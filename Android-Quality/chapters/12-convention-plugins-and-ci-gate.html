@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12 &mdash; Convention Plugins &amp; The CI Quality Gate | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="11-r8-minification.html">&larr; Prev</a>
+      <a href="maps/12-convention-plugins-and-ci-gate-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Convention Plugins &amp; The CI Quality Gate</h1>
+    <p class="subtitle">Package the whole stack into one plugin; wire it as a PR-blocking CI check &mdash; the payoff chapter</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The "we have it everywhere" problem</h2>
+
+      <p>Look at your project right now. If you've followed the previous eleven chapters, every module's <code>build.gradle.kts</code> is bigger than it was &mdash; lint config, detekt config, ktlint, the StrictMode wiring, R8 rules, version catalogs. The good kind of bigger. But also the <em>bad</em> kind: the same 30-line block of "configure quality stack" copied into every module's build file.</p>
+
+      <p>You added a feature module last month and forgot to copy the lint block over. It was building green for two weeks until a code review noticed a missing <code>HardcodedText</code> error that the rest of the project would have failed on. The standard exists, but it's not enforced; it's <em>opt-in by copy-paste</em>.</p>
+
+      <p>This chapter fixes that, permanently. <strong>Convention plugins</strong> are Gradle's way of packaging build logic into a plugin you apply with one line. Once you have <code>my.app.android.application</code> and <code>my.app.quality</code>, every module gets the entire stack for free, and there's no way to opt out without a deliberate, reviewable change.</p>
+
+      <p>Then we wire that stack as a <strong>CI quality gate</strong>: every PR runs lint + detekt + ktlint + tests + buildHealth, and a failing check blocks the merge button. The 12-chapter journey ends here. After this, "we'll add it later" is structurally impossible &mdash; the merge button literally won't work.</p>
+
+      <div class="highlight-box">
+        <p><strong>The frame for this final chapter:</strong> you've been adding tools. Now you're going to operationalize them &mdash; one place to configure, one CI gate to enforce, zero copy-paste. The quality stack stops being something engineers must <em>remember to do</em> and becomes something the system <em>does for them.</em></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Meet the tool</h2>
+
+      <div class="tool-profile-box">
+        <h3>Meet Convention Plugins + the CI Quality Gate</h3>
+        <p><strong>What it is:</strong> a Gradle <code>build-logic/</code> included build that hosts custom plugins (e.g. <code>my.app.android.application</code>, <code>my.app.quality</code>) every module applies in one line, plus a GitHub Actions workflow that runs the full quality stack on every PR and gates merging via branch protection.</p>
+        <p><strong>What it catches that humans miss:</strong> "I forgot to copy the lint block to this new module," "this module's detekt config drifted from the rest," "this PR slipped through without ktlintCheck running," "the team has no enforcement for the standard we wrote down."</p>
+        <p><strong>Install:</strong> create <code>build-logic/</code> as an included build, add a <code>convention</code> module with the <code>kotlin-dsl</code> plugin, register your plugins in <code>gradlePlugin {}</code>, then apply <code>id("my.app.android.application")</code> in modules.</p>
+        <p><strong>Runtime cost:</strong> zero at app runtime. Build-time cost is <em>negative</em> &mdash; less repeated config, faster sync, single source of truth for upgrades.</p>
+        <p><strong>When to skip it:</strong> only if you have one module. As soon as you have three modules with the same lint/detekt/ktlint config, this is overdue.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The two ways to do convention plugins</h2>
+
+      <p>Gradle gives you two mechanisms for shared build logic. Pick one and don't mix.</p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <h4><code>buildSrc/</code></h4>
+          <p>The old way. A magic directory at the project root that's automatically a "compile-this-first" project. Compiles every Gradle sync, even when nothing changed. Invalidates the configuration cache for the whole project on every edit. Avoid for new work.</p>
+        </div>
+        <div class="prompt-example good">
+          <h4><code>build-logic/</code> (included build)</h4>
+          <p>The current best practice. A separate Gradle build registered via <code>includeBuild("build-logic")</code> in <code>settings.gradle.kts</code>. Compiles on demand, plays nicely with the configuration cache, can be released as a standalone artifact if you ever scale to multiple repos.</p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>If your project already uses <code>buildSrc/</code>, migration is mostly mechanical:</strong> rename the directory to <code>build-logic/convention/</code>, add a <code>settings.gradle.kts</code> in <code>build-logic/</code>, register the included build in your root <code>settings.gradle.kts</code>. The plugin code itself usually doesn't change.
+      </div>
+    </section>
+
+    <section>
+      <h2>The <code>build-logic/</code> skeleton</h2>
+
+      <div class="config-recipe">
+        <h4><code>settings.gradle.kts</code> (root) &mdash; register the included build</h4>
+<pre><code>pluginManagement {
+    includeBuild("build-logic")
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "MyApp"
+include(":app", ":feature:profile", ":feature:home", ":core:network", ":core:ui")</code></pre>
+        <p class="recipe-note"><code>includeBuild</code> tells Gradle "before configuring this build, configure the one over there and make its plugins available." That's the magic that lets you reference plugins from a sibling directory without publishing them.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>build-logic/settings.gradle.kts</code></h4>
+<pre><code>dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+
+    // CRITICAL: share the version catalog with the main build
+    versionCatalogs {
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
+}
+
+rootProject.name = "build-logic"
+include(":convention")</code></pre>
+        <p class="recipe-note">Sharing the version catalog means your convention plugins reference the same Kotlin/AGP/Compose versions as your app. Edit one TOML file; everything stays in lockstep.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>build-logic/convention/build.gradle.kts</code></h4>
+<pre><code>plugins {
+    `kotlin-dsl`
+}
+
+group = "com.example.buildlogic"
+
+dependencies {
+    // Pin the same versions of the AGP &amp; Kotlin plugins your app uses
+    compileOnly(libs.android.gradlePlugin)
+    compileOnly(libs.kotlin.gradlePlugin)
+    compileOnly(libs.detekt.gradlePlugin)
+    compileOnly(libs.ktlint.gradlePlugin)
+}
+
+gradlePlugin {
+    plugins {
+        register("androidApplication") {
+            id = "my.app.android.application"
+            implementationClass = "AndroidApplicationConventionPlugin"
+        }
+        register("androidLibrary") {
+            id = "my.app.android.library"
+            implementationClass = "AndroidLibraryConventionPlugin"
+        }
+        register("quality") {
+            id = "my.app.quality"
+            implementationClass = "QualityConventionPlugin"
+        }
+    }
+}</code></pre>
+        <p class="recipe-note">The <code>gradlePlugin { plugins { register(...) }}</code> block is what makes your plugin classes addressable by ID. <code>compileOnly</code> rather than <code>implementation</code> &mdash; you don't ship Gradle &amp; AGP inside your plugin, the host build provides them.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Your first convention plugin</h2>
+
+      <p>Plugins live in <code>build-logic/convention/src/main/kotlin/</code>. Convention is to put each plugin's class in the source-set root with no package, but you can package them if you prefer.</p>
+
+      <div class="config-recipe">
+        <h4><code>AndroidApplicationConventionPlugin.kt</code></h4>
+<pre><code>import com.android.build.gradle.LibraryExtension
+import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.Plugin
+import org.gradle.api.Project
+import org.gradle.kotlin.dsl.configure
+import org.gradle.kotlin.dsl.dependencies
+
+class AndroidApplicationConventionPlugin : Plugin&lt;Project&gt; {
+    override fun apply(target: Project) = with(target) {
+        // Apply the AGP application plugin and Kotlin
+        pluginManager.apply("com.android.application")
+        pluginManager.apply("org.jetbrains.kotlin.android")
+
+        extensions.configure&lt;ApplicationExtension&gt; {
+            compileSdk = 35
+            defaultConfig {
+                minSdk = 24
+                targetSdk = 35
+                vectorDrawables { useSupportLibrary = true }
+            }
+            buildTypes {
+                getByName("release") {
+                    isMinifyEnabled = true
+                    isShrinkResources = true
+                    proguardFiles(
+                        getDefaultProguardFile("proguard-android-optimize.txt"),
+                        "proguard-rules.pro"
+                    )
+                }
+            }
+            buildFeatures {
+                buildConfig = true
+            }
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+        }
+
+        // Apply the quality stack to every Android app module
+        pluginManager.apply("my.app.quality")
+    }
+}</code></pre>
+        <p class="recipe-note">One file. Every Android app module in the repo applies <code>id("my.app.android.application")</code>, gets the same compileSdk, R8 config, Java 17 source level, and the quality stack &mdash; for free.</p>
+      </div>
+
+      <p>The library variant is the same shape with a few changes: <code>com.android.library</code> instead of <code>com.android.application</code>, <code>LibraryExtension</code> instead of <code>ApplicationExtension</code>, no <code>defaultConfig.targetSdk</code>, no <code>buildTypes</code> R8 (libraries don't ship release builds in the same sense). Otherwise identical.</p>
+    </section>
+
+    <section>
+      <h2>The quality convention plugin &mdash; the payoff</h2>
+
+      <div class="config-recipe">
+        <h4><code>QualityConventionPlugin.kt</code></h4>
+<pre><code>import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import org.gradle.api.Plugin
+import org.gradle.api.Project
+import org.gradle.kotlin.dsl.configure
+
+class QualityConventionPlugin : Plugin&lt;Project&gt; {
+    override fun apply(target: Project) = with(target) {
+        pluginManager.apply("io.gitlab.arturbosch.detekt")
+        pluginManager.apply("org.jlleitschuh.gradle.ktlint")
+
+        // Detekt: shared config + per-module baseline
+        extensions.configure&lt;DetektExtension&gt; {
+            config.setFrom(rootProject.file("config/detekt/detekt.yml"))
+            baseline = file("$projectDir/detekt-baseline.xml")
+            buildUponDefaultConfig = true
+            allRules = false
+            autoCorrect = true
+        }
+
+        // Ktlint: editor config + reporters
+        extensions.configure&lt;org.jlleitschuh.gradle.ktlint.KtlintExtension&gt; {
+            android.set(true)
+            ignoreFailures.set(false)
+            reporters {
+                reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.HTML)
+                reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.PLAIN)
+            }
+        }
+
+        // Lint: shared lint.xml
+        plugins.withId("com.android.base") {
+            extensions.configure&lt;com.android.build.api.dsl.CommonExtension&lt;*, *, *, *, *, *&gt;&gt; {
+                lint {
+                    abortOnError = true
+                    warningsAsErrors = false
+                    checkReleaseBuilds = true
+                    baseline = file("lint-baseline.xml")
+                    lintConfig = rootProject.file("config/lint/lint.xml")
+                    htmlReport = true
+                    xmlReport = true
+                }
+            }
+        }
+    }
+}</code></pre>
+        <p class="recipe-note">Three tools, one plugin. Apply <code>id("my.app.quality")</code> in any module and you instantly get detekt + ktlint + lint with shared config files at <code>config/detekt/detekt.yml</code> and <code>config/lint/lint.xml</code>. Per-module baselines stay per-module (because legacy code is per-module). Shared rules stay shared.</p>
+      </div>
+
+      <p>The shared config files at the root deserve their own note. Convention is:</p>
+
+      <pre><code>project-root/
+├── build-logic/
+│   └── convention/
+│       └── src/main/kotlin/
+│           ├── AndroidApplicationConventionPlugin.kt
+│           ├── AndroidLibraryConventionPlugin.kt
+│           └── QualityConventionPlugin.kt
+├── config/
+│   ├── detekt/detekt.yml
+│   └── lint/lint.xml
+├── gradle/libs.versions.toml
+└── (modules)</code></pre>
+    </section>
+
+    <section>
+      <h2>What a module's <code>build.gradle.kts</code> shrinks to</h2>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <h4>Before convention plugins</h4>
+<pre><code>plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("io.gitlab.arturbosch.detekt") version "1.23.7"
+    id("org.jlleitschuh.gradle.ktlint") version "12.1.1"
+}
+
+android {
+    compileSdk = 35
+    defaultConfig { minSdk = 24; targetSdk = 35 }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(...)
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    lint {
+        abortOnError = true
+        baseline = file("lint-baseline.xml")
+        lintConfig = rootProject.file("config/lint/lint.xml")
+    }
+}
+
+detekt {
+    config.setFrom(...)
+    buildUponDefaultConfig = true
+    baseline = file("detekt-baseline.xml")
+}
+// ... 30+ more lines</code></pre>
+        </div>
+        <div class="prompt-example good">
+          <h4>After</h4>
+<pre><code>plugins {
+    alias(libs.plugins.my.app.android.application)
+}
+
+android {
+    namespace = "com.example.app"
+    defaultConfig {
+        applicationId = "com.example.app"
+        versionCode = 1
+        versionName = "1.0"
+    }
+}
+
+dependencies {
+    implementation(libs.bundles.compose.ui)
+    implementation(libs.bundles.networking)
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+}</code></pre>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The ratio matters.</strong> Modules go from 60-line build files (mostly repeated config) to 15-line build files (only the module-specific bits: namespace, applicationId, dependencies). Adding a new module becomes a 30-second copy-paste of an existing one with two strings changed.
+      </div>
+    </section>
+
+    <section>
+      <h2>The CI quality gate</h2>
+
+      <p>Convention plugins make the standards <em>declarable</em>. The CI gate makes them <em>enforced</em>. Below is a working GitHub Actions workflow for a real Android project.</p>
+
+      <div class="config-recipe">
+        <h4><code>.github/workflows/quality.yml</code></h4>
+<pre><code>name: Quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for some lint baseline tools
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Ktlint check
+        run: ./gradlew ktlintCheck --continue
+
+      - name: Detekt
+        run: ./gradlew detekt --continue
+
+      - name: Lint
+        run: ./gradlew :app:lintRelease --continue
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports
+          path: |
+            **/build/reports/detekt/*.html
+            **/build/reports/ktlint/*.html
+            **/build/reports/lint-results-*.html
+          retention-days: 14
+
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run unit tests
+        run: ./gradlew testReleaseUnitTest --continue
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'
+          retention-days: 14
+
+  build-health:
+    name: Dependency health
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: buildHealth (advisory)
+        run: ./gradlew buildHealth || true
+        # Advisory only until noise floor is low — flip to required later.</code></pre>
+        <p class="recipe-note">Three jobs in parallel. <code>--continue</code> is the trick &mdash; it makes Gradle run all the checks even if one fails, so a single PR shows you all the violations at once instead of one-at-a-time. <code>concurrency.cancel-in-progress</code> cancels old PR pushes so you don't burn CI minutes on every force-push.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Branch protection &mdash; making the gate real</h2>
+
+      <p>The workflow above runs on every PR. By default, it doesn't <em>block</em> anything &mdash; engineers can merge red builds. Branch protection turns advisory checks into required checks.</p>
+
+      <div class="config-recipe">
+        <h4>GitHub branch protection (Settings &rarr; Branches &rarr; Add rule)</h4>
+<pre><code>Branch name pattern: main
+
+✅ Require a pull request before merging
+   ✅ Require approvals (1 minimum)
+   ✅ Dismiss stale pull request approvals when new commits are pushed
+
+✅ Require status checks to pass before merging
+   ✅ Require branches to be up to date before merging
+   Required status checks:
+     - Static Analysis
+     - Unit tests
+
+✅ Require conversation resolution before merging
+✅ Do not allow bypassing the above settings (for non-admins)</code></pre>
+        <p class="recipe-note">Note: don't make <code>build-health</code> required from day 1 &mdash; the first <code>buildHealth</code> reports on a legacy project are noisy. Keep it advisory until the unused-deps section is empty, then promote it to required.</p>
+      </div>
+
+      <div class="warning-box">
+        <strong>The "Do not allow bypassing" toggle is what turns this from a guideline into a rule.</strong> Without it, admins (which often means tech leads under deadline pressure) can override and the gate becomes performance art. Turn it on. Talk to your team about it first.
+      </div>
+    </section>
+
+    <section>
+      <h2>Inline PR comments with Reviewdog or Danger</h2>
+
+      <p>Gradle reports are great if engineers click into the CI log. They almost never do. Surface findings as inline PR comments and review-time engagement skyrockets.</p>
+
+      <div class="tool-card">
+        <h4>Reviewdog</h4>
+        <p>Lightweight Go-based tool. Hooks ktlint, detekt, lint output into PR comments via the <code>ktlint-action</code> and friends. Five lines of YAML. Recommended starting point.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4>Danger / DangerKotlin</h4>
+        <p>Heavier framework, more flexible. Lets you write custom rules ("PR title must follow Conventional Commits", "no <code>TODO</code> in modified lines") in a Dangerfile. Worth it for teams ready to invest in PR-bot tooling.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>.github/workflows/reviewdog.yml</code> &mdash; ktlint inline comments</h4>
+<pre><code>name: Reviewdog
+
+on: [pull_request]
+
+jobs:
+  ktlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ScaCap/action-ktlint@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          fail_on_error: false
+          ktlint_version: 1.5.0</code></pre>
+        <p class="recipe-note">Set <code>fail_on_error: false</code> while rolling this out. Engineers see the comments, get used to fixing them, then you flip to <code>true</code> in a follow-up PR once the team's used to the workflow.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>AI-Assisted Setup: <code>/draft-quality-convention-plugin</code></h2>
+
+      <p>Setting up <code>build-logic/</code> from scratch is the kind of mechanical-but-error-prone work where AI shines. Hand it the existing module configs and let it consolidate.</p>
+
+      <div class="prompt-example good">
+        <h4>Good prompt</h4>
+        <p>"Create a convention-plugin <code>build-logic/</code> for this project. Read every module's <code>build.gradle.kts</code> to identify the common config patterns (lint, detekt, ktlint, compileSdk, R8, Java level). Output: (1) <code>build-logic/settings.gradle.kts</code>, (2) <code>build-logic/convention/build.gradle.kts</code> with plugin registrations for <code>my.app.android.application</code>, <code>my.app.android.library</code>, and <code>my.app.quality</code>, (3) the three plugin classes consolidating the common config, (4) a unified diff showing what to remove from each module's build file. Preserve any module-specific overrides as inline overrides in the post-migration files. Use the existing <code>gradle/libs.versions.toml</code> for version references &mdash; share the catalog with the included build."</p>
+      </div>
+
+      <div class="prompt-example bad">
+        <h4>Bad prompt</h4>
+        <p>"Add convention plugins to my project."</p>
+        <p><em>Why it fails:</em> doesn't say to read existing configs, doesn't define plugin IDs, doesn't ask for a diff, doesn't constrain to preserve overrides. You'll get a tutorial-quality stub plus zero application.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>.claude/commands/draft-quality-convention-plugin.md</code></h4>
+<pre><code># /draft-quality-convention-plugin
+
+Set up build-logic/ as an included build with three convention plugins:
+  - my.app.android.application
+  - my.app.android.library
+  - my.app.quality (lint + detekt + ktlint)
+
+Inputs (read from disk):
+  - All module build.gradle.kts files
+  - Root settings.gradle.kts
+  - gradle/libs.versions.toml
+  - Any existing buildSrc/ directory (deprecate it)
+
+Outputs:
+  1. build-logic/settings.gradle.kts (sharing the version catalog)
+  2. build-logic/convention/build.gradle.kts (kotlin-dsl + plugin registrations)
+  3. AndroidApplicationConventionPlugin.kt
+  4. AndroidLibraryConventionPlugin.kt
+  5. QualityConventionPlugin.kt
+  6. Move shared config files: config/detekt/detekt.yml, config/lint/lint.xml
+  7. A unified diff showing each module's build.gradle.kts shrunk
+     (only namespace, applicationId, dependencies remain)
+  8. Updated root settings.gradle.kts with includeBuild("build-logic")
+
+Constraints:
+  - Use included build (build-logic/), NOT buildSrc/.
+  - All plugin IDs must use the format my.app.X.
+  - Preserve any module-specific overrides — flag them as candidates
+    for migration into the convention plugin if they appear in 3+ modules.
+  - Java 17, AGP from libs.versions.toml.</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>The 30-day rollout</h2>
+
+      <div class="adoption-ladder">
+
+        <div class="rung">
+          <h4>Day 1 (Week 1)</h4>
+          <p>Stand up <code>build-logic/</code> as an included build. Write <code>AndroidApplicationConventionPlugin</code> and <code>AndroidLibraryConventionPlugin</code> &mdash; just the AGP/Kotlin/Java level config, no quality stack yet. Migrate one leaf module to apply the convention. Verify it builds.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Week 2</h4>
+          <p>Add <code>QualityConventionPlugin</code> consolidating lint + detekt + ktlint. Migrate the rest of the modules. Move shared config files to <code>config/lint/</code> and <code>config/detekt/</code>. Each module's <code>build.gradle.kts</code> should now be 60-70% shorter.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Week 3</h4>
+          <p>Add the GitHub Actions workflow. Three jobs: static-analysis, tests, build-health (advisory). Run on every PR + push to main. Set <code>--continue</code> for full visibility per PR.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Week 4 (Month 1)</h4>
+          <p>Turn on branch protection: require static-analysis + tests, require approvals, dismiss stale approvals on push. Add Reviewdog for inline ktlint comments (<code>fail_on_error: false</code> initially). Schedule the buildHealth promotion-to-required for 60 days out, once you've cleaned the unused-deps backlog.</p>
+        </div>
+
+      </div>
+    </section>
+
+    <section>
+      <h2>The before/after of the whole journey</h2>
+
+      <p>This is the closing chapter, so the before/after isn't just for this chapter &mdash; it's for the whole 12-chapter arc.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">📉</div>
+          <div class="stat-label">Average PR review time: 40 min &rarr; 12 min</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">🐛</div>
+          <div class="stat-label">Production crashes per release: 14 &rarr; 3</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">📦</div>
+          <div class="stat-label">Release APK size: -32% via R8 + resource shrink</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">⚡</div>
+          <div class="stat-label">"What's our standard for X?" &rarr; one config file</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">🔒</div>
+          <div class="stat-label">PRs that bypass the standard: structurally impossible</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">🎯</div>
+          <div class="stat-label">New module setup: 30 seconds, one plugin alias</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The pitfalls</h2>
+
+      <div class="warning-box">
+        <strong>Don't try to do all 12 chapters in 30 days.</strong> The course is designed to be adopted one tool at a time, over months. The convention-plugin chapter assumes the previous tools are in place. If you've only adopted lint and detekt, your convention plugin only consolidates lint and detekt &mdash; that's still a win.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't merge convention-plugin migration with adding new rules.</strong> Migration is mechanical &mdash; consolidating config that already exists. Adding new rules is a separate concern. Two PRs.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't enable branch protection on day one.</strong> Run the CI workflow as advisory for at least a sprint. Once team velocity is unaffected and engineers know how to read failures, flip the required-checks toggle. Forced adoption with broken tooling is the fastest way to make the team hate the quality stack.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't build a "perfect" convention plugin first.</strong> Ship a 60%-good one, migrate two modules, learn what breaks, iterate. Convention plugins are normal code &mdash; they get refactored.
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise &mdash; the capstone</h2>
+
+      <div class="exercise-box">
+        <h3>Operationalize the whole stack</h3>
+        <ol>
+          <li>Create <code>build-logic/</code> as an included build with the skeleton from this chapter. Write <code>AndroidApplicationConventionPlugin</code>, <code>AndroidLibraryConventionPlugin</code>, and <code>QualityConventionPlugin</code>.</li>
+          <li>Migrate at least one app module and one library module to use the convention plugins. Verify both build green.</li>
+          <li>Move detekt/lint config to <code>config/detekt/</code> and <code>config/lint/</code> &mdash; no per-module copies of the rules.</li>
+          <li>Add <code>.github/workflows/quality.yml</code> with three jobs: static-analysis, tests, build-health (advisory). Verify it runs on a test PR.</li>
+          <li>Configure branch protection on <code>main</code>: require static-analysis &amp; tests, require approvals, do not allow bypassing for non-admins.</li>
+          <li>Add Reviewdog for inline ktlint comments with <code>fail_on_error: false</code>.</li>
+          <li>Open a PR titled "Operationalize the quality stack." Body: link to the convention plugin, before/after diff for one module's <code>build.gradle.kts</code>, screenshot of branch protection settings, link to a green CI run.</li>
+        </ol>
+        <p><strong>Deliverable:</strong> a repo where the entire 12-chapter quality stack is one <code>id("my.app.android.application")</code> per module away. Bonus: <code>/draft-quality-convention-plugin</code> in <code>.claude/commands/</code> so the next project you join takes 90 minutes instead of a week.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The closing message</h2>
+
+      <p>Twelve chapters ago you were the engineer who'd been putting this off. You shipped real apps, debugged real crashes, but never invested in detekt, lint, StrictMode, LeakCanary, version catalogs, R8, convention plugins, or a CI gate. Today's the day that changed.</p>
+
+      <p>You went from "we don't have time for quality" to "the quality stack runs on every PR, automatically, with one line per module." The compounding starts now. Every new feature lands on a foundation that catches NPEs, leaks, formatting drift, dependency rot, and APK bloat <em>before</em> they hit users. Every new engineer who joins inherits the standards via the convention plugin, not via a wiki page nobody reads. Every "what's our convention for X?" question has a one-file answer.</p>
+
+      <p>The trap of "I'll add quality tooling when I have time" is that it's recursive: you don't have time precisely <em>because</em> you don't have quality tooling. PR reviews drag, regressions creep in, debugging takes hours instead of minutes. Adopting the stack <em>creates</em> the time you needed to adopt the stack. That's the leverage. That's the whole game.</p>
+
+      <p>Ship one convention plugin this week. Ship one CI gate next week. The next time you read a "we don't have time for that" thread on your team's Slack, you'll know: yes, you do, and here's how.</p>
+
+      <div class="highlight-box">
+        <p><strong>You finished the course.</strong> The quality stack is bolted on. The CI gate is enforced. The next 12 months of feature work will compound on this foundation. Go ship.</p>
+      </div>
+    </section>
+
+    <footer class="chapter-nav">
+      <a href="11-r8-minification.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">R8: Minification Without Mysteries</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to</span>
+        <span class="nav-chapter">Contents</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

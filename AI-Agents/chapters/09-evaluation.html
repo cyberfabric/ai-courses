@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Agent Evaluation &amp; Testing | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-error-recovery.html">&larr; Prev</a>
+      <a href="10-agent-frameworks.html">Next &rarr;</a>
+      <a href="maps/09-evaluation-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Agent Evaluation &amp; Testing</h1>
+    <p class="subtitle">How do you know if your agent is good? The hardest question in agent development.</p>
+  </header>
+
+  <main>
+
+    <h2>The Evaluation Problem</h2>
+
+    <p>With traditional software, testing is straightforward: give input X, expect output Y. If you get Y, the test passes. If you get something else, it fails. Nice, clean, deterministic.</p>
+
+    <p>Agents break this model completely. Ask your research agent &ldquo;What are the top AI frameworks in 2026?&rdquo; and it might search different queries each time, read different pages, and produce different (but equally valid) answers. The path is non-deterministic, and there&rsquo;s often no single &ldquo;correct&rdquo; answer.</p>
+
+    <p>So how do you test something that gives different answers every time? You change what you measure.</p>
+
+    <div class="highlight-box">
+      <h3>Evaluating agents is like evaluating employees</h3>
+      <p>You don&rsquo;t just check if they finished the task. You look at <strong>quality</strong> (was the result good?), <strong>efficiency</strong> (how long did it take?), <strong>process</strong> (did they follow the right steps?), and <strong>cost</strong> (what resources did they use?). Agent evaluation works the same way &mdash; multiple dimensions, not just pass/fail.</p>
+    </div>
+
+    <h2>What to Measure</h2>
+
+    <p>Every agent evaluation should capture these five dimensions:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Completion</span>
+        <span class="stat-label">Did the agent finish the task without human intervention?</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Accuracy</span>
+        <span class="stat-label">Was the result correct and complete?</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Efficiency</span>
+        <span class="stat-label">How many steps and tokens did it use?</span>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>What It Measures</th>
+          <th>How to Calculate</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Task completion rate</strong></td>
+          <td>% of tasks finished successfully</td>
+          <td>successful_tasks / total_tasks</td>
+        </tr>
+        <tr>
+          <td><strong>Accuracy score</strong></td>
+          <td>Quality of the result (0&ndash;1)</td>
+          <td>LLM-as-judge or human rating</td>
+        </tr>
+        <tr>
+          <td><strong>Step count</strong></td>
+          <td>How many tool calls to finish</td>
+          <td>Count tool_use blocks per task</td>
+        </tr>
+        <tr>
+          <td><strong>Cost per task</strong></td>
+          <td>Dollar cost per successful task</td>
+          <td>total_tokens &times; price_per_token</td>
+        </tr>
+        <tr>
+          <td><strong>Cost per success</strong></td>
+          <td>Accounting for failed attempts</td>
+          <td>total_spend / successful_tasks</td>
+        </tr>
+        <tr>
+          <td><strong>Latency</strong></td>
+          <td>Wall-clock time per task</td>
+          <td>end_time - start_time</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Cost per success is more revealing than cost per task.</strong> If your agent costs $0.05 per run but fails 50% of the time, your real cost is $0.10 per successful result. Track both.
+    </div>
+
+    <h2>End-to-End Evaluation</h2>
+
+    <p>The most important eval: <strong>run the agent on a set of tasks and measure outcomes</strong>. This is your integration test &mdash; does the agent actually work?</p>
+
+<pre><code>import json
+from datetime import datetime
+
+class EvalSuite:
+    """A test suite for evaluating agent performance."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.test_cases = []
+        self.results = []
+
+    def add_case(self, query: str, expected_contains: list = None,
+                 expected_tools: list = None, max_steps: int = 15):
+        """Add a test case with expected outcomes."""
+        self.test_cases.append({
+            "query": query,
+            "expected_contains": expected_contains or [],
+            "expected_tools": expected_tools or [],
+            "max_steps": max_steps,
+        })
+
+    def run(self, agent_fn):
+        """Run all test cases against an agent function."""
+        print(f"\nRunning eval suite: {self.name}")
+        print(f"{'='*60}")
+
+        for i, case in enumerate(self.test_cases, 1):
+            print(f"\n  Test {i}/{len(self.test_cases)}: {case['query'][:60]}...")
+            start = datetime.now()
+
+            try:
+                result = agent_fn(case["query"], max_steps=case["max_steps"])
+                elapsed = (datetime.now() - start).total_seconds()
+
+                # Score the result
+                score = self._score(result, case)
+                self.results.append({
+                    "case": case["query"],
+                    "passed": score["passed"],
+                    "score": score["score"],
+                    "elapsed": elapsed,
+                    "details": score["details"],
+                })
+                status = "PASS" if score["passed"] else "FAIL"
+                print(f"  [{status}] Score: {score['score']:.0%} "
+                      f"({elapsed:.1f}s)")
+
+            except Exception as e:
+                self.results.append({
+                    "case": case["query"],
+                    "passed": False,
+                    "score": 0,
+                    "error": str(e),
+                })
+                print(f"  [ERROR] {e}")
+
+        self._print_summary()
+
+    def _score(self, result: str, case: dict) -> dict:
+        """Score a result against expected outcomes."""
+        checks = []
+        result_lower = result.lower()
+
+        for keyword in case["expected_contains"]:
+            found = keyword.lower() in result_lower
+            checks.append({"check": f"contains '{keyword}'", "passed": found})
+
+        passed_count = sum(1 for c in checks if c["passed"])
+        total = max(len(checks), 1)
+
+        return {
+            "passed": passed_count == total,
+            "score": passed_count / total,
+            "details": checks,
+        }
+
+    def _print_summary(self):
+        passed = sum(1 for r in self.results if r["passed"])
+        total = len(self.results)
+        avg_score = sum(r["score"] for r in self.results) / max(total, 1)
+        print(f"\n{'='*60}")
+        print(f"Results: {passed}/{total} passed ({avg_score:.0%} avg score)")
+        print(f"{'='*60}")</code></pre>
+
+    <p>Now create a test suite for your research agent:</p>
+
+<pre><code># Build an eval suite
+suite = EvalSuite("Research Agent v1")
+
+suite.add_case(
+    query="What is the population of Tokyo?",
+    expected_contains=["Tokyo", "million"],
+    max_steps=5,
+)
+suite.add_case(
+    query="Compare Python and Rust for CLI tools",
+    expected_contains=["Python", "Rust", "performance"],
+    max_steps=10,
+)
+suite.add_case(
+    query="What are the main AI agent frameworks in 2026?",
+    expected_contains=["LangGraph", "Claude", "OpenAI"],
+    max_steps=10,
+)
+
+# Run it
+suite.run(run_agent)  # run_agent from Chapter 4</code></pre>
+
+    <h2>Step-Level Evaluation</h2>
+
+    <p>End-to-end tells you <em>if</em> the agent works. Step-level tells you <em>how</em> it works. Did it pick the right tool? Pass the right parameters? Avoid unnecessary steps?</p>
+
+    <div class="architecture-box">
+      <h3>The Golden Trajectory Approach</h3>
+      <p>Define an ideal sequence of tool calls for a task (the &ldquo;golden trajectory&rdquo;), then compare the agent&rsquo;s actual path against it:</p>
+      <div class="workflow-steps">
+        <span class="step">Define golden path</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Run agent</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Compare trajectories</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Score alignment</span>
+      </div>
+      <p>You&rsquo;re not checking for an exact match &mdash; the agent might take a different but equally valid path. Instead, check: Did the agent use all the <strong>key tools</strong>? Did it avoid <strong>unnecessary</strong> calls? Did it call tools in a <strong>sensible order</strong>?</p>
+    </div>
+
+<pre><code>def evaluate_trajectory(actual_tools: list, golden: dict) -> dict:
+    """Compare agent's tool calls against a golden trajectory."""
+    scores = {}
+
+    # 1. Were all required tools used?
+    required = set(golden.get("required_tools", []))
+    used = set(actual_tools)
+    scores["required_coverage"] = len(required & used) / max(len(required), 1)
+
+    # 2. Were any unnecessary tools called?
+    allowed = set(golden.get("allowed_tools", actual_tools))
+    unnecessary = used - allowed
+    scores["no_unnecessary"] = 1.0 if not unnecessary else \
+        max(0, 1 - len(unnecessary) / len(used))
+
+    # 3. Was the step count reasonable?
+    max_steps = golden.get("max_expected_steps", 10)
+    scores["efficiency"] = min(1.0, max_steps / max(len(actual_tools), 1))
+
+    # Overall score
+    scores["overall"] = sum(scores.values()) / len(scores)
+    return scores
+
+# Define a golden trajectory
+golden = {
+    "required_tools": ["search_web", "read_page"],
+    "allowed_tools": ["search_web", "read_page", "save_report"],
+    "max_expected_steps": 6,
+}
+
+# After running the agent, evaluate:
+actual = ["search_web", "read_page", "search_web", "read_page", "save_report"]
+scores = evaluate_trajectory(actual, golden)
+print(f"Trajectory score: {scores['overall']:.0%}")</code></pre>
+
+    <h2>LLM-as-Judge</h2>
+
+    <p>For evaluating output <em>quality</em> (not just presence of keywords), use another LLM as a judge. This is the dominant evaluation method in 2026, used by 53% of organizations:</p>
+
+<pre><code>def llm_judge(question: str, agent_answer: str,
+              reference: str = None) -> dict:
+    """Use an LLM to evaluate the quality of an agent's answer."""
+    judge_prompt = f"""Evaluate this agent's answer on a scale of 1-5 for each criterion:
+
+Question: {question}
+
+Agent's Answer: {agent_answer}
+
+{f"Reference Answer: {reference}" if reference else ""}
+
+Criteria:
+1. ACCURACY (1-5): Is the information factually correct?
+2. COMPLETENESS (1-5): Does it cover the key aspects of the question?
+3. CLARITY (1-5): Is it well-organized and easy to understand?
+4. SOURCING (1-5): Does it cite sources or provide evidence?
+
+Respond in JSON format:
+{{"accuracy": N, "completeness": N, "clarity": N, "sourcing": N, "reasoning": "..."}}"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=500,
+        messages=[{"role": "user", "content": judge_prompt}],
+    )
+    return json.loads(response.content[0].text)</code></pre>
+
+    <div class="pitfall-box">
+      <strong>LLM judges have biases.</strong> They tend to prefer longer answers, more formal language, and outputs that look like their own training data. Mitigate this by: (1) using specific, numerical rubrics, (2) including reference answers when possible, (3) rotating judge models, and (4) calibrating scores against human ratings on a small sample.
+    </div>
+
+    <h2>Existing Benchmarks</h2>
+
+    <p>Before building your own evals, check if an existing benchmark covers your use case:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">SW</div>
+      <div class="tool-info">
+        <div class="tool-name">SWE-bench Verified</div>
+        <div class="tool-desc">500 real GitHub issues with test-verified solutions. The standard for coding agents. Tests: can the agent read a codebase, understand the bug, and produce a working fix? Top agents solve ~70% of issues.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">GA</div>
+      <div class="tool-info">
+        <div class="tool-name">GAIA</div>
+        <div class="tool-desc">General AI assistant benchmark: multi-step reasoning, tool use, web browsing. Tests real-world assistant tasks across difficulty levels. Claude Sonnet 4.5 leads at 74.6%.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">WA</div>
+      <div class="tool-info">
+        <div class="tool-name">WebArena</div>
+        <div class="tool-desc">Web navigation benchmark with realistic websites. Tests: can the agent browse the web, fill forms, click buttons, and complete tasks? Top score ~61.7%.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">TB</div>
+      <div class="tool-info">
+        <div class="tool-name">TAU-bench</div>
+        <div class="tool-desc">Customer service simulation across retail, airline, and telecom domains. Tests tool use and policy compliance. Claude Opus 4.6 leads with 99.3% on telecom tasks.</div>
+      </div>
+    </div>
+
+    <h2>Building Your Own Evaluation Set</h2>
+
+    <p>Generic benchmarks tell you how the model performs on generic tasks. But <em>your</em> agent has a specific domain, specific tools, and specific users. You need <strong>domain-specific evals</strong>.</p>
+
+    <div class="pattern-box">
+      <h3>Evaluation-Driven Development (EDD)</h3>
+      <p><strong>Concept:</strong> Write your evals <em>before</em> building the agent, just like writing tests before code in TDD.</p>
+      <p><strong>Process:</strong></p>
+      <ol>
+        <li>Define 10&ndash;20 representative tasks your agent should handle</li>
+        <li>For each task, specify: expected outcome, required tools, maximum steps, quality criteria</li>
+        <li>Set a target score (e.g., &ldquo;pass 80% of cases&rdquo;)</li>
+        <li>Build the agent, run the eval, iterate until you hit the target</li>
+        <li>Every change to the agent must not regress the eval score</li>
+      </ol>
+      <p><strong>Key difference from TDD:</strong> Agent evals use <em>thresholds</em> instead of binary pass/fail, because agents are non-deterministic. A test that passes 9 out of 10 runs might be fine. A test that passes 6 out of 10 needs work.</p>
+    </div>
+
+    <p>Structure your eval set with three types of cases:</p>
+
+    <ul>
+      <li><strong>Happy path</strong> (40%) &mdash; straightforward tasks the agent should handle easily</li>
+      <li><strong>Edge cases</strong> (40%) &mdash; tricky inputs, ambiguous queries, missing information</li>
+      <li><strong>Adversarial</strong> (20%) &mdash; inputs designed to confuse: contradictory requests, prompt injection attempts, impossible tasks</li>
+    </ul>
+
+    <h2>Regression Testing</h2>
+
+    <p>Every improvement to your agent risks breaking something else. Run your full eval suite after every change:</p>
+
+<pre><code>def regression_check(new_results: list, baseline_results: list,
+                      tolerance: float = 0.05) -> dict:
+    """Compare new eval results against a baseline."""
+    regressions = []
+
+    for new, base in zip(new_results, baseline_results):
+        if new["score"] < base["score"] - tolerance:
+            regressions.append({
+                "case": new["case"],
+                "baseline_score": base["score"],
+                "new_score": new["score"],
+                "delta": new["score"] - base["score"],
+            })
+
+    new_avg = sum(r["score"] for r in new_results) / len(new_results)
+    base_avg = sum(r["score"] for r in baseline_results) / len(baseline_results)
+
+    return {
+        "passed": len(regressions) == 0,
+        "regressions": regressions,
+        "avg_score_change": new_avg - base_avg,
+        "summary": f"{'PASS' if not regressions else 'FAIL'}: "
+                   f"{len(regressions)} regressions, "
+                   f"avg score {new_avg:.0%} (was {base_avg:.0%})"
+    }</code></pre>
+
+    <div class="warning-box">
+      <strong>Run evals multiple times.</strong> Because agents are non-deterministic, a single run isn&rsquo;t reliable. Run each test case 3&ndash;5 times and use the median score. A test that passes 3/5 times at 80%+ is more informative than one perfect run that might have been lucky.
+    </div>
+
+    <h2>A/B Testing Agent Versions</h2>
+
+    <p>When you have two versions of your agent (different model, different prompt, different tools), compare them head-to-head on the same tasks:</p>
+
+<pre><code>def ab_test(agent_a, agent_b, test_cases: list, runs_per_case: int = 3):
+    """Compare two agent versions on the same tasks."""
+    results = {"a": [], "b": []}
+
+    for case in test_cases:
+        for run in range(runs_per_case):
+            score_a = run_and_score(agent_a, case)
+            score_b = run_and_score(agent_b, case)
+            results["a"].append(score_a)
+            results["b"].append(score_b)
+
+    avg_a = sum(r["score"] for r in results["a"]) / len(results["a"])
+    avg_b = sum(r["score"] for r in results["b"]) / len(results["b"])
+    cost_a = sum(r["cost"] for r in results["a"]) / len(results["a"])
+    cost_b = sum(r["cost"] for r in results["b"]) / len(results["b"])
+
+    print(f"Agent A: {avg_a:.0%} accuracy, ${cost_a:.4f}/task")
+    print(f"Agent B: {avg_b:.0%} accuracy, ${cost_b:.4f}/task")
+    print(f"Winner: {'A' if avg_a > avg_b else 'B'} "
+          f"(by {abs(avg_a - avg_b):.0%})")
+
+    return results</code></pre>
+
+    <p>This is how you answer &ldquo;should I use Sonnet or Haiku for this agent?&rdquo; &mdash; don&rsquo;t guess, measure.</p>
+
+    <h2>Agent Trace: Eval in Action</h2>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Eval</span>
+        <span>Running test case 1/10: &ldquo;What is the population of Tokyo?&rdquo;</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Agent</span>
+        <span><code>search_web({"query": "Tokyo population 2026"})</code> &rarr; <code>read_page(...)</code> &rarr; response</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Check</span>
+        <span>Contains &ldquo;Tokyo&rdquo;? Yes. Contains &ldquo;million&rdquo;? Yes. Step count: 3 (max 5). Keyword score: 100%.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Judge</span>
+        <span>LLM-as-judge scores: accuracy 5/5, completeness 4/5, clarity 5/5, sourcing 4/5. Overall: 90%.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Trajectory</span>
+        <span>Required tools used: 2/2. No unnecessary calls. Efficiency: 100%. Trajectory score: 100%.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Result</span>
+        <span>[PASS] Combined score: 95%. Steps: 3. Cost: $0.02. Latency: 4.2s.</span>
+      </div>
+    </div>
+
+    <h2>Cost vs Quality Tradeoffs</h2>
+
+    <p>A common dilemma: a cheaper model takes more steps but costs less per step. An expensive model finishes in fewer steps but each step costs more. Which is better?</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Claude Sonnet (fewer steps)</div>
+        <div class="prompt-text">3 steps, $0.04/task, 92% accuracy
+Cost per success: $0.043</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Claude Haiku (more steps)</div>
+        <div class="prompt-text">7 steps, $0.008/task, 78% accuracy
+Cost per success: $0.010</div>
+      </div>
+    </div>
+
+    <p>The answer depends on your priorities. If accuracy matters most, Sonnet wins. If you&rsquo;re processing thousands of tasks and can tolerate some failures, Haiku&rsquo;s cost per success might be better. <strong>The eval suite answers this question for you</strong> &mdash; don&rsquo;t debate, measure.</p>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Create an Evaluation Suite for Your Research Agent</h3>
+      <p>Build a comprehensive eval suite for the agent from Chapter 4:</p>
+      <ol>
+        <li><strong>Create 10 test cases</strong> covering:
+          <ul>
+            <li>3 factual questions with verifiable answers</li>
+            <li>3 comparison questions requiring multiple searches</li>
+            <li>2 edge cases (very niche topics, ambiguous queries)</li>
+            <li>2 adversarial cases (impossible questions, contradictory requests)</li>
+          </ul>
+        </li>
+        <li><strong>Add expected outcomes</strong> for each: keywords that should appear, tools that should be used, maximum step count</li>
+        <li><strong>Run the suite 3 times</strong> and report median scores</li>
+        <li><strong>Try two models</strong> (Sonnet vs Haiku) and compare: accuracy, cost, steps, latency</li>
+        <li><strong>Add an LLM-as-judge</strong> to evaluate answer quality beyond keyword matching</li>
+      </ol>
+      <p>Save your baseline scores &mdash; you&rsquo;ll use them for regression testing as you improve the agent in later chapters.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now know how to measure agent quality rigorously. But so far, you&rsquo;ve built everything from scratch. In the real world, you don&rsquo;t have to &mdash; there are frameworks that handle the tool loop, state management, multi-agent coordination, and evaluation infrastructure for you.</p>
+
+    <p>In <a href="10-agent-frameworks.html">Chapter 10: Agent Frameworks &amp; SDKs</a>, we&rsquo;ll survey the major frameworks &mdash; Claude Agent SDK, OpenAI Agents SDK, LangGraph, CrewAI &mdash; and help you pick the right one for your project. Because now that you understand the fundamentals, you can evaluate these frameworks with real understanding instead of just trusting the marketing.</p>
+
+    <nav class="chapter-nav">
+      <a href="08-error-recovery.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Error Handling &amp; Recovery</span>
+      </a>
+      <a href="10-agent-frameworks.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Agent Frameworks &amp; SDKs</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

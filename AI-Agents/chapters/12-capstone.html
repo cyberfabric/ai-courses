@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Building a Real Agent System | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="11-production.html">&larr; Prev</a>
+      <a href="13-managed-agents.html">Next &rarr;</a>
+      <a href="maps/12-capstone-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Building a Real Agent System</h1>
+    <p class="subtitle">Capstone project &mdash; design, build, and deploy a multi-agent code review system</p>
+  </header>
+
+  <main>
+
+    <h2>The Capstone Challenge</h2>
+
+    <p>You&rsquo;ve learned every piece of the puzzle: architectures (Ch. 2), tool design (Ch. 3), the agent loop (Ch. 4), memory (Ch. 5), human-in-the-loop (Ch. 6), multi-agent orchestration (Ch. 7), error handling (Ch. 8), evaluation (Ch. 9), frameworks (Ch. 10), and production deployment (Ch. 11). Now we put it all together.</p>
+
+    <p>We&rsquo;re building a <strong>multi-agent code review system</strong>. When someone opens a PR, our system automatically analyzes it from three angles &mdash; security, code quality, and logic &mdash; then merges the findings into a unified review. A human reviewer approves before anything gets posted.</p>
+
+    <p>This is a real system you can deploy on real repositories.</p>
+
+    <h2>System Design</h2>
+
+    <div class="architecture-box">
+      <h3>Code Review Agent Architecture</h3>
+      <p>Four agents, coordinated by a supervisor using the pattern from Chapter 7:</p>
+      <div class="workflow-steps">
+        <span class="step">PR Diff</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Orchestrator</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Security Agent</span>
+      </div>
+      <div class="workflow-steps" style="margin-top: 0.5rem;">
+        <span class="step">Orchestrator</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Quality Agent</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Orchestrator</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Merge &amp; Review</span>
+      </div>
+      <p>The <strong>Orchestrator</strong> (Sonnet) parses the PR, creates a review plan, delegates to specialists (Haiku), merges results, and presents the final review. A <strong>human gate</strong> approves before posting. Each specialist has a focused system prompt and sees only the relevant code.</p>
+    </div>
+
+    <h3>Agent Roles</h3>
+
+    <div class="tool-card">
+      <div class="tool-icon">O</div>
+      <div class="tool-info">
+        <div class="tool-name">Orchestrator</div>
+        <div class="tool-desc">Receives the PR diff, creates a review plan, delegates chunks to specialists, merges findings, deduplicates, ranks by severity, and produces the final review. Uses Claude Sonnet for reasoning.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">S</div>
+      <div class="tool-info">
+        <div class="tool-name">Security Agent</div>
+        <div class="tool-desc">Scans for vulnerabilities: SQL injection, XSS, hardcoded secrets, insecure dependencies, auth bypasses. Outputs findings with severity (critical/high/medium/low), file, line, and fix suggestion.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">Q</div>
+      <div class="tool-info">
+        <div class="tool-name">Quality Agent</div>
+        <div class="tool-desc">Checks code quality: naming conventions, code duplication, complexity, design patterns, error handling. References the project&rsquo;s style guide if provided.</div>
+      </div>
+    </div>
+
+    <h2>Step 1: Define the Tools</h2>
+
+    <p>Our system needs tools to interact with Git and the file system:</p>
+
+<pre><code>import subprocess
+import json
+
+review_tools = [
+    {
+        "name": "get_pr_diff",
+        "description": "Get the diff of a pull request. Returns the full "
+                       "diff with file names and line numbers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "base_branch": {
+                    "type": "string",
+                    "description": "The base branch, e.g. 'main'"
+                },
+                "pr_branch": {
+                    "type": "string",
+                    "description": "The PR branch, e.g. 'feature/new-auth'"
+                }
+            },
+            "required": ["base_branch", "pr_branch"]
+        }
+    },
+    {
+        "name": "read_file",
+        "description": "Read the full contents of a source file. Use this "
+                       "to see surrounding context beyond the diff.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path relative to repo root"
+                }
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "list_files",
+        "description": "List files changed in the PR.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "base_branch": {"type": "string"},
+                "pr_branch": {"type": "string"}
+            },
+            "required": ["base_branch", "pr_branch"]
+        }
+    }
+]
+
+def get_pr_diff(base_branch: str, pr_branch: str) -> str:
+    result = subprocess.run(
+        ["git", "diff", f"{base_branch}...{pr_branch}"],
+        capture_output=True, text=True, timeout=30
+    )
+    if result.returncode != 0:
+        return json.dumps({"status": "error", "message": result.stderr})
+    diff = result.stdout
+    if len(diff) > 15000:
+        diff = diff[:15000] + "\n\n[...diff truncated — too large]"
+    return json.dumps({"status": "success", "diff": diff})
+
+def read_file(path: str) -> str:
+    try:
+        with open(path) as f:
+            content = f.read()
+        if len(content) > 8000:
+            content = content[:8000] + "\n[...truncated]"
+        return json.dumps({"status": "success", "content": content})
+    except FileNotFoundError:
+        return json.dumps({"status": "error", "message": f"File not found: {path}"})</code></pre>
+
+    <h2>Step 2: Build the Specialist Agents</h2>
+
+    <p>Each specialist gets a focused system prompt that tells it exactly what to look for and how to report findings:</p>
+
+<pre><code>SECURITY_PROMPT = """You are a security review specialist. Analyze code
+diffs for security vulnerabilities.
+
+CHECK FOR:
+- SQL injection, XSS, command injection
+- Hardcoded secrets (API keys, passwords, tokens)
+- Insecure authentication or authorization
+- Missing input validation on user-facing endpoints
+- Insecure dependencies or deprecated crypto
+
+OUTPUT FORMAT for each finding:
+- severity: critical | high | medium | low
+- file: the file path
+- line: approximate line number
+- issue: one-sentence description
+- fix: suggested remediation
+
+If you find NO issues, say so explicitly. Don't invent problems."""
+
+QUALITY_PROMPT = """You are a code quality reviewer. Analyze code diffs
+for quality and maintainability issues.
+
+CHECK FOR:
+- Unclear or inconsistent naming
+- Functions longer than 50 lines
+- Missing error handling
+- Code duplication (copy-pasted logic)
+- Overly complex logic that could be simplified
+- Missing or incorrect type hints
+
+OUTPUT FORMAT for each finding:
+- severity: high | medium | low
+- file: the file path
+- line: approximate line number
+- issue: one-sentence description
+- suggestion: how to improve it
+
+Focus on substantive issues. Don't flag style preferences."""
+
+def run_specialist(system_prompt: str, code_context: str,
+                   model: str = "claude-haiku-4-5-20251001") -> str:
+    """Run a specialist review agent."""
+    response = client.messages.create(
+        model=model,
+        max_tokens=2048,
+        system=system_prompt,
+        messages=[{"role": "user", "content": code_context}],
+    )
+    return response.content[0].text</code></pre>
+
+    <div class="tip-box">
+      Notice how each prompt ends with <strong>&ldquo;Don&rsquo;t invent problems&rdquo;</strong> or <strong>&ldquo;Don&rsquo;t flag style preferences.&rdquo;</strong> Without these guardrails, LLMs tend to produce false positives &mdash; flagging every line as a potential issue. Precision matters more than recall in code review.
+    </div>
+
+    <h2>Step 3: Build the Orchestrator</h2>
+
+<pre><code>ORCHESTRATOR_PROMPT = """You are a code review orchestrator. Your job is to
+coordinate a thorough code review by delegating to specialists.
+
+PROCESS:
+1. Get the PR diff and list of changed files
+2. Delegate security review to the security specialist
+3. Delegate quality review to the quality specialist
+4. Merge all findings, remove duplicates, rank by severity
+5. Produce a final review summary
+
+RULES:
+- Pass relevant code context to each specialist — not the entire diff
+- Group findings by file
+- Start with critical/high issues, then medium, then low
+- Include an overall assessment: APPROVE, REQUEST_CHANGES, or NEEDS_DISCUSSION
+- Be concise — reviewers don't want to read a novel"""
+
+def run_orchestrator(base_branch: str, pr_branch: str) -> dict:
+    """Run the full code review pipeline."""
+    print("  [1/5] Getting PR diff...")
+    diff = get_pr_diff(base_branch, pr_branch)
+    diff_data = json.loads(diff)
+
+    if diff_data["status"] != "success":
+        return {"status": "error", "message": "Could not get diff"}
+
+    code = diff_data["diff"]
+
+    print("  [2/5] Security review...")
+    security_findings = run_specialist(SECURITY_PROMPT, code)
+
+    print("  [3/5] Quality review...")
+    quality_findings = run_specialist(QUALITY_PROMPT, code)
+
+    print("  [4/5] Merging findings...")
+    merge_prompt = f"""Merge these review findings into a single, organized
+code review. Remove duplicates. Group by file. Rank by severity.
+
+SECURITY FINDINGS:
+{security_findings}
+
+QUALITY FINDINGS:
+{quality_findings}
+
+Produce a final review with:
+1. Overall verdict: APPROVE, REQUEST_CHANGES, or NEEDS_DISCUSSION
+2. Summary (2-3 sentences)
+3. Findings grouped by file, ordered by severity
+4. Each finding with: severity, line, issue, suggestion"""
+
+    final_review = run_specialist(
+        "You merge code review findings into a clear, actionable review.",
+        merge_prompt,
+        model="claude-sonnet-4-6-20250514",  # Smart model for merging
+    )
+
+    print("  [5/5] Review complete.")
+    return {"status": "success", "review": final_review}</code></pre>
+
+    <h2>Step 4: Add Human-in-the-Loop</h2>
+
+    <p>The reviewer sees the findings and decides what to post (from Chapter 6):</p>
+
+<pre><code>def human_review_gate(review: str) -> dict:
+    """Let a human approve, edit, or reject the review."""
+    print("\n" + "="*60)
+    print("AGENT CODE REVIEW — PENDING APPROVAL")
+    print("="*60)
+    print(review)
+    print("="*60)
+    print("\nOptions:")
+    print("  [a] Approve and post as-is")
+    print("  [e] Edit before posting")
+    print("  [r] Reject — do not post")
+    print("  [d] Discard specific findings")
+
+    choice = input("\nYour choice (a/e/r/d) > ").strip().lower()
+
+    if choice == "a":
+        return {"action": "post", "review": review}
+    elif choice == "e":
+        print("\nPaste your edited review (end with an empty line):")
+        lines = []
+        while True:
+            line = input()
+            if line == "":
+                break
+            lines.append(line)
+        return {"action": "post", "review": "\n".join(lines)}
+    elif choice == "d":
+        print("Enter finding numbers to remove (comma-separated):")
+        # In production, parse and filter findings
+        return {"action": "post", "review": review}
+    else:
+        return {"action": "reject"}</code></pre>
+
+    <h2>Step 5: Handle Errors Gracefully</h2>
+
+    <p>What happens when one specialist fails? We don&rsquo;t want to lose the entire review (from Chapter 8):</p>
+
+    <div class="pattern-box">
+      <h3>Partial Results Pattern</h3>
+      <p><strong>Problem:</strong> In a multi-agent system, one agent fails. Do you retry everything or lose the work?</p>
+      <p><strong>Solution:</strong> Collect results independently. If one agent fails, still present results from the others with a note about what&rsquo;s missing.</p>
+<pre><code>def run_with_partial_results(specialists: dict, code: str) -> dict:
+    results = {}
+    failures = []
+
+    for name, prompt in specialists.items():
+        try:
+            results[name] = run_specialist(prompt, code)
+        except Exception as e:
+            failures.append({"agent": name, "error": str(e)})
+            results[name] = f"[{name} review unavailable: {e}]"
+
+    return {
+        "results": results,
+        "failures": failures,
+        "complete": len(failures) == 0,
+        "note": f"{len(failures)} agent(s) failed" if failures else None,
+    }</code></pre>
+      <p><strong>When to use:</strong> Any multi-agent system where partial output is better than no output. Code review with only security findings is still valuable, even without quality analysis.</p>
+    </div>
+
+    <h2>Putting It All Together</h2>
+
+<pre><code>def review_pr(base_branch: str = "main", pr_branch: str = None):
+    """Full code review pipeline with human approval."""
+    if not pr_branch:
+        pr_branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True
+        ).stdout.strip()
+
+    print(f"\n  Reviewing: {pr_branch} → {base_branch}")
+
+    # Run the orchestrator
+    result = run_orchestrator(base_branch, pr_branch)
+
+    if result["status"] != "success":
+        print(f"  Error: {result['message']}")
+        return
+
+    # Human approval gate
+    decision = human_review_gate(result["review"])
+
+    if decision["action"] == "post":
+        print("\n  Review approved. In production, this would be posted "
+              "as a PR comment via the GitHub API.")
+        # gh_api.post_review_comment(pr_number, decision["review"])
+    else:
+        print("\n  Review rejected. No comments posted.")
+
+# Run it on the current branch
+review_pr()</code></pre>
+
+    <h2>Agent Trace: A Full Review</h2>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label tool">Step 1</span>
+        <span><code>get_pr_diff("main", "feature/user-auth")</code> &mdash; 247 lines changed across 5 files</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Step 2</span>
+        <span><strong>Security Agent</strong> analyzes diff &rarr; Found 2 issues: hardcoded JWT secret in <code>auth.py:15</code> (CRITICAL), missing CSRF token validation in <code>views.py:82</code> (HIGH)</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Step 3</span>
+        <span><strong>Quality Agent</strong> analyzes diff &rarr; Found 3 issues: <code>authenticate()</code> is 67 lines (HIGH), inconsistent error returns (MEDIUM), missing type hints on public API (LOW)</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Step 4</span>
+        <span><strong>Orchestrator</strong> merges: 5 unique findings, verdict REQUEST_CHANGES (critical security issue found)</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Step 5</span>
+        <span><strong>Human gate:</strong> Reviewer sees findings. Approves security and quality items, removes the type hints suggestion (team doesn&rsquo;t enforce this).</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Posted</span>
+        <span>4 findings posted as PR comment. Total cost: $0.08. Time: 18 seconds.</span>
+      </div>
+    </div>
+
+    <h2>Cost and Latency Budget</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">$0.05&ndash;0.15</span>
+        <span class="stat-label">Cost per review (Haiku specialists + Sonnet orchestrator)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">15&ndash;30s</span>
+        <span class="stat-label">Wall-clock time for a typical 200-line PR</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3 agents</span>
+        <span class="stat-label">Security + Quality + Merger (can run security &amp; quality in parallel)</span>
+      </div>
+    </div>
+
+    <p>Running specialists in parallel (security + quality simultaneously) cuts latency by ~40%. With prompt caching on the system prompts, cost drops another 30% for subsequent reviews.</p>
+
+    <h2>Evaluation: Testing the System</h2>
+
+    <p>Use the evaluation techniques from Chapter 9 to measure your review system:</p>
+
+<pre><code>review_eval = EvalSuite("Code Review System v1")
+
+# Test: known vulnerability should be caught
+review_eval.add_case(
+    query="diff with SQL injection in user_query = f'SELECT * FROM users WHERE id={id}'",
+    expected_contains=["SQL injection", "parameterized", "critical"],
+)
+
+# Test: clean code should get APPROVE
+review_eval.add_case(
+    query="diff with well-structured code, proper error handling, typed params",
+    expected_contains=["APPROVE"],
+)
+
+# Test: should not flag style preferences
+review_eval.add_case(
+    query="diff using single quotes instead of double quotes in Python",
+    expected_contains=[],  # Should find no issues
+)</code></pre>
+
+    <div class="warning-box">
+      <strong>Measure precision, not just recall.</strong> A review system that flags everything has 100% recall but is useless &mdash; developers will ignore it. Aim for high precision (&gt;80% of flagged issues are real issues) even if it means missing some edge cases. A trusted reviewer that catches 70% of real issues is more valuable than a noisy one that catches 95% but has a 50% false positive rate.
+    </div>
+
+    <h2>Lessons Learned</h2>
+
+    <p>After building this system, here&rsquo;s what you&rsquo;ll discover:</p>
+
+    <div class="pitfall-box">
+      <strong>Diff context is not enough.</strong> A diff shows what changed but not why. The security agent might see <code>password = request.form["password"]</code> and flag it, not realizing it&rsquo;s immediately hashed on the next line (which isn&rsquo;t in the diff). Give specialists access to <code>read_file</code> so they can check surrounding context. This costs more tokens but dramatically reduces false positives.
+    </div>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Smaller PRs get better reviews</strong> &mdash; under 200 lines, agents catch most real issues. Over 500 lines, quality drops sharply</li>
+      <li class="checked"><strong>System prompts need iteration</strong> &mdash; your first draft will produce too many false positives. Iterate based on real PR feedback</li>
+      <li class="checked"><strong>The merger agent is critical</strong> &mdash; without deduplication and ranking, the review is a noisy list instead of actionable feedback</li>
+      <li class="checked"><strong>Human-in-the-loop builds trust</strong> &mdash; developers accept AI reviews much faster when they know a human approved each one</li>
+      <li class="checked"><strong>Start with one specialist</strong> &mdash; get security review working and trusted before adding quality and performance</li>
+    </ul>
+
+    <h2>The Agent Builder&rsquo;s Mindset</h2>
+
+    <p>As you build more agent systems, keep these principles close:</p>
+
+    <div class="highlight-box">
+      <h3>Seven Principles for Agent Builders</h3>
+      <ol>
+        <li><strong>Start simple, add complexity only when the simple version fails</strong> &mdash; a single agent with good tools beats a complex multi-agent system you can&rsquo;t debug</li>
+        <li><strong>Tools matter more than models</strong> &mdash; invest time in tool design (Ch. 3), not model selection</li>
+        <li><strong>The system prompt IS the architecture</strong> &mdash; a clear prompt turns a generic LLM into a focused specialist</li>
+        <li><strong>Always have an escape hatch</strong> &mdash; humans must be able to intervene, override, and shut down</li>
+        <li><strong>Measure everything</strong> &mdash; cost, accuracy, latency. You can&rsquo;t improve what you don&rsquo;t measure</li>
+        <li><strong>Errors are normal</strong> &mdash; design for recovery, not perfection. 85% per step is realistic; 100% is fantasy</li>
+        <li><strong>Build the loop first, then the framework</strong> &mdash; understand <code>while True</code> before reaching for abstractions</li>
+      </ol>
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Deploy Your Code Review System</h3>
+      <p>Take the code from this chapter and run it on a real repository:</p>
+      <ol>
+        <li><strong>Set up the system</strong> &mdash; save all code to <code>review_agent.py</code>, install dependencies, configure your API key</li>
+        <li><strong>Create a test branch</strong> with some intentional issues: a hardcoded secret, a 100-line function, missing error handling</li>
+        <li><strong>Run the review</strong> on your test branch and check: did it catch the intentional issues? Did it produce false positives?</li>
+        <li><strong>Run it on your last 5 real PRs</strong> &mdash; compare the agent&rsquo;s findings with what human reviewers actually commented on</li>
+        <li><strong>Measure:</strong> precision (% of findings that are valid), recall (% of real issues caught), cost per review, time per review</li>
+      </ol>
+      <p>Bonus: add a third specialist (performance agent) that checks for N+1 queries, unnecessary allocations, and algorithmic complexity. Does it improve review quality enough to justify the extra cost?</p>
+    </div>
+
+    <h2>You Built an Agent System</h2>
+
+    <p>Twelve chapters ago, you didn&rsquo;t know the difference between a chatbot and an agent. Now you&rsquo;ve built a multi-agent system with specialized roles, tool use, error recovery, human oversight, evaluation, and production-ready architecture. You understand the <code>while True</code> loop that powers every agent, the tool design that determines success, and the patterns that make agents reliable.</p>
+
+    <p>The agent ecosystem will keep evolving. New frameworks will appear. New models will unlock new capabilities. But the fundamentals you&rsquo;ve learned won&rsquo;t change: observe, think, act, loop. Design good tools. Keep humans in control. Measure everything. Start simple.</p>
+
+    <p>Go build something amazing.</p>
+
+    <nav class="chapter-nav">
+      <a href="11-production.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Production Deployment</span>
+      </a>
+      <a href="13-managed-agents.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Managed Agents</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

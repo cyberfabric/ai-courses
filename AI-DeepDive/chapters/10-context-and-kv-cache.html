@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Context, Memory &amp; the KV Cache | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-sampling-strategies.html">&larr; Prev</a>
+      <a href="11-embeddings-geometry.html">Next &rarr;</a>
+      <a href="maps/10-context-and-kv-cache-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Context, Memory &amp; the KV Cache</h1>
+    <p class="chapter-subtitle">How the KV cache works mechanically, why context windows have hard limits, and the memory math behind it all</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/08-context-windows.html">AI-Intro Ch 8: Context Windows</a>. There you learned that models have a maximum context size. Now you&rsquo;ll understand <em>why</em> that limit exists and what the KV cache actually does under the hood.
+    </div>
+
+    <p>In Chapter 8, you traced autoregressive generation: predict one token, append it, predict the next. In Chapter 9, you saw how sampling strategies shape each prediction. But there&rsquo;s a critical performance question we skipped: <strong>every time the model generates a new token, does it really reprocess the entire sequence from scratch?</strong></p>
+
+    <p>Without optimization, yes. And that&rsquo;s brutally expensive. The KV cache is the trick that makes generation practical. By the end of this chapter, you&rsquo;ll understand exactly what gets cached, how much memory it costs, and why context windows have hard limits.</p>
+
+    <!-- ============================================== -->
+    <h2>The Problem: Redundant Computation</h2>
+    <!-- ============================================== -->
+
+    <p>Recall from Chapter 6: attention requires computing Q, K, and V for every token, then computing attention scores between all pairs. In autoregressive generation, we add one new token at each step.</p>
+
+    <div class="operation-box">
+      <h4>The Naive Approach (No Cache)</h4>
+      <p>At each generation step, recompute Q, K, V for <strong>every token in the sequence</strong>, including all the ones that haven&rsquo;t changed. Then compute the full attention matrix.</p>
+      <ul>
+        <li>Step 1: Process tokens [The] &mdash; compute Q, K, V for 1 token</li>
+        <li>Step 2: Process tokens [The, cat] &mdash; recompute Q, K, V for <strong>2 tokens</strong></li>
+        <li>Step 3: Process tokens [The, cat, sat] &mdash; recompute Q, K, V for <strong>3 tokens</strong></li>
+        <li>Step 100: Process all 100 tokens &mdash; recompute Q, K, V for <strong>100 tokens</strong></li>
+      </ul>
+      <p>Total K/V computations across 100 steps: 1 + 2 + 3 + &hellip; + 100 = <strong>5,050</strong>. But most of that work is wasted &mdash; &ldquo;The&rdquo; doesn&rsquo;t change between steps!</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The Key Insight</h4>
+      <p>In a decoder-only model (GPT, Claude, Llama), tokens can only attend to <em>previous</em> tokens (the causal mask from Chapter 7). This means the K and V vectors for token 1 are always the same, regardless of what comes after. Token 2&rsquo;s K and V are always the same. Only the <strong>newest token&rsquo;s</strong> K and V need to be computed.</p>
+      <p>So why not <strong>save</strong> the K and V vectors as we go and just look them up next time?</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The KV Cache: Save and Reuse</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>How the KV Cache Works</h4>
+      <p>Instead of recomputing K and V for all tokens at every step:</p>
+      <ol>
+        <li><strong>Compute</strong> K and V for the new token only</li>
+        <li><strong>Append</strong> them to the cached K and V from previous steps</li>
+        <li><strong>Compute Q</strong> for the new token only</li>
+        <li><strong>Attend:</strong> use Q (new token) against all cached K and V</li>
+      </ol>
+      <p>Result: each generation step only computes K, V, and Q for <strong>one token</strong> instead of all N tokens.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>KV Cache Step by Step: Generating 5 Tokens</h4>
+
+      <p>Suppose we&rsquo;re generating after a 3-token prompt [The, cat, sat]. The model has one attention layer with head dimension 4.</p>
+
+      <p><strong>Step 0: Process the prompt (prefill)</strong></p>
+      <p>Compute K and V for all 3 prompt tokens at once:</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>K vector</th><th>V vector</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>The</td><td><code>[0.2, 0.5, -0.1, 0.3]</code></td><td><code>[0.8, 0.1, 0.4, -0.2]</code></td></tr>
+          <tr><td>cat</td><td><code>[0.7, -0.3, 0.4, 0.1]</code></td><td><code>[0.3, 0.6, -0.1, 0.5]</code></td></tr>
+          <tr><td>sat</td><td><code>[-0.1, 0.8, 0.2, 0.6]</code></td><td><code>[0.5, -0.2, 0.7, 0.3]</code></td></tr>
+        </tbody>
+      </table>
+      <p>Cache now holds: 3 K vectors, 3 V vectors.</p>
+
+      <p><strong>Step 1: Generate token &ldquo;on&rdquo;</strong></p>
+      <table>
+        <thead>
+          <tr><th>Action</th><th>What Happens</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Compute new</td><td>K<sub>on</sub> = <code>[0.4, 0.1, 0.6, -0.2]</code>, V<sub>on</sub> = <code>[0.1, 0.9, 0.2, 0.4]</code></td></tr>
+          <tr><td>Append to cache</td><td>Cache now has 4 K vectors, 4 V vectors</td></tr>
+          <tr><td>Compute Q</td><td>Q<sub>on</sub> = <code>[0.3, 0.7, -0.2, 0.5]</code></td></tr>
+          <tr><td>Attend</td><td>Q<sub>on</sub> &times; [K<sub>The</sub>, K<sub>cat</sub>, K<sub>sat</sub>, K<sub>on</sub>] &rarr; scores &rarr; softmax &rarr; weighted V sum</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 2: Generate token &ldquo;the&rdquo;</strong></p>
+      <table>
+        <thead>
+          <tr><th>Action</th><th>What Happens</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Compute new</td><td>K<sub>the</sub>, V<sub>the</sub> (new vectors for this position)</td></tr>
+          <tr><td>Append to cache</td><td>Cache now has <strong>5</strong> K vectors, 5 V vectors</td></tr>
+          <tr><td>Compute Q</td><td>Q<sub>the</sub> only</td></tr>
+          <tr><td>Attend</td><td>Q<sub>the</sub> against all 5 cached K vectors</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>The pattern:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Step</th><th>New K/V computed</th><th>Cache size</th><th>Without cache (naive)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>0 (prefill)</td><td>3</td><td>3</td><td>3</td></tr>
+          <tr><td>1</td><td>1</td><td>4</td><td>4</td></tr>
+          <tr><td>2</td><td>1</td><td>5</td><td>5</td></tr>
+          <tr><td>3</td><td>1</td><td>6</td><td>6</td></tr>
+          <tr><td>4</td><td>1</td><td>7</td><td>7</td></tr>
+          <tr><td><strong>Total K/V computed</strong></td><td><strong>7</strong></td><td>&mdash;</td><td><strong>25</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The Tradeoff</h4>
+      <p>The KV cache trades <strong>memory for compute</strong>. Instead of recomputing K and V vectors (expensive), we store them in GPU memory (takes space). For a 5-token generation, we computed 7 K/V pairs instead of 25. For a 1000-token generation, it&rsquo;s 1,003 instead of 501,500. The savings grow quadratically with sequence length.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If you&rsquo;re generating 200 tokens after a 50-token prompt, how many K/V computations does the cache save?</p>
+      <p><strong>Answer:</strong> With cache: 50 (prefill) + 200 (one per step) = <strong>250</strong>. Without cache: 50 + 51 + 52 + &hellip; + 250 = <strong>30,100</strong>. Savings: 29,850 redundant computations avoided!</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Two Phases of Generation</h2>
+    <!-- ============================================== -->
+
+    <p>The KV cache creates two distinct phases with very different performance characteristics:</p>
+
+    <div class="comparison">
+      <div class="comparison-side">
+        <h4>Phase 1: Prefill</h4>
+        <ul>
+          <li><strong>What:</strong> Process the entire prompt</li>
+          <li><strong>Computes:</strong> Q, K, V for all prompt tokens</li>
+          <li><strong>Parallelism:</strong> High &mdash; all tokens processed at once</li>
+          <li><strong>Bottleneck:</strong> Compute (matrix multiplications)</li>
+          <li><strong>Produces:</strong> The KV cache + first token prediction</li>
+          <li><strong>You experience this as:</strong> The pause before text starts appearing</li>
+        </ul>
+      </div>
+      <div class="comparison-side">
+        <h4>Phase 2: Decode</h4>
+        <ul>
+          <li><strong>What:</strong> Generate tokens one at a time</li>
+          <li><strong>Computes:</strong> Q, K, V for one token per step</li>
+          <li><strong>Parallelism:</strong> Low &mdash; inherently sequential</li>
+          <li><strong>Bottleneck:</strong> Memory bandwidth (reading the cache)</li>
+          <li><strong>Produces:</strong> One token, then appends K/V to cache</li>
+          <li><strong>You experience this as:</strong> Text streaming in token by token</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>This is why you experience two distinct latencies when using ChatGPT or Claude:</p>
+
+    <table>
+      <thead>
+        <tr><th>Metric</th><th>What It Measures</th><th>Depends On</th><th>Typical Value</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>TTFT</strong><br>(Time to First Token)</td>
+          <td>How long before the first output token appears</td>
+          <td>Prompt length (more tokens = more prefill work)</td>
+          <td>0.5&ndash;5 seconds</td>
+        </tr>
+        <tr>
+          <td><strong>TPS</strong><br>(Tokens Per Second)</td>
+          <td>How fast output tokens stream after the first</td>
+          <td>Model size (larger model = more parameters to read)</td>
+          <td>30&ndash;100 tokens/sec</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Practical impact:</strong> If you paste a 10,000-token document and ask a question, you&rsquo;ll wait several seconds for the first token (long prefill). But once generation starts, it streams at the same speed as a short prompt. The KV cache from the long prefill is already built &mdash; each decode step only adds one row.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>How Much Memory Does the KV Cache Need?</h2>
+    <!-- ============================================== -->
+
+    <p>Here&rsquo;s where the hard limits come from. The KV cache stores two vectors (K and V) per token, per layer, per head. Let&rsquo;s compute the exact size.</p>
+
+    <div class="operation-box">
+      <h4>KV Cache Memory Formula</h4>
+      <p><code>Memory = tokens &times; layers &times; 2 &times; num_heads &times; head_dim &times; bytes_per_value</code></p>
+      <p>The &ldquo;2&rdquo; is for K and V. Everything else is architecture-specific.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>KV Cache Size for a Toy Model</h4>
+
+      <p>Let&rsquo;s start small. Our toy model:</p>
+      <ul>
+        <li>Layers: <code>4</code></li>
+        <li>Attention heads: <code>2</code></li>
+        <li>Head dimension: <code>3</code></li>
+        <li>Precision: float16 (<code>2 bytes</code> per value)</li>
+        <li>Sequence: <code>10 tokens</code></li>
+      </ul>
+
+      <p><strong>Per token, per layer:</strong></p>
+      <p><code>2 (K+V) &times; 2 heads &times; 3 dimensions = 12 values = 24 bytes</code></p>
+
+      <p><strong>Per token, all layers:</strong></p>
+      <p><code>24 bytes &times; 4 layers = 96 bytes</code></p>
+
+      <p><strong>Full 10-token sequence:</strong></p>
+      <p><code>96 bytes &times; 10 tokens = 960 bytes</code></p>
+
+      <p>Less than 1 KB. No problem! But watch what happens when we scale up.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>KV Cache Size for Real Models</h4>
+
+      <p>Now let&rsquo;s use GPT-3-scale numbers:</p>
+      <ul>
+        <li>Layers: <code>96</code></li>
+        <li>Attention heads: <code>96</code></li>
+        <li>Head dimension: <code>128</code></li>
+        <li>Precision: float16 (<code>2 bytes</code>)</li>
+      </ul>
+
+      <p><strong>Per token, per layer:</strong></p>
+      <p><code>2 &times; 96 heads &times; 128 dim &times; 2 bytes = 49,152 bytes &asymp; 48 KB</code></p>
+
+      <p><strong>Per token, all layers:</strong></p>
+      <p><code>48 KB &times; 96 layers = 4,608 KB &asymp; 4.5 MB</code></p>
+
+      <p>That&rsquo;s <strong>4.5 megabytes per token</strong>. Now let&rsquo;s see what that means for different context lengths:</p>
+
+      <table>
+        <thead>
+          <tr><th>Context Length</th><th>KV Cache Size</th><th>Perspective</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>2,048 tokens</td><td><strong>9 GB</strong></td><td>Fits on most GPUs</td></tr>
+          <tr><td>8,192 tokens</td><td><strong>36 GB</strong></td><td>Needs a high-end GPU (A100 80GB)</td></tr>
+          <tr><td>32,768 tokens</td><td><strong>144 GB</strong></td><td>Multiple GPUs required</td></tr>
+          <tr><td>128,000 tokens</td><td><strong>576 GB</strong></td><td>A whole server rack</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why Context Windows Have Hard Limits</h4>
+      <p>The context window limit is fundamentally a <strong>memory limit</strong>. Every token you add costs ~4.5 MB of GPU memory (for a GPT-3-scale model). When you hit 128K tokens, the KV cache alone needs 576 GB &mdash; and that&rsquo;s on top of the model weights (350 GB for GPT-3) and other overhead. There&rsquo;s no algorithm trick to make this disappear. More context = more memory, period.</p>
+    </div>
+
+    <div class="warning-box">
+      <strong>Watch out:</strong> The KV cache size is <em>per user, per request</em>. When a cloud provider serves thousands of simultaneous users, each one has their own KV cache. This is a major reason why API pricing scales with token count &mdash; you&rsquo;re literally renting GPU memory.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Quadratic Attention Problem</h2>
+    <!-- ============================================== -->
+
+    <p>The KV cache solves the redundant computation problem, but there&rsquo;s a second issue: attention itself is <strong>O(n&sup2;)</strong> where n is the sequence length.</p>
+
+    <p>Why? Each token attends to every previous token. The attention score matrix has dimensions n &times; n. Double the sequence length, and you have 4&times; the attention scores to compute.</p>
+
+    <table>
+      <thead>
+        <tr><th>Sequence Length</th><th>Attention Scores</th><th>Relative Cost</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1,000</td><td>1,000,000</td><td>1&times;</td></tr>
+        <tr><td>2,000</td><td>4,000,000</td><td>4&times;</td></tr>
+        <tr><td>4,000</td><td>16,000,000</td><td>16&times;</td></tr>
+        <tr><td>8,000</td><td>64,000,000</td><td>64&times;</td></tr>
+        <tr><td>128,000</td><td>16,384,000,000</td><td>16,384&times;</td></tr>
+      </tbody>
+    </table>
+
+    <p>This quadratic scaling is the main reason long context is expensive. Going from 4K to 128K context isn&rsquo;t 32&times; more expensive &mdash; it&rsquo;s <strong>1,024&times;</strong> more expensive for the attention computation.</p>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If processing a 1,000-token prompt takes 100ms, how long would a 10,000-token prompt take with standard attention?</p>
+      <p><strong>Answer:</strong> 10&times; longer = 100&times; more attention scores = <strong>10,000ms (10 seconds)</strong>. That&rsquo;s the quadratic tax. In practice, optimizations like FlashAttention reduce this, but the scaling relationship holds.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Solutions: Making Long Context Possible</h2>
+    <!-- ============================================== -->
+
+    <p>Researchers have developed several techniques to push context windows further. Here are the most important ones:</p>
+
+    <h3>Sliding Window Attention</h3>
+
+    <p>Instead of attending to ALL previous tokens, only attend to the last W tokens. This turns the memory requirement from O(n) to O(W), where W is fixed.</p>
+
+    <div class="math-walkthrough">
+      <h4>Sliding Window with W=4</h4>
+
+      <p>An 8-token sequence with a window of 4. Each token can only attend to itself and the 3 tokens before it:</p>
+
+      <table>
+        <thead>
+          <tr><th></th><th>t1</th><th>t2</th><th>t3</th><th>t4</th><th>t5</th><th>t6</th><th>t7</th><th>t8</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>t1</strong></td><td>&#10004;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+          <tr><td><strong>t2</strong></td><td>&#10004;</td><td>&#10004;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+          <tr><td><strong>t3</strong></td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td></td><td></td><td></td><td></td><td></td></tr>
+          <tr><td><strong>t4</strong></td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td></td><td></td><td></td><td></td></tr>
+          <tr><td><strong>t5</strong></td><td></td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td></td><td></td><td></td></tr>
+          <tr><td><strong>t6</strong></td><td></td><td></td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td></td><td></td></tr>
+          <tr><td><strong>t7</strong></td><td></td><td></td><td></td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td></td></tr>
+          <tr><td><strong>t8</strong></td><td></td><td></td><td></td><td></td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td><td>&#10004;</td></tr>
+        </tbody>
+      </table>
+
+      <p>Token 8 cannot directly see token 1. But information can propagate <em>indirectly</em> through the layers &mdash; token 5 saw token 1, and token 8 can see token 5. With enough layers stacked, information from early tokens can still reach later ones.</p>
+    </div>
+
+    <p>Mistral&rsquo;s models use sliding window attention with W=4,096. Combined with many layers, information propagates across much longer distances than the window size suggests.</p>
+
+    <h3>Grouped Query Attention (GQA)</h3>
+
+    <p>Standard multi-head attention has separate K and V for every attention head. GQA <strong>shares</strong> K and V across groups of heads, drastically reducing cache size.</p>
+
+    <div class="math-walkthrough">
+      <h4>GQA: Sharing K/V Across Heads</h4>
+
+      <p>A model with 8 query heads and 2 KV groups:</p>
+
+      <table>
+        <thead>
+          <tr><th>Q Heads</th><th>Shared K/V Group</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Q1, Q2, Q3, Q4</td><td>K/V Group 1</td></tr>
+          <tr><td>Q5, Q6, Q7, Q8</td><td>K/V Group 2</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Standard MHA:</strong> 8 Q heads &times; K + 8 Q heads &times; V = 16 vectors per token per layer</p>
+      <p><strong>GQA with 2 groups:</strong> 8 Q heads + 2 K + 2 V = <strong>4 K/V vectors</strong> per token per layer</p>
+      <p><strong>Memory savings:</strong> 4/16 = <strong>75% reduction</strong> in KV cache size!</p>
+
+      <p>Llama 2 (70B) uses GQA with 8 KV groups for 64 Q heads. Llama 3 continues this pattern. The quality loss is minimal because K/V vectors within a group are often similar anyway.</p>
+    </div>
+
+    <h3>Multi-Query Attention (MQA)</h3>
+
+    <p>The extreme version of GQA: <strong>all</strong> query heads share a single K and single V. Maximum memory savings, but quality can suffer.</p>
+
+    <table>
+      <thead>
+        <tr><th>Approach</th><th>K/V sets per layer</th><th>Cache savings</th><th>Quality impact</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Standard MHA</td><td>= num Q heads (e.g., 64)</td><td>None (baseline)</td><td>Best quality</td></tr>
+        <tr><td>GQA</td><td>= num groups (e.g., 8)</td><td>~75&ndash;90%</td><td>Minimal loss</td></tr>
+        <tr><td>MQA</td><td>= 1</td><td>~98%</td><td>Some loss</td></tr>
+      </tbody>
+    </table>
+
+    <h3>RoPE: Rotary Position Embedding</h3>
+
+    <p>Remember positional encoding from Chapter 7? The original sinusoidal approach added a fixed position vector to each token&rsquo;s embedding. RoPE takes a different approach: it <strong>rotates</strong> the Q and K vectors by an angle that depends on position.</p>
+
+    <p>The key advantage: RoPE allows models to extrapolate to longer sequences than they were trained on. A model trained with 4K context can sometimes handle 8K or 16K with RoPE-based techniques like &ldquo;NTK-aware scaling&rdquo; &mdash; you essentially adjust the rotation frequency to handle longer distances.</p>
+
+    <div class="tip-box">
+      <strong>Why this matters:</strong> RoPE is used in Llama, Mistral, and most modern open models. It&rsquo;s a big part of how the field went from 2K context windows to 128K+ in just a few years.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Meeting Notes Analogy</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <p>The KV cache is like <strong>taking notes during a long meeting</strong>.</p>
+      <ul>
+        <li><strong>Without cache (naive):</strong> Every time someone asks a question, you re-listen to the entire meeting recording from the start. The more the meeting goes on, the longer each re-listen takes.</li>
+        <li><strong>With KV cache:</strong> You write notes as the meeting progresses. When someone asks a question, you consult your notes instead of rewinding. Much faster &mdash; but your notebook has limited pages.</li>
+        <li><strong>Context window limit:</strong> You run out of notebook pages. You can&rsquo;t take more notes, so the meeting has to end (or you start a new notebook, losing the first half).</li>
+        <li><strong>Sliding window:</strong> You erase old notes to make room for new ones. You can&rsquo;t look up what was said 2 hours ago, but recent discussion is always available.</li>
+        <li><strong>GQA:</strong> Instead of each team member keeping their own notes, groups share a single set. Less paper used, and most people&rsquo;s notes looked similar anyway.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Context Window Evolution</h2>
+    <!-- ============================================== -->
+
+    <p>The history of context windows is a story of engineering ingenuity:</p>
+
+    <table>
+      <thead>
+        <tr><th>Year</th><th>Model</th><th>Context</th><th>Key Technique</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>2020</td><td>GPT-3</td><td>2,048</td><td>Standard attention</td></tr>
+        <tr><td>2022</td><td>GPT-3.5</td><td>4,096</td><td>Better training + FlashAttention</td></tr>
+        <tr><td>2023</td><td>GPT-4</td><td>8,192 / 32K</td><td>Efficient attention + scaling</td></tr>
+        <tr><td>2023</td><td>Claude 2</td><td>100,000</td><td>Undisclosed optimizations</td></tr>
+        <tr><td>2024</td><td>Gemini 1.5</td><td>1,000,000</td><td>MoE + efficient attention</td></tr>
+        <tr><td>2024</td><td>Claude 3.5</td><td>200,000</td><td>Continued improvements</td></tr>
+        <tr><td>2025</td><td>Claude 4</td><td>200,000</td><td>Continued improvements</td></tr>
+      </tbody>
+    </table>
+
+    <p>Context grew 500&times; in 5 years. The model architectures didn&rsquo;t change fundamentally &mdash; the optimizations (GQA, FlashAttention, better hardware, clever engineering) made it practical to cache and attend over much longer sequences.</p>
+
+    <!-- ============================================== -->
+    <h2>The &ldquo;Lost in the Middle&rdquo; Problem</h2>
+    <!-- ============================================== -->
+
+    <p>A longer context window doesn&rsquo;t automatically mean better performance. Research shows that models attend unevenly &mdash; they pay most attention to the <strong>beginning</strong> and <strong>end</strong> of the context, with reduced attention to the middle.</p>
+
+    <div class="warning-box">
+      <strong>The lost-in-the-middle effect:</strong> If you paste a 100-page document and ask about information on page 50, the model is less likely to find it than information on page 1 or page 100. This isn&rsquo;t a bug in a specific model &mdash; it&rsquo;s a property of how attention distributes across long sequences.
+    </div>
+
+    <p>Practical implications:</p>
+    <ul>
+      <li>Put the most important context at the <strong>beginning or end</strong> of your prompt</li>
+      <li>Don&rsquo;t assume &ldquo;128K context&rdquo; means the model equally processes all 128K tokens</li>
+      <li>For document Q&amp;A, retrieval (RAG) + short context often beats stuffing everything into one giant prompt</li>
+    </ul>
+
+    <!-- ============================================== -->
+    <h2>Prompt Caching: Reusing Across Requests</h2>
+    <!-- ============================================== -->
+
+    <p>The KV cache we&rsquo;ve discussed is <em>within</em> a single request. But what if you make multiple requests with the same system prompt? Do you recompute K/V for that shared prefix every time?</p>
+
+    <p>Providers like Anthropic and OpenAI offer <strong>prompt caching</strong>: if the beginning of your request matches a previously computed prefix, the server reuses the cached K/V from that prefix. You only pay the prefill cost for the new, unique part of your prompt.</p>
+
+    <div class="tip-box">
+      <strong>Example:</strong> Your application sends a 3,000-token system prompt with every request, plus a ~200-token user message. Without prompt caching, every request processes 3,200 tokens in prefill. With caching, only the 200 new tokens need prefill &mdash; the 3,000-token system prompt&rsquo;s K/V are already in cache. That&rsquo;s up to <strong>15&times; faster TTFT</strong>.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Calculate KV Cache Memory</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your Turn: KV Cache Sizing</h4>
+
+      <p>You have a model with these specs:</p>
+      <ul>
+        <li>Layers: <code>32</code></li>
+        <li>Query heads: <code>32</code></li>
+        <li>KV heads (GQA): <code>8</code></li>
+        <li>Head dimension: <code>128</code></li>
+        <li>Precision: float16 (<code>2 bytes</code>)</li>
+      </ul>
+
+      <p><strong>Questions:</strong></p>
+      <ol>
+        <li>How much KV cache memory per token?</li>
+        <li>How much for a 4,096-token context?</li>
+        <li>How much for a 128,000-token context?</li>
+        <li>How much would it be WITHOUT GQA (32 KV heads instead of 8)?</li>
+      </ol>
+
+      <details>
+        <summary>Show Solution</summary>
+
+        <p><strong>1. Per token (with GQA):</strong></p>
+        <p><code>2 (K+V) &times; 8 KV heads &times; 128 dim &times; 2 bytes = 4,096 bytes = 4 KB</code></p>
+        <p><code>4 KB &times; 32 layers = 128 KB per token</code></p>
+
+        <p><strong>2. For 4,096 tokens:</strong></p>
+        <p><code>128 KB &times; 4,096 = 524,288 KB = <strong>512 MB</strong></code></p>
+
+        <p><strong>3. For 128,000 tokens:</strong></p>
+        <p><code>128 KB &times; 128,000 = 16,384,000 KB = <strong>16 GB</strong></code></p>
+
+        <p><strong>4. Without GQA (32 KV heads):</strong></p>
+        <p><code>2 &times; 32 KV heads &times; 128 dim &times; 2 bytes = 16,384 bytes per token per layer</code></p>
+        <p><code>16,384 &times; 32 layers = 512 KB per token</code></p>
+        <p>At 128K tokens: <code>512 KB &times; 128,000 = <strong>64 GB</strong></code></p>
+        <p>GQA saves <strong>48 GB</strong> &mdash; a 75% reduction, exactly as expected with 8 KV heads vs 32.</p>
+      </details>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>You now understand the infrastructure beneath generation: how the KV cache avoids redundant computation, why memory is the hard constraint, and how techniques like GQA and sliding window push the limits further.</p>
+
+    <p>In <a href="11-embeddings-geometry.html">Chapter 11: Embeddings &mdash; From Words to Geometry</a>, we&rsquo;ll zoom into the very first step of the pipeline &mdash; how tokens become vectors. You&rsquo;ll train a tiny embedding from scratch, compute cosine similarity by hand, and see how vector math lets you search, compare, and reason about meaning.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="09-sampling-strategies.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Sampling Strategies</span>
+    </a>
+    <a href="11-embeddings-geometry.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Embeddings &mdash; From Words to Geometry</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: ANR Diagnosis and Prevention | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../03-anr-diagnosis.html">Chapter</a>
+      <a href="02-crash-logs-logcat-map.html">&#8592; Prev Map</a>
+      <a href="04-memory-leaks-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>ANR Diagnosis and Prevention</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Every time you write code on the main thread, ask: <strong>"Could this ever take more than 100ms?"</strong> If yes &mdash; or even "maybe on a slow device" &mdash; move it to a background thread. The main thread has one job: respond to the user.</p>
+    </div>
+
+    <!-- ====== THE ANR REALITY ====== -->
+    <h2>😱 Why ANRs Are Worse Than Crashes</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🚪</span>
+        <div class="map-card-title">47% Uninstall</div>
+        <div class="map-card-desc">Nearly half of users uninstall after experiencing an ANR. No crash dialog, no review &mdash; they just leave.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚖️</span>
+        <div class="map-card-title">2x Play Store Penalty</div>
+        <div class="map-card-desc">ANRs weigh twice as much as crashes in Play Store vitals. Bad-behavior threshold: 0.47% of sessions.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⏱️</span>
+        <div class="map-card-title">5-Second Rule</div>
+        <div class="map-card-desc">Main thread blocked for 5 seconds = ANR dialog. That's all it takes.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">👻</span>
+        <div class="map-card-title">Silent Killer</div>
+        <div class="map-card-desc">No stacktrace, no crash report. The app just freezes. Hardest Android bugs to troubleshoot.</div>
+      </div>
+    </div>
+
+    <!-- ====== THE THREE TRIGGERS ====== -->
+    <h2>🎯 The Three ANR Triggers</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>ANR Type</th>
+          <th>Trigger</th>
+          <th>Timeout</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Input dispatching</strong> (most common)</td>
+          <td>Main thread doesn't respond to touch/key</td>
+          <td>5 seconds</td>
+        </tr>
+        <tr>
+          <td><strong>BroadcastReceiver</strong></td>
+          <td><code>onReceive()</code> doesn't complete</td>
+          <td>10s foreground / 60s background</td>
+        </tr>
+        <tr>
+          <td><strong>Service</strong></td>
+          <td><code>onCreate/onStartCommand/onBind</code> doesn't complete</td>
+          <td>20s foreground / 200s background</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== ANR DIAGNOSIS FLOW ====== -->
+    <h2>🔍 ANR Diagnosis Workflow</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Pull traces.txt</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Find "main" thread</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Check state</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Find lock holder</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Run /analyze-anr</div>
+    </div>
+
+    <!-- ====== MAIN THREAD STATES ====== -->
+    <h2>🧵 Reading the Main Thread State</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Blocked</h4>
+        <p>Waiting to acquire a lock held by another thread. Find <code>waiting to lock &lt;0x...&gt; held by thread N</code>, then find thread N.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Runnable (doing heavy work)</h4>
+        <p>Main thread is running CPU-intensive code &mdash; JSON parsing, bitmap ops, large list sorting. Top stack frames reveal what.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Waiting / Sleeping</h4>
+        <p>Main thread is waiting for a callback, future, or synchronous IPC that hasn't returned.</p>
+      </li>
+    </ol>
+
+    <!-- ====== COMMON PATTERNS ====== -->
+    <h2>🗂️ Common ANR Patterns</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title">SharedPreferences Trap</div>
+        <div class="map-card-desc"><code>getString()</code> looks harmless but loads the entire XML from disk. First call + concurrent <code>commit()</code> = ANR. Fix: migrate to DataStore.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔀</span>
+        <div class="map-card-title">Wrong Dispatcher</div>
+        <div class="map-card-desc"><code>viewModelScope.launch</code> defaults to <code>Dispatchers.Main</code>. Room query inside = main thread IO. Fix: wrap in <code>withContext(Dispatchers.IO)</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔒</span>
+        <div class="map-card-title">Lock Contention</div>
+        <div class="map-card-desc">Main thread waits for a DB lock held by a long-running background sync. Two problems compound &mdash; sync query + direct main-thread access.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📡</span>
+        <div class="map-card-title">Binder IPC Stall</div>
+        <div class="map-card-desc">System service call (<code>getPackageInfo</code>, etc.) blocks main thread. Look for <code>BinderProxy.transactNative</code> in the trace. Move call off main thread.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⌨️</span>
+        <div class="map-card-title">Undebounced Input</div>
+        <div class="map-card-desc">DB query on every keystroke in <code>afterTextChanged</code>. Fix: use <code>debounce(300)</code> with <code>StateFlow</code> + Room's <code>Flow</code> return type.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">allowMainThreadQueries()</div>
+        <div class="map-card-desc">Disabling Room's safety check is asking for ANRs. Room's check exists for a reason. Use <code>suspend</code> or <code>Flow</code> instead.</div>
+      </div>
+    </div>
+
+    <!-- ====== STRICTMODE ====== -->
+    <h2>🚨 StrictMode: Your Smoke Detector</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">🔍 detectDiskReads()</div>
+      <div class="map-rel-node">💾 detectDiskWrites()</div>
+      <div class="map-rel-center">🚨 StrictMode<br>(debug builds only)</div>
+      <div class="map-rel-node">🌐 detectNetwork()</div>
+      <div class="map-rel-node">🐢 detectCustomSlowCalls()</div>
+    </div>
+
+    <p style="text-align:center; color: var(--text-secondary);">Catches violations <strong>before</strong> they become ANRs. Analogy: smoke detector that alerts before the building burns.</p>
+
+    <!-- ====== TWO SKILLS ====== -->
+    <h2>⚡ Skills Built in This Chapter</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Skill</th>
+          <th>Purpose</th>
+          <th>When to Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>/analyze-anr</code></td>
+          <td>Diagnose an ANR from traces.txt &mdash; finds blocked thread, lock holder, root cause</td>
+          <td>After an ANR happens</td>
+        </tr>
+        <tr>
+          <td><code>/check-anr-risks</code></td>
+          <td>Scan codebase for main-thread violations before they ship</td>
+          <td>Pre-PR review, proactive prevention</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== KEY TERMS ====== -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>ANR (Application Not Responding)</dt>
+      <dd>Android kills your UI responsiveness when the main thread is blocked beyond the timeout threshold.</dd>
+
+      <dt>traces.txt</dt>
+      <dd>Thread dump at <code>/data/anr/traces.txt</code> showing every thread's state at the moment of the ANR.</dd>
+
+      <dt>Lock contention</dt>
+      <dd>Main thread waiting for a lock held by a background thread. The ANR trace shows <code>waiting to lock &lt;0x...&gt; held by thread N</code>.</dd>
+
+      <dt>StrictMode</dt>
+      <dd>Debug-time detector for disk, network, and slow calls on the main thread. Enable in <code>Application.onCreate()</code>.</dd>
+
+      <dt>DataStore</dt>
+      <dd>Fully async replacement for SharedPreferences. Won't block the main thread.</dd>
+
+      <dt>debounce()</dt>
+      <dd>Coroutine Flow operator that waits N ms after the last emission before forwarding. Prevents per-keystroke queries.</dd>
+
+      <dt>Binder IPC</dt>
+      <dd>Inter-process communication to Android system services. Can stall the main thread if the service is overloaded.</dd>
+    </dl>
+
+    <!-- ====== TIME COMPARISON ====== -->
+    <h2>⏱️ Time Comparison: ANR Diagnosis</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Phase</th>
+          <th>Manual</th>
+          <th>AI-Assisted</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Pull &amp; parse traces</td>
+          <td>8 min</td>
+          <td>2 min</td>
+        </tr>
+        <tr>
+          <td>Find lock/wait chain</td>
+          <td>18 min</td>
+          <td>&lt;1 min (AI finds both threads)</td>
+        </tr>
+        <tr>
+          <td>Cross-reference code</td>
+          <td>8 min</td>
+          <td>2 min (follow-up)</td>
+        </tr>
+        <tr>
+          <td>Fix &amp; test</td>
+          <td>6 min</td>
+          <td>5 min</td>
+        </tr>
+        <tr>
+          <td><strong>Total</strong></td>
+          <td><strong>~40 min</strong></td>
+          <td><strong>~13 min</strong> (68% faster)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+
+      <details>
+        <summary>What are the three types of ANR triggers and their timeouts?</summary>
+        <p class="quiz-answer"><strong>Input dispatching</strong> (5s) &mdash; main thread doesn't respond to touch. <strong>BroadcastReceiver</strong> (10s fg / 60s bg) &mdash; onReceive doesn't complete. <strong>Service</strong> (20s fg / 200s bg) &mdash; lifecycle methods don't complete.</p>
+      </details>
+
+      <details>
+        <summary>In an ANR trace, the main thread is "Blocked" and "waiting to lock &lt;0x02a3e5c8&gt; held by thread 14". What's the next step?</summary>
+        <p class="quiz-answer">Find thread 14 in the trace dump to see what it's doing. It holds the lock the main thread needs. The root cause is whatever long operation thread 14 is running.</p>
+      </details>
+
+      <details>
+        <summary>Why is SharedPreferences.getString() an ANR risk?</summary>
+        <p class="quiz-answer">It's synchronous. The first call loads the entire XML from disk. If another thread is calling <code>commit()</code>, <code>getString()</code> blocks until the commit finishes. On slow flash storage = ANR. Fix: migrate to DataStore.</p>
+      </details>
+
+      <details>
+        <summary>What's wrong with viewModelScope.launch { dao.getAllUsers() }?</summary>
+        <p class="quiz-answer"><code>viewModelScope.launch</code> defaults to <code>Dispatchers.Main</code>. The Room query runs on the main thread. Fix: wrap in <code>withContext(Dispatchers.IO)</code> or use Room's <code>Flow</code>/<code>suspend</code> return types.</p>
+      </details>
+
+      <details>
+        <summary>What's the Play Store ANR bad-behavior threshold?</summary>
+        <p class="quiz-answer">0.47% of daily sessions. Roughly 1 in 200 sessions with an ANR gets your app flagged, hurting visibility in the Play Store.</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">ANRs are worse than crashes &mdash; 47% uninstall rate and 2x penalty in Play Store vitals.</li>
+        <li class="map-summary-item">The main thread blocked for 5 seconds = ANR. Ask "could this take >100ms?" for every main-thread operation.</li>
+        <li class="map-summary-item">ANR traces show every thread's state. Find "main" thread, check its state, follow the lock chain to the holder.</li>
+        <li class="map-summary-item">Top ANR causes: SharedPreferences on main thread, wrong dispatcher, lock contention, undebounced input queries.</li>
+        <li class="map-summary-item">Enable StrictMode in debug builds to catch violations before they become production ANRs.</li>
+        <li class="map-summary-item">Build <code>/analyze-anr</code> (diagnosis) and <code>/check-anr-risks</code> (prevention) skills for your toolkit.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-crash-logs-logcat-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">Crash Logs, Logcat &amp; Stacktraces</span>
+      </a>
+      <a href="../03-anr-diagnosis.html" class="next">
+        <span class="nav-direction">Back to Chapter</span>
+        <span class="nav-chapter">ANR Diagnosis and Prevention</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

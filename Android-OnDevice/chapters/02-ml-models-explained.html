@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: How ML Models Work — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-on-device-revolution.html">&larr; Prev</a>
+      <a href="03-first-model.html">Next &rarr;</a>
+      <a href="maps/02-ml-models-explained-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>How ML Models Work</h1>
+    <p class="subtitle">Just enough theory to be dangerous — no PhD required</p>
+  </header>
+
+  <main>
+
+    <h2>What Is a Model, Really?</h2>
+
+    <p>In Chapter 1 we said on-device AI means running models on the phone. But what <em>is</em> a model?</p>
+
+    <p>Here's the analogy that will save you: <strong>a model is a compiled function you didn't write.</strong> It takes an input (an image, a sentence, an audio clip) and returns an output (a label, a bounding box, a transcription). You can call it, but you can't read its source code. The "source code" is millions of numerical weights that were learned during training.</p>
+
+    <p>In Android terms, think of it like a <code>.so</code> native library. You didn't write the C++ inside it. You don't need to understand every line. You just know: "I call this function with these arguments, and I get this result back." A model file works the same way — except the "function" was learned from data, not written by a programmer.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">What a model IS</p>
+        <div class="prompt-text">A file (2-50MB) containing millions of numerical weights.
+You load it, feed it input, and read its output.
+It's a black-box function: input → numbers → output.
+You don't modify it at runtime — it's read-only.</div>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">What a model is NOT</p>
+        <div class="prompt-text">It's NOT code you write or compile.
+It's NOT a rules engine or if/else chain.
+It's NOT a database you query.
+It does NOT "think" — it multiplies matrices, very fast.</div>
+      </div>
+    </div>
+
+    <h2>The Inference Loop — The Pattern Behind Every Feature</h2>
+
+    <p>Every on-device AI feature you build in this course follows the exact same five-step pattern. Learn it once, use it forever:</p>
+
+    <div class="model-pipeline">
+      <p><strong>The inference loop — the core pattern for every on-device AI feature:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">1. Load Model</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">2. Preprocess Input</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">3. Run Inference</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">4. Postprocess Output</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">5. Display Result</span>
+      </div>
+      <p style="margin-top: 1rem; color: var(--color-text-light);">
+        <strong>Load</strong> the model file into memory once (expensive). <strong>Preprocess</strong> your raw input (resize image, tokenize text) into the format the model expects. <strong>Run inference</strong> — the model crunches numbers and produces raw output. <strong>Postprocess</strong> the output into something meaningful (label + confidence). <strong>Display</strong> the result to the user.
+      </p>
+    </div>
+
+    <p>Steps 1 and 5 are Android work you already know (asset loading, Compose UI). Steps 3 is handled by the ML runtime. Your new skills are steps 2 and 4 — <strong>preprocessing and postprocessing</strong> — and that's what most of this chapter is about.</p>
+
+    <h2>Model Formats You'll Encounter</h2>
+
+    <p>Just like images come in PNG, JPEG, and WebP, ML models come in different formats. Here are the ones that matter on Android:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Format</th>
+          <th>Extension</th>
+          <th>Origin</th>
+          <th>When You'll Use It</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>TensorFlow Lite</strong></td>
+          <td><code>.tflite</code></td>
+          <td>Google / TensorFlow</td>
+          <td>Most common on Android. Chapters 3, 7-11. Best ecosystem support, widest hardware acceleration.</td>
+        </tr>
+        <tr>
+          <td><strong>MediaPipe Task Bundle</strong></td>
+          <td><code>.task</code></td>
+          <td>Google / MediaPipe</td>
+          <td>Pre-packaged TFLite model + metadata + preprocessing config. Chapters 4, 9. Easiest to use.</td>
+        </tr>
+        <tr>
+          <td><strong>ONNX</strong></td>
+          <td><code>.onnx</code></td>
+          <td>Microsoft / Linux Foundation</td>
+          <td>Models from PyTorch, scikit-learn, or cross-platform projects. Chapter 8. Good iOS compatibility.</td>
+        </tr>
+        <tr>
+          <td><strong>PyTorch Mobile</strong></td>
+          <td><code>.ptl</code></td>
+          <td>Meta / PyTorch</td>
+          <td>Direct PyTorch deployment. Less common on Android than TFLite — usually converted to TFLite or ONNX first.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Default to TFLite.</strong> When you have a choice, use <code>.tflite</code> format on Android. It has the best hardware acceleration support (NNAPI, GPU delegate), the most mature tooling, and the largest collection of pre-optimized mobile models. You'll only reach for ONNX when a model doesn't convert cleanly to TFLite.
+    </div>
+
+    <h2>Tensors Explained for Android Developers</h2>
+
+    <p>The word "tensor" sounds intimidating, but you already work with them every day. <strong>A tensor is just a multi-dimensional array.</strong> That's it.</p>
+
+    <p>You know <code>IntArray</code> — a 1D tensor. You know <code>Array&lt;IntArray&gt;</code> — a 2D tensor. A <code>Bitmap</code>? That's a 3D tensor: height &times; width &times; color channels (RGBA).</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Android Concept</th>
+          <th>Tensor Shape</th>
+          <th>What It Means</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A single number (confidence score)</td>
+          <td><code>[1]</code> — scalar</td>
+          <td>0 dimensions, one value</td>
+        </tr>
+        <tr>
+          <td>A list of class probabilities</td>
+          <td><code>[1000]</code> — 1D</td>
+          <td>1,000 numbers, one per ImageNet class</td>
+        </tr>
+        <tr>
+          <td>A grayscale image</td>
+          <td><code>[224, 224]</code> — 2D</td>
+          <td>224 rows, 224 columns of pixel values</td>
+        </tr>
+        <tr>
+          <td>An RGB image</td>
+          <td><code>[224, 224, 3]</code> — 3D</td>
+          <td>224&times;224 pixels, 3 color channels</td>
+        </tr>
+        <tr>
+          <td>A batch of RGB images</td>
+          <td><code>[1, 224, 224, 3]</code> — 4D</td>
+          <td>1 image of 224&times;224&times;3 — the standard model input shape</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>That last row — <code>[1, 224, 224, 3]</code> — is the shape you'll see most often. It means: "I'm giving you a batch of 1 image, sized 224&times;224 pixels, with 3 color channels (RGB)." Nearly every image classification model expects exactly this shape (sometimes with 320 or 512 instead of 224).</p>
+
+    <div class="warning-box">
+      <strong>Shape mismatches are the #1 beginner mistake.</strong> If a model expects input shape <code>[1, 224, 224, 3]</code> and you feed it a <code>[1, 640, 480, 3]</code> tensor (your raw camera frame), it will crash or produce garbage. Always check the model's expected input shape and resize your data to match.
+    </div>
+
+    <h2>Input Preprocessing — Why You Can't Just Throw a Bitmap at a Model</h2>
+
+    <p>Your camera gives you a 12-megapixel <code>Bitmap</code>. The model expects a tiny 224&times;224 float tensor with values between 0.0 and 1.0. You need to bridge that gap. This is <strong>preprocessing</strong>.</p>
+
+    <p>Here are the three preprocessing steps you'll do for almost every image model:</p>
+
+    <h3>Step 1: Resize to the Expected Dimensions</h3>
+
+    <p>Most mobile vision models expect small, square inputs — 224&times;224, 320&times;320, or 512&times;512. You need to resize (and potentially crop) your camera frame to match.</p>
+
+<pre><code>// Resize a Bitmap to the model's expected size
+val resized = Bitmap.createScaledBitmap(
+    originalBitmap,
+    224,  // model expects 224 wide
+    224,  // model expects 224 tall
+    true  // bilinear filtering
+)</code></pre>
+
+    <h3>Step 2: Normalize Pixel Values</h3>
+
+    <p>A <code>Bitmap</code> stores each color channel as an integer from 0 to 255. Most models want floats between 0.0 and 1.0 (or sometimes -1.0 to 1.0). You divide by 255:</p>
+
+<pre><code>// Convert pixel (0-255) to normalized float (0.0-1.0)
+val normalized = pixelValue / 255.0f
+
+// Some models use a different normalization:
+// mean/std normalization (ImageNet standard)
+val normalizedImageNet = (pixelValue / 255.0f - 0.485f) / 0.229f</code></pre>
+
+    <h3>Step 3: Arrange Channels Correctly</h3>
+
+    <p>Android <code>Bitmap</code> pixels are ARGB (alpha, red, green, blue). Most models expect RGB (no alpha) or sometimes BGR. You need to extract the right channels in the right order.</p>
+
+    <p>Thankfully, you rarely do this by hand. TFLite's <code>ImageProcessor</code> class handles all three steps in a clean pipeline:</p>
+
+<pre><code>val imageProcessor = ImageProcessor.Builder()
+    .add(ResizeOp(224, 224, ResizeOp.ResizeMethod.BILINEAR))
+    .add(NormalizeOp(0.0f, 255.0f))  // normalize to [0, 1]
+    .build()
+
+val tensorImage = TensorImage(DataType.FLOAT32)
+tensorImage.load(bitmap)
+val processed = imageProcessor.process(tensorImage)
+// processed is now ready for inference</code></pre>
+
+    <div class="model-pipeline">
+      <p><strong>Image preprocessing pipeline — what happens to your camera frame before inference:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Camera Bitmap (4032&times;3024)</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Resize (224&times;224)</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Normalize (0-255 &rarr; 0.0-1.0)</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Float Tensor [1, 224, 224, 3]</span>
+      </div>
+    </div>
+
+    <h2>Output Postprocessing — Making Sense of Raw Numbers</h2>
+
+    <p>A model doesn't return "golden retriever, 92% confident." It returns an array of 1,000 floating-point numbers — one for each class it knows. These raw numbers are called <strong>logits</strong> or <strong>probabilities</strong> (depending on the model's final layer).</p>
+
+    <p>Your job is to interpret them:</p>
+
+<pre><code>// Model output: FloatArray of 1000 probabilities
+val output = FloatArray(1000)
+interpreter.run(inputBuffer, output)
+
+// Find the index with the highest probability
+val maxIndex = output.indices.maxByOrNull { output[it] } ?: 0
+val confidence = output[maxIndex]
+
+// Map index to human-readable label
+val labels = loadLabels(context, "labels.txt")  // 1000 lines, one per class
+val prediction = labels[maxIndex]
+
+// Result: "golden_retriever" with 0.92 confidence
+println("$prediction: ${(confidence * 100).toInt()}%")</code></pre>
+
+    <p>That's postprocessing in a nutshell: find the highest number, look up what it means, and show the result. Different model types have different output formats — object detectors return bounding box coordinates, segmentation models return per-pixel masks — but the principle is always the same: <strong>raw numbers in, meaningful result out.</strong></p>
+
+    <h2>Model Metadata — The README Inside the Model</h2>
+
+    <p>Good <code>.tflite</code> models come with embedded metadata — think of it as a README file packed inside the model. The metadata tells you:</p>
+
+    <ul>
+      <li><strong>Input tensor shape</strong> — what size and format the model expects (e.g., <code>[1, 224, 224, 3]</code>)</li>
+      <li><strong>Output tensor shape</strong> — what the model returns (e.g., <code>[1, 1000]</code> for 1,000 classes)</li>
+      <li><strong>Normalization parameters</strong> — how to scale pixel values (mean=0.0, std=255.0)</li>
+      <li><strong>Labels file</strong> — the list of class names the model can predict</li>
+      <li><strong>Model description</strong> — what the model does, its accuracy, and limitations</li>
+    </ul>
+
+    <p>You can read metadata programmatically:</p>
+
+<pre><code>val metadataExtractor = MetadataExtractor(modelBuffer)
+val inputTensor = metadataExtractor.getInputTensorShape(0)
+// inputTensor = [1, 224, 224, 3]
+
+// Extract the labels file bundled inside the model
+val labelsStream = metadataExtractor
+    .getAssociatedFile("labels.txt")
+val labels = labelsStream.bufferedReader()
+    .readLines()</code></pre>
+
+    <div class="tip-box">
+      <strong>Always check model metadata first.</strong> Before writing preprocessing code, check what the model actually expects. A model that wants <code>[1, 320, 320, 3]</code> with mean/std normalization will produce garbage if you feed it <code>[1, 224, 224, 3]</code> with simple 0-255 normalization. The metadata is your contract with the model.
+    </div>
+
+    <h2>Common Model Architectures for Android</h2>
+
+    <p>You don't need to understand how these models are built. But you do need to know what they do, because you'll be choosing between them:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">M</div>
+      <div class="tool-info">
+        <div class="tool-name">MobileNet</div>
+        <div class="tool-desc"><strong>Image classification</strong> — "What is this?" Takes an image, returns the most likely class label. MobileNetV3-Small (2.4MB) and MobileNetV3-Large (5.4MB) are the go-to choices. Extremely fast on mobile hardware.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">S</div>
+      <div class="tool-info">
+        <div class="tool-name">SSD / YOLO</div>
+        <div class="tool-desc"><strong>Object detection</strong> — "What is this, and where is it?" Returns bounding box coordinates + class labels for every detected object. SSD-MobileNetV2 (6.8MB) for speed; YOLOv8-nano (6.2MB) for better accuracy.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">D</div>
+      <div class="tool-info">
+        <div class="tool-name">DeepLab</div>
+        <div class="tool-desc"><strong>Image segmentation</strong> — "Which pixels belong to what?" Returns a per-pixel mask labeling every pixel as person, background, car, etc. Powers portrait mode and background replacement features.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">B</div>
+      <div class="tool-info">
+        <div class="tool-name">MobileBERT</div>
+        <div class="tool-desc"><strong>Text classification</strong> — "What kind of text is this?" Analyzes text for sentiment, category, intent, or spam detection. 25MB, ~12ms inference. The NLP equivalent of MobileNet.</div>
+      </div>
+    </div>
+
+    <h2>The Size-Accuracy Tradeoff</h2>
+
+    <p>In mobile ML, there's always a tradeoff between model size and accuracy. Smaller models run faster and use less memory, but they make more mistakes. Here's the real data:</p>
+
+    <div class="device-benchmark">
+      <p><strong>Image classification models — size vs. accuracy on ImageNet (Pixel 8 Pro, NNAPI):</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Size</th>
+            <th>Top-1 Accuracy</th>
+            <th>Inference Time</th>
+            <th>Memory Usage</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>MobileNetV3-Small</td>
+            <td>2.4 MB</td>
+            <td>67.5%</td>
+            <td>~3 ms</td>
+            <td>~15 MB</td>
+          </tr>
+          <tr>
+            <td>MobileNetV3-Large</td>
+            <td>5.4 MB</td>
+            <td>75.2%</td>
+            <td>~6 ms</td>
+            <td>~25 MB</td>
+          </tr>
+          <tr>
+            <td>EfficientNet-Lite0</td>
+            <td>4.7 MB</td>
+            <td>75.1%</td>
+            <td>~7 ms</td>
+            <td>~30 MB</td>
+          </tr>
+          <tr>
+            <td>EfficientNet-Lite4</td>
+            <td>13 MB</td>
+            <td>80.4%</td>
+            <td>~20 ms</td>
+            <td>~55 MB</td>
+          </tr>
+          <tr>
+            <td>EfficientNet-B7</td>
+            <td>66 MB</td>
+            <td>84.3%</td>
+            <td>~120 ms</td>
+            <td>~250 MB</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">Going from 2.4MB to 66MB gets you 17 percentage points of accuracy — but costs 40x the inference time and 16x the memory. For most mobile features, MobileNetV3-Large is the sweet spot.</p>
+    </div>
+
+    <p>Remember the "good enough" principle from Chapter 1: a 5MB model fine-tuned for your specific 10-class task will outperform a 66MB general-purpose model. <strong>Pick the smallest model that meets your accuracy requirements, then fine-tune it for your domain.</strong></p>
+
+    <h2>Where to Find Pre-Trained Models</h2>
+
+    <p>You don't need to train models from scratch. There are thousands of pre-trained, mobile-optimized models ready to download. Think of these as the "package registries" for ML models:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">TF</div>
+      <div class="tool-info">
+        <div class="tool-name">TensorFlow Hub / Kaggle Models</div>
+        <div class="tool-desc">Google's model registry. Largest collection of <code>.tflite</code> models optimized for mobile. Filter by "TFLite" and "mobile" to find models ready for Android. Your first stop for any vision or NLP task.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">MP</div>
+      <div class="tool-info">
+        <div class="tool-name">MediaPipe Solutions</div>
+        <div class="tool-desc">Pre-built ML solutions with models included. Face detection, hand tracking, pose estimation, object detection, text classification — production-ready, no model hunting required.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">HF</div>
+      <div class="tool-info">
+        <div class="tool-name">Hugging Face</div>
+        <div class="tool-desc">The largest open model community. Filter by "tflite" or "onnx" for mobile-compatible models. Especially strong for NLP models (text classification, sentiment, translation). Many models need conversion to TFLite.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">OX</div>
+      <div class="tool-info">
+        <div class="tool-name">ONNX Model Zoo</div>
+        <div class="tool-desc">Curated collection of models in ONNX format. Good for PyTorch-originated models. Use ONNX Runtime Mobile on Android or convert to TFLite.</div>
+      </div>
+    </div>
+
+    <div class="hardware-note">
+      <p><strong>Device compatibility for common model sizes:</strong></p>
+      <ul>
+        <li><strong>Under 5MB models</strong> (MobileNet, MediaPipe) — run on virtually any Android device from the last 5 years, including budget phones with 2GB RAM</li>
+        <li><strong>5-25MB models</strong> (EfficientNet-Lite, MobileBERT) — comfortable on mid-range devices (4GB+ RAM). May need fallbacks on budget devices</li>
+        <li><strong>25-100MB models</strong> (larger EfficientNet, Whisper small) — flagship territory (8GB+ RAM). Consider dynamic download rather than bundling in APK</li>
+        <li><strong>Gemini Nano</strong> (system-managed, ~2GB) — Pixel 8 Pro+, Samsung Galaxy S24+. The OS manages the model; your app just calls the API</li>
+      </ul>
+    </div>
+
+    <h2>Peeking Inside a Model with Netron</h2>
+
+    <p>There's a free tool called <strong>Netron</strong> that lets you visually inspect any model file — think of it as "Android Studio's Layout Inspector, but for ML models." Open a <code>.tflite</code> file in Netron and you can see:</p>
+
+    <ul>
+      <li>The input shape (what the model expects)</li>
+      <li>The output shape (what the model returns)</li>
+      <li>Every layer and operation in the model</li>
+      <li>The file size and number of parameters</li>
+      <li>Embedded metadata and labels</li>
+    </ul>
+
+    <p>You can use Netron at <strong>netron.app</strong> in your browser — no install required. Just drag and drop a <code>.tflite</code> file. This is the fastest way to answer "what does this model expect?" when documentation is sparse.</p>
+
+    <h2>Putting It All Together</h2>
+
+    <p>Let's trace through a complete example end-to-end. You want to classify a photo of a dog:</p>
+
+    <div class="highlight-box">
+      <h3>End-to-End Inference Example</h3>
+      <ol>
+        <li><strong>Load model</strong> — read <code>mobilenet_v3.tflite</code> from assets into an <code>Interpreter</code></li>
+        <li><strong>Check metadata</strong> — input: <code>[1, 224, 224, 3]</code>, normalize: 0.0/255.0, labels: 1,000 ImageNet classes</li>
+        <li><strong>Preprocess</strong> — resize Bitmap to 224&times;224, normalize pixels to [0, 1], create float tensor</li>
+        <li><strong>Inference</strong> — call <code>interpreter.run(input, output)</code> — takes ~6ms on NPU</li>
+        <li><strong>Postprocess</strong> — find max index in output array (249), look up label ("golden_retriever"), get confidence (0.92)</li>
+        <li><strong>Display</strong> — show "Golden Retriever — 92%" in your Compose UI</li>
+      </ol>
+    </div>
+
+    <p>That's the entire mental model. Every on-device AI feature in this course — image classification, object detection, hand tracking, text analysis, speech recognition — is a variation of this pattern. The model changes, the preprocessing changes, the output format changes, but the five-step loop stays the same.</p>
+
+    <h2>Try It: Explore a Real Model</h2>
+
+    <div class="exercise-box">
+      <p><strong>Download and inspect a real model — no code required yet.</strong></p>
+      <ol>
+        <li>Go to <strong>Kaggle Models</strong> and search for "MobileNetV3 TFLite"</li>
+        <li>Download the <strong>MobileNetV3-Large</strong> <code>.tflite</code> file</li>
+        <li>Open it in <strong>Netron</strong> (netron.app — works in your browser)</li>
+        <li>Find and write down:
+          <ul>
+            <li>The <strong>input tensor name</strong> and <strong>shape</strong> (hint: look for <code>serving_default_input</code>)</li>
+            <li>The <strong>output tensor name</strong> and <strong>shape</strong></li>
+            <li>The <strong>file size</strong></li>
+            <li>The <strong>number of operations</strong> in the model graph</li>
+          </ul>
+        </li>
+        <li>Now download <strong>MobileNetV3-Small</strong> and compare — how do the sizes and shapes differ?</li>
+      </ol>
+      <p>This exercise builds your intuition for model files. In Chapter 3, you'll load this exact model into an Android app and run inference on live camera frames.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now understand what a model is, how inference works, and what preprocessing and postprocessing mean. You can look at a <code>.tflite</code> file and know what it expects.</p>
+
+    <p>Time to stop reading and start building. In <strong>Chapter 3: Your First On-Device Model</strong>, you'll create an Android app from scratch that loads MobileNetV3 onto your phone, captures frames from the camera with CameraX, classifies objects in real time, and displays results in Compose. By the end of Chapter 3, you'll have a working AI feature running on your device.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="01-on-device-revolution.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">The On-Device AI Revolution</span>
+      </a>
+      <a href="03-first-model.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Your First On-Device Model</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

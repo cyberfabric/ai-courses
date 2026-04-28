@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Retrieval That Actually Works | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-chunking-strategies.html">&larr; Prev</a>
+      <a href="08-building-the-pipeline.html">Next &rarr;</a>
+      <a href="maps/07-retrieval-that-works-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Retrieval That Actually Works</h1>
+    <p class="subtitle">Keyword search, semantic search, hybrid search, and re-ranking — finding the needle in the haystack</p>
+  </header>
+
+  <main>
+
+    <p>In the last chapter, you learned how to slice documents into chunks — the atoms of your RAG system. You now have thousands (or millions) of perfectly sized pieces sitting in a vector database, waiting to be found.</p>
+
+    <p>But here's the thing: <strong>chunking is only half the story</strong>. The other half — arguably the harder half — is retrieval. When a user asks "What's our refund policy for enterprise clients?", your system needs to find the 3–5 most relevant chunks out of potentially millions. Get this wrong, and it doesn't matter how good your LLM is — garbage in, garbage out.</p>
+
+    <p>This chapter is about making retrieval actually work. Not "works in a demo" — works in production, with real users asking messy, ambiguous, misspelled questions.</p>
+
+    <div class="highlight-box">
+      <h3>The Big Idea</h3>
+      <p>No single retrieval method is best for every query. The secret to great RAG retrieval is combining multiple approaches — keyword search for precision, semantic search for understanding, and re-ranking for quality — into a pipeline that handles whatever users throw at it.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Retrieval Problem</h2>
+
+    <p>Let's make this concrete. You've indexed 10,000 chunks from your company's documentation. A user types:</p>
+
+    <p><em>"How do I reset my API key?"</em></p>
+
+    <p>Your system needs to:</p>
+    <ol>
+      <li>Search through all 10,000 chunks</li>
+      <li>Find the 5 most relevant ones</li>
+      <li>Return them in order of relevance</li>
+      <li>Do all of this in under 100 milliseconds</li>
+    </ol>
+
+    <p>Sounds simple? Here's why it's not. The chunk that answers this question might say "To regenerate your credentials, navigate to Settings > Security > Token Management." Notice that it doesn't contain the words "reset," "API," or "key" — yet it's the perfect answer.</p>
+
+    <p>This is the fundamental tension in retrieval: <strong>exact word matching</strong> vs. <strong>meaning matching</strong>. And as you'll see, the best systems use both.</p>
+
+    <div class="pipeline-box">
+      <h3>Where Retrieval Fits in the RAG Pipeline</h3>
+      <p>Retrieval is the bridge between your indexed knowledge and the LLM. The pipeline flows: <strong>User Question → Embed Query → Retrieve Chunks → (Optional: Re-rank) → Build Prompt → LLM Generates Answer</strong>. Everything in this chapter happens in that "Retrieve Chunks" step — and the optional re-ranking step right after it. Get retrieval right, and the LLM has great material to work with. Get it wrong, and you're asking the LLM to write a book report on the wrong book.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Keyword Search: The Classic That Still Works</h2>
+
+    <p>Before embeddings and vector databases, there was keyword search. And despite all the AI hype, keyword search is still incredibly useful — sometimes even better than semantic search.</p>
+
+    <p>The most important keyword search algorithm is <strong>BM25</strong> (Best Match 25). Think of it as Ctrl+F on steroids.</p>
+
+    <div class="retrieval-box">
+      <h3>How BM25 Works (Intuition)</h3>
+      <p>BM25 scores documents based on two key ideas:</p>
+      <ul>
+        <li><strong>Term Frequency (TF):</strong> If a word appears more often in a chunk, that chunk is probably more relevant — but with diminishing returns. The 5th mention of "refund" doesn't help as much as the 1st.</li>
+        <li><strong>Inverse Document Frequency (IDF):</strong> Words that appear in fewer documents are more informative. "Refund" is more useful than "the" for finding relevant chunks.</li>
+        <li><strong>Length normalization:</strong> A 20-page document shouldn't outrank a 1-paragraph answer just because it has more words. BM25 penalizes longer documents so they don't dominate results unfairly.</li>
+      </ul>
+      <p>Analogy: Imagine searching a library catalog. BM25 is like a librarian who counts how many times your search words appear in each book, gives bonus points for rare words, and adjusts for book length. Simple, fast, and surprisingly effective.</p>
+    </div>
+
+    <p>Here's a basic BM25 implementation using the <code>rank_bm25</code> library:</p>
+
+    <pre><code>from rank_bm25 import BM25Okapi
+import nltk
+from nltk.tokenize import word_tokenize
+
+# Your chunks (from the chunking chapter)
+chunks = [
+    "To reset your API key, go to Settings and click Regenerate.",
+    "Our refund policy allows returns within 30 days of purchase.",
+    "API rate limits are set to 1000 requests per minute.",
+    "Enterprise clients can contact support for custom API configurations.",
+    "The credentials management page lets you rotate tokens and keys."
+]
+
+# Tokenize each chunk
+tokenized_chunks = [word_tokenize(chunk.lower()) for chunk in chunks]
+
+# Build the BM25 index
+bm25 = BM25Okapi(tokenized_chunks)
+
+# Search
+query = "how do I reset my API key"
+tokenized_query = word_tokenize(query.lower())
+scores = bm25.get_scores(tokenized_query)
+
+# Get top results
+top_indices = scores.argsort()[-3:][::-1]
+for i in top_indices:
+    print(f"Score: {scores[i]:.2f} | {chunks[i]}")</code></pre>
+
+    <div class="tip-box">
+      <h3>When Keyword Search Wins</h3>
+      <p>BM25 excels when queries contain <strong>exact identifiers</strong> — error codes (<code>ERR_CONN_REFUSED</code>), product names (<code>iPhone 15 Pro Max</code>), API endpoints (<code>/api/v2/users</code>), version numbers, or domain-specific jargon. Embedding models may not understand these the way keyword matching does.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Semantic Search: Understanding Meaning</h2>
+
+    <p>Keyword search has a fatal flaw: it only finds documents that share the same words as the query. If the user asks "How do I cancel my subscription?" but the docs say "To terminate your membership plan…" — keyword search whiffs completely.</p>
+
+    <p>Semantic search fixes this by comparing <strong>meaning</strong>, not words. You learned about embeddings in Chapter 4 — semantic search is where they earn their keep.</p>
+
+    <pre><code>import numpy as np
+from openai import OpenAI
+
+client = OpenAI()
+
+def get_embedding(text, model="text-embedding-3-small"):
+    """Get embedding vector for a text string."""
+    response = client.embeddings.create(input=text, model=model)
+    return np.array(response.data[0].embedding)
+
+def cosine_similarity(a, b):
+    """Measure how similar two vectors are (1 = identical, 0 = unrelated)."""
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Embed all chunks (in practice, do this once and store in a vector DB)
+chunk_embeddings = [get_embedding(chunk) for chunk in chunks]
+
+# Embed the query
+query = "How do I cancel my subscription?"
+query_embedding = get_embedding(query)
+
+# Find most similar chunks
+similarities = [cosine_similarity(query_embedding, emb) for emb in chunk_embeddings]
+top_indices = np.argsort(similarities)[-3:][::-1]
+
+for i in top_indices:
+    print(f"Similarity: {similarities[i]:.3f} | {chunks[i]}")</code></pre>
+
+    <p>The beauty of semantic search: it finds "terminate your membership plan" even when the user typed "cancel my subscription." The embedding model understands these mean the same thing.</p>
+
+    <div class="tip-box">
+      <h3>When Semantic Search Wins</h3>
+      <p>Semantic search shines with <strong>conceptual queries</strong> — "What's our policy on working from home?" will match "Remote work guidelines" even though they share zero meaningful keywords. It handles paraphrasing, synonyms, and natural language questions beautifully.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Showdown: Keyword vs. Semantic</h2>
+
+    <p>Let's see how each approach handles different types of queries:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Keyword Search (BM25) Wins</h4>
+        <ul>
+          <li><strong>Query:</strong> "ERR_AUTH_TOKEN_EXPIRED"<br>BM25 finds the exact error code. Semantic search might return vaguely related auth docs.</li>
+          <li><strong>Query:</strong> "iPhone 15 Pro Max battery specs"<br>BM25 nails the exact product name. Semantic search might confuse it with other iPhone models.</li>
+          <li><strong>Query:</strong> "kubectl apply -f deployment.yaml"<br>BM25 matches the exact command. Semantic search doesn't understand CLI syntax well.</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Semantic Search Wins</h4>
+        <ul>
+          <li><strong>Query:</strong> "How do I get my money back?"<br>Semantic search finds "refund policy." BM25 misses because neither "money" nor "back" appear in the docs.</li>
+          <li><strong>Query:</strong> "What happens if the server goes down?"<br>Semantic search finds "disaster recovery procedures." BM25 looks for "server" and "goes down" literally.</li>
+          <li><strong>Query:</strong> "Can I use this on my phone?"<br>Semantic search finds "mobile compatibility." BM25 doesn't connect "phone" to "mobile."</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>See the pattern? <strong>Neither approach is universally better.</strong> BM25 wins with exact terms and identifiers. Semantic search wins with natural language and conceptual questions. The real question is: why choose?</p>
+
+    <!-- ============================================ -->
+    <h2>Hybrid Search: The Best of Both Worlds</h2>
+
+    <p>Hybrid search runs both keyword and semantic search on every query, then combines the results. It's no longer a nice-to-have — <strong>hybrid search is the production standard for RAG in 2026.</strong> Studies show it improves retrieval accuracy by 10–30% compared to using either method alone.</p>
+
+    <p>Here's the real-world data that makes the case:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">62%</div>
+        <div class="stat-label">BM25 alone — relevant docs in top 10</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">71%</div>
+        <div class="stat-label">Semantic search alone — relevant docs in top 10</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">87%</div>
+        <div class="stat-label">Hybrid + re-ranking — relevant docs in top 10</div>
+      </div>
+    </div>
+
+    <p>That's a massive jump. But how do you actually combine two completely different scoring systems? Enter Reciprocal Rank Fusion.</p>
+
+    <!-- ============================================ -->
+    <h2>Reciprocal Rank Fusion (RRF): The Glue</h2>
+
+    <p>The tricky part of hybrid search is that BM25 scores and cosine similarity scores are on completely different scales. BM25 might give a score of 14.7 while cosine similarity gives 0.82. You can't just add them together.</p>
+
+    <p><strong>Reciprocal Rank Fusion (RRF)</strong> solves this elegantly by ignoring the scores entirely and using only the <strong>ranks</strong>. The idea: if a chunk ranks high in both search methods, it's probably relevant.</p>
+
+    <p>The formula is simple:</p>
+
+    <pre><code># RRF formula
+# For each document d, across all search methods:
+# RRF_score(d) = Σ  1 / (k + rank(d))
+#
+# k is a constant (typically 60) that prevents top-ranked
+# documents from dominating too much</code></pre>
+
+    <p>Let's see it in action:</p>
+
+    <pre><code>def reciprocal_rank_fusion(ranked_lists, k=60):
+    """
+    Combine multiple ranked result lists using RRF.
+
+    Args:
+        ranked_lists: List of lists, each containing doc IDs in rank order
+        k: Smoothing constant (default 60)
+
+    Returns:
+        List of (doc_id, rrf_score) sorted by score descending
+    """
+    rrf_scores = {}
+
+    for ranked_list in ranked_lists:
+        for rank, doc_id in enumerate(ranked_list, start=1):
+            if doc_id not in rrf_scores:
+                rrf_scores[doc_id] = 0
+            rrf_scores[doc_id] += 1 / (k + rank)
+
+    # Sort by RRF score, highest first
+    return sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+
+
+# Example: BM25 returns these chunks (by ID), best first
+bm25_results = [3, 0, 4, 1, 2]
+
+# Semantic search returns these chunks, best first
+semantic_results = [0, 4, 3, 2, 1]
+
+# Fuse them
+fused = reciprocal_rank_fusion([bm25_results, semantic_results])
+
+print("Hybrid search results (RRF):")
+for doc_id, score in fused[:5]:
+    print(f"  Chunk {doc_id}: RRF score = {score:.4f}")</code></pre>
+
+    <p>In this example, chunks 0, 3, and 4 rank high in both methods, so they bubble to the top. Chunk 1 ranks low in both, so it sinks. <strong>RRF doesn't care about the raw scores — only the ranking positions.</strong></p>
+
+    <div class="tip-box">
+      <h3>Why k = 60?</h3>
+      <p>The constant <code>k</code> controls how much top ranks dominate. With <code>k = 60</code>, the difference between rank 1 and rank 2 is small (1/61 vs 1/62), preventing a single high-ranked result from overshadowing everything else. This value comes from the original RRF paper and works well in practice — you rarely need to tune it.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Putting Hybrid Search Together</h2>
+
+    <p>Here's a complete hybrid search implementation that combines BM25 and vector search with RRF:</p>
+
+    <pre><code>from rank_bm25 import BM25Okapi
+from openai import OpenAI
+import numpy as np
+
+class HybridSearcher:
+    def __init__(self, chunks, embeddings):
+        self.chunks = chunks
+        self.embeddings = np.array(embeddings)
+
+        # Build BM25 index
+        tokenized = [chunk.lower().split() for chunk in chunks]
+        self.bm25 = BM25Okapi(tokenized)
+
+        self.client = OpenAI()
+
+    def keyword_search(self, query, top_k=20):
+        """BM25 keyword search — returns chunk indices ranked by relevance."""
+        tokens = query.lower().split()
+        scores = self.bm25.get_scores(tokens)
+        top_indices = scores.argsort()[-top_k:][::-1]
+        return top_indices.tolist()
+
+    def semantic_search(self, query, top_k=20):
+        """Vector similarity search — returns chunk indices ranked by relevance."""
+        response = self.client.embeddings.create(
+            input=query, model="text-embedding-3-small"
+        )
+        query_emb = np.array(response.data[0].embedding)
+
+        # Cosine similarity against all chunks
+        similarities = np.dot(self.embeddings, query_emb) / (
+            np.linalg.norm(self.embeddings, axis=1) * np.linalg.norm(query_emb)
+        )
+        top_indices = similarities.argsort()[-top_k:][::-1]
+        return top_indices.tolist()
+
+    def hybrid_search(self, query, top_k=5):
+        """Combine BM25 + semantic search using Reciprocal Rank Fusion."""
+        bm25_results = self.keyword_search(query, top_k=20)
+        semantic_results = self.semantic_search(query, top_k=20)
+
+        # Fuse with RRF
+        fused = reciprocal_rank_fusion([bm25_results, semantic_results])
+
+        # Return top_k chunks
+        results = []
+        for doc_id, score in fused[:top_k]:
+            results.append({
+                "chunk": self.chunks[doc_id],
+                "score": score,
+                "index": doc_id
+            })
+        return results</code></pre>
+
+    <p>Most vector databases — Pinecone, Weaviate, Qdrant, and even pgvector — now support hybrid search natively. You don't always need to implement it from scratch, but understanding how it works helps you debug when results aren't what you expect.</p>
+
+    <!-- ============================================ -->
+    <h2>Re-ranking: The Quality Check</h2>
+
+    <p>Hybrid search gets you a good pool of candidates. But "good" isn't "great." This is where <strong>re-ranking</strong> comes in — a second pass that dramatically improves precision.</p>
+
+    <p>Think of it like hiring. Hybrid search is the recruiter who screens 100 resumes down to 20 candidates. The re-ranker is the hiring manager who carefully reads those 20 and picks the best 5.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>Stage 1: Retrieve</strong>
+        <p>Hybrid search returns top 20-100 candidates. Fast but approximate.</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Stage 2: Re-rank</strong>
+        <p>Cross-encoder scores each candidate against the query. Slow but precise.</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Top K</strong>
+        <p>Send the best 3-5 chunks to the LLM for answer generation.</p>
+      </div>
+    </div>
+
+    <h3>Why Re-ranking Works So Well</h3>
+
+    <p>Regular embedding search uses a <strong>bi-encoder</strong>: the query and document are embedded separately, then compared. This is fast (you can pre-compute document embeddings) but lossy — the model can't see how the query and document interact.</p>
+
+    <p>A <strong>cross-encoder</strong> re-ranker takes a different approach: it feeds the query and document together into one model and outputs a single relevance score. It sees the full interaction between them — word by word. This is much more accurate, but much slower (you can't pre-compute anything).</p>
+
+    <p>That's why we use the two-stage architecture: fast-but-approximate search first, then slow-but-precise re-ranking on just the top candidates.</p>
+
+    <pre><code># Re-ranking with Cohere
+import cohere
+
+co = cohere.ClientV2()
+
+# Your hybrid search returned these 10 candidates
+candidates = [
+    "To reset your API key, navigate to Settings > Security.",
+    "API keys expire every 90 days for security purposes.",
+    "You can generate a new API key from the dashboard.",
+    "Contact support if your API key is compromised.",
+    "Rate limiting is applied per API key, not per user.",
+    # ... more candidates
+]
+
+query = "How do I reset my API key?"
+
+# Re-rank the candidates
+results = co.rerank(
+    query=query,
+    documents=candidates,
+    top_n=3,
+    model="rerank-v3.5"
+)
+
+for result in results.results:
+    print(f"Score: {result.relevance_score:.3f} | {candidates[result.index]}")</code></pre>
+
+    <div class="tip-box">
+      <h3>Re-ranking Options in 2026</h3>
+      <p><strong>Cohere Rerank v3.5</strong> — the most popular hosted option. Simple API, good quality, ~150-400ms latency. <strong>Cross-encoder models</strong> (e.g., <code>cross-encoder/ms-marco-MiniLM-L-6-v2</code>) — open-source, run locally, no API costs. <strong>FlashRank</strong> — lightweight, fast, open-source re-ranker optimized for RAG. Choose based on your latency budget and cost constraints.</p>
+    </div>
+
+    <p>Here's an open-source alternative using the <code>sentence-transformers</code> library:</p>
+
+    <pre><code>from sentence_transformers import CrossEncoder
+
+# Load a cross-encoder model (runs locally, no API needed)
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+query = "How do I reset my API key?"
+pairs = [[query, chunk] for chunk in candidates]
+
+# Score all query-document pairs
+scores = reranker.predict(pairs)
+
+# Sort by score
+ranked = sorted(zip(scores, candidates), reverse=True)
+for score, chunk in ranked[:3]:
+    print(f"Score: {score:.3f} | {chunk}")</code></pre>
+
+    <!-- ============================================ -->
+    <h2>Metadata Filtering: Narrow Before You Search</h2>
+
+    <p>Sometimes the best way to improve retrieval is to search <strong>less</strong>. If a user asks "What changed in v3.2?", you don't want to search your entire knowledge base — you want to search only the v3.2 release notes.</p>
+
+    <p>Metadata filtering lets you attach labels to chunks (date, version, category, department, author) and filter by them before or during the vector search.</p>
+
+    <pre><code># Example with ChromaDB — metadata filtering + vector search
+import chromadb
+
+client = chromadb.Client()
+collection = client.create_collection("docs")
+
+# Add chunks with metadata
+collection.add(
+    documents=["Release notes for version 3.2...", "Setup guide for v3.2..."],
+    metadatas=[
+        {"version": "3.2", "type": "release_notes", "date": "2026-01-15"},
+        {"version": "3.2", "type": "guide", "date": "2026-01-20"}
+    ],
+    ids=["doc1", "doc2"]
+)
+
+# Search with metadata filter — only look at v3.2 docs
+results = collection.query(
+    query_texts=["What new features were added?"],
+    where={"version": "3.2"},  # Pre-filter by version
+    n_results=5
+)</code></pre>
+
+    <p>Metadata filtering is like telling the librarian "Only look in the Science section" before they start searching. It reduces the search space, speeds up queries, and dramatically improves relevance.</p>
+
+    <div class="warning-box">
+      <h3>Don't Over-Filter</h3>
+      <p>Be careful not to filter too aggressively — you might accidentally exclude the most relevant chunk. If the user asks about "v3.2 API changes" but the answer is actually in the general API documentation (not tagged as v3.2), a strict version filter will miss it. Use filters to narrow, not to exclude.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Multi-Query Retrieval: Ask the Question Three Ways</h2>
+
+    <p>Users are terrible at writing search queries. (No offense — we all are.) The question they type is rarely the best way to find the answer. Multi-query retrieval fixes this by using the LLM to rephrase the question multiple ways, then searching with all of them.</p>
+
+    <pre><code>from anthropic import Anthropic
+
+client = Anthropic()
+
+def generate_query_variants(original_query, n=3):
+    """Use an LLM to generate alternative phrasings of the query."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": f"""Generate {n} alternative phrasings of this search query.
+Each should capture the same intent but use different words.
+Return only the queries, one per line, no numbering.
+
+Original query: {original_query}"""
+        }]
+    )
+    variants = response.content[0].text.strip().split("\n")
+    return [original_query] + variants  # Include original
+
+# Example
+query = "How do I reset my API key?"
+variants = generate_query_variants(query)
+# Might return:
+# - "How do I reset my API key?"
+# - "Steps to regenerate API credentials"
+# - "Where can I get a new API token"
+# - "API key rotation process"
+
+# Search with ALL variants, merge results
+all_results = []
+for variant in variants:
+    results = searcher.hybrid_search(variant, top_k=10)
+    all_results.extend(results)
+
+# Deduplicate and re-rank the combined results</code></pre>
+
+    <p>Multi-query retrieval improves <strong>recall</strong> — the chance that the right chunk appears somewhere in your results. The tradeoff is more API calls (one embedding per variant), so use it when quality matters more than latency.</p>
+
+    <!-- ============================================ -->
+    <h2>The Complete Retrieval Pipeline</h2>
+
+    <p>Let's put it all together. Here's the retrieval strategy that production RAG systems use in 2026:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Pre-filter</strong>
+        <p>Metadata filtering narrows the search space</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Hybrid Search</strong>
+        <p>BM25 + vector search, fused with RRF</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Re-rank</strong>
+        <p>Cross-encoder scores top candidates</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Top K</strong>
+        <p>Best 3-5 chunks go to the LLM</p>
+      </div>
+    </div>
+
+    <p>Not every system needs every stage. Start with pure semantic search, add BM25 when you notice keyword queries failing, add re-ranking when precision matters, and add multi-query when users ask vague questions. Build up complexity only as needed.</p>
+
+    <!-- ============================================ -->
+    <h2>Common Retrieval Gotchas</h2>
+
+    <div class="gotcha-box">
+      <h3>Semantic Search Can Be Confidently Wrong</h3>
+      <p>Semantic search finds chunks that are <strong>topically similar</strong> — but topically similar doesn't always mean <strong>relevant</strong>. Ask "What is our return policy?" and semantic search might return a chunk about "return types in TypeScript" because both use the word "return" in a conceptual sense. Or ask about "Python memory management" and get a chunk about "snake species memory" because embedding models sometimes confuse domains. This is exactly why hybrid search and re-ranking exist — they catch these false matches.</p>
+    </div>
+
+    <div class="gotcha-box">
+      <h3>More Chunks ≠ Better Answers</h3>
+      <p>It's tempting to retrieve 20 chunks "just to be safe." But stuffing too much context into the LLM's prompt causes problems: the model may get confused by contradictory chunks, important information gets buried in noise, and you burn through tokens (and money). Research shows that <strong>3-5 high-quality chunks</strong> consistently outperform 10-20 mediocre ones. Focus on retrieval precision, not volume.</p>
+    </div>
+
+    <div class="gotcha-box">
+      <h3>Don't Mix Embedding Models</h3>
+      <p>If you indexed your chunks with <code>text-embedding-3-small</code>, you <strong>must</strong> query with the same model. Vectors from different models live in completely different spaces — comparing them is like comparing GPS coordinates from two different planets. If you switch embedding models, you need to re-embed everything.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Choosing Your Retrieval Strategy</h2>
+
+    <p>Here's a decision framework based on your use case:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Just getting started?</strong> — Pure semantic search. Simple, effective, good enough for prototypes.</li>
+        <li><strong>Users search with exact terms (error codes, IDs, names)?</strong> — Add BM25 for hybrid search.</li>
+        <li><strong>Need high precision (legal, medical, compliance)?</strong> — Add a cross-encoder re-ranker.</li>
+        <li><strong>Users ask vague or ambiguous questions?</strong> — Add multi-query retrieval.</li>
+        <li><strong>Data has natural categories (version, department, date)?</strong> — Add metadata filtering.</li>
+        <li><strong>Doing all of the above?</strong> — Congratulations, you're building a production RAG system.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Try It: Hybrid Search Showdown</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Compare Retrieval Strategies</h3>
+      <p>Build a mini-benchmark to see the difference between keyword, semantic, and hybrid search:</p>
+      <ol>
+        <li><strong>Prepare your data:</strong> Take 50-100 chunks from your Chapter 5 vector database (or use any document set you have).</li>
+        <li><strong>Create 10 test queries:</strong> Write 5 keyword-heavy queries (with exact terms, product names, or codes) and 5 conceptual queries (paraphrased, using synonyms).</li>
+        <li><strong>For each query, manually identify the "correct" chunks</strong> — these are your ground truth answers.</li>
+        <li><strong>Run each retrieval method</strong> and record which correct chunks appear in the top 5:
+          <ul>
+            <li>BM25 only</li>
+            <li>Semantic search only</li>
+            <li>Hybrid search (BM25 + semantic with RRF)</li>
+          </ul>
+        </li>
+        <li><strong>Calculate precision@5</strong> for each method: how many of the top 5 results were actually relevant?</li>
+        <li><strong>Bonus:</strong> Add a cross-encoder re-ranker and see if precision improves further.</li>
+      </ol>
+      <p>You'll likely find: BM25 wins on keyword queries, semantic wins on conceptual queries, and hybrid wins overall. That's the whole point.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+
+    <p>You now have a complete retrieval toolkit: keyword search for precision, semantic search for understanding, hybrid search to combine them, re-ranking for quality, and metadata filtering to narrow the search space. These are the building blocks.</p>
+
+    <p>But building blocks aren't a building. In the next chapter, we'll connect everything — document loading, chunking, embedding, retrieval, and generation — into a <strong>production RAG pipeline</strong>. You'll learn how to go from "it works in a notebook" to "it works reliably for real users," handling messy documents, streaming responses, error cases, and everything else that separates a prototype from a product.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="06-chunking-strategies.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Chunking: The Art of Splitting Documents</span>
+    </a>
+    <a href="08-building-the-pipeline.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Building a Production RAG Pipeline</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

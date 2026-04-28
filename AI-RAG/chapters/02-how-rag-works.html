@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: How RAG Actually Works | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-the-problem-rag-solves.html">&larr; Prev</a>
+      <a href="03-your-first-rag.html">Next &rarr;</a>
+      <a href="maps/02-how-rag-works-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>How RAG Actually Works</h1>
+    <p class="subtitle">The complete RAG pipeline explained step by step, no jargon required</p>
+  </header>
+
+  <main>
+
+    <h2>Two Pipelines, Not One</h2>
+
+    <p>In Chapter 1, we saw the big idea: find relevant documents, then let the LLM read them and answer. Simple enough. But when you sit down to build it, you quickly realize there are actually <em>two</em> separate processes happening at different times.</p>
+
+    <p>Think of it like a restaurant. There's the <strong>prep work</strong> that happens before the restaurant opens — sourcing ingredients, chopping vegetables, making sauces. And there's the <strong>service</strong> that happens when a customer orders — grabbing the prepped ingredients, cooking the dish, and plating it. Both are essential, but they happen at completely different times and at different speeds.</p>
+
+    <p>RAG works the same way:</p>
+
+    <div class="highlight-box">
+      <h3>The Two Phases of RAG</h3>
+      <p><strong>Indexing time</strong> (offline, done once or periodically): Load your documents, split them into chunks, convert them to embeddings, and store them in a vector database. This is your prep work.</p>
+      <p><strong>Query time</strong> (online, every time a user asks): Embed the user's question, search for similar chunks, build a prompt with the retrieved context, send it to the LLM, and return the answer. This is service time.</p>
+    </div>
+
+    <p>Let's walk through each phase in detail, with a concrete example that makes every step tangible.</p>
+
+    <h2>Phase 1: Indexing — Preparing Your Data</h2>
+
+    <p>Before your RAG system can answer a single question, you need to prepare your knowledge base. This is the "filing cabinet" phase — you're organizing your documents so they can be searched quickly and accurately later.</p>
+
+    <p>Let's say you're building a RAG system for your company's employee handbook. Here's what the indexing phase looks like:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Load documents</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Split into chunks</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Create embeddings</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Store in vector DB</div>
+    </div>
+
+    <h3>Step 1: Load Your Documents</h3>
+
+    <p>First, you need to get your data into the system. Your employee handbook might be a PDF, a set of Markdown files, a Confluence wiki, or a Google Doc. The loading step reads these documents and extracts the text content.</p>
+
+    <pre><code># Loading documents — the simplest version
+import os
+
+def load_documents(directory):
+    documents = []
+    for filename in os.listdir(directory):
+        if filename.endswith('.md') or filename.endswith('.txt'):
+            path = os.path.join(directory, filename)
+            with open(path, 'r') as f:
+                documents.append({
+                    'content': f.read(),
+                    'source': filename
+                })
+    return documents
+
+docs = load_documents('./handbook/')
+print(f"Loaded {len(docs)} documents")</code></pre>
+
+    <p>In production, this step gets messier — you're dealing with PDFs (which need OCR or parsing), HTML (which has boilerplate to strip), and APIs (which have rate limits). We'll tackle that in Chapter 8. For now, just know: step one is getting text out of your files.</p>
+
+    <h3>Step 2: Split Into Chunks</h3>
+
+    <p>Here's a question that trips up every beginner: <em>why not just give the whole document to the LLM?</em></p>
+
+    <p>Two reasons. First, most documents are too long to fit in the LLM's context window alongside the user's question and other retrieved documents. Second, even if they fit, the LLM is better at finding answers in short, focused passages than in a 50-page document.</p>
+
+    <p>So we split documents into smaller pieces called <strong>chunks</strong>. Each chunk should be a meaningful unit of information — a paragraph, a section, or a few related sentences.</p>
+
+    <pre><code># Simple chunking — split every 500 characters with overlap
+def chunk_text(text, chunk_size=500, overlap=50):
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start = end - overlap  # overlap so we don't cut mid-sentence
+    return chunks
+
+# Our handbook becomes many small chunks
+for doc in docs:
+    doc['chunks'] = chunk_text(doc['content'])</code></pre>
+
+    <div class="gotcha-box">
+      <strong>Chunk size is the #1 lever for RAG quality.</strong> Too small (50 characters) and chunks lose context — "14 days" means nothing without knowing it's about a refund policy. Too large (5000 characters) and you waste context window space with irrelevant text. A sweet spot of 200–500 tokens is a common starting point, but the best size depends on your data. We'll go deep on chunking strategies in Chapter 6.
+    </div>
+
+    <p>Why the overlap? Imagine a chunk boundary falls right in the middle of "refund policy is 14 days for annual subscriptions." Without overlap, you might get one chunk ending with "refund policy is 14" and the next starting with "days for annual subscriptions." Neither chunk has the complete information. Overlap ensures important sentences near boundaries appear in both chunks.</p>
+
+    <h3>Step 3: Create Embeddings</h3>
+
+    <p>This is where the magic happens. We need to turn each text chunk into something a computer can search — specifically, a list of numbers called an <strong>embedding</strong> (or <strong>vector</strong>).</p>
+
+    <p>Don't worry about the math yet — that's Chapter 4. Here's the intuition:</p>
+
+    <div class="embedding-box">
+      <strong>What's an embedding?</strong> An embedding is a list of numbers (typically 768 to 3072 numbers) that captures the <em>meaning</em> of a text. Texts with similar meanings get similar numbers. "How do I get a refund?" and "What's your return policy?" have very different words but nearly identical embeddings — because they mean roughly the same thing.
+    </div>
+
+    <p>Creating embeddings is a single API call:</p>
+
+    <pre><code># Creating embeddings with OpenAI
+from openai import OpenAI
+client = OpenAI()
+
+def get_embeddings(texts):
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=texts
+    )
+    return [item.embedding for item in response.data]
+
+# Embed all our chunks
+all_chunks = []
+for doc in docs:
+    for chunk in doc['chunks']:
+        all_chunks.append({
+            'text': chunk,
+            'source': doc['source']
+        })
+
+texts = [c['text'] for c in all_chunks]
+embeddings = get_embeddings(texts)
+
+# Each chunk now has a vector representation
+for i, chunk in enumerate(all_chunks):
+    chunk['embedding'] = embeddings[i]
+
+print(f"Created {len(embeddings)} embeddings")
+print(f"Each embedding has {len(embeddings[0])} dimensions")</code></pre>
+
+    <p>After this step, every chunk of your handbook has been transformed into a point in a high-dimensional space. Chunks about similar topics are <em>near</em> each other in this space, even if they use completely different words.</p>
+
+    <h3>Step 4: Store in a Vector Database</h3>
+
+    <p>You could keep these embeddings in a Python list and search them with a for loop. For a hundred chunks, that works fine. For a million chunks? You need a <strong>vector database</strong> — a database specifically designed to search through millions of vectors quickly.</p>
+
+    <pre><code># Storing in ChromaDB (a popular lightweight vector DB)
+import chromadb
+
+client = chromadb.Client()
+collection = client.create_collection("handbook")
+
+collection.add(
+    documents=[c['text'] for c in all_chunks],
+    embeddings=[c['embedding'] for c in all_chunks],
+    metadatas=[{'source': c['source']} for c in all_chunks],
+    ids=[f"chunk_{i}" for i in range(len(all_chunks))]
+)
+
+print(f"Indexed {len(all_chunks)} chunks in vector database")</code></pre>
+
+    <div class="tip-box">
+      You only run the indexing pipeline once for a given set of documents (or when documents change). The vector database persists on disk — you don't re-embed everything each time a user asks a question. Think of it as building the library catalog. You build it once, then use it for every search.
+    </div>
+
+    <p>That's the entire indexing phase. Your documents are now organized, chunked, embedded, and stored — ready to be searched.</p>
+
+    <h2>Phase 2: Query Time — Answering Questions</h2>
+
+    <p>Now a user types a question. This is where the magic becomes visible. The query pipeline runs in real time — typically under 2 seconds from question to answer.</p>
+
+    <div class="workflow-steps">
+      <div class="step">User asks</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Embed question</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Search vectors</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Build prompt</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">LLM generates</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Return answer</div>
+    </div>
+
+    <p>Let's trace through a real example. A new employee asks: <em>"How many vacation days do I get?"</em></p>
+
+    <h3>Step 1: Embed the Question</h3>
+
+    <p>The first thing we do is convert the user's question into an embedding — using the <strong>exact same embedding model</strong> we used during indexing. This is critical: the question and the document chunks need to live in the same "meaning space" so we can compare them.</p>
+
+    <pre><code># Embed the user's question
+question = "How many vacation days do I get?"
+question_embedding = get_embeddings([question])[0]
+# This is now a list of 1536 numbers representing the meaning
+# of the question</code></pre>
+
+    <div class="retrieval-box">
+      <strong>The retrieval trick:</strong> By converting both documents and questions into the same numerical space, we turn "finding relevant text" into "finding nearby points." The question "How many vacation days do I get?" becomes a point in space that's <em>near</em> the point for the chunk containing "Employees receive 20 days of paid time off per year." The search becomes a math problem: find the nearest neighbors.
+    </div>
+
+    <h3>Step 2: Search for Similar Chunks</h3>
+
+    <p>Now we ask the vector database: "Which chunks are closest in meaning to this question?" This is a <strong>similarity search</strong> — finding the k most similar vectors out of all the chunks we indexed.</p>
+
+    <pre><code># Search the vector database
+results = collection.query(
+    query_embeddings=[question_embedding],
+    n_results=5  # Get the top 5 most relevant chunks
+)
+
+# results now contains:
+# - The text of the 5 most relevant chunks
+# - Their similarity scores
+# - Their metadata (which document they came from)
+
+for i, doc in enumerate(results['documents'][0]):
+    print(f"\n--- Result {i+1} ---")
+    print(f"Source: {results['metadatas'][0][i]['source']}")
+    print(f"Text: {doc[:100]}...")</code></pre>
+
+    <p>For our vacation question, the results might look like:</p>
+
+    <pre><code>--- Result 1 ---
+Source: benefits-policy.md
+Text: "Employees receive 20 days of paid time off per year.
+New hires start accruing from day one..."
+
+--- Result 2 ---
+Source: onboarding-guide.md
+Text: "Your benefits include health insurance, 401k matching,
+and 20 vacation days. See the benefits policy for details..."
+
+--- Result 3 ---
+Source: leave-policy.md
+Text: "In addition to vacation days, employees receive 10
+paid sick days and 3 personal days per year..."</code></pre>
+
+    <p>Notice what happened. The system didn't search for the words "vacation days" — it searched for the <em>meaning</em>. That's why it also found the chunk about "paid time off" (different words, same concept) and the one about "benefits" (related context).</p>
+
+    <h3>Step 3: Build the Prompt</h3>
+
+    <p>Now we take the retrieved chunks and build a prompt that tells the LLM: "Here's the context — answer from this, and only this."</p>
+
+    <pre><code># Build the augmented prompt
+def build_prompt(question, retrieved_chunks, sources):
+    context = "\n\n".join([
+        f"[Source: {src}]\n{chunk}"
+        for chunk, src in zip(retrieved_chunks, sources)
+    ])
+
+    return f"""You are a helpful HR assistant. Answer the
+employee's question based ONLY on the provided context.
+If the context doesn't contain enough information to
+answer fully, say so.
+
+Always cite which document your answer comes from.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+prompt = build_prompt(
+    question,
+    results['documents'][0],
+    [m['source'] for m in results['metadatas'][0]]
+)</code></pre>
+
+    <div class="pipeline-box">
+      <strong>Where this fits in the pipeline:</strong> The prompt engineering step is where "Retrieval" meets "Generation." The quality of your prompt directly affects whether the LLM uses the retrieved context faithfully or falls back to its training data. A good RAG prompt does three things: (1) provides the context, (2) constrains the LLM to answer only from that context, and (3) asks for source citations. We'll master this in Chapter 8.
+    </div>
+
+    <h3>Step 4: Generate the Answer</h3>
+
+    <p>Finally, we send the augmented prompt to the LLM. The model reads the retrieved context and generates an answer grounded in your actual documents.</p>
+
+    <pre><code># Generate the answer with an LLM
+import anthropic
+
+claude = anthropic.Anthropic()
+
+response = claude.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": prompt}]
+)
+
+answer = response.content[0].text
+print(answer)</code></pre>
+
+    <p>The output might look like:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">RAG-powered answer</div>
+      <div class="prompt-text">You receive 20 days of paid time off per year. You start accruing vacation days from your first day of employment.
+
+In addition to vacation, you also receive 10 paid sick days and 3 personal days per year.
+
+Sources: benefits-policy.md, leave-policy.md</div>
+      <p class="prompt-explanation">The answer is accurate, cites its sources, and draws from multiple retrieved documents. The LLM synthesized information from the chunks — it didn't just copy-paste.</p>
+    </div>
+
+    <p>Compare this to what the LLM would say <em>without</em> RAG:</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Without RAG</div>
+      <div class="prompt-text">Most companies offer between 10–15 vacation days for new employees, with more accruing based on tenure. Check with your HR department for your specific policy.</div>
+      <p class="prompt-explanation">Generic, unhelpful, and possibly wrong. The LLM doesn't know your company's policy, so it generates a plausible-sounding average.</p>
+    </div>
+
+    <h2>A Visual Walkthrough</h2>
+
+    <p>Let's zoom out and see both phases together, tracing a single example end to end. Imagine your knowledge base contains three documents about your company:</p>
+
+    <h3>Indexing Phase (done once)</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Step</th>
+          <th>Input</th>
+          <th>Output</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Load</strong></td>
+          <td>refund-policy.pdf, shipping-faq.md, returns.html</td>
+          <td>3 raw text documents</td>
+        </tr>
+        <tr>
+          <td><strong>Chunk</strong></td>
+          <td>3 documents</td>
+          <td>47 text chunks (~300 tokens each)</td>
+        </tr>
+        <tr>
+          <td><strong>Embed</strong></td>
+          <td>47 text chunks</td>
+          <td>47 vectors (1536 dimensions each)</td>
+        </tr>
+        <tr>
+          <td><strong>Store</strong></td>
+          <td>47 vectors + metadata</td>
+          <td>Vector database with searchable index</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Query Phase (per question)</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Step</th>
+          <th>Input</th>
+          <th>Output</th>
+          <th>Latency</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Embed question</strong></td>
+          <td>"Can I return shoes after 30 days?"</td>
+          <td>1 vector (1536 dims)</td>
+          <td>~50–100ms</td>
+        </tr>
+        <tr>
+          <td><strong>Search</strong></td>
+          <td>Query vector</td>
+          <td>Top 5 matching chunks</td>
+          <td>~10–50ms</td>
+        </tr>
+        <tr>
+          <td><strong>Build prompt</strong></td>
+          <td>Question + 5 chunks</td>
+          <td>Augmented prompt (~2000 tokens)</td>
+          <td>&lt;1ms</td>
+        </tr>
+        <tr>
+          <td><strong>Generate</strong></td>
+          <td>Augmented prompt</td>
+          <td>Grounded answer with sources</td>
+          <td>~500–2000ms</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Total time from question to answer: <strong>under 2 seconds</strong>. The embedding and search are fast — it's the LLM generation that takes most of the time. This latency budget becomes important in production (Chapter 11).</p>
+
+    <h2>The Simplest Possible RAG System</h2>
+
+    <p>Here's the entire two-phase RAG pipeline as a working code outline. This isn't production-ready, but it captures the complete flow in about 50 lines:</p>
+
+    <pre><code>from openai import OpenAI
+import anthropic
+import chromadb
+import os
+
+openai_client = OpenAI()
+claude_client = anthropic.Anthropic()
+db = chromadb.Client()
+collection = db.create_collection("knowledge")
+
+# ===== PHASE 1: INDEXING (run once) =====
+
+def index_documents(directory):
+    chunk_id = 0
+    for filename in os.listdir(directory):
+        with open(os.path.join(directory, filename)) as f:
+            text = f.read()
+
+        # Simple chunking
+        chunks = [text[i:i+500] for i in range(0, len(text), 450)]
+
+        # Embed chunks
+        response = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=chunks
+        )
+        embeddings = [r.embedding for r in response.data]
+
+        # Store in vector DB
+        collection.add(
+            documents=chunks,
+            embeddings=embeddings,
+            metadatas=[{"source": filename}] * len(chunks),
+            ids=[f"chunk_{chunk_id + i}" for i in range(len(chunks))]
+        )
+        chunk_id += len(chunks)
+
+# ===== PHASE 2: QUERY (run per question) =====
+
+def ask(question):
+    # Embed the question
+    q_emb = openai_client.embeddings.create(
+        model="text-embedding-3-small",
+        input=[question]
+    ).data[0].embedding
+
+    # Retrieve relevant chunks
+    results = collection.query(
+        query_embeddings=[q_emb], n_results=5
+    )
+
+    # Build prompt with context
+    context = "\n\n".join(results['documents'][0])
+    prompt = f"""Answer from this context ONLY:\n\n{context}
+    \n\nQuestion: {question}"""
+
+    # Generate answer
+    response = claude_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.content[0].text
+
+# Usage
+index_documents("./my_docs/")
+print(ask("What is our refund policy?"))</code></pre>
+
+    <p>That's a complete, working RAG system. Everything we'll learn in the rest of this course is about making each of these steps better — smarter chunking, better embeddings, faster retrieval, more reliable generation.</p>
+
+    <h2>Where Each Stage Can Fail</h2>
+
+    <p>Understanding <em>how</em> RAG works also means understanding <em>where</em> it breaks. In 2026, the consensus among production teams is clear: <strong>when RAG fails, the failure point is almost always retrieval, not generation.</strong></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Stage</th>
+          <th>What Can Go Wrong</th>
+          <th>How You'll Know</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Loading</strong></td>
+          <td>Corrupt PDFs, missing pages, garbled text extraction</td>
+          <td>Chunks contain gibberish or are incomplete</td>
+        </tr>
+        <tr>
+          <td><strong>Chunking</strong></td>
+          <td>Chunks too small (lose context) or too big (dilute relevance)</td>
+          <td>Correct answer exists but retrieval misses it</td>
+        </tr>
+        <tr>
+          <td><strong>Embedding</strong></td>
+          <td>Wrong model choice, mixing embeddings from different models</td>
+          <td>Semantically related chunks aren't near each other</td>
+        </tr>
+        <tr>
+          <td><strong>Retrieval</strong></td>
+          <td>Returns topically related but factually irrelevant chunks</td>
+          <td>Answer is wrong despite having the right docs in the DB</td>
+        </tr>
+        <tr>
+          <td><strong>Generation</strong></td>
+          <td>LLM ignores context or hallucinates beyond it</td>
+          <td>Answer contradicts the retrieved documents</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="gotcha-box">
+      <strong>Don't blame the LLM first.</strong> When your RAG system gives a wrong answer, your instinct will be to blame the generation step. But 80%+ of the time, the problem is upstream — bad chunks, poor retrieval, or missing documents. Always check what was retrieved before blaming the LLM. We'll build evaluation tools for this in Chapter 10.
+    </div>
+
+    <h2>The Research Assistant Analogy</h2>
+
+    <p>We used the librarian analogy in Chapter 1. Here's another way to think about it that captures the two-phase nature:</p>
+
+    <p>Imagine you hire a research assistant to help you answer questions about a legal case. The assistant works in two phases:</p>
+
+    <ol>
+      <li><strong>Preparation (indexing):</strong> The assistant reads all 500 pages of case documents, creates an index card for each key section, and organizes them in a filing cabinet by topic. This takes time, but it's done once.</li>
+      <li><strong>Research (query time):</strong> When a lawyer asks "What did the defendant say about the contract terms?", the assistant doesn't re-read all 500 pages. They go to the filing cabinet, pull the 3–5 most relevant index cards, hand those sections to the lawyer, and the lawyer drafts the response using those specific passages.</li>
+    </ol>
+
+    <p>The research assistant is the retrieval system. The lawyer is the LLM. The filing cabinet is the vector database. And the index cards? Those are your chunks and embeddings.</p>
+
+    <div class="warning-box">
+      <strong>A common beginner mistake:</strong> Many people try to skip the indexing phase entirely by stuffing all their documents into the LLM's context window. This works for tiny knowledge bases (a few pages), but it fails at scale for three reasons: (1) context windows have limits, (2) cost scales linearly with context size, and (3) accuracy drops when relevant info is buried in long context. RAG's indexing phase is what makes it scalable.
+    </div>
+
+    <h2>What Makes RAG Hard</h2>
+
+    <p>The pipeline we just walked through is conceptually simple. But making each step work <em>well</em> is where the craft lies. Here's a preview of the challenges we'll tackle in the rest of the course:</p>
+
+    <ul>
+      <li><strong>Chunking strategy</strong> (Ch. 6): How do you split documents so that each chunk is a self-contained, meaningful unit? Fixed-size splits are easy but dumb. Semantic splits are smart but complex.</li>
+      <li><strong>Embedding quality</strong> (Ch. 4): Not all embedding models are equal. The choice of model directly affects how well "similar meaning" is captured. And you can't mix models.</li>
+      <li><strong>Retrieval accuracy</strong> (Ch. 7): Vector similarity isn't always enough. Hybrid search (combining keyword and semantic search) outperforms either alone. Re-ranking further improves results.</li>
+      <li><strong>Prompt engineering</strong> (Ch. 8): The LLM needs clear instructions to answer from context and not its training data. Small prompt changes can dramatically affect answer quality.</li>
+      <li><strong>Evaluation</strong> (Ch. 10): "It seems to work" isn't a metric. You need systematic ways to measure retrieval quality and answer accuracy.</li>
+    </ul>
+
+    <div class="pipeline-box">
+      <strong>The full course roadmap in context:</strong> You now understand the complete RAG pipeline. Chapters 3–7 go deep on each building block (hands-on coding, embeddings, vector databases, chunking, retrieval). Chapter 8 assembles them into a production pipeline. Chapters 9–10 cover advanced patterns and evaluation. Chapters 11–12 tackle production deployment and future directions. Every chapter builds on this mental model.
+    </div>
+
+    <div class="exercise-box">
+      <strong>Trace a question through the pipeline.</strong> Pick one of the RAG opportunities you identified in Chapter 1's exercise. Now trace it through both phases:
+      <ol>
+        <li><strong>Indexing:</strong> What documents would you load? How might you chunk them? (Don't worry about the "right" way — just estimate.)</li>
+        <li><strong>Query:</strong> Write down a specific question a user would ask. What chunks would ideally be retrieved? What would a good answer look like?</li>
+        <li><strong>Failure modes:</strong> What could go wrong? Which stage is most likely to fail for your use case?</li>
+      </ol>
+      <p>This exercise builds your intuition for where to focus your optimization efforts later.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now have the complete mental model of how RAG works — both the indexing phase and the query phase, step by step. In the next chapter, we'll stop talking and start building. You'll create a <strong>working RAG system in 30 minutes</strong> — a complete pipeline from document loading to answer generation, with about 60 lines of Python.</p>
+
+    <p>Bring your API key and your terminal. It's time to code.</p>
+
+    <nav class="chapter-nav">
+      <a href="01-the-problem-rag-solves.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">The Problem RAG Solves</span>
+      </a>
+      <a href="03-your-first-rag.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Your First RAG System in 30 Minutes</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

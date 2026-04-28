@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: RAG — Teaching AI Your Data | The AI Developer's Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The AI Developer's Toolkit</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-ollama.html">&larr; Previous</a>
+      <a href="05-langchain.html">Next &rarr;</a>
+      <a href="maps/04-rag-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>RAG: Teaching AI Your Data</h1>
+    <p class="subtitle">The most practical pattern in AI &mdash; make any model answer questions about your documents, your code, your world</p>
+  </header>
+
+  <main>
+
+    <h2>The Problem</h2>
+
+    <p>You've got an AI model running &mdash; maybe through a cloud API, maybe locally with Ollama. It's smart. It can write code, explain concepts, and have conversations. But ask it about <em>your</em> company's product documentation, <em>your</em> app's API, or the meeting notes from last Tuesday, and it draws a complete blank.</p>
+
+    <p>That's because AI models only know what they were trained on. GPT-4 was trained on internet data up to a cutoff date. Llama was trained on public datasets. Neither has ever seen your internal wiki, your codebase, or your customer support tickets.</p>
+
+    <p>So how do you make AI know about <em>your</em> stuff?</p>
+
+    <p>There are two approaches:</p>
+
+    <ul>
+      <li><strong>Fine-tuning</strong> (Chapter 9): Retrain the model on your data. Expensive, slow, and you need to redo it every time your data changes.</li>
+      <li><strong>RAG</strong>: Find the relevant information at query time and paste it into the prompt alongside the user's question. Cheap, fast, and always up-to-date.</li>
+    </ul>
+
+    <p>For most use cases, <strong>RAG wins</strong>. It's the single most practical AI pattern you'll learn in this guide.</p>
+
+    <div class="why-care-box">
+      RAG is how you build AI features that actually know things &mdash; a support chatbot that answers questions about your app, a search feature that understands natural language, a documentation assistant that helps developers onboard faster. Every "chat with your docs" product you've ever seen? That's RAG. And building one is simpler than you think.
+    </div>
+
+    <h2>What RAG Actually Stands For</h2>
+
+    <p><strong>Retrieval-Augmented Generation.</strong> Let's break that down:</p>
+
+    <ul>
+      <li><strong>Retrieval</strong> &mdash; find the relevant pieces of information from your documents</li>
+      <li><strong>Augmented</strong> &mdash; add that information to the prompt (augment the context)</li>
+      <li><strong>Generation</strong> &mdash; let the LLM generate an answer using the retrieved context</li>
+    </ul>
+
+    <p>That's it. RAG is "look up the relevant info, paste it into the prompt, then ask the model to answer based on it." It sounds almost too simple to deserve a fancy acronym. But the devil is in the details of <em>how</em> you find the relevant info.</p>
+
+    <h2>The RAG Pipeline, Step by Step</h2>
+
+    <p>A RAG system has two phases: <strong>ingestion</strong> (preparing your documents) and <strong>querying</strong> (answering questions). Let's walk through both.</p>
+
+    <div class="workflow-steps">
+      <span class="step">Documents</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Chunk</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Embed</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Store</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Query</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Retrieve</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Generate</span>
+    </div>
+
+    <h3>Step 1: Chunking &mdash; Breaking Documents Into Pieces</h3>
+
+    <p>Your documents are too long to paste into a prompt whole. A user manual might be 200 pages. An API reference might have thousands of endpoints. You need to break them into smaller, digestible pieces called <strong>chunks</strong>.</p>
+
+    <p>Chunking is like cutting a book into paragraphs or sections. Each chunk should be:</p>
+
+    <ul>
+      <li><strong>Small enough</strong> to fit in a prompt alongside other chunks (typically 200-1000 tokens)</li>
+      <li><strong>Large enough</strong> to contain a complete thought or piece of information</li>
+      <li><strong>Self-contained</strong> &mdash; a chunk should make sense on its own</li>
+    </ul>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Good Chunking</p>
+        <p class="prompt-text">Chunk: "The UserProfile API endpoint accepts
+a JSON body with 'name' (string, required),
+'email' (string, required), and 'avatar_url'
+(string, optional). Returns 201 on success
+with the created profile object."</p>
+        <p class="prompt-explanation">Self-contained, useful &mdash; enough to answer a question about this endpoint.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Bad Chunking</p>
+        <p class="prompt-text">Chunk: "string, optional). Returns 201
+on success with the created profile
+object. ## Delete Profile The"</p>
+        <p class="prompt-explanation">Cut mid-sentence, mixes two topics &mdash; useless for answering questions.</p>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      Most RAG tutorials use simple character-count splitting. That works for demos but creates terrible chunks in practice. Better approaches: split by paragraph/section, use overlap between chunks (so context isn't lost at boundaries), or use "semantic chunking" that detects topic changes. Start simple, then improve your chunking when the answers aren't good enough.
+    </div>
+
+    <h3>Step 2: Embedding &mdash; Turning Text Into Numbers</h3>
+
+    <p>This is where the magic from "How AI Actually Works" pays off. Remember embeddings? They turn text into vectors &mdash; lists of numbers that capture the <em>meaning</em> of the text.</p>
+
+    <p>Each chunk gets converted into a vector. The key property: <strong>chunks with similar meaning have similar vectors</strong>. A chunk about "user authentication" and a question about "how do users log in" will have vectors that are close together, even though they use different words.</p>
+
+    <p>You do this using an <strong>embedding model</strong> &mdash; a specialized AI model that takes text in and produces a vector out. Popular choices:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Where</th>
+          <th>Quality</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>text-embedding-3-small</strong></td>
+          <td>OpenAI API</td>
+          <td>Very good</td>
+          <td>Cheap, fast, cloud-only</td>
+        </tr>
+        <tr>
+          <td><strong>nomic-embed-text</strong></td>
+          <td>Ollama / HuggingFace</td>
+          <td>Good</td>
+          <td>Free, runs locally</td>
+        </tr>
+        <tr>
+          <td><strong>all-MiniLM-L6-v2</strong></td>
+          <td>HuggingFace</td>
+          <td>Good</td>
+          <td>Tiny, fast, great for getting started</td>
+        </tr>
+        <tr>
+          <td><strong>BGE-large</strong></td>
+          <td>HuggingFace</td>
+          <td>Excellent</td>
+          <td>Top-tier open-source option</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Step 3: Storing &mdash; Vector Databases</h3>
+
+    <p>You now have thousands of chunks, each with a vector. You need somewhere to store them and &mdash; crucially &mdash; to search them by similarity. That's what a <strong>vector database</strong> does.</p>
+
+    <p>A vector database is like a regular database, but instead of searching by exact match (<code>WHERE name = 'John'</code>), you search by meaning (<code>find the 5 chunks most similar to this question</code>).</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">C</div>
+      <div class="tool-info">
+        <div class="tool-name">Chroma</div>
+        <div class="tool-desc">The "SQLite of vector databases." Runs in-process with your Python code, zero setup. Perfect for development and small projects. <strong>Start here.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">P</div>
+      <div class="tool-info">
+        <div class="tool-name">Pinecone</div>
+        <div class="tool-desc">Fully managed cloud vector database. Zero ops, scales automatically. Great for production but costs money.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">PG</div>
+      <div class="tool-info">
+        <div class="tool-name">pgvector</div>
+        <div class="tool-desc">PostgreSQL extension that adds vector search. If you already use Postgres, this lets you keep everything in one database.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">W</div>
+      <div class="tool-info">
+        <div class="tool-name">Weaviate</div>
+        <div class="tool-desc">Open-source, feature-rich, self-hosted or cloud. Good middle ground between Chroma (simple) and Pinecone (managed).</div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>My recommendation:</strong> start with <strong>Chroma</strong> for development and prototyping. It requires zero configuration and runs in your Python process. When you go to production, consider <strong>pgvector</strong> if you already use PostgreSQL, or <strong>Pinecone</strong> if you want zero ops.
+    </div>
+
+    <h3>Step 4: Querying &mdash; Finding Relevant Chunks</h3>
+
+    <p>When a user asks a question, you:</p>
+
+    <ol>
+      <li>Embed the question using the same embedding model</li>
+      <li>Search the vector database for chunks with similar vectors</li>
+      <li>Get back the top 3-5 most relevant chunks</li>
+    </ol>
+
+    <p>This is called <strong>similarity search</strong> or <strong>semantic search</strong>. It finds relevant content based on meaning, not keywords. "How do I reset my password?" will match a chunk about "account recovery steps" even though they share no words.</p>
+
+    <h3>Step 5: Generating &mdash; The LLM Answers</h3>
+
+    <p>Now you combine everything. You take the user's question, the retrieved chunks, and a system prompt, and send them all to the LLM:</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">What the LLM actually sees</p>
+      <p class="prompt-text">System: Answer the user's question based ONLY on the
+provided context. If the context doesn't contain the
+answer, say "I don't know."
+
+Context:
+[Chunk 1: UserProfile API accepts name, email...]
+[Chunk 2: Authentication uses JWT tokens...]
+[Chunk 3: Password reset sends email to...]
+
+User: How do I reset a user's password?</p>
+      <p class="prompt-explanation">The LLM generates an answer using the retrieved chunks as its source of truth.</p>
+    </div>
+
+    <p>The LLM doesn't "know" the answer &mdash; it <em>reads</em> the answer from the chunks you gave it. That's why it's called <strong>retrieval-augmented</strong>: you're augmenting the model's knowledge by giving it relevant documents at query time.</p>
+
+    <h2>The Complete Picture in Code</h2>
+
+    <p>Here's what a minimal RAG pipeline looks like. This isn't production code, but it shows the shape of the whole thing:</p>
+
+    <pre><code># Ingestion: prepare your documents (run once)
+from langchain_community.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OllamaEmbeddings
+
+# 1. Load → 2. Chunk → 3. Embed & Store
+docs = TextLoader("my_docs.txt").load()
+chunks = RecursiveCharacterTextSplitter(chunk_size=500).split_documents(docs)
+vectorstore = Chroma.from_documents(chunks, OllamaEmbeddings(model="nomic-embed-text"))
+
+# Querying: answer a question (run per question)
+results = vectorstore.similarity_search("How do I reset a password?", k=3)
+context = "\n".join([r.page_content for r in results])
+# Send context + question to your LLM (Ollama, OpenAI, etc.)</code></pre>
+
+    <p>That's ~10 lines for a working RAG pipeline. The LangChain imports handle the boring parts (loading files, splitting text, talking to the vector database). Chapter 5 goes deeper on LangChain itself.</p>
+
+    <h2>Why RAG Works (and Why It Sometimes Doesn't)</h2>
+
+    <p>RAG works because you're not changing the model &mdash; you're changing <strong>what the model sees</strong>. The model's reasoning ability stays the same; you're just giving it better context. It's like giving a smart person the right reference book before asking them a question.</p>
+
+    <p>But RAG can fail, and when it does, it's usually one of these problems:</p>
+
+    <h3>Problem 1: Bad Chunking</h3>
+    <p>If your chunks break sentences mid-thought or mix unrelated content, the retrieved context will be confusing. Fix: improve your chunking strategy (use paragraph boundaries, add overlap).</p>
+
+    <h3>Problem 2: Irrelevant Retrieval</h3>
+    <p>The vector search returns chunks that are <em>vaguely</em> related but don't actually answer the question. Fix: try a better embedding model, increase the number of retrieved chunks (k), or add metadata filtering.</p>
+
+    <h3>Problem 3: Missing Information</h3>
+    <p>The answer exists in your documents, but the embedding model doesn't match the question to the right chunk. Fix: try rephrasing your chunks, use hybrid search (vector + keyword), or add summaries.</p>
+
+    <h3>Problem 4: Context Window Overflow</h3>
+    <p>You retrieve too many chunks and they don't fit in the model's context window. Fix: retrieve fewer, more relevant chunks. Or use a model with a larger context window.</p>
+
+    <div class="warning-box">
+      The #1 mistake beginners make with RAG: they get bad results and blame the LLM. Usually the problem is retrieval &mdash; the right chunks aren't being found. Before tweaking your LLM prompt, check what the vector search actually returns. If it's irrelevant, no prompt engineering will save you.
+    </div>
+
+    <h2>RAG vs Fine-Tuning: The Decision Framework</h2>
+
+    <p>People often confuse RAG and fine-tuning, or wonder which to use. Here's a clear framework:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Factor</th>
+          <th>RAG</th>
+          <th>Fine-Tuning</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Purpose</strong></td>
+          <td>Give the model ACCESS to your data</td>
+          <td>Change how the model BEHAVES</td>
+        </tr>
+        <tr>
+          <td><strong>Example</strong></td>
+          <td>"Answer questions about our docs"</td>
+          <td>"Always respond in our brand voice"</td>
+        </tr>
+        <tr>
+          <td><strong>Data freshness</strong></td>
+          <td>Always current (reads live data)</td>
+          <td>Frozen at training time</td>
+        </tr>
+        <tr>
+          <td><strong>Setup cost</strong></td>
+          <td>Low (hours)</td>
+          <td>High (days + GPU costs)</td>
+        </tr>
+        <tr>
+          <td><strong>Per-query cost</strong></td>
+          <td>Higher (embedding + retrieval + generation)</td>
+          <td>Lower (just generation)</td>
+        </tr>
+        <tr>
+          <td><strong>When data changes</strong></td>
+          <td>Re-index the new docs (minutes)</td>
+          <td>Retrain the model (hours/days)</td>
+        </tr>
+        <tr>
+          <td><strong>Accuracy</strong></td>
+          <td>Can cite sources, verifiable</td>
+          <td>Internalized, may hallucinate</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The Simple Rule</h3>
+      <p><strong>RAG = "The model needs to KNOW things it doesn't know."</strong> Your docs, your API, your company data.</p>
+      <p><strong>Fine-tuning = "The model needs to DO things differently."</strong> Your tone, your format, your specialized behavior.</p>
+      <p><strong>Both = "The model needs to know your data AND behave in a specific way."</strong> Fine-tune for behavior, RAG for data access. This is the most powerful combination.</p>
+    </div>
+
+    <h2>Real-World RAG Examples</h2>
+
+    <p>To make this concrete, here are actual things people build with RAG:</p>
+
+    <ul>
+      <li><strong>Documentation chatbot:</strong> "How do I configure push notifications in our SDK?" &rarr; RAG retrieves the relevant SDK docs and the LLM answers based on them.</li>
+      <li><strong>Code search:</strong> "Show me how we handle authentication" &rarr; RAG searches your codebase and returns relevant code snippets with explanations.</li>
+      <li><strong>Customer support:</strong> "My order hasn't shipped" &rarr; RAG retrieves the customer's order data and shipping policies, LLM generates a personalized response.</li>
+      <li><strong>Legal research:</strong> "What do our terms say about refunds?" &rarr; RAG finds the relevant contract clauses.</li>
+      <li><strong>Internal knowledge base:</strong> "What's our deployment process?" &rarr; RAG searches your internal wiki and Confluence pages.</li>
+    </ul>
+
+    <h2>Connection to Android Development</h2>
+
+    <p>As an Android developer, RAG opens up practical features:</p>
+
+    <ul>
+      <li><strong>In-app help:</strong> Users ask questions in natural language, your backend uses RAG to find answers in your documentation and FAQ. No more digging through help pages.</li>
+      <li><strong>Smart search:</strong> Instead of keyword matching, your search feature understands meaning. "How to change my profile picture" matches content about "avatar settings" and "photo upload."</li>
+      <li><strong>Onboarding assistant:</strong> New developers on your team ask questions about the codebase. RAG searches your code, READMEs, and architecture docs to give contextual answers.</li>
+      <li><strong>Content recommendations:</strong> Embed your content items as vectors. When a user reads an article, find similar content by vector similarity.</li>
+    </ul>
+
+    <p>The architecture is simple: your Android app sends a question to your backend. The backend runs the RAG pipeline (retrieve relevant chunks, send to LLM, get answer). The app displays the answer. Your Android code doesn't need to know anything about vectors or embeddings &mdash; it just makes an HTTP request.</p>
+
+    <div class="use-skip-box">
+      <div class="use-it">
+        <ul>
+          <li>You need AI to answer questions about your specific documents or data</li>
+          <li>Your data changes frequently and you need answers to stay current</li>
+          <li>You want the AI to cite sources ("Based on page 12 of the manual...")</li>
+          <li>You're building a search feature that understands natural language</li>
+          <li>You have a knowledge base and want to make it conversational</li>
+        </ul>
+      </div>
+      <div class="skip-it">
+        <ul>
+          <li>The model already knows the answers (general knowledge, public info)</li>
+          <li>You need to change the model's behavior or tone (use fine-tuning instead)</li>
+          <li>Your data is a few paragraphs &mdash; just paste it into the system prompt</li>
+          <li>You need real-time data (stock prices, live feeds) &mdash; use tool calling instead</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Common Gotchas and Honest Advice</h2>
+
+    <ul>
+      <li><strong>Start with the simplest possible pipeline.</strong> Load a text file, split by paragraphs, embed with a free model, store in Chroma. Get it working before optimizing.</li>
+      <li><strong>Evaluate by reading the retrieved chunks.</strong> Before blaming the LLM, print out what the retrieval step actually returns. Is it relevant? If not, fix retrieval first.</li>
+      <li><strong>Chunk size matters more than you think.</strong> Too small = no context. Too large = diluted relevance. 300-500 tokens with 50-token overlap is a decent starting point.</li>
+      <li><strong>Don't over-engineer the vector database.</strong> Chroma or SQLite with vectors is fine for thousands of documents. You don't need Pinecone until you have millions of vectors or need zero-ops at scale.</li>
+      <li><strong>Test with real questions.</strong> Don't test with "What is X?" questions that a simple search could answer. Test with the messy, ambiguous questions your actual users would ask.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <strong>Design a RAG Pipeline</strong>
+      <p>You don't need to build anything for this exercise &mdash; just think through the design. Pick one of these scenarios (or use your own):</p>
+      <ul>
+        <li>A chatbot that answers questions about your app's user documentation</li>
+        <li>A search tool for your team's internal wiki</li>
+        <li>A support assistant that knows your product's FAQ and troubleshooting guides</li>
+      </ul>
+      <p>Now answer these questions:</p>
+      <ol>
+        <li>What <strong>documents</strong> would you ingest? (docs, wiki pages, code, FAQs?)</li>
+        <li>How would you <strong>chunk</strong> them? (by paragraph? by section? by page?)</li>
+        <li>Which <strong>embedding model</strong> would you use? (cloud or local?)</li>
+        <li>Which <strong>vector database</strong> would you start with?</li>
+        <li>Which <strong>LLM</strong> would generate the answers? (cloud API or Ollama?)</li>
+        <li>What's the <strong>hardest question</strong> a user might ask? Would your pipeline handle it?</li>
+      </ol>
+      <p>Write down your design. In later chapters, you'll learn the tools to actually build it.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now understand the most important AI pattern for application developers. But you might have noticed: building a RAG pipeline involves a lot of pieces &mdash; loaders, splitters, embeddings, vector stores, prompts, LLMs. Connecting all of those pieces is exactly what <strong>LangChain</strong> does.</p>
+
+    <p>In <strong>Chapter 5: LangChain</strong>, we'll explore the framework that ties everything together &mdash; the chains, the tools, the memory, and yes, the controversy. Love it or hate it, LangChain is the most popular framework for building AI applications, and understanding it will help you decide whether to use it or build your own.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-ollama.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">&larr; Ollama: Running AI on Your Machine</span>
+      </a>
+      <a href="05-langchain.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">LangChain: Connecting the Pieces &rarr;</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

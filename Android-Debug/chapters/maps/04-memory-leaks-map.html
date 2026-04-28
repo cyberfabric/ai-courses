@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Memory Leak Detection with AI | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../04-memory-leaks.html">Chapter</a>
+      <a href="03-anr-diagnosis-map.html">&#8592; Prev Map</a>
+      <a href="05-compose-recomposition-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Memory Leak Detection with AI</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Every time you pass <code>this</code> (Activity/Fragment) to something that lives longer &mdash; a singleton, companion object, callback, ViewModel &mdash; ask: <strong>"What happens to this reference when my Activity is destroyed?"</strong> If the answer is "nothing," you have a leak.</p>
+    </div>
+
+    <!-- ====== LEAKCANARY FLOW ====== -->
+    <h2>🔧 How LeakCanary Works</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Object destroyed</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Wait for GC</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Still alive?</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Dump heap</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Find retention chain</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Show leak trace</div>
+    </div>
+
+    <p style="text-align:center; color: var(--text-secondary);">One line to add: <code>debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")</code>. No init code needed.</p>
+
+    <!-- ====== READING A LEAK TRACE ====== -->
+    <h2>🔬 Anatomy of a Leak Trace</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>GC Root (top)</h4>
+        <p>The long-lived object that's supposed to be alive &mdash; singleton, static field, Application scope.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Suspected Cause (~~~ underline)</h4>
+        <p>The reference marked with <code>~~~</code> is where the retention chain should be broken.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Leaking Object (bottom)</h4>
+        <p>The node marked <code>Leaking: YES</code> &mdash; the Activity/Fragment that should have been GC'd. Shows retained size.</p>
+      </li>
+    </ol>
+
+    <p style="text-align:center; color: var(--text-secondary);">Analogy: A chain of custody from something alive to something dead. Break the <code>~~~</code> link to fix the leak.</p>
+
+    <!-- ====== THE CLASSIC LEAKS ====== -->
+    <h2>🗂️ The Classic Android Memory Leaks</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔗</span>
+        <div class="map-card-title">#1 Unregistered Listener</div>
+        <div class="map-card-desc">Register callback in <code>onCreate</code>, forget to unregister in <code>onDestroy</code>. The long-lived owner keeps the dead Activity alive. <strong>Most common leak.</strong></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📌</span>
+        <div class="map-card-title">#2 Static Activity Reference</div>
+        <div class="map-card-desc"><code>companion object { var activity: Activity? = null }</code> &mdash; lives for the entire process. Activity can never be GC'd.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪆</span>
+        <div class="map-card-title">#3 Inner Class Capture</div>
+        <div class="map-card-desc">Anonymous <code>Runnable</code> in <code>Handler.postDelayed</code> implicitly captures outer Activity. Fix: use <code>lifecycleScope.launch</code> instead.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🖼️</span>
+        <div class="map-card-title">#4 ViewBinding in Fragments</div>
+        <div class="map-card-desc">Fragment outlives its view on config change. Must null <code>_binding</code> in <code>onDestroyView()</code>. Doesn't apply to Compose.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧮</span>
+        <div class="map-card-title">#5 ViewModel Holding Views</div>
+        <div class="map-card-desc">ViewModels survive config changes. Holding a View or Context = guaranteed leak. ViewModels hold <strong>data only</strong>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧪</span>
+        <div class="map-card-title">#6 Compose Captures</div>
+        <div class="map-card-desc"><code>LaunchedEffect</code> capturing an Activity reference. Fix: pass only the data you need, not the Activity itself.</div>
+      </div>
+    </div>
+
+    <!-- ====== FIX PATTERNS ====== -->
+    <h2>🛠️ Fix Patterns at a Glance</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Leak Pattern</th>
+          <th>Quick Fix</th>
+          <th>Better Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Unregistered listener</td>
+          <td>Null callback in <code>onDestroy</code></td>
+          <td>Use <code>DefaultLifecycleObserver</code> for auto-cleanup</td>
+        </tr>
+        <tr>
+          <td>Static Activity reference</td>
+          <td>Don't. Just don't.</td>
+          <td>Use Application context or dependency injection</td>
+        </tr>
+        <tr>
+          <td>Handler + Runnable</td>
+          <td><code>removeCallbacks</code> in <code>onDestroy</code></td>
+          <td>Replace with <code>lifecycleScope.launch { delay() }</code></td>
+        </tr>
+        <tr>
+          <td>ViewBinding in Fragment</td>
+          <td><code>_binding = null</code> in <code>onDestroyView</code></td>
+          <td>Migrate to Compose (no binding needed)</td>
+        </tr>
+        <tr>
+          <td>ViewModel + View</td>
+          <td>Remove the View reference</td>
+          <td>Expose <code>StateFlow</code>, let UI observe</td>
+        </tr>
+        <tr>
+          <td>Compose LaunchedEffect capture</td>
+          <td>Pass data, not Activity</td>
+          <td>Hoist side effects to ViewModel</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== RELATIONSHIP MAP ====== -->
+    <h2>🕸️ What Leaks What</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">📌 Static / companion fields</div>
+      <div class="map-rel-node">🔗 Callbacks &amp; listeners</div>
+      <div class="map-rel-center">🪣 Leaked Activity<br>(14 MB each!)</div>
+      <div class="map-rel-node">🪆 Inner classes &amp; Runnables</div>
+      <div class="map-rel-node">🧮 ViewModels holding Views</div>
+    </div>
+
+    <p style="text-align:center; color: var(--text-secondary);">Analogy: a dripping faucet into a bucket. Each drip is invisible. The overflow is <code>OutOfMemoryError</code>.</p>
+
+    <!-- ====== KEY TERMS ====== -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>LeakCanary</dt>
+      <dd>Debug library that auto-detects leaked Activities, Fragments, ViewModels, and Dialogs. One-line setup, zero config.</dd>
+
+      <dt>Leak trace / retention chain</dt>
+      <dd>Path from GC root → leaked object. The <code>~~~</code> underline marks the suspected cause reference.</dd>
+
+      <dt>GC Root</dt>
+      <dd>An object the garbage collector considers always reachable &mdash; static fields, thread stacks, JNI globals.</dd>
+
+      <dt>WeakReference</dt>
+      <dd>A reference that doesn't prevent GC. LeakCanary uses these to detect when objects survive collection.</dd>
+
+      <dt>DefaultLifecycleObserver</dt>
+      <dd>Interface for automatic lifecycle-aware cleanup. Implement <code>onDestroy</code> to break references automatically.</dd>
+
+      <dt>remember vs rememberSaveable</dt>
+      <dd><code>remember</code>: survives recomposition. <code>rememberSaveable</code>: survives recomposition AND config changes.</dd>
+
+      <dt>.hprof</dt>
+      <dd>Heap dump file format. Capture via Android Studio Profiler or <code>adb shell am dumpheap</code>. Extract metrics for AI analysis.</dd>
+    </dl>
+
+    <!-- ====== SKILLS ====== -->
+    <h2>⚡ Skills Built in This Chapter</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Skill</th>
+          <th>Purpose</th>
+          <th>When to Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>/analyze-leak</code></td>
+          <td>Diagnose a LeakCanary trace &mdash; identifies leaking object, retention chain, classification, and fix</td>
+          <td>After LeakCanary fires</td>
+        </tr>
+        <tr>
+          <td><code>/scan-for-leaks</code></td>
+          <td>Proactively scan codebase for 7 known leak patterns</td>
+          <td>Pre-PR review, periodic audit</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+
+      <details>
+        <summary>What does the ~~~ underline in a LeakCanary trace mean?</summary>
+        <p class="quiz-answer">It marks the <strong>suspected cause</strong> &mdash; the specific reference in the retention chain that should be broken to fix the leak.</p>
+      </details>
+
+      <details>
+        <summary>Why must you null _binding in onDestroyView() for Fragments using ViewBinding?</summary>
+        <p class="quiz-answer">The Fragment instance survives config changes, but its view is destroyed and recreated. Without nulling, the Fragment holds a reference to the old (dead) view tree, leaking the entire view hierarchy.</p>
+      </details>
+
+      <details>
+        <summary>Why can't you store an Activity reference in a ViewModel?</summary>
+        <p class="quiz-answer">ViewModels survive configuration changes (rotation). The old Activity is destroyed, but the ViewModel keeps it alive via the reference. Guaranteed leak on every rotation.</p>
+      </details>
+
+      <details>
+        <summary>How does Compose avoid the ViewBinding leak problem?</summary>
+        <p class="quiz-answer">Compose has no ViewBinding. View lifecycle is managed automatically by the Compose runtime. However, Compose introduces its own risks: <code>LaunchedEffect</code> capturing Activity references and heavy objects in <code>remember</code>.</p>
+      </details>
+
+      <details>
+        <summary>What's the "lifecycle-aware" fix for listener leaks?</summary>
+        <p class="quiz-answer">Implement <code>DefaultLifecycleObserver</code>. In <code>observe()</code>, register the callback and add the observer. In <code>onDestroy()</code>, null the callback. Cleanup happens automatically &mdash; no chance of forgetting.</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Add LeakCanary (<code>debugImplementation</code>) &mdash; it auto-detects leaked Activities, Fragments, ViewModels, and Dialogs with zero config.</li>
+        <li class="map-summary-item">The 6 classic leaks: unregistered listener, static reference, inner class capture, ViewBinding in Fragment, ViewModel + View, Compose LaunchedEffect capture.</li>
+        <li class="map-summary-item">Read leak traces bottom-up: find <code>Leaking: YES</code>, then follow the <code>~~~</code> underline to the cause.</li>
+        <li class="map-summary-item">Use <code>DefaultLifecycleObserver</code> for automatic cleanup instead of manual <code>onDestroy</code> null-outs.</li>
+        <li class="map-summary-item">ViewModels hold <strong>data only</strong> (StateFlow) &mdash; never Views, Contexts, or Activities.</li>
+        <li class="map-summary-item">In Compose, pass data to <code>LaunchedEffect</code>, not Activity references. Hoist heavy state to ViewModel.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-anr-diagnosis-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">ANR Diagnosis and Prevention</span>
+      </a>
+      <a href="../04-memory-leaks.html" class="next">
+        <span class="nav-direction">Back to Chapter</span>
+        <span class="nav-chapter">Memory Leak Detection with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5 &mdash; Ktlint &amp; Spotless | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="04-detekt-and-konsist.html">&larr; Prev</a>
+      <a href="06-pre-commit-and-local-loop.html">Next &rarr;</a>
+      <a href="maps/05-ktlint-and-spotless-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Ktlint &amp; Spotless: One-Click Formatting</h1>
+    <p class="subtitle">End the tabs-vs-spaces wars. Format on save, format on commit, fail the CI build on unformatted code &mdash; and never argue about a trailing comma again.</p>
+  </header>
+
+  <main>
+
+    <h2>The bikeshedding tax</h2>
+
+    <p>Every team has had this PR comment. "Can you fix the indentation on line 47?" "Trailing comma here, please." "Why are these imports in this order?" "Wildcard import &mdash; expand it." Multiply by every PR, every reviewer, every week. That's the bikeshedding tax. It's invisible because it never appears on a Jira ticket, but it's burning hours of senior-engineer time on questions a 30-line script could answer.</p>
+
+    <p>Detekt and Lint catch bugs. <strong>Formatters catch shape.</strong> Indentation, line length, import order, trailing commas, wildcard imports, blank lines, semicolons (don't), spaces around operators. None of it is a bug; all of it is a debate; and a formatter ends every debate by simply picking an answer and applying it everywhere.</p>
+
+    <p>This chapter installs the two pieces you need. <strong>Ktlint</strong> &mdash; the de-facto Kotlin formatter, opinionated by design, configured by <code>.editorconfig</code>. And <strong>Spotless</strong> &mdash; the Gradle plugin that wraps ktlint (and a dozen other formatters) into one task, so a single <code>./gradlew spotlessApply</code> formats your Kotlin, your Gradle scripts, your XML, your Markdown, and your license headers in one shot.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">~6 min</span>
+        <div class="stat-label">average time per PR spent on style nits before automated formatting</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">0</span>
+        <div class="stat-label">style debates after the format-the-whole-repo PR lands</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~12k</span>
+        <div class="stat-label">lines a typical mid-size Android repo changes on first <code>spotlessApply</code></div>
+      </div>
+    </div>
+
+    <p>The numbers above aren't sourced from a study; they're what you'll see on your own team. Ask three reviewers how often they comment on indentation, import order, or trailing commas. The answer is "every PR, multiple times." That's hours per week, sprayed across senior calendars. Spotless eliminates the entire category in an afternoon.</p>
+
+    <div class="tool-profile-box">
+      <div class="tool-name">ktlint</div>
+      <p>Pinterest's anti-bikeshedding Kotlin formatter, derived from the official Kotlin and Android style guides.</p>
+      <dl>
+        <dt>What it catches</dt>
+        <dd>Indentation, line length, import order, wildcard imports, trailing commas, blank lines, spacing, parameter wrapping, chain wrapping &mdash; the entire surface area of "what does Kotlin code look like."</dd>
+        <dt>Install</dt>
+        <dd><code>id("com.diffplug.spotless") version "6.25.0"</code> in your root <code>build.gradle.kts</code> (we use ktlint <em>through</em> Spotless, not directly).</dd>
+        <dt>Runtime cost</dt>
+        <dd>Roughly 5&ndash;15 seconds for a medium Android repo on a clean check; sub-second for incremental formatting via the Gradle plugin or IDE.</dd>
+        <dt>When to skip it</dt>
+        <dd>Never. Even a one-person side project benefits &mdash; you stop having style fights with past-you. The only legitimate reason to skip is if your team is already on detekt-formatting (which uses ktlint internally anyway).</dd>
+      </dl>
+    </div>
+
+    <h2>Why two tools, not one?</h2>
+
+    <p>You might be wondering why this chapter is "ktlint <em>and</em> Spotless" and not just one. Short answer: ktlint is the <em>engine</em>, Spotless is the <em>chassis</em>. Ktlint formats Kotlin. Spotless wraps ktlint plus formatters for Java, Groovy, XML, JSON, YAML, Markdown, and adds license-header management, trailing-newline enforcement, and target-glob filters.</p>
+
+    <p>Could you use ktlint's official Gradle plugin (<code>org.jlleitschuh.gradle.ktlint</code>) directly? Yes, and it's a fine choice. We're recommending Spotless because the moment you want to also format your <code>build.gradle.kts</code> files, your XML resources, or strip trailing whitespace from Markdown docs, you need it anyway. Two formatters, one config, one task. Less surface to maintain.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Spotless approach</div>
+        <div class="prompt-text">./gradlew spotlessApply
+
+Formats Kotlin (via ktlint),
+build scripts, XML, Markdown,
+license headers &mdash; all at once.
+One config block, one task.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Tool-per-format approach</div>
+        <div class="prompt-text">./gradlew ktlintFormat
+./gradlew xmlFormat
+./gradlew prettierFormat
+./gradlew licenseFormat
+
+Four plugins. Four config blocks.
+Four version pins to babysit.</div>
+      </div>
+    </div>
+
+    <h2>The install &mdash; Spotless + ktlint</h2>
+
+    <p>Two files change. The root <code>build.gradle.kts</code> applies the plugin and configures it; the <code>.editorconfig</code> at the repo root tells ktlint your house rules. Both go in source control.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">build.gradle.kts (root)</div>
+<pre><code>plugins {
+    id("com.diffplug.spotless") version "6.25.0"
+}
+
+spotless {
+    // Format Kotlin source files in every module.
+    kotlin {
+        target("**/*.kt")
+        targetExclude("**/build/**", "**/generated/**")
+        ktlint("1.2.1")
+            .editorConfigOverride(
+                mapOf(
+                    "ktlint_standard_filename" to "disabled",
+                    "ktlint_standard_no-wildcard-imports" to "enabled"
+                )
+            )
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    // Format Gradle Kotlin DSL scripts.
+    kotlinGradle {
+        target("*.gradle.kts", "**/*.gradle.kts")
+        ktlint("1.2.1")
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    // Format XML resources (layouts, drawables, values).
+    format("xml") {
+        target("**/src/**/*.xml")
+        targetExclude("**/build/**")
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}</code></pre>
+      <div class="recipe-note">Pin ktlint by exact version &mdash; ktlint releases occasionally change rules and you don't want a transitive bump rewriting your codebase on a Tuesday. The same goes for the Spotless plugin itself.</div>
+    </div>
+
+    <p>The companion file is <code>.editorconfig</code> at the repo root. Ktlint reads it; so does IntelliJ, Android Studio, VS Code, and every modern editor. One file to rule them all.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">.editorconfig</div>
+<pre><code>root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{kt,kts}]
+max_line_length = 140
+ij_kotlin_imports_layout = *,java.**,javax.**,kotlin.**,^
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+ktlint_standard_no-wildcard-imports = enabled
+ktlint_standard_filename = disabled
+ktlint_standard_function-naming = disabled
+
+[*.{xml,yml,yaml,json}]
+indent_size = 2
+
+[*.md]
+max_line_length = off
+trim_trailing_whitespace = false</code></pre>
+      <div class="recipe-note">The <code>ij_kotlin_*</code> keys are read by IntelliJ and Android Studio so the IDE formats identically to ktlint. Disable <code>filename</code> if your project has classes-per-file conventions ktlint dislikes (test files, sealed-class hierarchies). Disable <code>function-naming</code> if you use <code>@Composable</code> functions named in PascalCase (Compose convention conflicts with the rule).</div>
+    </div>
+
+    <h2>The "format-the-whole-repo-once" PR</h2>
+
+    <p>You install Spotless. You run <code>./gradlew spotlessApply</code>. <code>git diff</code> shows 12,000 changed lines. Welcome to the one-time tax.</p>
+
+    <p>Don't panic, and absolutely don't try to merge it with feature work. The right move is a dedicated <strong>format-the-whole-repo PR</strong> that does <em>nothing else</em>. No logic changes, no refactors, no renames. Just the formatter's diff. Reviewers don't read it line by line; they spot-check 5 files, see only whitespace and import-order changes, and approve.</p>
+
+    <div class="tip-box">
+      <strong>Land it on a Friday afternoon.</strong> Merge conflicts on the format PR are nasty if there are 12 in-flight feature branches. Pick a low-traffic window, give a 30-minute heads-up in your team channel, merge it, then ask everyone to rebase on Monday morning. The pain is concentrated and over in a day. The alternative &mdash; a slow rolling format that touches every file someone edits &mdash; bleeds for months.
+    </div>
+
+    <p>Once the big-bang PR is in, every subsequent PR has a clean baseline. New code is held to the standard. Old code is already there. The "we'll format as we touch it" strategy sounds appealing but produces years of half-formatted files where reviewers can't tell which lines are actually changed.</p>
+
+    <h2>IDE integration &mdash; format on save</h2>
+
+    <p>Spotless on the command line is fine. Spotless running on every Ctrl+S is the actual win. Two settings in Android Studio close the loop.</p>
+
+    <ol>
+      <li><strong>Settings &rarr; Editor &rarr; Code Style &rarr; Kotlin &rarr; Set from&hellip; &rarr; Kotlin style guide.</strong> This aligns the IDE's built-in formatter with Kotlin's official style. Combined with <code>.editorconfig</code> in your repo, the IDE will pick up your project-specific overrides automatically.</li>
+      <li><strong>Settings &rarr; Tools &rarr; Actions on Save.</strong> Enable "Reformat code" and "Optimize imports" on save. Now every save reflows the file to ktlint-compatible formatting before you even think about it.</li>
+    </ol>
+
+    <p>Bonus: install the official ktlint IntelliJ plugin (<em>Ktlint</em> by Nikky Bonnici on the marketplace). It surfaces ktlint warnings as inline highlights in the editor &mdash; the same warnings the build will fail on, shown in real time. The plugin reads your <code>.editorconfig</code>, so it stays in sync with the Spotless config.</p>
+
+    <div class="warning-box">
+      <strong>One source of truth.</strong> If the IDE's formatter and ktlint disagree, you'll have a nightmarish ping-pong where save reformats one way and <code>spotlessApply</code> reformats it another. Always set the IDE to "Kotlin style guide" and let <code>.editorconfig</code> override the parts you care about. Don't customize formatting in the IDE settings &mdash; it's per-developer, won't be in source control, and your CI build doesn't see it.
+    </div>
+
+    <h2>The CI gate</h2>
+
+    <p>Local format-on-save is for the conscientious. The CI gate is for everyone else. Add a single check job: <code>./gradlew spotlessCheck</code>. If anything is unformatted, the build fails. The PR cannot merge. The fix is one command (<code>./gradlew spotlessApply</code> + commit), and it's clearly the developer's responsibility, not the reviewer's.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">.github/workflows/format.yml</div>
+<pre><code>name: Format check
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  spotless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # Fast: only validates formatting, does not modify files.
+      - name: Run spotlessCheck
+        run: ./gradlew spotlessCheck --no-daemon
+
+      # If it fails, the error message tells the dev to run
+      # ./gradlew spotlessApply locally and commit.</code></pre>
+      <div class="recipe-note">Run <code>spotlessCheck</code> separately from your build job. It's fast (under a minute on most repos) and gives a clean, dedicated failure signal &mdash; "your code is unformatted" &mdash; instead of burying it among compilation errors.</div>
+    </div>
+
+    <h2>Custom rules &mdash; the escape hatches</h2>
+
+    <p>Ktlint is opinionated, which is the point. But occasionally a rule is wrong for your codebase. Three legitimate reasons to disable a rule, in order of frequency.</p>
+
+    <ul>
+      <li><strong><code>ktlint_standard_no-wildcard-imports</code></strong> &mdash; usually you keep this <em>on</em>, but if you have a heavy <code>import androidx.compose.material3.*</code> codebase, you might disable it. Or just live with the explicit imports; the IDE handles them.</li>
+      <li><strong><code>ktlint_standard_function-naming</code></strong> &mdash; disable for Compose codebases. <code>@Composable fun MyScreen()</code> is PascalCase by convention; ktlint flags it as a violation.</li>
+      <li><strong><code>ktlint_standard_filename</code></strong> &mdash; disable if you have files containing multiple top-level types (sealed-class hierarchies, paired data classes). Ktlint wants the filename to match the single public type.</li>
+    </ul>
+
+    <p>Each disabled rule costs you something &mdash; a small piece of consistency. Don't accumulate disabled rules unconsciously. Every entry in <code>.editorconfig</code> is a deliberate choice. If you ever find yourself disabling more than 5 rules, ask whether you've configured around your team's actual conventions or around individual preferences that should adapt instead.</p>
+
+    <div class="warning-box">
+      <strong>Don't ban <code>@file:Suppress</code> as a habit.</strong> It exists for a reason &mdash; sometimes a generated file or a mock has weird shape that ktlint can't reasonably know about. But if you're suppressing in normal code, you're either fighting a rule that should be globally disabled, or you're avoiding a refactor that the rule is correctly nudging you toward. Audit suppressions monthly. They tend to multiply.
+    </div>
+
+    <h2>AI-Assisted Setup &mdash; the <code>/draft-editorconfig</code> skill</h2>
+
+    <p>The most boring part of installing ktlint is writing the <code>.editorconfig</code>. You don't know your team's conventions in formal terms; you know them as "yeah, that looks right." A short Claude Code skill bridges the gap: feed it five representative Kotlin files from your codebase, get back a draft <code>.editorconfig</code> that matches what you already do.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Skill: /draft-editorconfig</div>
+      <div class="prompt-text">Read 5 representative .kt files from src/main/kotlin (pick from
+different packages: a ViewModel, a Repository, a data class, a
+Composable, and a util). Detect the prevailing conventions:
+
+- indent size and style (tabs vs spaces)
+- max line length (look at the longest non-string line)
+- import order (standard, by package prefix, etc.)
+- wildcard imports: present or absent
+- trailing comma usage on multi-line calls/declarations
+- function naming (camelCase, PascalCase for Composables, etc.)
+
+Produce a complete .editorconfig file at the repo root that locks
+in these conventions. Annotate any rule you disable with a brief
+comment explaining why (cite the file/line that justifies it).
+Flag any inconsistencies you found between files &mdash; those are
+spots where the team needs to make a decision before formatting.</div>
+      <div class="prompt-explanation">Save this to <code>.claude/commands/draft-editorconfig.md</code>. Run it before the format-the-whole-repo-once PR. The output gives you a starting point and, more importantly, surfaces the inconsistencies in your codebase that the formatter is about to silently resolve.</div>
+    </div>
+
+    <p>One more skill worth standing up: <code>/explain-spotless-failure</code>. When CI fails on Spotless, the error log lists the files but not <em>why</em>. Have Claude diff the offending lines against the ktlint rule and explain in English what's wrong. Most often it's something the IDE would have caught if format-on-save were enabled.</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Skill: /draft-editorconfig (don't do this)</div>
+      <div class="prompt-text">Make me an .editorconfig for an Android project.</div>
+      <div class="prompt-explanation">No grounding in your codebase. You'll get a generic Android template that may or may not match your conventions, and once you commit it the format-the-whole-repo PR will rewrite thousands of lines to match an opinion nobody on your team agreed to. Always feed the skill real files first; let it observe before it prescribes.</div>
+    </div>
+
+    <h2>The format pipeline at a glance</h2>
+
+    <p>By the end of this chapter you have four checkpoints, in order of when they fire. Each catches what the previous missed.</p>
+
+    <div class="workflow-steps">
+      <span class="step">IDE save</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Pre-commit</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">spotlessCheck</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">PR block</span>
+    </div>
+
+    <p>IDE save catches 95% of issues with zero developer effort. Pre-commit (Chapter 6) catches the remaining 4% before push. <code>spotlessCheck</code> in CI catches the last 1% &mdash; usually from contributors whose IDE isn't configured. The PR cannot merge until the check passes. There is no "I'll fix it later" path, because there is no path that bypasses the gate.</p>
+
+    <h2>The pre-commit angle (teaser)</h2>
+
+    <p>The CI gate is the safety net. Format-on-save is the convenience. The pre-commit hook is the layer between &mdash; runs <code>spotlessApply</code> on staged files only, in well under a second, before the commit ever lands. You'll wire that up in Chapter 6.</p>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        Add the Spotless plugin to root <code>build.gradle.kts</code>. Drop a starter <code>.editorconfig</code> in the repo root. Run <code>./gradlew spotlessApply</code>. Open the format-the-whole-repo PR. Merge it before any new feature lands on top.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        Get the team on format-on-save (Settings &rarr; Tools &rarr; Actions on Save). Install the ktlint IntelliJ plugin. Tune <code>.editorconfig</code> for the 2&ndash;3 rules that genuinely don't fit your codebase. Add a <code>spotlessCheck</code> CI job that warns on PRs.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        Promote the CI <code>spotlessCheck</code> job from warn to <em>required</em> &mdash; PRs cannot merge unformatted. Add a pre-commit hook (Chapter 6) that runs Spotless on staged files. Audit suppressions and disabled rules quarterly.
+      </div>
+    </div>
+
+    <h2>Common pitfalls</h2>
+
+    <ul>
+      <li><strong>Floating ktlint version.</strong> Pinning to <code>"+"</code> or even a major version means a transitive update can rewrite your codebase overnight. Pin to a specific version (<code>ktlint("1.2.1")</code>) and bump it deliberately when you're ready for the diff.</li>
+      <li><strong>IDE and ktlint disagree.</strong> If the IDE auto-format produces different output than <code>./gradlew spotlessApply</code>, your <code>.editorconfig</code> is incomplete or the IDE's code style is overriding it. Fix the config; don't paper over it with project-level IDE settings that aren't checked in.</li>
+      <li><strong>Suppressing whole packages.</strong> A <code>targetExclude("**/legacy/**")</code> sounds pragmatic but creates a permanent dark zone. Better: format it once, accept the diff, move on. Exclusions should be for generated code, not "code we don't feel like cleaning up."</li>
+      <li><strong>License headers as moving targets.</strong> If you enable Spotless's <code>licenseHeader</code> feature, pick a year placeholder (<code>$YEAR</code>) and never touch it again. Hand-updating copyright years across 800 files every January is exactly the manual work the formatter is supposed to eliminate.</li>
+      <li><strong>Forgetting the Gradle DSL files.</strong> If you only configure <code>kotlin { }</code> and skip <code>kotlinGradle { }</code>, your <code>build.gradle.kts</code> files drift in shape and someone eventually files a PR with their personal favorite indentation. Format both.</li>
+    </ul>
+
+    <h2>What you'll see in PRs after this</h2>
+
+    <p>The biggest visible change is what <em>stops</em> happening. No more "fix the indentation" comments. No more "alphabetize the imports." No more debate over whether trailing commas are good (Kotlin says yes, ktlint says yes, the formatter applies it, conversation over).</p>
+
+    <p>The reviewers' attention finally turns to the part of the code that actually matters: <em>does this logic work?</em> <em>Is this abstraction the right one?</em> <em>Did you forget a null check?</em> Those are the questions that justify hiring senior engineers. Style is the noise that drowns them out.</p>
+
+    <div class="highlight-box">
+      <h3>The compounding payoff</h3>
+      <p>Ktlint pays for itself the first week, in PR-review hours saved. Then it keeps paying every week, forever, with no maintenance. New hires learn the style by reading code and saving it. Old hires stop having opinions. Code review becomes about <em>logic</em>, not <em>shape</em>. This is what "leverage" means: a 50-line config block that gives you back senior engineering time, indefinitely.</p>
+    </div>
+
+    <h3>Pre-flight checklist for the format-the-whole-repo PR</h3>
+
+    <p>Before you click "merge" on the big-bang formatter PR, walk this list. Each item has burned at least one team that skipped it.</p>
+
+    <ul class="checklist">
+      <li class="checked">All in-flight feature branches have been notified to rebase Monday morning.</li>
+      <li class="checked">Ktlint version is pinned exactly (no <code>+</code>, no version range) in <code>build.gradle.kts</code>.</li>
+      <li class="checked">The PR contains <em>only</em> the formatter's diff &mdash; no rename, no logic change, no <code>val</code>-to-<code>var</code> tweaks.</li>
+      <li class="checked"><code>.editorconfig</code> is committed in the same PR as the format diff (so the next person who runs <code>spotlessApply</code> gets the same result).</li>
+      <li class="checked">CI runs <code>spotlessCheck</code> on the format PR and passes green.</li>
+      <li class="checked">The PR description explicitly tells reviewers: "do not line-by-line review; spot-check 3 files."</li>
+      <li class="checked">Merge window is low-traffic (Friday afternoon, end of sprint) and a 30-minute heads-up has gone to the team channel.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <strong>Your turn.</strong>
+      <ol>
+        <li>Add the Spotless plugin to your root <code>build.gradle.kts</code> (use the recipe above).</li>
+        <li>Drop the starter <code>.editorconfig</code> at your repo root. Don't tune it yet &mdash; defaults first.</li>
+        <li>Run <code>./gradlew spotlessApply</code>. Note how many files changed (<code>git status | wc -l</code>).</li>
+        <li>Run <code>./gradlew spotlessCheck</code>. Confirm it now passes.</li>
+        <li>Open a feature branch and commit only the formatter's diff. Do not include any logic changes.</li>
+        <li>Run the <code>/draft-editorconfig</code> skill against 5 representative files. Compare its output to your starter config. Adjust 1&ndash;2 rules if the AI's suggestions match your team's actual conventions better.</li>
+        <li>Enable "Reformat code on save" in Android Studio. Confirm that saving a file with deliberate bad formatting auto-corrects.</li>
+      </ol>
+      <p>Stretch goal: add the GitHub Actions workflow above and run it on the format PR. Watch <code>spotlessCheck</code> pass green for the first time. That's the moment the bikeshedding tax ends.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You now have three static analyzers (Lint, detekt) plus a formatter (Spotless+ktlint) running on every PR. That's the whole static-analysis pillar. But there's a problem: every check runs <em>in CI</em>, 7 minutes after push. By then you've context-switched. Chapter 6 moves the checks left &mdash; pre-commit hooks, pre-push hooks, save actions &mdash; so feedback comes in seconds instead of minutes. Same checks, same rules, just a much faster loop.</p>
+
+    <footer class="chapter-nav">
+      <a href="04-detekt-and-konsist.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Detekt + Konsist</span>
+      </a>
+      <a href="06-pre-commit-and-local-loop.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Pre-commit &amp; Local Loop</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

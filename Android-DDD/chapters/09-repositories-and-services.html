@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Repositories and Domain Services — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="08-aggregates.html">← Prev</a>
+      <a href="10-ddd-on-android-architecture.html">Next →</a>
+      <a href="maps/09-repositories-and-services-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Repositories and Domain Services</h1>
+    <p class="subtitle">Repositories as in-memory collections &mdash; and where stateless domain logic actually belongs</p>
+  </header>
+
+  <main>
+
+    <p>You can find aggregates and protect their consistency. Now you need two more building blocks to make the model run end-to-end: <strong>repositories</strong> &mdash; the place where aggregates come from and go to &mdash; and <strong>domain services</strong> &mdash; the place where logic lives when it doesn't belong on a single entity.</p>
+
+    <p>Both terms are wildly overloaded in the Android world. "Repository" usually means "a thin wrapper around a Retrofit API and a Room DAO with caching glued in between." "Service" usually means "anything that ends in <code>Service</code>." Neither matches what Evans and Vernon meant, and the gap is one of the bigger reasons "we tried Clean Architecture" projects often feel like ceremony without payoff. Let's draw the lines crisply.</p>
+
+    <h2>What a repository really is</h2>
+
+    <div class="language-box">
+      <span class="term">Repository</span> &mdash; a collection-like interface that gives you aggregates by their identity, accepts new aggregates, and persists changes to existing ones. From the domain's perspective it is an in-memory <code>Set&lt;Aggregate&gt;</code>. The persistence mechanism &mdash; Room, Retrofit, in-memory, KMP SQLDelight &mdash; is hidden behind the interface and replaceable.
+      <div class="do-not-say">Do not say "DAO," "data source," or "store." DAOs are per-table and per-row; data sources are persistence-layer concepts; "store" is vague. A repository is per-aggregate and exposes a domain-shaped contract: <code>findById</code>, <code>save</code>, <code>remove</code> &mdash; not <code>selectByXAndY</code>.</div>
+    </div>
+
+    <p>Three things define a repository:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1️⃣</span>
+        <div class="stat-label"><strong>One per aggregate type.</strong> <code>OrderRepository</code>, not <code>BillingRepository</code>. The repository is the gateway to one consistency boundary.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">📚</span>
+        <div class="stat-label"><strong>Collection-shaped.</strong> Tiny interface: <code>findById</code>, <code>save</code>, <code>remove</code>, maybe <code>add</code>. Not 30 query methods.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🌫️</span>
+        <div class="stat-label"><strong>Hides persistence.</strong> Domain code never knows whether the data came from Room, Retrofit, RAM, or a CSV.</div>
+      </div>
+    </div>
+
+    <h2>The minimal repository interface</h2>
+
+    <p>A repository is mostly four methods. That's it. If yours has 17, it's a DAO with a fancy name.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain &mdash; the contract, no Android
+interface OrderRepository {
+  suspend fun findById(id: OrderId): Order?
+  suspend fun save(order: Order)
+  suspend fun remove(id: OrderId)
+  fun observe(id: OrderId): Flow&lt;Order?&gt;     // optional, for reactive UIs
+}</div>
+    </div>
+
+    <p>That's a complete repository for an aggregate. Notice what's <em>not</em> there:</p>
+
+    <ul>
+      <li>No <code>getOrdersByCustomerId(customerId, status, dateRange, limit, offset)</code>. That's a query, not a collection operation.</li>
+      <li>No DTOs. <code>save(order: Order)</code> takes the domain aggregate; the implementation maps to whatever the storage layer wants.</li>
+      <li>No exceptions for "not found." <code>findById</code> returns <code>Order?</code> &mdash; nullable is the canonical "absent" signal in Kotlin.</li>
+      <li>No partial entities. The repository returns whole aggregates or nothing &mdash; the chapter 8 contract.</li>
+    </ul>
+
+    <h2>The Room-backed implementation</h2>
+
+    <div class="android-box">
+      <div class="android-code">// :data &mdash; the implementation
+@Singleton
+class RoomOrderRepository @Inject constructor(
+  private val dao: OrderDao,
+  private val ioDispatcher: CoroutineDispatcher,
+) : OrderRepository {
+
+  override suspend fun findById(id: OrderId): Order? = withContext(ioDispatcher) {
+    val row = dao.loadWithLines(id.value) ?: return@withContext null
+    row.toDomain()       // mapper from Room shape to aggregate
+  }
+
+  override suspend fun save(order: Order) = withContext(ioDispatcher) {
+    dao.saveAggregate(
+      order = order.toRow(),
+      lines = order.lines.map { it.toRow(order.id) }
+    )
+  }
+
+  override suspend fun remove(id: OrderId) = withContext(ioDispatcher) {
+    dao.deleteOrder(id.value)
+  }
+
+  override fun observe(id: OrderId): Flow&lt;Order?&gt; =
+    dao.observeWithLines(id.value)
+      .map { row -&gt; row?.toDomain() }
+      .flowOn(ioDispatcher)
+}</div>
+    </div>
+
+    <p>The DAO and the mappers stay in <code>:data</code>. The interface lives in <code>:domain</code>. <code>:feature-checkout</code> depends on <code>:domain</code> and gets the implementation injected by Hilt at the application graph. The domain code never imports Room types &mdash; not even <code>RoomDatabase</code>, not even <code>@Entity</code>.</p>
+
+    <div class="tip-box">
+      <strong>The dependency direction is the whole point.</strong> <code>:domain</code> never depends on <code>:data</code>. <code>:data</code> depends on <code>:domain</code> to satisfy the interface. The arrow points <em>inward</em>. Reverse the arrow and you've made <code>:domain</code> a sub-module of your persistence layer &mdash; which is the architectural sin Clean Architecture and Hexagonal both exist to prevent.
+    </div>
+
+    <h2>Why repositories return aggregates (and not DTOs)</h2>
+
+    <p>This is one of those small rules that pays compounding dividends. The repository's return type is the aggregate. Not a Room <code>@Entity</code>, not a Retrofit DTO, not a "presentation model," not a partial. The reasons:</p>
+
+    <ol>
+      <li><strong>Invariants travel with the aggregate.</strong> If you return a DTO, the caller gets a property bag without methods, without validation, without state-transition guards. The whole point of the aggregate (chapter 8) is wasted at the boundary.</li>
+      <li><strong>Type safety up the stack.</strong> When <code>findById</code> returns <code>Order</code>, every caller gets a value-object-rich, validated object. When it returns <code>OrderDto</code>, every caller has to remember to validate and convert.</li>
+      <li><strong>One mapping, in one place.</strong> The mapper from row to aggregate lives in the repository implementation. Not in the use case, not in the ViewModel, not in three places.</li>
+    </ol>
+
+    <h2>Beyond the four methods: the specification pattern</h2>
+
+    <p>So what about real queries? "All open orders for this customer placed in the last 30 days." That doesn't fit a four-method interface, but you also don't want a 17-method one. The DDD answer is the <strong>specification pattern</strong>: a small object that encapsulates a query predicate, which the repository can interpret.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain &mdash; the specification, plain Kotlin
+sealed interface OrderSpec {
+  data class ByCustomer(val customerId: CustomerId) : OrderSpec
+  data class WithStatus(val status: OrderStatus) : OrderSpec
+  data class PlacedAfter(val instant: Instant) : OrderSpec
+  data class And(val left: OrderSpec, val right: OrderSpec) : OrderSpec
+
+  infix fun and(other: OrderSpec): OrderSpec = And(this, other)
+}
+
+interface OrderRepository {
+  suspend fun findById(id: OrderId): Order?
+  suspend fun find(spec: OrderSpec): List&lt;Order&gt;
+  suspend fun save(order: Order)
+  suspend fun remove(id: OrderId)
+}
+
+// Caller usage in a ViewModel / use case
+val openRecent = repo.find(
+  OrderSpec.ByCustomer(customerId)
+    and OrderSpec.WithStatus(OrderStatus.Open)
+    and OrderSpec.PlacedAfter(now.minus(30, DAYS))
+)</div>
+    </div>
+
+    <p>The specification keeps the repository interface small (one <code>find</code> method) while letting callers express any query. The implementation translates the spec tree into a Room query (or a Retrofit call, or a series of in-memory filters &mdash; doesn't matter to the caller).</p>
+
+    <p>You don't always need this. If your app has two queries for orders, just put them on the interface as named methods (<code>findOpenForCustomer</code>, <code>findRecent</code>). Reach for specifications when the combinatorial growth would otherwise force a 30-method interface.</p>
+
+    <h2>Anti-pattern: the repository-as-DAO</h2>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad &mdash; DAO with extra steps</div>
+        <div class="prompt-text">interface OrderRepository {
+  suspend fun getById(id: Long): OrderDto
+  suspend fun getOrdersByStatus(s: String): List&lt;OrderDto&gt;
+  suspend fun getOrdersByDateRange(...): List&lt;OrderDto&gt;
+  suspend fun getOrdersByCustomerAndStatus(...): List&lt;OrderDto&gt;
+  suspend fun updateStatus(id: Long, s: String)
+  suspend fun updateTotal(id: Long, total: Long)
+  suspend fun deleteByCustomerId(c: Long)
+  // ... 11 more methods
+}
+// Returns DTOs, takes primitives,
+// per-column updates, per-shape queries.
+// This is just SQL with method calls.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Good &mdash; collection-shaped</div>
+        <div class="prompt-text">interface OrderRepository {
+  suspend fun findById(id: OrderId): Order?
+  suspend fun find(spec: OrderSpec): List&lt;Order&gt;
+  suspend fun save(order: Order)
+  suspend fun remove(id: OrderId)
+}
+// Returns aggregates, takes value objects,
+// whole-aggregate writes, queries via spec.
+// Domain language, hidden persistence.</div>
+      </div>
+    </div>
+
+    <p>If your repository looks like the left, you don't have a repository &mdash; you have a thinly-wrapped DAO. There's nothing wrong with a DAO; just don't pretend it's something it isn't, and don't push it into <code>:domain</code> where it leaks SQL semantics into your business logic.</p>
+
+    <h2>Domain services: where stateless logic lives</h2>
+
+    <div class="language-box">
+      <span class="term">Domain Service</span> &mdash; a stateless operation that belongs to the domain but doesn't fit cleanly on a single entity or value object. It expresses domain logic, lives in <code>:domain</code>, and uses domain types as inputs and outputs.
+      <div class="do-not-say">Do not say "manager," "helper," or "util." Those names are vague enough to absorb anything; <code>UserManager</code> ends up doing twelve unrelated things. A domain service has a precise responsibility expressed in domain language &mdash; <code>PriceCalculator</code>, <code>RouteFinder</code>, <code>FraudCheck</code>.</div>
+    </div>
+
+    <p>The classic test: <em>"this operation needs to happen, but I can't find a single entity it naturally belongs to."</em> If you find yourself adding a method to <code>Order</code> that needs to consult three other aggregates, take it off <code>Order</code>. Make a domain service that takes the inputs explicitly.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain &mdash; a domain service
+class ShippingFeeCalculator(
+  private val rates: ShippingRateTable,
+  private val zones: ShippingZoneCatalog,
+) {
+  fun feeFor(order: Order, address: Address): Money {
+    val zone = zones.zoneOf(address)
+    val rate = rates.rateFor(zone, order.totalWeight)
+    return rate.applyTo(order.subtotal)
+  }
+}
+
+// Used from a use case
+class CheckoutUseCase(
+  private val orders: OrderRepository,
+  private val fees: ShippingFeeCalculator,
+  private val bus: DomainEventBus,
+  private val clock: Clock,
+) {
+  suspend operator fun invoke(cmd: PlaceOrder): Result&lt;OrderId&gt; {
+    val order = orders.findById(cmd.orderId)
+      ?: return Result.failure(NoSuchElementException())
+    val fee = fees.feeFor(order, cmd.shipTo)
+    val event = order.place(fee, clock.now())
+    orders.save(order)
+    bus.publish(event)
+    return Result.success(order.id)
+  }
+}</div>
+    </div>
+
+    <p>Things to notice. The service is <em>stateless</em> &mdash; <code>ShippingFeeCalculator</code> has dependencies, but no fields that change between calls. It takes domain types (an <code>Order</code>, an <code>Address</code>) and returns a domain type (<code>Money</code>). The use case <em>orchestrates</em> the calculator and the repository &mdash; but the use case is not the same thing as the domain service.</p>
+
+    <h2>Three kinds of "service" &mdash; tell them apart</h2>
+
+    <p>Senior teams trip on this distinction more than any other in tactical DDD. There are three different things often called "service" in Android codebases, and they live in different layers.</p>
+
+    <table>
+      <thead>
+        <tr><th>Kind</th><th>What it does</th><th>Where it lives</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Domain service</strong></td>
+          <td>Stateless domain logic that doesn't fit on one entity. Uses domain types only.</td>
+          <td><code>:domain</code></td>
+        </tr>
+        <tr>
+          <td><strong>Application service</strong> (a.k.a. use case, interactor)</td>
+          <td>Orchestrates aggregates, repositories, domain services, and events to fulfill one user intention.</td>
+          <td><code>:domain</code> or <code>:feature-*</code></td>
+        </tr>
+        <tr>
+          <td><strong>Infrastructure service</strong></td>
+          <td>Talks to the outside world: HTTP, push, file system, sensors. Implementation of a domain interface.</td>
+          <td><code>:data</code> / <code>:platform</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Concretely: <code>ShippingFeeCalculator</code> is a domain service. <code>CheckoutUseCase</code> is an application service. <code>RetrofitOrdersApi</code> is an infrastructure service. They have different shapes, different test strategies, and different rates of change. Mixing them is the fastest way to make a "Clean Architecture" project feel anything but clean.</p>
+
+    <h2>Anti-pattern: the god-service</h2>
+
+    <div class="warning-box">
+      <strong>The <code>UserManager</code> / <code>PaymentService</code> / <code>OrderHelper</code> bloat.</strong> Once a class has a name like <code>SomethingManager</code>, every loosely-related method ends up there: validation, formatting, fetching, caching, logging, sometimes a side effect for analytics. After 18 months it has 90 methods, 11 dependencies, and exactly one test that uses Mockito to mock six of them. The fix is two-step: rename it (<code>PriceCalculator</code>, <code>UserSession</code>, <code>OrderPlacer</code>) and let the new name push out everything that doesn't belong. If the rename is hard, that's the smell &mdash; the class never had a real responsibility.
+    </div>
+
+    <h2>Where the interfaces live: <code>:domain</code> vs <code>:data</code></h2>
+
+    <p>The cleanest module split for repositories and services on a multi-module Android app:</p>
+
+    <div class="android-box">
+      <div class="android-code">// settings.gradle.kts (excerpt)
+include(
+  ":domain",          // pure Kotlin, no Android
+  ":data",            // Room, Retrofit, mappers
+  ":feature-checkout",
+  ":feature-orders",
+  ":app",
+)
+
+// :domain/src/main/kotlin/.../OrderRepository.kt &mdash; the interface
+interface OrderRepository { ... }
+
+// :data/src/main/kotlin/.../RoomOrderRepository.kt &mdash; the implementation
+class RoomOrderRepository(...) : OrderRepository { ... }
+
+// :data/src/main/kotlin/.../di/DataModule.kt &mdash; Hilt binding
+@Module @InstallIn(SingletonComponent::class)
+abstract class DataModule {
+  @Binds
+  abstract fun bindOrderRepository(
+    impl: RoomOrderRepository
+  ): OrderRepository
+}
+
+// :feature-checkout depends on :domain, NOT on :data.
+// At runtime, the Hilt graph wires the data binding into
+// the feature module's dependencies.</div>
+    </div>
+
+    <p>This split lets you do something powerful: swap implementations. A KMP variant could implement <code>OrderRepository</code> with SQLDelight; a test build could use an in-memory fake. Neither requires changing one line of <code>:domain</code> or <code>:feature-*</code>.</p>
+
+    <h2>Testing: fakes, not mocks</h2>
+
+    <p>Vernon and most modern DDD writers prefer hand-written fakes over mocking frameworks. The reason: a fake captures the <em>contract</em> of the repository in code, while a mock script captures only the specific calls one test makes. Fakes outlive tests; mock scripts rot the moment the test changes.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain/src/testFixtures/.../FakeOrderRepository.kt
+class FakeOrderRepository : OrderRepository {
+  private val store = mutableMapOf&lt;OrderId, Order&gt;()
+  private val flows = mutableMapOf&lt;OrderId, MutableStateFlow&lt;Order?&gt;&gt;()
+
+  override suspend fun findById(id: OrderId): Order? = store[id]
+
+  override suspend fun save(order: Order) {
+    store[order.id] = order
+    flows[order.id]?.value = order
+  }
+
+  override suspend fun remove(id: OrderId) {
+    store.remove(id)
+    flows[id]?.value = null
+  }
+
+  override fun observe(id: OrderId): Flow&lt;Order?&gt; =
+    flows.getOrPut(id) { MutableStateFlow(store[id]) }
+}</div>
+    </div>
+
+    <p>One file, 20 lines, used by every test in every feature module. The contract is explicit: <code>save</code> upserts, <code>remove</code> deletes, <code>observe</code> emits the latest. Testing a use case becomes: create the fake, prime it with an aggregate, run the use case, assert on the fake's state and on emitted events. No <code>verify(mock).save(eq(captured))</code> ceremony.</p>
+
+    <h2>When you don't need a repository</h2>
+
+    <p>Not every aggregate-shaped concept needs the full repository ceremony. Skip it when:</p>
+
+    <ul class="checklist">
+      <li>The data is a small, finite set loaded once at startup (a settings store, a list of supported countries). A simple <code>SettingsHolder</code> with a <code>StateFlow</code> is fine.</li>
+      <li>The aggregate is per-session and lives in memory only (an in-progress wizard, a temporary form). Pass it through the use case directly.</li>
+      <li>The data is read-only reference data shipped with the app (an icon catalog, a static rates table). Wrap it in a typed accessor; calling it a repository is overkill.</li>
+    </ul>
+
+    <p>The point of the repository abstraction is to hide complex persistence behind a domain-shaped contract. If the persistence is trivial, the abstraction has nothing to hide.</p>
+
+    <h2>The Cart bounded context: a complete picture</h2>
+
+    <div class="context-box">
+      Inside the <span class="context-name">Checkout</span> context: <code>Cart</code> is the aggregate, <code>CartRepository</code> is the contract for getting and saving carts, <code>PriceCalculator</code> is a domain service that computes totals across coupons and shipping rules, and <code>PlaceOrderUseCase</code> is the application service that orchestrates them. Each has a single, narrow responsibility. The repository hides Room; the calculator has no I/O; the use case is the only thing that touches the bus.
+    </div>
+
+    <p>That layout &mdash; aggregate + repository + a couple of domain services + a handful of use cases &mdash; is the entire tactical DDD pattern for one bounded context. Replicate it per context, draw the seams between contexts with events (chapter 6), and you have a real, working DDD-shaped Android app.</p>
+
+    <h2>Common Android-specific traps</h2>
+
+    <h3>The "RepositoryImpl" reflex</h3>
+
+    <p>Many Android codebases name implementations <code>FooRepositoryImpl</code> and put them next to the interface in <code>:domain</code>. That defeats the dependency-direction win &mdash; <code>:domain</code> now contains a class that imports Room. Move the implementation to <code>:data</code>; rename it <code>RoomFooRepository</code> or <code>RetrofitFooRepository</code> so the persistence is in the name; keep the interface in <code>:domain</code> alone.</p>
+
+    <h3>The "Result wrapping" reflex</h3>
+
+    <p>Some teams wrap every repository return in <code>Result&lt;T&gt;</code> "to handle errors." Most of the time the error is "not found," which is just <code>null</code>. <code>Result</code> is for operations that can fail in domain-meaningful ways &mdash; "cannot place an empty order" &mdash; not for routing exceptions across the layer boundary. If your repository can throw <code>IOException</code>, let it; catch it where the user actually sees the error.</p>
+
+    <h3>The "useCase per method" reflex</h3>
+
+    <p>One use-case-per-method makes thin classes that just call a repository. <code>FindOrderUseCase</code>, <code>SaveOrderUseCase</code>, <code>DeleteOrderUseCase</code> &mdash; if the use case is just a forwarding stub, the ViewModel can call the repository directly. Use cases earn their keep when they orchestrate <em>more than one</em> moving piece (load aggregate, call domain service, save, publish event).</p>
+
+    <h2>Exercise: rewrite one DAO as a repository</h2>
+
+    <div class="exercise-box">
+      <p><strong>One hour. One DAO. Real codebase.</strong></p>
+      <ol>
+        <li>Open your largest <code>@Dao</code>-annotated interface. Count its methods.</li>
+        <li>Identify which aggregate (or candidate aggregate &mdash; if you skipped chapter 8's exercise, do it now) the DAO serves.</li>
+        <li>Create a new <code>FooRepository</code> interface in <code>:domain</code> (or your equivalent pure-Kotlin module). Start with four methods: <code>findById</code>, <code>save</code>, <code>remove</code>, and one observe or query method specific to your needs.</li>
+        <li>Create <code>RoomFooRepository</code> in <code>:data</code> implementing the interface. The DAO becomes its private dependency. Mappers DTO ↔ aggregate live here too.</li>
+        <li>Walk to one caller of the old DAO and switch it to the new interface. The compiler will help; expect the call site to shrink.</li>
+        <li>Write a <code>FakeFooRepository</code> in your test fixtures, 15-20 lines.</li>
+        <li>Move one piece of "this method needs three aggregates and a calculation" logic out of a ViewModel into a domain service in <code>:domain</code>. Inject it into the use case (or directly into the ViewModel for now).</li>
+        <li>Run the test suite. Anything red? Either the original logic was wrong, or your refactor moved a behavior &mdash; both are good outcomes to discover.</li>
+      </ol>
+      <p>You don't have to convert every DAO in one sitting. The win is having one example in your codebase that the team can point to: <em>"this is what a repository looks like; this is what a domain service looks like; let's match this when we add new ones."</em></p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You now have the full DDD vocabulary: bounded contexts, ubiquitous language, subdomains, events, entities, value objects, aggregates, repositories, and domain services. Chapter 10 is the <em>integration</em> chapter: how all of this maps onto a real, modern multi-module Android codebase. We'll lay out the Gradle module graph (<code>:domain</code>, <code>:data</code>, <code>:feature-*</code>, <code>:app</code>), show how DDD fits on top of MVI and MVVM, where Compose and ViewModels sit, how Coroutines and Flow play with the domain layer, and what KMP looks like once <code>:domain</code> is genuinely Android-free. By the end of chapter 10 you'll have a complete picture of what a "DDD-shaped Android app" actually looks like in your IDE.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-aggregates.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Aggregates</span>
+      </a>
+      <a href="10-ddd-on-android-architecture.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">DDD on Android Architecture</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

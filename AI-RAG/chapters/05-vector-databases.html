@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Vector Databases &mdash; Your AI's Memory | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-embeddings-demystified.html">&larr; Prev</a>
+      <a href="06-chunking-strategies.html">Next &rarr;</a>
+      <a href="maps/05-vector-databases-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Vector Databases: Your AI's Memory</h1>
+    <p class="subtitle">Where embeddings live and how similarity search works at scale</p>
+  </header>
+
+  <main>
+
+    <h2>From a Python List to a Million Vectors</h2>
+
+    <p>In Chapter 3, we stored our embeddings in a plain Python list and searched with a <code>for</code> loop. It worked beautifully for 50 chunks. But imagine your company has 100,000 documents, each split into 10 chunks. That's a million vectors. Your <code>for</code> loop now compares the user's query against every single one of them, one by one.</p>
+
+    <p>That's like searching for a book in a library by walking down every aisle, pulling out every book, and checking the cover. It works &mdash; technically &mdash; but you'd be there all day.</p>
+
+    <p>A vector database is the catalog system. It organizes your embeddings so that when a query comes in, it jumps straight to the right neighborhood and pulls the best matches in milliseconds &mdash; even across millions of vectors.</p>
+
+    <div class="highlight-box">
+      <strong>The one-sentence version:</strong> A vector database stores your embeddings, indexes them for lightning-fast similarity search, and returns the nearest neighbors to any query vector.
+    </div>
+
+    <h2>What a Vector Database Actually Does</h2>
+
+    <p>At its core, a vector database does three things:</p>
+
+    <ol>
+      <li><strong>Stores vectors</strong> &mdash; your embeddings plus any metadata you attach (source file, date, category, page number)</li>
+      <li><strong>Indexes them</strong> &mdash; builds a data structure that makes similarity search fast (we'll cover the algorithms shortly)</li>
+      <li><strong>Searches them</strong> &mdash; given a query vector, finds the <em>k</em> most similar vectors in the index</li>
+    </ol>
+
+    <p>Think of it like a regular database, but instead of looking up rows by exact key matches (<code>WHERE id = 42</code>), you're asking "which rows are <em>closest</em> to this point in 1536-dimensional space?"</p>
+
+    <div class="pipeline-box">
+      <strong>Where the vector database sits in the RAG pipeline:</strong>
+      <div class="workflow-steps">
+        <div class="step">Load Documents</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Split into Chunks</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Create Embeddings</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step" style="font-weight: bold; border: 2px solid currentColor;">Store in Vector DB</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Query &amp; Retrieve</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Generate Answer</div>
+      </div>
+      <p>The vector database bridges indexing time and query time. At indexing time, you fill it with embeddings. At query time, you search it. It's the persistent memory of your RAG system.</p>
+    </div>
+
+    <h2>The Speed Problem: Why You Can't Just Loop</h2>
+
+    <p>Let's put numbers on it. Say you have 1 million vectors of 1536 dimensions each. A brute-force search computes cosine similarity against every single vector:</p>
+
+    <pre><code># Brute force: O(n) comparisons
+import numpy as np
+
+def brute_force_search(query_vector, all_vectors, top_k=5):
+    """Search 1M vectors one by one. Accurate, but painfully slow."""
+    similarities = np.dot(all_vectors, query_vector)
+    top_indices = np.argsort(similarities)[-top_k:][::-1]
+    return top_indices
+
+# With 1M vectors: ~200-500ms per query
+# With 10M vectors: ~2-5 seconds per query
+# With 100M vectors: go get lunch</code></pre>
+
+    <p>For a chatbot answering user questions, 2-5 seconds just for retrieval is unacceptable. Users expect answers in under a second. You need a way to search <em>without</em> checking every vector.</p>
+
+    <p>The solution? <strong>Approximate Nearest Neighbors (ANN)</strong>.</p>
+
+    <h2>Approximate Nearest Neighbors: Close Enough Is Fast Enough</h2>
+
+    <p>Here's the key insight that makes vector databases possible: you don't need the <em>exact</em> nearest neighbors. You need <em>very good</em> nearest neighbors, and you need them <em>fast</em>.</p>
+
+    <p>Imagine you're in a new city looking for a good Italian restaurant. You could visit every single restaurant, read every menu, and pick the best one. Or you could go to the neighborhood known for Italian food and pick from the top three you find there. You might miss the absolute best restaurant hidden in a random alley &mdash; but you'll find a great one in minutes instead of days.</p>
+
+    <p>That's what ANN algorithms do. They trade a tiny bit of accuracy (maybe 95-99% recall instead of 100%) for massive speed gains (milliseconds instead of seconds).</p>
+
+    <div class="retrieval-box">
+      <strong>The three major ANN indexing algorithms:</strong>
+
+      <h3>1. IVF (Inverted File Index) &mdash; "Divide the City into Neighborhoods"</h3>
+      <p>IVF clusters all your vectors into groups (typically 100-1000 clusters). When a query comes in, it first figures out which clusters are closest, then only searches vectors within those clusters.</p>
+      <ul>
+        <li><strong>Analogy:</strong> A city divided into districts. Looking for Italian food? Check the restaurant district, skip the industrial zone.</li>
+        <li><strong>Speed:</strong> Instead of searching 1M vectors, you search maybe 10,000 (the nearest cluster).</li>
+        <li><strong>Tradeoff:</strong> Search more clusters (<code>nprobe</code>) for better accuracy but slower speed.</li>
+      </ul>
+
+      <h3>2. HNSW (Hierarchical Navigable Small Worlds) &mdash; "A Highway System for Vectors"</h3>
+      <p>HNSW builds a multi-layer graph where each vector is a node connected to its neighbors. The top layer has few nodes with long-range connections (highways). Each lower layer adds more nodes with shorter connections (local roads). To search, you start at the top and zoom in.</p>
+      <ul>
+        <li><strong>Analogy:</strong> Flying from New York to a small town in France. You take a transatlantic flight (top layer), then a regional flight (middle layer), then a taxi (bottom layer). You don't walk the whole way.</li>
+        <li><strong>Speed:</strong> Searches in O(log n) time &mdash; even 100M vectors take only milliseconds.</li>
+        <li><strong>Tradeoff:</strong> Uses more memory (1.5-2x the raw vector data) to store the graph structure.</li>
+      </ul>
+
+      <h3>3. Product Quantization (PQ) &mdash; "Compress to Save Space"</h3>
+      <p>PQ compresses each vector by splitting it into sub-vectors and replacing each sub-vector with the ID of its nearest centroid from a codebook. This can shrink a 1536-dimension float32 vector from 6KB to under 100 bytes.</p>
+      <ul>
+        <li><strong>Analogy:</strong> Instead of storing every photo at full resolution, you store thumbnails. You lose some detail, but you can fit millions more photos on your phone.</li>
+        <li><strong>Speed:</strong> Searching compressed vectors is much faster because they fit in CPU cache.</li>
+        <li><strong>Tradeoff:</strong> Lower accuracy &mdash; PQ is usually combined with IVF or HNSW, not used alone.</li>
+      </ul>
+    </div>
+
+    <div class="tip-box">
+      <strong>Which algorithm should you care about?</strong> In practice, most vector databases use HNSW as their default. It's the best general-purpose algorithm for datasets up to hundreds of millions of vectors. You rarely need to configure the algorithm yourself &mdash; the database picks a good default. But understanding how it works helps you debug performance issues and tune parameters when needed.
+    </div>
+
+    <h2>The Big Players: Choosing a Vector Database</h2>
+
+    <p>The vector database landscape in 2026 has matured significantly. Here are the five databases you'll encounter most often, each with a distinct personality:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">🟢</div>
+      <div class="tool-info">
+        <div class="tool-name">ChromaDB</div>
+        <div class="tool-desc"><strong>The "Just Get Started" database.</strong> Install with <code>pip install chromadb</code>, create a collection, and you're storing and querying vectors in under five minutes. No infrastructure, no configuration files. Uses HNSW under the hood. Perfect for prototyping and small-to-medium production workloads. Starts to hit performance limits around 5-10 million vectors.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🌲</div>
+      <div class="tool-info">
+        <div class="tool-name">Pinecone</div>
+        <div class="tool-desc"><strong>The "I don't want to manage infrastructure" database.</strong> Fully managed cloud service &mdash; get an API key, create an index, start querying. No servers to provision, no indexes to tune. Serverless pricing means you pay for what you use. The easiest path from prototype to production, though you're locked into their platform and pricing.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🦀</div>
+      <div class="tool-info">
+        <div class="tool-name">Qdrant</div>
+        <div class="tool-desc"><strong>The "Performance matters" database.</strong> Written in Rust, Qdrant delivers exceptional speed &mdash; P95 latency of 22ms at 10 million vectors. Powerful metadata filtering with payload indexes. Available as open-source (self-host) or managed cloud. Great choice when you need fast filtered search at scale.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🔷</div>
+      <div class="tool-info">
+        <div class="tool-name">Weaviate</div>
+        <div class="tool-desc"><strong>The "batteries included" database.</strong> Open-source with built-in modules for generating embeddings &mdash; insert raw text and Weaviate handles the vectorization. Native hybrid search combines vector and keyword search in a single query. Best when you want vectorization and search tightly integrated.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🐘</div>
+      <div class="tool-info">
+        <div class="tool-name">pgvector</div>
+        <div class="tool-desc"><strong>The "use what you already have" option.</strong> A PostgreSQL extension that adds vector columns and similarity search to your existing Postgres database. Supports both HNSW and IVF indexing. No new infrastructure to manage, full SQL power, transactional consistency. The default recommendation if you already run Postgres.</div>
+      </div>
+    </div>
+
+    <h3>Head-to-Head Comparison</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th>ChromaDB</th>
+          <th>Pinecone</th>
+          <th>Qdrant</th>
+          <th>Weaviate</th>
+          <th>pgvector</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Hosting</strong></td>
+          <td>Self-hosted / embedded</td>
+          <td>Managed cloud only</td>
+          <td>Self-hosted or cloud</td>
+          <td>Self-hosted or cloud</td>
+          <td>Your Postgres</td>
+        </tr>
+        <tr>
+          <td><strong>Setup time</strong></td>
+          <td>30 seconds</td>
+          <td>2 minutes</td>
+          <td>5 minutes</td>
+          <td>5 minutes</td>
+          <td>1 minute (if you have PG)</td>
+        </tr>
+        <tr>
+          <td><strong>Scale limit</strong></td>
+          <td>~5-10M vectors</td>
+          <td>Billions</td>
+          <td>Hundreds of millions</td>
+          <td>Hundreds of millions</td>
+          <td>Tens of millions</td>
+        </tr>
+        <tr>
+          <td><strong>Metadata filtering</strong></td>
+          <td>Basic</td>
+          <td>Good</td>
+          <td>Excellent</td>
+          <td>Excellent</td>
+          <td>Full SQL</td>
+        </tr>
+        <tr>
+          <td><strong>Hybrid search</strong></td>
+          <td>No</td>
+          <td>Yes</td>
+          <td>Yes</td>
+          <td>Built-in</td>
+          <td>With full-text search</td>
+        </tr>
+        <tr>
+          <td><strong>Best for</strong></td>
+          <td>Prototypes, small apps</td>
+          <td>Zero-ops production</td>
+          <td>High-perf production</td>
+          <td>Multi-modal, hybrid</td>
+          <td>Postgres shops</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Which one should you pick?</strong> If you're just starting out, use <strong>ChromaDB</strong>. It'll carry you from prototype to production for the vast majority of use cases. If you hit its limits, the migration to Qdrant or Pinecone is straightforward &mdash; the concepts are the same, just the client library changes. If you already run Postgres, <strong>pgvector</strong> is a no-brainer for your first RAG system.
+    </div>
+
+    <h2>Hands-On: Your First Vector Database with ChromaDB</h2>
+
+    <p>Enough theory. Let's store and search some vectors. We'll use ChromaDB because you can go from zero to searching in about 10 lines of code.</p>
+
+    <pre><code># Install: pip install chromadb
+
+import chromadb
+
+# 1. Create a client (in-memory for prototyping)
+client = chromadb.Client()
+
+# 2. Create a collection (like a table in a regular database)
+collection = client.create_collection(
+    name="company_docs",
+    metadata={"hnsw:space": "cosine"}  # Use cosine similarity
+)
+
+# 3. Add documents — Chroma embeds them automatically!
+collection.add(
+    ids=["doc1", "doc2", "doc3", "doc4", "doc5"],
+    documents=[
+        "Our refund policy allows returns within 30 days of purchase.",
+        "Employees get 20 days of paid vacation per year.",
+        "The engineering team uses Python and TypeScript primarily.",
+        "Our office is located at 123 Main Street, San Francisco.",
+        "Customer support is available 24/7 via chat and email."
+    ],
+    metadatas=[
+        {"department": "sales", "updated": "2026-01"},
+        {"department": "hr", "updated": "2026-03"},
+        {"department": "engineering", "updated": "2026-02"},
+        {"department": "operations", "updated": "2025-11"},
+        {"department": "support", "updated": "2026-04"}
+    ]
+)
+
+# 4. Query — Chroma embeds the question and finds similar documents
+results = collection.query(
+    query_texts=["How do I return a product?"],
+    n_results=2
+)
+
+print(results["documents"])
+# [['Our refund policy allows returns within 30 days of purchase.',
+#   'Customer support is available 24/7 via chat and email.']]
+
+print(results["distances"])
+# [[0.312, 0.891]]  — lower distance = more similar</code></pre>
+
+    <p>That's it. Five documents in, one query out, and the most relevant document comes back first. No <code>for</code> loop, no numpy, no manual embedding. ChromaDB handles the embedding, indexing, and searching for you.</p>
+
+    <h3>Persisting to Disk</h3>
+
+    <p>The in-memory client is great for experiments, but your vectors disappear when the process exits. To persist them:</p>
+
+    <pre><code># Use PersistentClient to save to disk
+client = chromadb.PersistentClient(path="./chroma_data")
+
+# Everything else stays the same!
+collection = client.get_or_create_collection("company_docs")
+
+# Your vectors survive restarts</code></pre>
+
+    <h2>Metadata Filtering: Narrowing the Search</h2>
+
+    <p>Real-world RAG systems don't just search by similarity &mdash; they also filter by metadata. Want to search only documents from the HR department? Only documents updated in the last month? Metadata filtering lets you narrow down candidates <em>before</em> the vector search happens.</p>
+
+    <div class="embedding-box">
+      <strong>Metadata filtering in action:</strong> Think of it as a two-step search. First, the database eliminates vectors that don't match your filter (like removing all non-HR documents). Then, it runs similarity search only on what's left. This is faster <em>and</em> more relevant than searching everything and filtering after.
+    </div>
+
+    <pre><code># Search only within the HR department
+results = collection.query(
+    query_texts=["How many vacation days do I get?"],
+    n_results=3,
+    where={"department": "hr"}  # Pre-filter by metadata
+)
+
+# Combine multiple filters
+results = collection.query(
+    query_texts=["What tools does the team use?"],
+    n_results=3,
+    where={
+        "$and": [
+            {"department": "engineering"},
+            {"updated": {"$gte": "2026-01"}}
+        ]
+    }
+)</code></pre>
+
+    <p>Metadata filtering is essential for multi-tenant RAG systems where each user should only see their own documents, or for time-sensitive data where you want to prioritize recent content.</p>
+
+    <h2>Collections and Namespaces: Organizing Your Vectors</h2>
+
+    <p>As your RAG system grows, you'll have different types of documents &mdash; support articles, product docs, internal wikis, meeting notes. You can dump them all into one collection, or organize them into separate collections.</p>
+
+    <p>Think of collections like different shelves in a library. The fiction shelf, the reference shelf, the periodicals shelf. Each has its own index and can be searched independently.</p>
+
+    <pre><code># Separate collections for different document types
+support_docs = client.create_collection("support_articles")
+product_docs = client.create_collection("product_documentation")
+internal_wiki = client.create_collection("internal_wiki")
+
+# Search only support articles
+results = support_docs.query(
+    query_texts=["How do I reset my password?"],
+    n_results=3
+)
+
+# Or search across collections by querying each one
+# and merging results (more on this in Chapter 7)</code></pre>
+
+    <div class="tip-box">
+      <strong>One collection or many?</strong> Start with one collection and use metadata filtering to separate document types. Split into multiple collections only when you have distinct embedding models for different content types, or when you need completely isolated search scopes (e.g., per-tenant data).
+    </div>
+
+    <h2>Upserting, Updating, and Deleting: Keeping Your Index Fresh</h2>
+
+    <p>Documents change. Policies get updated, products get discontinued, new FAQs get written. Your vector database needs to stay in sync with your source data.</p>
+
+    <pre><code># Upsert: insert or update if the ID already exists
+collection.upsert(
+    ids=["doc1"],
+    documents=["Our refund policy allows returns within 60 days of purchase."],
+    metadatas=[{"department": "sales", "updated": "2026-04"}]
+)
+
+# Delete by ID
+collection.delete(ids=["doc4"])
+
+# Delete by metadata filter
+collection.delete(where={"department": "operations"})</code></pre>
+
+    <p>The key concept is <strong>upsert</strong> &mdash; "update if exists, insert if new." This is how you keep your index fresh without worrying about duplicates. Most vector databases support upsert as a first-class operation.</p>
+
+    <div class="gotcha-box">
+      <strong>Vector databases are not traditional databases.</strong> Don't try to do SQL-style joins, aggregations, or complex relational queries. A vector database answers one question well: "Which vectors are most similar to this one?" It stores metadata for filtering, not for relational modeling. If you need joins and transactions alongside vector search, look at <strong>pgvector</strong>, which gives you both worlds in PostgreSQL.
+    </div>
+
+    <div class="gotcha-box">
+      <strong>Index build time vs. query time is a real tradeoff.</strong> When you add vectors, the database needs to update its index. HNSW indexes are fast to query but slower to build &mdash; inserting 1 million vectors can take minutes. If you're doing bulk ingestion, check if your database supports batch inserts (most do) and consider building the index after all data is loaded rather than incrementally.
+    </div>
+
+    <h2>A Complete Example: Building a FAQ Search Engine</h2>
+
+    <p>Let's put it all together with a more realistic example. We'll build a FAQ search engine that indexes questions and answers, then retrieves the best match for a user query:</p>
+
+    <pre><code>import chromadb
+
+# Initialize persistent storage
+client = chromadb.PersistentClient(path="./faq_db")
+faq = client.get_or_create_collection("faq", metadata={"hnsw:space": "cosine"})
+
+# Our FAQ data (in practice, you'd load this from a file or API)
+faqs = [
+    {"q": "How do I cancel my subscription?",
+     "a": "Go to Settings > Billing > Cancel Plan. You'll keep access until the end of your billing period."},
+    {"q": "What payment methods do you accept?",
+     "a": "We accept Visa, Mastercard, American Express, and PayPal."},
+    {"q": "Can I upgrade my plan mid-cycle?",
+     "a": "Yes! Go to Settings > Billing > Change Plan. You'll be charged a prorated amount."},
+    {"q": "How do I export my data?",
+     "a": "Go to Settings > Data > Export. You can export as CSV or JSON."},
+    {"q": "Is there a mobile app?",
+     "a": "Yes, available on iOS and Android. Search for 'OurApp' in your app store."},
+]
+
+# Index the FAQs — embed the question for matching, store the answer as metadata
+faq.upsert(
+    ids=[f"faq_{i}" for i in range(len(faqs))],
+    documents=[f["q"] for f in faqs],       # Embed the questions
+    metadatas=[{"answer": f["a"]} for f in faqs]  # Store answers as metadata
+)
+
+# Search
+def ask_faq(question, top_k=2):
+    results = faq.query(query_texts=[question], n_results=top_k)
+    for i, (doc, meta, dist) in enumerate(zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0]
+    )):
+        print(f"\n--- Match {i+1} (distance: {dist:.3f}) ---")
+        print(f"Q: {doc}")
+        print(f"A: {meta['answer']}")
+
+ask_faq("I want to stop paying")
+# --- Match 1 (distance: 0.287) ---
+# Q: How do I cancel my subscription?
+# A: Go to Settings > Billing > Cancel Plan. ...
+#
+# --- Match 2 (distance: 0.614) ---
+# Q: Can I upgrade my plan mid-cycle?
+# A: Yes! Go to Settings > Billing > Change Plan. ...</code></pre>
+
+    <p>Notice how "I want to stop paying" matched "How do I cancel my subscription?" even though they share no words in common. That's the power of semantic search through embeddings &mdash; and the vector database made it fast.</p>
+
+    <h2>Using a Custom Embedding Model</h2>
+
+    <p>ChromaDB's default embedding model is fine for getting started, but for production you'll want to choose your own. Here's how to use OpenAI embeddings with ChromaDB:</p>
+
+    <pre><code>import chromadb
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+
+# Use OpenAI's embedding model
+openai_ef = OpenAIEmbeddingFunction(
+    api_key="your-api-key",
+    model_name="text-embedding-3-small"
+)
+
+# Pass the embedding function when creating the collection
+collection = client.create_collection(
+    name="docs_with_openai",
+    embedding_function=openai_ef
+)
+
+# Now all add/query operations use OpenAI embeddings automatically</code></pre>
+
+    <div class="warning-box">
+      <strong>Never mix embedding models in the same collection.</strong> If you indexed documents with OpenAI's <code>text-embedding-3-small</code>, you <em>must</em> query with the same model. Vectors from different models live in completely different spaces &mdash; comparing them is like comparing GPS coordinates from two different planets.
+    </div>
+
+    <h2>When to Use Which Database: A Decision Tree</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <strong>Use ChromaDB when:</strong>
+        <ul>
+          <li>You're prototyping or building a personal project</li>
+          <li>You have fewer than 5 million vectors</li>
+          <li>You want zero configuration</li>
+          <li>You need something working in 5 minutes</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <strong>Use pgvector when:</strong>
+        <ul>
+          <li>You already run PostgreSQL</li>
+          <li>You need transactional consistency</li>
+          <li>You want SQL power alongside vector search</li>
+          <li>Your team doesn't want another database to manage</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <strong>Use Pinecone when:</strong>
+        <ul>
+          <li>You have no infrastructure team</li>
+          <li>You want managed everything</li>
+          <li>You need to scale to billions of vectors</li>
+          <li>You'd rather pay than operate</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <strong>Use Qdrant or Weaviate when:</strong>
+        <ul>
+          <li>You need high-performance filtered search</li>
+          <li>You're building a multi-modal or hybrid search system</li>
+          <li>You want open-source with cloud-hosted options</li>
+          <li>You need fine-grained control over indexing</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <strong>Build a vector-powered document search.</strong>
+      <ol>
+        <li>Install ChromaDB: <code>pip install chromadb</code></li>
+        <li>Pick a set of 20+ text documents (a README, blog posts, a FAQ, meeting notes &mdash; anything text-based)</li>
+        <li>Split each document into chunks of roughly 200-300 words (manually is fine for now)</li>
+        <li>Index all chunks into a ChromaDB collection with metadata (source filename, chunk number)</li>
+        <li>Write 5 test queries and run them against your collection</li>
+        <li>For each query, print the top 3 results with their distance scores</li>
+        <li><strong>Bonus:</strong> Try filtering by source file &mdash; search only within a specific document</li>
+      </ol>
+      <p>This exercise gives you hands-on experience with the full vector database workflow: indexing, querying, and filtering. You'll start to develop intuition for what distance scores "feel like" &mdash; essential for tuning retrieval quality in later chapters.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now have a vector database storing your embeddings and returning similar chunks in milliseconds. But here's the thing &mdash; the quality of those results depends enormously on <em>how you split your documents into chunks in the first place</em>.</p>
+
+    <p>In the next chapter, we'll tackle <strong>chunking strategies</strong> &mdash; the single biggest lever in RAG quality. Too big and you waste the LLM's context window with irrelevant text. Too small and you lose the meaning. We'll explore fixed-size splitting, sentence-based chunking, semantic chunking, and how to find the sweet spot for your data.</p>
+
+    <nav class="chapter-nav">
+      <a href="04-embeddings-demystified.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Embeddings Demystified</span>
+      </a>
+      <a href="06-chunking-strategies.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Chunking: The Art of Splitting Documents</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

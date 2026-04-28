@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map — Chapter 8: Aggregates</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../08-aggregates.html">Chapter</a>
+      <a href="07-entities-and-value-objects-map.html">&#8592; Prev Map</a>
+      <a href="09-repositories-and-services-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Aggregates</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🛡️</span>
+      <h3>The Big Idea</h3>
+      <p>An aggregate is a <strong>scope of consistency</strong>, not a "natural cluster of related stuff." Draw the boundary around an <em>invariant</em> &mdash; a rule that must always be true &mdash; and only as wide as that invariant requires. One root, one boundary, one transaction. Everything else is detail.</p>
+    </div>
+
+    <h2>🧩 The Three Things That Make an Aggregate</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🌳</span>
+        <div class="map-card-title">One Root</div>
+        <div class="map-card-desc">Outsiders only hold a reference to the root entity. Internal entities and value objects are reached <em>through</em> the root.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🛡️</span>
+        <div class="map-card-title">One Consistency Boundary</div>
+        <div class="map-card-desc">The root protects an <em>invariant</em>. The boundary is drawn around exactly what that invariant requires &mdash; nothing more.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚛️</span>
+        <div class="map-card-title">One Transaction</div>
+        <div class="map-card-desc">Loaded together, mutated together, saved together. No half-states ever leak out.</div>
+      </div>
+    </div>
+
+    <h2>🪜 Vernon's Four Rules of Effective Aggregate Design</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Model true invariants in consistency boundaries</h4>
+        <p>Only put inside the aggregate what cannot tolerate being inconsistent for even a moment.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Design small aggregates</h4>
+        <p>Most should be one root + a few value objects. Big "tree" aggregates are a smell.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Reference other aggregates by ID only</h4>
+        <p><code>Order</code> holds a <code>CustomerId</code>, never a <code>Customer</code>. Fewer locks, looser coupling.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Use eventual consistency outside the boundary</h4>
+        <p>Cross-aggregate updates flow through domain events &mdash; never one giant transaction.</p>
+      </li>
+    </ol>
+
+    <h2>📦 The Order/LineItem Worked Example</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">LineItem<br>(value object inside)</div>
+      <div class="map-rel-node">Money<br>(value object)</div>
+      <div class="map-rel-center">Order<br>(aggregate root)</div>
+      <div class="map-rel-node">CustomerId<br>(by ID, not embedded)</div>
+      <div class="map-rel-node">OrderStatus<br>(value)</div>
+    </div>
+
+    <p>Invariant: <code>order.total == sum(lines.subtotal)</code>. So <code>LineItem</code> lives <em>inside</em> the <code>Order</code> aggregate, mutated only via <code>order.addLine(...)</code> which recomputes the total. <code>Customer</code> is its own aggregate &mdash; referenced by ID, never embedded.</p>
+
+    <h2>🔄 Cross-Aggregate Consistency = Events</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Tx 1: Mutate Aggregate A</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">A emits event</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Bus delivers</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Tx 2: Handler mutates B</div>
+    </div>
+
+    <p>Two aggregates, two transactions, one consistent end state &mdash; reached eventually, not atomically. <code>Cart.checkout()</code> emits <code>OrderPlaced</code>; a handler creates the <code>Order</code> aggregate in a separate transaction.</p>
+
+    <h2>📐 Sizing: Big vs Small Aggregates</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Big "graph" aggregate</th><th>Small aggregate</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Boundary</td><td>Customer → Orders → Lines → Refunds</td><td>One root + a few value objects</td></tr>
+        <tr><td>Load cost</td><td>Megabytes per fetch</td><td>One row + its parts</td></tr>
+        <tr><td>Lock surface</td><td>Customer locks every line item</td><td>Locks only what's mutated</td></tr>
+        <tr><td>Test setup</td><td>Full customer + order fixtures</td><td>Minimal fixture per aggregate</td></tr>
+        <tr><td>Scales out</td><td>No &mdash; coupled storage</td><td>Yes &mdash; aggregates can split</td></tr>
+        <tr><td>Cross-update mode</td><td>One giant transaction</td><td>Events between aggregates</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🤖 Aggregates on Android (Room)</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📥</span>
+        <div class="map-card-title">@Transaction is your friend</div>
+        <div class="map-card-desc">Wrap aggregate load and save in <code>@Transaction</code>. Atomicity at the persistence layer.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">@Relation across boundaries = trap</div>
+        <div class="map-card-desc"><code>Customer @Relation List&lt;Order&gt;</code> silently glues two aggregates. Use <code>@Relation</code> only inside one aggregate.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🥚</span>
+        <div class="map-card-title">Eager, complete, or null</div>
+        <div class="map-card-desc">Repository returns the full aggregate or nothing. No half-hydrated stubs, no lazy collections.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🆔</span>
+        <div class="map-card-title">Mint IDs client-side</div>
+        <div class="map-card-desc">UUID/ULID at the moment of creation. Offline-first works; events carry real IDs from birth.</div>
+      </div>
+    </div>
+
+    <h2>🎯 Finding Aggregates: Follow the Invariants</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>List the rules in plain English</h4>
+        <p>"Total = sum of subtotals." "Cannot ship before paid." "A coupon is used at most once per order."</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Find the entity responsible for each rule</h4>
+        <p>That entity is your aggregate root. Things that share an invariant probably share an aggregate.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Pressure-test "must be atomic" claims</h4>
+        <p>Most "we need atomic consistency" arguments dissolve when you ask: "is a 200ms stale read actually a problem?"</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Default to eventual + events</h4>
+        <p>If two aggregates can be eventually consistent (almost always), keep them separate and bridge with events.</p>
+      </li>
+    </ol>
+
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Aggregate</dt>
+      <dd>A cluster of entities + value objects treated as one unit for data changes.</dd>
+
+      <dt>Aggregate Root</dt>
+      <dd>The single entity that outsiders reference. The only entry point into the aggregate.</dd>
+
+      <dt>Consistency Boundary</dt>
+      <dd>The seam around an invariant. Everything inside is consistent at every commit; everything outside is eventually consistent.</dd>
+
+      <dt>Invariant</dt>
+      <dd>A rule that must <em>always</em> be true. The reason an aggregate exists.</dd>
+
+      <dt>One-aggregate-per-transaction rule</dt>
+      <dd>Mutate one aggregate per commit. Cross-aggregate updates use events.</dd>
+
+      <dt>Reference by ID</dt>
+      <dd>Holding another aggregate's ID instead of embedding it. Loose coupling, independent storage, no shared lock.</dd>
+
+      <dt>Eventual Consistency</dt>
+      <dd>Cross-aggregate state lines up "eventually" via event handlers, not atomically in one transaction.</dd>
+
+      <dt>Law of Demeter (here)</dt>
+      <dd>"Talk only to the root." Never reach <code>order.lines[0].sku</code>; call a method on the root instead.</dd>
+    </dl>
+
+    <h2>🚨 Anti-Patterns</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🌲</span>
+        <div class="map-card-title">Graph aggregate</div>
+        <div class="map-card-desc">Owns half the schema (Customer→Orders→Lines→Refunds). Massive joins, every mutation locks the customer.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📭</span>
+        <div class="map-card-title">Anemic aggregate</div>
+        <div class="map-card-desc">Root is a property bag; logic lives in <code>OrderManager</code>. If the root doesn't enforce invariants, it's a record &mdash; not a root.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💤</span>
+        <div class="map-card-title">Lazy collection</div>
+        <div class="map-card-desc">Internal collection returned as <code>Flow</code>/lazy <code>Sequence</code>. Breaks the "loaded as a unit" promise.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔗</span>
+        <div class="map-card-title">Two-aggregate transaction</div>
+        <div class="map-card-desc">Loading + mutating two aggregates in one Room <code>@Transaction</code>. Doubles lock surface, hides invariants.</div>
+      </div>
+    </div>
+
+    <h2>🏛️ Through-the-Root vs Reach-Inside</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Through the root ✅</th><th>Reach inside ❌</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>order.total</code></td><td><code>order.lines.sumOf { it.subtotal }</code></td></tr>
+        <tr><td><code>order.addLine(sku, qty, price)</code></td><td><code>order.lines.add(LineItem(...))</code></td></tr>
+        <tr><td><code>order.canBePlaced()</code></td><td><code>order.status == Draft &amp;&amp; order.lines.isNotEmpty()</code></td></tr>
+        <tr><td>Invariant in one place</td><td>Invariant scattered across callers</td></tr>
+      </tbody>
+    </table>
+
+    <h2>❓ Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test yourself</h3>
+      <details>
+        <summary>What's the difference between an aggregate and a "natural cluster of related rows"?</summary>
+        <p class="quiz-answer">An aggregate is defined by an <em>invariant</em>, not by foreign-key relationships. The boundary is drawn only as wide as the invariant requires. Without that contract, you have a graph &mdash; not an aggregate.</p>
+      </details>
+      <details>
+        <summary>Why isn't <code>LineItem</code> its own aggregate?</summary>
+        <p class="quiz-answer">Nothing outside the order references a specific line item independently, a line item can't exist without an order, and the invariant "total = sum of subtotals" lives on the order. All three signals point inward.</p>
+      </details>
+      <details>
+        <summary>How do you keep <code>Order</code> and <code>Customer</code> consistent if they're separate aggregates?</summary>
+        <p class="quiz-answer">Eventual consistency via events. Mutate one aggregate in transaction 1, emit an event, let a handler update the other aggregate in transaction 2. Idempotent handler + persisted event log handles the failure case.</p>
+      </details>
+      <details>
+        <summary>Why is Room's <code>@Relation</code> across aggregate boundaries dangerous?</summary>
+        <p class="quiz-answer">It silently couples two aggregates into one query and one transaction. <code>Customer @Relation List&lt;Order&gt;</code> turns "load one customer" into "load every order ever" and prevents the two from ever scaling independently. Use <code>@Relation</code> only <em>inside</em> a single aggregate.</p>
+      </details>
+      <details>
+        <summary>Why mint aggregate IDs on the client?</summary>
+        <p class="quiz-answer">UUID/ULID at creation time means events carry a real ID immediately, offline-first works naturally, and you skip the round-trip to the database to learn what to call the new thing.</p>
+      </details>
+      <details>
+        <summary>What lives in the ViewModel vs the aggregate?</summary>
+        <p class="quiz-answer">ViewModel: load via repository, call domain methods, save, publish events, project to UI state. Aggregate: enforce invariants, validate state transitions, decide what events to emit. The interesting work happens inside the aggregate.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">An aggregate is a scope of consistency: one root, one boundary, one transaction.</li>
+        <li class="map-summary-item">Boundaries are drawn around <em>invariants</em>, not around natural row relationships.</li>
+        <li class="map-summary-item">Vernon's rules: small, by-ID references, eventual consistency outside, true invariants inside.</li>
+        <li class="map-summary-item">Cross-aggregate updates always flow through domain events &mdash; never one giant transaction.</li>
+        <li class="map-summary-item">Outsiders only talk to the root. Never reach <code>order.lines[0].sku</code>; call a method on the root.</li>
+        <li class="map-summary-item">On Room: wrap aggregate I/O in <code>@Transaction</code>; never use <code>@Relation</code> across aggregate boundaries.</li>
+        <li class="map-summary-item">Repositories return the full aggregate or null &mdash; never half-hydrated, never lazy-loaded.</li>
+        <li class="map-summary-item">Mint aggregate IDs client-side (ULID). Offline-first, event-friendly, no round-trip.</li>
+        <li class="map-summary-item">Anti-patterns: graph aggregate, anemic root, lazy collections, two-aggregate transactions. Spot them in code review.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="07-entities-and-value-objects-map.html">
+        <span class="nav-direction">&#8592; Previous Map</span>
+        <span class="nav-chapter">Entities &amp; Value Objects</span>
+      </a>
+      <a href="../08-aggregates.html">
+        <span class="nav-direction">📖 Read</span>
+        <span class="nav-chapter">Chapter 8</span>
+      </a>
+      <a href="09-repositories-and-services-map.html" class="next">
+        <span class="nav-direction">Next Map &#8594;</span>
+        <span class="nav-chapter">Repositories &amp; Services</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

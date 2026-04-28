@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Debugging 16 KB Page Size Compatibility for Native Libraries | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-performance-playbook.html">&larr; Prev</a>
+      <a href="14-modern-background-restrictions.html">Next &rarr;</a>
+      <a href="maps/13-16kb-page-size-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Debugging 16 KB Page Size Compatibility for Native Libraries</h1>
+    <p class="subtitle">The Pixel 9 crash signature that&rsquo;s gating Play Store submissions in 2026</p>
+  </header>
+
+  <main>
+
+    <h2>The Crash Class That Came Out of Nowhere</h2>
+
+    <p>Imagine: your app has shipped to millions of users for years. Stable. Boring. Then a Pixel 9 user files a one-star review &mdash; &ldquo;crashes immediately on launch.&rdquo; You reproduce it, and there it is in logcat, the line that ruined a thousand evenings:</p>
+
+    <pre><code>java.lang.UnsatisfiedLinkError: dlopen failed: "/data/app/.../lib/arm64-v8a/libfoo.so"
+    is not page-size compatible. Please rebuild library with new NDK.</code></pre>
+
+    <p>You didn&rsquo;t change anything. The library was built two years ago. Why is it crashing now?</p>
+
+    <p>Because Android changed underneath you. Some Android 15+ devices &mdash; the ones with more RAM, including the Pixel 8a/9/9a family with the 16 KB developer toggle &mdash; switched from the legacy 4 KB memory page size to 16 KB. Native libraries (`.so` files) are loaded with `mmap()` calls that require alignment to the device&rsquo;s page size. A `.so` aligned to 4 KB cannot be mapped on a device with 16 KB pages. The dynamic linker refuses, and your process dies before `onCreate()` even runs.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Nov 1, 2025</span>
+        <span class="stat-label">Google Play deadline for 16 KB support on new submissions targeting Android 15+</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">May 31, 2026</span>
+        <span class="stat-label">Last automatic Play Console extension for the requirement</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">4&times;</span>
+        <span class="stat-label">Page size jump (4096 &rarr; 16384 bytes) &mdash; the source of the misalignment</span>
+      </div>
+    </div>
+
+    <p>This chapter is about debugging that crash class. It&rsquo;s the most common new-OS-restriction bug of 2026, it&rsquo;s the easiest to miss in CI (no test you have today exercises 16 KB devices), and most teams hit it through a transitive dependency they didn&rsquo;t even know was native.</p>
+
+    <h2>Why It Happens: A 30-Second Mental Model</h2>
+
+    <p>When the OS loads a `.so` file, it uses `mmap()` to project the file&rsquo;s ELF segments into memory. `mmap()` can only operate at page-size granularity. If the segments are aligned for 4 KB pages but the OS is using 16 KB pages, the math doesn&rsquo;t work &mdash; you can&rsquo;t place a 4 KB-aligned segment cleanly on a 16 KB grid. The dynamic linker (`linker64`) detects this and fails with the signature above.</p>
+
+    <p>The fix lives in two places:</p>
+    <ul>
+      <li><strong>The compiler flags</strong> when the `.so` was built. NDK r28+ emits 16 KB-aligned segments by default. Older NDKs need linker flags to override the 4 KB default. (<a href="https://developer.android.com/guide/practices/page-sizes">developer.android.com/guide/practices/page-sizes</a>, 2026-04-26)</li>
+      <li><strong>The APK packaging.</strong> AGP 8.5.1+ (and certainly AGP 9.x in 2026) zip-aligns the APK&rsquo;s native libs with the 16 KB stride so the runtime can map them directly out of the APK without copying.</li>
+    </ul>
+
+    <h2>The Logcat Signature, Up Close</h2>
+
+    <div class="debug-trace">
+      <h4>Crash on Pixel 9 with 16 KB Toggle Enabled</h4>
+<pre><code>2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime: FATAL EXCEPTION: main
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime: Process: com.example.shop, PID: 4521
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime: java.lang.UnsatisfiedLinkError: dlopen failed:
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime:     "/data/app/~~xY..==/com.example.shop-Hk..==/lib/arm64/libimage_proc.so"
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime:     is not page-size compatible. Please rebuild library with new NDK.
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime:     at java.lang.Runtime.loadLibrary0(Runtime.java:1098)
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime:     at java.lang.System.loadLibrary(System.java:1661)
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime:     at com.example.shop.imaging.NativeImageProcessor.&lt;clinit&gt;(NativeImageProcessor.kt:14)
+2026-04-22 10:14:08.221  4521  4521 E AndroidRuntime:     at com.example.shop.MainApplication.onCreate(MainApplication.kt:42)
+
+2026-04-22 10:14:08.198  4521  4521 W linker  : Warning: "/data/app/.../lib/arm64/libimage_proc.so"
+2026-04-22 10:14:08.198  4521  4521 W linker  :     LOAD segment alignment (0x1000) is smaller than system page size (0x4000)
+2026-04-22 10:14:08.198  4521  4521 W linker  :     dlopen failed: unsupported page size 16384</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) The crash is pre-`onCreate()`.</strong> `loadLibrary` failed during a static initializer in `NativeImageProcessor`, which `MainApplication.onCreate()` indirectly triggers. There is no recoverable point &mdash; the process dies on launch. <strong>(2) The offending `.so` is `libimage_proc.so`</strong>, located at `lib/arm64-v8a/libimage_proc.so` inside the installed APK. <strong>(3) The linker warning</strong> spells out the math: segment alignment is `0x1000` (4096 bytes), system page size is `0x4000` (16384 bytes). 4 KB doesn&rsquo;t divide cleanly into 16 KB at the segment offset, so the segment can&rsquo;t be mapped. <strong>(4) The fix is upstream</strong> &mdash; rebuild `libimage_proc.so` with NDK r28+, or apply the legacy linker flags if you&rsquo;re stuck on r27. <strong>(5) Triage hint:</strong> the path tells you whether this is your code (look in `app/src/main/cpp/`) or a dependency (look in any AAR&rsquo;s `jni/` folder). For `libimage_proc.so` named like this, it&rsquo;s almost certainly your own native module.</p>
+    </div>
+
+    <p>The two lines that matter are the linker warning and the `dlopen failed: unsupported page size 16384` text. AI gives you the diagnosis instantly because this is one of the most pattern-matchable Android crashes that exists &mdash; there is exactly one cause.</p>
+
+    <h2>Catching It Before It Ships: APK Analyzer + Lint</h2>
+
+    <p>The cheapest diagnosis is the one that runs before users see the crash. Three checks should be wired into every native-using project:</p>
+
+    <h3>1. APK Analyzer (manual, but instant)</h3>
+
+    <p>In Android Studio: <strong>Build &rarr; Analyze APK&hellip;</strong>, then drill into `lib/arm64-v8a/`. Each `.so` row has an <em>Alignment</em> column. Anything other than &ldquo;16 KB&rdquo; is a candidate to fix.</p>
+
+    <h3>2. The official <code>check_elf_alignment.sh</code> script</h3>
+
+    <pre><code># From the NDK or download from Google&rsquo;s repo:
+$ ./check_elf_alignment.sh app-release.apk
+
+Checking APK app-release.apk
+  lib/arm64-v8a/libnative-lib.so       ALIGNED   (16 KiB)
+  lib/arm64-v8a/libimage_proc.so       UNALIGNED (4 KiB)   &lt;-- BROKEN
+  lib/arm64-v8a/libreactnative.so      UNALIGNED (4 KiB)   &lt;-- BROKEN
+  lib/arm64-v8a/libopencv_java4.so     ALIGNED   (16 KiB)
+  lib/x86_64/libnative-lib.so          ALIGNED   (16 KiB)</code></pre>
+
+    <h3>3. <code>llvm-objdump</code> for surgical inspection of one library</h3>
+
+    <pre><code>$ANDROID_HOME/ndk/28.1.13356709/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump \
+    -p libimage_proc.so | grep LOAD
+
+LOAD off 0x0000000000000000 vaddr 0x0000000000000000 align 2**12  # 2^12 = 4096 (BAD)
+LOAD off 0x000000000004a000 vaddr 0x000000000004b000 align 2**12  # BAD</code></pre>
+
+    <div class="tip-box">
+      Look at the <code>align</code> column. <code>2**14</code> = 16384 = good. <code>2**13</code> = 8192 or <code>2**12</code> = 4096 = needs rebuild. The `check_elf_alignment.sh` script just wraps this `llvm-objdump` check across every `.so` in your APK so you don&rsquo;t have to script it yourself.
+    </div>
+
+    <h3>4. <code>zipalign -c -P 16 -v 4</code> for the packaging side</h3>
+
+    <p>Even with 16 KB-aligned `.so` files, the APK itself must place them at 16 KB-aligned offsets (uncompressed) so the runtime can `mmap()` directly into the APK. AGP 8.5.1+ does this automatically; verify with:</p>
+
+    <pre><code>$ANDROID_HOME/build-tools/35.0.0/zipalign -c -P 16 -v 4 app-release.apk
+# Last line: "Verification successful" or it tells you which entries are misaligned.</code></pre>
+
+    <h2>Building the <code>/analyze-page-size</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/analyze-page-size.md</code>:</p>
+
+    <pre><code># /analyze-page-size — 16 KB Page Size Audit
+
+Take output from `check_elf_alignment.sh` (or the APK Analyzer)
+and produce a structured remediation plan.
+
+## Input
+The user pastes the alignment report. Each line has the form:
+  &lt;path inside APK&gt;  ALIGNED|UNALIGNED  (4 KiB|16 KiB)
+
+## Analysis Steps
+1. **Group findings:** ALIGNED count vs UNALIGNED count, broken
+   down by ABI (arm64-v8a, armeabi-v7a, x86_64, x86).
+2. **For each unaligned `.so`, classify the source:**
+   - First-party (`app/src/main/cpp/...`) — fix by rebuilding with
+     NDK r28+ or adding linker flags.
+   - Third-party (in an AAR or NDK dependency) — needs upstream fix
+     or local rebuild.
+   - Transitive via React Native / Flutter / Unity — special cases
+     covered below.
+3. **Rank by impact:** libraries loaded eagerly via `System.loadLibrary`
+   in `Application.onCreate` are launch crashes. Libraries loaded
+   on-demand are feature crashes.
+4. **Suggest the cheapest fix** per library: rebuild local, bump
+   dependency version, or apply legacy linker flags.
+
+## Output Format
+### Alignment Summary
+| ABI | Aligned | Unaligned |
+
+### Critical (launch crash) ⚠️
+[List of unaligned `.so` files loaded eagerly]
+
+### Non-critical (feature crash)
+[List of unaligned `.so` files loaded lazily]
+
+### Remediation Plan
+[Per library: source classification + fix + estimated effort]</code></pre>
+
+    <h2>When the Culprit Is a Transitive Dependency</h2>
+
+    <p>The hardest 16 KB bugs are the ones you didn&rsquo;t write. Your APK pulls in a `.so` because some library you depend on bundles native code, and now you&rsquo;re responsible for shipping it 16 KB-aligned. The frequent offenders in 2026:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Ecosystem</th>
+          <th>What to bump</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>React Native</strong></td>
+          <td>RN 0.76+ (Hermes &amp; JSC pre-aligned in newer releases)</td>
+          <td>Many third-party RN modules ship their own `.so`; check each one.</td>
+        </tr>
+        <tr>
+          <td><strong>Flutter</strong></td>
+          <td>Flutter 3.27+ engine</td>
+          <td>The Flutter engine itself is aligned in recent releases; plugin authors are mixed.</td>
+        </tr>
+        <tr>
+          <td><strong>OpenCV (Android SDK)</strong></td>
+          <td>4.10.0+</td>
+          <td>Earlier OpenCV releases shipped 4 KB-aligned `libopencv_java*.so`.</td>
+        </tr>
+        <tr>
+          <td><strong>SQLCipher / SQLite native</strong></td>
+          <td>SQLCipher 4.6.0+ Android AAR</td>
+          <td>Crypto libs are common offenders &mdash; check yours.</td>
+        </tr>
+        <tr>
+          <td><strong>Conscrypt</strong></td>
+          <td>2.5.4+</td>
+          <td>2.5.3 was the famous Pixel 8 16 KB crash; bumped quickly. (<a href="https://github.com/google/conscrypt/issues/1413">github.com/google/conscrypt/issues/1413</a>, 2026-04-26)</td>
+        </tr>
+        <tr>
+          <td><strong>ML Kit / TFLite</strong></td>
+          <td>TFLite 2.17.0+</td>
+          <td>Google&rsquo;s own libs were among the first to align.</td>
+        </tr>
+        <tr>
+          <td><strong>Game engines (Unity, Unreal)</strong></td>
+          <td>Unity 6.0 LTS, Unreal 5.5+</td>
+          <td>Engine-shipped native libs; rebuild the export with the latest engine version.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The diagnostic workflow is the same regardless of source:</p>
+
+    <ol>
+      <li>Run <code>check_elf_alignment.sh</code> on a release APK.</li>
+      <li>For each unaligned `.so`, find which AAR or Maven artifact contains it: <code>./gradlew :app:dependencies | grep -i &lt;lib-name&gt;</code> or unzip the AAR and look in `jni/`.</li>
+      <li>Check the dependency&rsquo;s changelog for &ldquo;16 KB&rdquo; or &ldquo;page size&rdquo; mentions.</li>
+      <li>If a fixed version exists: bump it. If not: file an issue, and decide whether to rebuild from source, drop the dependency, or use the legacy linker flags as a temporary workaround on a fork.</li>
+    </ol>
+
+    <h2>Rebuilding First-Party Native Code</h2>
+
+    <p>If the `.so` is yours &mdash; built from `app/src/main/cpp/` &mdash; the fix is mostly a toolchain bump.</p>
+
+    <h3>The happy path: NDK r28+ and AGP 8.5.1+</h3>
+
+    <pre><code>// app/build.gradle.kts
+android {
+    ndkVersion = "28.1.13356709"  // r28 or newer = 16 KB by default
+    // ...
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1+"
+        }
+    }
+}</code></pre>
+
+    <p>Rebuild, run the alignment check, you&rsquo;re done. NDK r28 generates 16 KB-aligned ELF segments by default, and AGP 8.5.1+ zip-aligns the APK&rsquo;s `lib/` entries with the correct stride. (<a href="https://developer.android.com/guide/practices/page-sizes">developer.android.com/guide/practices/page-sizes</a>, 2026-04-26)</p>
+
+    <h3>Stuck on NDK r27 or older? Linker flags.</h3>
+
+    <p>If you can&rsquo;t bump the NDK (CI image lock-in, gradle plugin compat), add the legacy linker flags. CMake:</p>
+
+    <pre><code># CMakeLists.txt
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    "-Wl,-z,max-page-size=16384"
+    "-Wl,-z,common-page-size=16384"
+)</code></pre>
+
+    <p>ndk-build (legacy):</p>
+
+    <pre><code># Android.mk
+LOCAL_LDFLAGS += -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384</code></pre>
+
+    <div class="warning-box">
+      The legacy linker flags only fix the <em>alignment of segments inside the `.so`</em>. They do <strong>not</strong> fix the APK packaging. If you&rsquo;re on an old AGP that doesn&rsquo;t zip-align with a 16 KB stride, the apk-level <code>zipalign -P 16</code> check will still fail. Bumping AGP is usually less painful than bumping NDK.
+    </div>
+
+    <h2>Runtime Code: Stop Hardcoding 4096</h2>
+
+    <p>Even with aligned `.so` files, your C/C++ code may still assume 4 KB pages internally &mdash; and that assumption breaks when the OS hands out 16 KB pages.</p>
+
+    <pre><code>// ❌ BAD — hardcoded 4 KB assumption
+#define PAGE_SIZE 4096
+void* mapped = mmap(NULL, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+
+// ❌ ALSO BAD — magic number
+char buffer[4096];
+
+// ✅ GOOD — query the runtime
+#include &lt;unistd.h&gt;
+long page_size = sysconf(_SC_PAGESIZE);   // POSIX-correct
+// or
+int page_size = getpagesize();            // BSD-style, equivalent on Linux/Android</code></pre>
+
+    <p>NDK r27 and higher actually <em>undefine</em> the <code>PAGE_SIZE</code> macro when 16 KB mode is enabled, so old code that referenced the macro will fail to compile rather than fail at runtime. That&rsquo;s a feature: it forces the audit before users ever see the crash.</p>
+
+    <div class="root-cause">
+      <h4>Root Cause Pattern: Buffer Sized to PAGE_SIZE</h4>
+      <p>A common silent bug: a native ring buffer or memory pool sized as a multiple of 4096. On a 16 KB device, your &ldquo;one-page allocation&rdquo; is now <em>quarter</em> the size you reasoned about, and code that assumed page-aligned writes overlaps with the next allocation. Symptoms: data corruption, crashes deeper in the stack than the actual bug, sporadic JNI errors. The fix is always: query the page size at runtime; never bake it into a constant.</p>
+    </div>
+
+    <h2>Testing Against a 16 KB Environment</h2>
+
+    <p>You have two options. Pick whichever is closer to hand &mdash; both are necessary in CI for any team shipping native code.</p>
+
+    <h3>Option A: Android Studio 16 KB emulator system images</h3>
+
+    <ol>
+      <li><strong>SDK Manager &rarr; SDK Platforms &rarr;</strong> check &ldquo;Show Package Details.&rdquo;</li>
+      <li>Under Android 15 (or higher), select &ldquo;Google APIs Experimental 16 KB Page Size ARM 64 v8a System Image.&rdquo;</li>
+      <li>Create a new AVD using that image.</li>
+      <li>Boot, then verify: <code>adb shell getconf PAGE_SIZE</code> should print <code>16384</code>.</li>
+    </ol>
+
+    <h3>Option B: Pixel 8/8a/9/9a developer toggle</h3>
+
+    <p>On supported Pixels (Pixel 8, 8 Pro, 8a on Android 15 QPR1+; Pixel 9 family on QPR2+; Pixel 9a on Android 16+), open <strong>Settings &rarr; System &rarr; Software updates</strong>, find <strong>Boot with 16 KB page size</strong>, toggle it, and reboot. The device wipes its app data and comes back up with 16 KB pages.</p>
+
+    <div class="tip-box">
+      Add a tagged emulator job to CI: spin up the 16 KB AVD, install the release APK, run a smoke test that exercises every code path that touches a `System.loadLibrary` call. If any `.so` is misaligned, it crashes immediately and the job fails. This is the cheapest possible regression gate &mdash; it costs you one extra emulator boot per build.
+    </div>
+
+    <h2>The Decision Matrix: Rebuild, Drop, or Wait</h2>
+
+    <p>When a transitive dependency is the culprit, you have three options. Most teams pick wrong on the first pass.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Option</th>
+          <th>When to choose</th>
+          <th>Risk</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Bump dependency version</strong></td>
+          <td>Upstream has shipped a 16 KB-aligned release. Always your first choice.</td>
+          <td>API breakage in the dependency&rsquo;s major-version bump.</td>
+        </tr>
+        <tr>
+          <td><strong>Rebuild from source locally</strong></td>
+          <td>Open-source dependency, no upstream fix yet, you can vendor it.</td>
+          <td>You now own the security patches for that lib until upstream catches up.</td>
+        </tr>
+        <tr>
+          <td><strong>Drop the dependency</strong></td>
+          <td>The lib is not load-bearing; alternatives exist; it&rsquo;s abandoned.</td>
+          <td>Migration work, possible feature regression.</td>
+        </tr>
+        <tr>
+          <td><strong>Wait for upstream</strong></td>
+          <td>Active maintainer, fix in a PR, you can extend Play deadline to May 31, 2026.</td>
+          <td>The deadline is hard. Don&rsquo;t wait past April 2026 without a fallback plan.</td>
+        </tr>
+        <tr>
+          <td><strong>Patch with linker flags on a fork</strong></td>
+          <td>Closed-source binary that won&rsquo;t be updated; vendor relationship blocking.</td>
+          <td>Highest. You&rsquo;re distributing a modified binary &mdash; check the license.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="fix-pattern">
+      <h4>Fix Pattern: The Two-Line Bump That Saves the Day</h4>
+<pre><code>// Before:
+implementation("com.example.image-processing:imageproc-android:2.3.1")
+// alignment check: lib/arm64-v8a/libimageproc.so  UNALIGNED (4 KiB)
+
+// After:
+implementation("com.example.image-processing:imageproc-android:2.6.0")
+// alignment check: lib/arm64-v8a/libimageproc.so  ALIGNED (16 KiB)</code></pre>
+      <p>For dependencies that have shipped a fix, this is all that&rsquo;s needed. The pattern that wastes weeks is teams forking and patching when a version bump on a recently-released dependency would have done it. Always check the changelog first.</p>
+    </div>
+
+    <h2>The Before/After: A Real Migration Score Card</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Pre-Migration State</h4>
+        <p><strong>Crash rate on Pixel 9 (16 KB enabled):</strong> 100% (launch crash)</p>
+        <p><strong>Play Console submission status:</strong> Rejected with &ldquo;Your app is affected by Google Play&rsquo;s 16 KB page size requirements&rdquo;</p>
+        <p><strong>Misaligned `.so` count:</strong> 7 of 14 native libraries</p>
+        <p><strong>Source mix:</strong> 1 first-party, 4 transitive (React Native modules), 2 OpenCV bundle</p>
+        <p><strong>NDK / AGP version:</strong> r25c / 8.2.0</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: 2-Day Fix Sprint</h4>
+        <p><strong>Crash rate on Pixel 9 (16 KB enabled):</strong> 0% (verified on emulator + physical Pixel 9a)</p>
+        <p><strong>Play Console submission status:</strong> Accepted, no warning</p>
+        <p><strong>Misaligned `.so` count:</strong> 0</p>
+        <p><strong>Fix breakdown:</strong> Bumped RN to 0.77 (3 libs fixed), bumped OpenCV to 4.10.0 (2 libs), rebuilt own lib with NDK r28 (1 lib), patched one fork lib with linker flags (1 lib)</p>
+        <p><strong>NDK / AGP version:</strong> r28b / 8.7.2</p>
+      </div>
+    </div>
+
+    <h2>Building the <code>/diagnose-page-size-crash</code> Skill</h2>
+
+    <p>The companion to `/analyze-page-size` (which audits an APK) is `/diagnose-page-size-crash` (which takes a single crash log and tells you what to fix). Create <code>.claude/commands/diagnose-page-size-crash.md</code>:</p>
+
+    <pre><code># /diagnose-page-size-crash — 16 KB Crash Triage
+
+You are given an Android crash log. Determine if it is a 16 KB
+page size compatibility crash, and if so, identify the offending
+library and suggest a fix.
+
+## Detection Heuristic
+A crash is a page-size crash if the log contains ANY of:
+  - "is not page-size compatible"
+  - "unsupported page size 16384"
+  - "LOAD segment alignment (0x1000) is smaller than system page size (0x4000)"
+  - dlopen failure mentioning a `.so` with a linker warning above it
+
+## Analysis Steps
+1. **Confirm classification.** If the log is NOT a page-size crash,
+   say so and route to /analyze-crash instead.
+2. **Extract the offending `.so`** path from the dlopen line.
+   The path is `/data/app/.../lib/&lt;abi&gt;/&lt;libname&gt;.so`.
+3. **Classify source** based on the library name:
+   - Looks like a vendor name (e.g., libreactnative, libopencv) → transitive
+   - Looks like a project-specific name (e.g., libmyapp_native) → first-party
+4. **Pinpoint the load site** from the Java/Kotlin stack:
+   the `System.loadLibrary` call that triggered it.
+5. **Suggest the fix** in priority order:
+   a) For transitive: name the most likely Maven artifact + suggested
+      version bump.
+   b) For first-party: NDK r28+ rebuild OR linker flags.
+6. **Note the user impact:** is this loaded eagerly (launch crash)
+   or lazily (feature crash)?
+
+## Output Format
+- **Classification:** 16 KB page size crash (confidence: high|medium)
+- **Offending library:** &lt;name&gt; (&lt;source: first-party|transitive&gt;)
+- **Load site:** &lt;file:line&gt; in Java/Kotlin
+- **User impact:** launch crash | feature crash | background crash
+- **Recommended fix:** &lt;1–3 sentence remediation&gt;
+- **Verification step:** &lt;the exact alignment-check command to confirm&gt;</code></pre>
+
+    <p>Now when a teammate pastes a crash, you don&rsquo;t play guess-the-cause &mdash; the skill spits out the library name, the source classification, the most likely fix, and the verification step.</p>
+
+    <h2>How This Connects to the Rest of the Course</h2>
+
+    <p>This is the same loop you&rsquo;ve practiced for 12 chapters: <strong>signature &rarr; AI diagnosis &rarr; root cause &rarr; reusable skill &rarr; verification</strong>. The page-size crash is special only because it&rsquo;s new (most teams haven&rsquo;t seen it) and because the fix is almost always upstream (you can&rsquo;t handle it in your own code). But the muscle memory carries over directly:</p>
+
+    <ul>
+      <li>Use <code>/analyze-crash</code> (Ch 2) for the initial triage if you&rsquo;re unsure of the class.</li>
+      <li>Use <code>/diagnose-page-size-crash</code> (this chapter) once you&rsquo;ve confirmed the signature.</li>
+      <li>Use <code>/analyze-page-size</code> (this chapter) on every release APK as a CI gate.</li>
+      <li>Add a 16 KB emulator job to CI &mdash; this is the only test that actually exercises the code path.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <h4>Exercise: Introduce a Misaligned Native Lib, Then Fix It</h4>
+      <ol>
+        <li><strong>Create a tiny native module</strong> in a side project. <code>app/src/main/cpp/native-lib.cpp</code> with a single JNI function that returns a string.</li>
+        <li><strong>Force a 4 KB build</strong>: temporarily downgrade <code>ndkVersion</code> to <code>"25.2.9519653"</code> (NDK r25c) in <code>app/build.gradle.kts</code>. Do <em>not</em> add the linker flags.</li>
+        <li><strong>Build a release APK.</strong> Run <code>./check_elf_alignment.sh app-release.apk</code>. You should see <code>UNALIGNED (4 KiB)</code> for `libnative-lib.so`.</li>
+        <li><strong>Spin up the 16 KB emulator</strong> from the SDK Manager. Install the APK. Launch it. Capture the crash with <code>adb logcat -d -t 200 *:E &gt; crash.log</code>.</li>
+        <li><strong>Feed the log to your <code>/diagnose-page-size-crash</code> skill.</strong> Verify it identifies the offending library and recommends an NDK bump.</li>
+        <li><strong>Apply the fix</strong>: bump <code>ndkVersion</code> to <code>"28.1.13356709"</code> (or newer). Rebuild. Re-run the alignment check. Re-run the app on the 16 KB emulator. The launch crash should be gone.</li>
+        <li><strong>Bonus:</strong> repeat step 6 but instead of bumping NDK, add the legacy linker flags to <code>CMakeLists.txt</code>. Confirm the same outcome &mdash; this is the workaround you&rsquo;ll need when an NDK bump is blocked.</li>
+      </ol>
+      <p>By the end of this exercise, you&rsquo;ve seen the crash, diagnosed it, and fixed it two different ways &mdash; which means the next time it happens to a real shipping app, you know exactly which lever to pull.</p>
+    </div>
+
+    <h2>Sources Used in This Chapter</h2>
+
+    <ul>
+      <li><a href="https://developer.android.com/guide/practices/page-sizes">developer.android.com/guide/practices/page-sizes</a> &mdash; official guide for 16 KB compatibility (verified 2026-04-26)</li>
+      <li><a href="https://android-developers.googleblog.com/2025/07/transition-to-16-kb-page-sizes-android-apps-games-android-studio.html">Android Developers Blog: Transition to 16 KB page sizes</a> (verified 2026-04-26)</li>
+      <li><a href="https://source.android.com/docs/core/architecture/16kb-page-size/16kb">source.android.com: 16 KB page size architecture</a> (verified 2026-04-26)</li>
+      <li><a href="https://github.com/google/conscrypt/issues/1413">Conscrypt issue #1413: 16 KB page size mismatch on Pixel 8</a> (verified 2026-04-26)</li>
+    </ul>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Chapter 14 stays in the same neighborhood &mdash; bugs that look invisible in your test environment but bite users on Android 15+ devices. We&rsquo;ll dig into the modern background-work restriction landscape: the <code>ForegroundServiceStartNotAllowedException</code> from <code>BOOT_COMPLETED</code>, Android 15&rsquo;s 6-hour timeouts on <code>dataSync</code> and <code>mediaProcessing</code> foreground services, and Android 16&rsquo;s job runtime quotas. Same diagnostic loop, different OS-policy minefield.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="12-performance-playbook.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Performance Budgets and Your Debugging Playbook</span>
+      </a>
+      <a href="14-modern-background-restrictions.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Debugging Background-Work Restrictions on Modern Android</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

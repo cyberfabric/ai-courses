@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Compose Recomposition Performance | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../05-compose-recomposition.html">Chapter</a>
+      <a href="04-memory-leaks-map.html">&#8592; Prev Map</a>
+      <a href="06-network-debugging-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Compose Recomposition Performance</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>If a composable recomposes and <strong>nothing visible on screen changes</strong>, you're burning CPU for nothing. Every recomposition should produce a visible change. Find the offenders with Layout Inspector, fix them with stability annotations and scoped state reads.</p>
+    </div>
+
+    <!-- ====== HOW RECOMPOSITION TRIGGERS ====== -->
+    <h2>🔄 How Recomposition Triggers</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">State changes</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Composable reads state</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Parameter equality check</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Params "changed"?</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Recompose &amp; re-render</div>
+    </div>
+
+    <p style="text-align:center; color: var(--color-text-muted); margin-top: 0.5rem;">The problem: Compose thinks inputs changed even when <em>meaningful</em> data hasn't &mdash; unstable types, re-allocated lambdas, and wrong state scoping are the culprits.</p>
+
+    <!-- ====== STRONG SKIPPING MODE ====== -->
+    <h2>🚀 Strong Skipping Mode (Default since Kotlin 2.0.20)</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">✅</span>
+        <div class="map-card-title">All restartable = skippable</div>
+        <div class="map-card-desc">Even composables with unstable parameters now skip. The old "restartable but NOT skippable" verdict mostly disappears.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪄</span>
+        <div class="map-card-title">Lambdas auto-memoized</div>
+        <div class="map-card-desc">The compiler wraps every lambda inside a composable in <code>remember</code> with its captures as keys. Manual <code>remember { { ... } }</code> is no longer required.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚖️</span>
+        <div class="map-card-title">Equality shifts</div>
+        <div class="map-card-desc">Stable params: object equality (<code>.equals()</code>). Unstable params: instance equality (<code>===</code>). Reallocated objects always fail <code>===</code> &mdash; that's why <code>@Immutable</code> still matters.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">Opt-outs</div>
+        <div class="map-card-desc"><code>@NonSkippableComposable</code> on a function disables skipping. <code>@DontMemoize</code> on a lambda disables auto-memoization.</div>
+      </div>
+    </div>
+
+    <!-- ====== THE 3 RECOMPOSITION TRAPS ====== -->
+    <h2>🪤 The Top Recomposition Traps</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⚠️</span>
+        <div class="map-card-title">Unstable Parameters</div>
+        <div class="map-card-desc"><code>List</code>, <code>Map</code>, non-data classes use <code>===</code> equality under strong skipping &mdash; reallocated objects <strong>never match</strong>, so the composable still recomposes. Fix: <code>ImmutableList</code> + <code>@Immutable</code> for object-equality semantics.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎯</span>
+        <div class="map-card-title">State Read Scoping</div>
+        <div class="map-card-desc">Reading state in a parent recomposes <em>everything</em> below it. Rule: <strong>read state as late as possible</strong>, in the narrowest composable scope.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧠</span>
+        <div class="map-card-title">Missing <code>remember</code></div>
+        <div class="map-card-desc">Without <code>remember</code>, expensive objects (formatters, parsers, regex) are <strong>recreated on every recomposition</strong>. Wrap them.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔗</span>
+        <div class="map-card-title">Lambda Captures</div>
+        <div class="map-card-desc">Strong skipping auto-memoizes lambdas, but the keys are the captured values. If the captures change every recomposition, the auto-<code>remember</code> still invalidates. Stabilize the captures (or use <code>@DontMemoize</code> for hot paths).</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔑</span>
+        <div class="map-card-title">Missing LazyColumn <code>key</code></div>
+        <div class="map-card-desc">Without <code>key</code>, Compose tracks items by position. Adding an item at the top recomposes <strong>every</strong> item. Always use <code>key = { it.id }</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Heavy Item Composables</div>
+        <div class="map-card-desc">Image loading, price formatting, markdown parsing inside items kills scroll perf. Move expensive work into <code>remember</code> or the ViewModel.</div>
+      </div>
+    </div>
+
+    <!-- ====== POWER TOOLS ====== -->
+    <h2>⚡ Power Tools for Recomposition</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node"><code>@Immutable</code><br>Mark data classes as truly immutable</div>
+      <div class="map-rel-node"><code>ImmutableList</code><br>Replace <code>List</code> interface</div>
+      <div class="map-rel-center">Recomposition<br>Optimization</div>
+      <div class="map-rel-node"><code>derivedStateOf</code><br>Filter frequent state changes</div>
+      <div class="map-rel-node"><code>snapshotFlow</code><br>State → Flow for side effects</div>
+    </div>
+
+    <div class="tip-box" style="margin-top: 1.5rem;">
+      <strong><code>derivedStateOf</code></strong> = reduce recompositions by computing a simpler boolean from rapidly-changing state (e.g., <code>index > 0</code> instead of every index value).<br>
+      <strong><code>snapshotFlow</code></strong> = bridge Compose state into coroutine Flows for side effects (analytics, logging). Combine with <code>.distinctUntilChanged()</code>.
+    </div>
+
+    <!-- ====== OPTIMIZATION WORKFLOW ====== -->
+    <h2>🛠️ The 5-Step Optimization Workflow</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Enable Compose Compiler Metrics</h4>
+        <p>Apply <code>org.jetbrains.kotlin.plugin.compose</code>, then add a <code>composeCompiler { reportsDestination = ...; metricsDestination = ... }</code> block. Rebuild to generate <code>*-composables.txt</code> and <code>*-classes.txt</code> in <code>app/build/compose_compiler/</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Find Skip-Quality Issues</h4>
+        <p>Under strong skipping, look at unstable parameters that hurt skip <em>quality</em> (<code>===</code> on reallocated objects = never matches), not skip occurrence. Feed the report to Claude Code with <code>/analyze-recomposition</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Measure with Layout Inspector</h4>
+        <p>Run app in debug mode &rarr; Tools &rarr; Layout Inspector &rarr; enable "Show Recomposition Counts" &rarr; interact and watch numbers climb.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Apply Fixes</h4>
+        <p>Stabilize parameters (<code>@Immutable</code>, <code>ImmutableList</code>), add <code>key</code> to lazy lists, scope state reads lower, wrap lambdas in <code>remember</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Measure Again</h4>
+        <p>Compare recomposition counts before vs. after. Target: dramatic reduction. Then set up Baseline Profiles for startup and scroll performance.</p>
+      </li>
+    </ol>
+
+    <!-- ====== BEFORE / AFTER ====== -->
+    <h2>📊 Before vs. After Optimization</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Before (Unstable, No Keys)</th>
+          <th>After (@Immutable, Keys, Scoped)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>ProductCard recompositions per scroll</td>
+          <td>47</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <td>Frame render time (P50)</td>
+          <td>22 ms</td>
+          <td>8 ms</td>
+        </tr>
+        <tr>
+          <td>Dropped frames during scroll</td>
+          <td>31%</td>
+          <td>1.2%</td>
+        </tr>
+        <tr>
+          <td>SearchBar recomposes on scroll</td>
+          <td>Yes ❌</td>
+          <td>No ✅</td>
+        </tr>
+        <tr>
+          <td>User perception</td>
+          <td>Visible jank</td>
+          <td>Butter smooth</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== KEY TERMS ====== -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Recomposition</dt>
+      <dd>Compose re-executing a composable function when its inputs (state) change &mdash; the Compose equivalent of re-rendering.</dd>
+
+      <dt>Skippable</dt>
+      <dd>A composable that Compose can skip if all its parameters are equal to the previous call. Under strong skipping (Kotlin 2.0.20+ default), all restartable composables are skippable.</dd>
+
+      <dt>Strong Skipping Mode</dt>
+      <dd>Default Compose Compiler behavior since Kotlin 2.0.20. All restartable composables become skippable (even with unstable params), and lambdas inside composables are auto-memoized.</dd>
+
+      <dt>@Immutable</dt>
+      <dd>Annotation promising all properties of a class will never change after construction. Switches comparison from <code>===</code> to <code>.equals()</code> &mdash; lets reallocated-but-content-equal objects skip.</dd>
+
+      <dt>@Stable</dt>
+      <dd>Annotation promising that changes will be notified to Compose via <code>MutableState</code>. Weaker than <code>@Immutable</code> but also enables object-equality comparison.</dd>
+
+      <dt>@NonSkippableComposable / @DontMemoize</dt>
+      <dd>Opt-outs for strong skipping &mdash; disable skipping on a composable, or disable auto-memoization on a specific lambda.</dd>
+
+      <dt>ImmutableList</dt>
+      <dd>From <code>kotlinx-collections-immutable</code>. A <code>List</code> implementation Compose treats as stable (unlike the <code>List</code> interface).</dd>
+
+      <dt>derivedStateOf</dt>
+      <dd>Creates a derived state that only triggers recomposition when its <em>computed value</em> changes, not when the source state changes.</dd>
+
+      <dt>snapshotFlow</dt>
+      <dd>Converts Compose snapshot state reads into a coroutine Flow &mdash; useful for side effects like analytics in response to state changes.</dd>
+
+      <dt>Baseline Profile</dt>
+      <dd>A list of critical code paths that get AOT-compiled for faster startup and reduced jank on first launch.</dd>
+    </dl>
+
+    <!-- ====== SKILL BUILT ====== -->
+    <h2>🤖 Skill Built This Chapter</h2>
+
+    <div class="map-card" style="max-width: 500px; margin: 0 auto;">
+      <span class="map-card-icon">📋</span>
+      <div class="map-card-title"><code>/analyze-recomposition</code></div>
+      <div class="map-card-desc">Feed Compose compiler metrics or recomposition counts. Returns: non-skippable composables, unstable types, state scoping issues, ranked optimization suggestions, and code fixes.</div>
+    </div>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Why is <code>List&lt;String&gt;</code> unstable in Compose?</summary>
+        <p class="quiz-answer"><code>List</code> is an interface &mdash; it could be backed by a <code>MutableList</code>. Compose can't guarantee it hasn't been mutated between recompositions, so it conservatively marks it unstable. Use <code>ImmutableList</code> from kotlinx-collections-immutable instead.</p>
+      </details>
+      <details>
+        <summary>What's the difference between <code>derivedStateOf</code> and <code>snapshotFlow</code>?</summary>
+        <p class="quiz-answer"><code>derivedStateOf</code> computes a new state value that only triggers recomposition when the <em>derived</em> value changes (UI use). <code>snapshotFlow</code> converts state reads into a Flow for <em>side effects</em> (analytics, logging, network calls) inside a coroutine.</p>
+      </details>
+      <details>
+        <summary>A composable is "restartable but NOT skippable." What does that mean &mdash; and is it still common in 2026?</summary>
+        <p class="quiz-answer">Historically, it meant Compose could restart the composable but never skip it, usually because of unstable parameter types. Under strong skipping (default since Kotlin 2.0.20), this verdict is rare &mdash; restartable composables are skippable by default. The remaining concern is skip <em>quality</em>: unstable params use <code>===</code> on potentially reallocated objects, so they often fail equality and recompose anyway.</p>
+      </details>
+      <details>
+        <summary>If strong skipping auto-memoizes lambdas, why do <code>@Immutable</code> and <code>ImmutableList</code> still matter?</summary>
+        <p class="quiz-answer">Because they switch parameter comparison from <code>===</code> (instance equality) to <code>.equals()</code> (content equality). When data flows from Room or networking, every emission allocates new objects &mdash; <code>===</code> always reports "different," so the composable recomposes even when content is identical. <code>@Immutable</code> tells Compose it's safe to use object equality.</p>
+      </details>
+      <details>
+        <summary>You add an item at the top of a LazyColumn with no <code>key</code>. What happens?</summary>
+        <p class="quiz-answer">Every item recomposes because Compose tracks items by position. All positions shifted by one, so Compose thinks every item changed. Adding <code>key = { it.id }</code> lets Compose track by identity instead.</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Recomposition is the #1 Compose performance issue &mdash; measure before you optimize using Layout Inspector and the modern <code>composeCompiler {}</code> DSL.</li>
+        <li class="map-summary-item">Strong skipping (default since Kotlin 2.0.20) makes all restartable composables skippable and auto-memoizes lambdas. <code>@Immutable</code> + <code>ImmutableList</code> still matter to enable object-equality comparison on reallocated objects.</li>
+        <li class="map-summary-item">Read state in the narrowest scope &mdash; the composable that reads the state is the one that recomposes. Push reads down the tree.</li>
+        <li class="map-summary-item">Always provide <code>key</code> in <code>LazyColumn</code>/<code>LazyRow</code> &mdash; without it, inserting one item recomposes all items.</li>
+        <li class="map-summary-item">Use <code>derivedStateOf</code> to filter rapid state changes into meaningful recomposition triggers (e.g., boolean from scroll index).</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-memory-leaks-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">Memory Leak Detection with AI</span>
+      </a>
+      <a href="../05-compose-recomposition.html" class="next">
+        <span class="nav-direction">Back to Chapter</span>
+        <span class="nav-chapter">Compose Recomposition Performance</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

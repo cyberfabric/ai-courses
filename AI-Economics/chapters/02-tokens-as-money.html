@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2 — Tokens Are Money: The Cost Equation</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="01-why-cost-engineering-matters.html">← Prev</a>
+      <a href="03-2026-pricing-landscape.html">Next →</a>
+      <a href="maps/02-tokens-as-money-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 2</div>
+    <h1>Tokens Are Money: The Cost Equation</h1>
+    <p class="chapter-subtitle">How tokens map to dollars — input vs output, reasoning tokens, and why longer context costs more</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Money with words on it</h2>
+
+      <p>
+        In Chapter 1 we said a prompt is "money with words on it." This chapter is where we turn that metaphor into arithmetic. If you can look at a prompt and instinctively see the dollars in it — before you call any API — you're already operating at a level most teams don't. That's the goal for the next 20 minutes.
+      </p>
+
+      <p>
+        The unit of all this accounting is the <strong>token</strong>. Not a request, not a sentence, not a page — a token. Every provider bills by it. Every cost equation rests on it. Tokens are the kilowatt-hours of AI. And just like electricity, what you pay depends on when you spend, how you spend, and which plan you're on.
+      </p>
+
+      <div class="highlight-box">
+        <strong>The cost equation, in one line:</strong> <code>cost = input_tokens × input_price + output_tokens × output_price</code>. Every optimization in this course is a variation on shrinking one of those four factors.
+      </div>
+    </section>
+
+    <section>
+      <h2>What a token actually is</h2>
+
+      <p>
+        A token is a chunk of text the model processes as a unit. It's not a character, not exactly a word, and not a syllable. For English, a useful rule of thumb: <strong>1 token ≈ 4 characters ≈ 0.75 words</strong>. Code, URLs, and non-English text tokenize less efficiently — we'll see why in a minute.
+      </p>
+
+      <p>
+        Every provider has its own tokenizer (the little program that slices text into tokens). OpenAI uses <code>tiktoken</code>. Anthropic uses its own. Google Gemini uses SentencePiece. A prompt can have <em>different token counts on different providers</em>, which means the same text literally costs different amounts depending on where you send it.
+      </p>
+
+      <p>
+        If you want the full "how does a tokenizer work" story, the <em>AI-Intro</em> course covers the mechanics. For cost engineering, you only need to know three practical things: tokens are what you pay for, the count depends on the tokenizer, and you can ask every provider to count for you before you call.
+      </p>
+    </section>
+
+    <section>
+      <h2>Input vs output: the 4–5x asymmetry</h2>
+
+      <p>
+        Here's the first surprise every developer hits: input and output are priced separately, and output is almost always several times more expensive than input. Typically 4x–5x, sometimes more.
+      </p>
+
+      <p>
+        Why? Because output generation is sequential and compute-intensive — each token forces another forward pass through the model. Reading your 10,000-token prompt happens in one chunk; writing a 500-token answer happens one token at a time. Providers price for the compute, not the character count.
+      </p>
+
+      <!-- source: https://benchlm.ai/blog/posts/claude-api-pricing as of 2026-04 -->
+      <!-- source: https://benchlm.ai/blog/posts/openai-api-pricing as of 2026-04 -->
+      <!-- source: https://benchlm.ai/blog/posts/gemini-api-pricing as of 2026-04 -->
+      <div class="pricing-table-box">
+        <h4>Input vs output rates — per 1M tokens, April 2026</h4>
+        <table>
+          <thead>
+            <tr><th>Model</th><th>Input $/M</th><th>Output $/M</th><th>Output / Input</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Claude Haiku 4.5</td><td>$1.00</td><td>$5.00</td><td>5.0x</td></tr>
+            <tr><td>Claude Sonnet 4.6</td><td>$3.00</td><td>$15.00</td><td>5.0x</td></tr>
+            <tr><td>Claude Opus 4.7</td><td>$5.00</td><td>$25.00</td><td>5.0x</td></tr>
+            <tr><td>GPT-5.4 Nano</td><td>$0.20</td><td>(low, verify<sup><a href="#src-openai">2</a></sup>)</td><td>—</td></tr>
+            <tr><td>GPT-5.4 Mini</td><td>$0.75</td><td>$4.50</td><td>6.0x</td></tr>
+            <tr><td>GPT-5.4 Standard</td><td>$2.50</td><td>$15.00</td><td>6.0x</td></tr>
+            <tr><td>GPT-5.4 Pro</td><td>$30.00</td><td>$180.00</td><td>6.0x</td></tr>
+            <tr><td>o4-mini (reasoning)</td><td>$1.10</td><td>$4.40</td><td>4.0x</td></tr>
+            <tr><td>o3 (reasoning)</td><td>$2.00</td><td>$8.00</td><td>4.0x</td></tr>
+            <tr><td>Gemini 2.5 Pro (≤200K ctx)</td><td>$1.25</td><td>$10.00</td><td>8.0x</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        The practical consequence: <strong>shortening an answer saves far more money than shortening a prompt</strong>. If your response is 5x more expensive per token and you can get it to return 500 tokens instead of 1,500, that's usually a bigger win than trimming the prompt by the same amount.
+      </p>
+
+      <div class="savings-callout">→ Cutting output from 1,500 → 500 tokens on Sonnet 4.6 saves $0.015 per call. Over 100K calls: <strong>$1,500/month</strong>.</div>
+    </section>
+
+    <section>
+      <h2>Reasoning tokens: the invisible bill</h2>
+
+      <p>
+        Reasoning models are the 2026 specialty. They "think" internally before producing the visible response — and you pay for every thought. Those internal-reasoning tokens are billed as <strong>output tokens</strong> on both Anthropic and OpenAI, but they never appear in your response. The API just sends you the final answer and a bigger invoice.<sup><a href="#src-anthropic-thinking">3</a></sup>
+      </p>
+
+      <p>
+        How much more? In our own measurements and in public benchmarks: <strong>reasoning tokens typically run 2–10x the visible output tokens</strong>, depending on the task. A hard math problem can burn 15,000 reasoning tokens to produce a 400-token explanation. That's a 40x multiplier on what you "see" coming back.
+      </p>
+
+      <div class="warning-box">
+        <strong>Watch out for silent reasoning costs.</strong> Anthropic's extended thinking has a minimum budget of 1,024 tokens <em>per call</em> when enabled.<sup><a href="#src-anthropic-thinking">3</a></sup> If you turned extended thinking on "to see what happens" and forgot, every single request is now carrying an extra $0.015–$0.030 in hidden output tokens at Sonnet rates. Audit the flag.
+      </div>
+
+      <p>
+        OpenAI's o3 and o4-mini work the same way: the reasoning tokens are billed as output and not returned. <code>response.usage.reasoning_tokens</code> tells you exactly how many. Watch that number in every production trace — it's often the single biggest lever on the bill.
+      </p>
+
+      <h3>Tuning the reasoning budget</h3>
+
+      <p>
+        Both Anthropic and OpenAI let you throttle how much "thinking" a reasoning model does. This is effectively a dial that trades quality for cost — and on most tasks, the default is tuned for hard problems, not yours.
+      </p>
+
+      <ul class="course-list">
+        <li><strong>Anthropic (Sonnet 4.6, Opus 4.6/4.7)</strong> — set <code>thinking.budget_tokens</code> explicitly; minimum 1,024, default off. If you don't turn it on, you don't pay for it.<sup><a href="#src-anthropic-thinking">3</a></sup></li>
+        <li><strong>OpenAI (o3, o4-mini)</strong> — <code>reasoning_effort</code> takes <code>"low"</code>, <code>"medium"</code>, <code>"high"</code>, or <code>"max"</code>. Low can cut reasoning tokens by 70–90% on easy tasks.</li>
+        <li><strong>Opus 4.6+ adaptive thinking</strong> — the model decides how much reasoning each task deserves. Still caps at your budget, but avoids "max effort on a trivial prompt" by default.</li>
+      </ul>
+
+      <p>
+        Practical pattern: set <code>reasoning_effort: "low"</code> as your baseline. Bump it up only for request classes where you've measured a quality win. Most teams leave it on "medium" or "high" forever and quietly pay the multiplier.
+      </p>
+
+      <!-- source: https://platform.claude.com/docs/en/build-with-claude/extended-thinking as of 2026-04 -->
+      <div class="cost-breakdown-box">
+        <div class="cost-breakdown-title">Reasoning tokens in action — one "hard" o4-mini request</div>
+        <ul class="cost-breakdown-list">
+          <li><span>Input tokens</span><span>2,000</span></li>
+          <li><span>Reasoning tokens (hidden)</span><span>8,500</span></li>
+          <li><span>Visible output tokens</span><span>400</span></li>
+          <li><span>Input cost (2,000 × $1.10/M)</span><span>$0.0022</span></li>
+          <li><span>Output cost — reasoning (8,500 × $4.40/M)</span><span>$0.0374</span></li>
+          <li><span>Output cost — visible (400 × $4.40/M)</span><span>$0.0018</span></li>
+          <li class="cost-breakdown-total"><span>Total per request</span><span>$0.0414</span></li>
+        </ul>
+        <p class="cost-breakdown-footnote">If you were budgeting based on visible output alone, you undercounted by <strong>~20x</strong> on the output side. At 50,000 of these per month, that's $2,000 of "invisible" spend.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The 200K (and 1M) context tax</h2>
+
+      <p>
+        Most providers quote a single rate like "$3 per 1M input tokens." What the sticker doesn't say: once your prompt crosses a threshold, <strong>the rate often doubles</strong>.
+      </p>
+
+      <p>
+        As of April 2026:
+      </p>
+
+      <ul class="course-list">
+        <li><strong>Gemini 2.5 Pro / 3 Pro</strong> — above 200K input tokens, input price roughly doubles (Gemini 2.5 Pro goes from $1.25/M to ~$2.50/M).<sup><a href="#src-gemini">4</a></sup></li>
+        <li><strong>GPT-5.4 and GPT-5.4 Pro</strong> — above 272K input tokens, OpenAI charges 2x input and 1.5x output for that session.<sup><a href="#src-openai">2</a></sup></li>
+        <li><strong>Anthropic</strong> — no context-size tier surcharge on standard models as of April 2026; the flat rate holds up to the model's max context.<sup><a href="#src-anthropic">1</a></sup></li>
+      </ul>
+
+      <p>
+        This matters enormously for RAG and long-document pipelines. A prompt that sits at 199K tokens is priced one way; the same prompt at 201K costs almost double per input token — and you rarely notice in your dashboard because the bill just "creeps up" as contexts grow.
+      </p>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> When you're near a context threshold, it's often cheaper to split the request into two smaller calls (each under the threshold) than to send one over-sized call. Run the math on your specific shape — but treat 200K and 272K as bright lines worth engineering around.
+      </div>
+    </section>
+
+    <section>
+      <h2>Case study: the $4,300 base64 accident</h2>
+
+      <p>
+        A team shipped an image-description feature. The prototype worked beautifully on their laptops. They sent the image as a base64 string inside the user message because it was "simpler than handling vision APIs properly." The prompts averaged 28,000 tokens each — most of it base64 garbage — and cost about $0.12 per call on Sonnet 4.6.
+      </p>
+
+      <p>
+        That's fine at 10 requests/minute. At 10,000 requests/minute over a weekend launch, the feature burned through <strong>$4,300</strong> before anyone noticed the bill was climbing. The fix took four hours: send the image via the proper vision endpoint (which handles its own encoding), drop the base64, watch cost per call drop to $0.004. A 30x improvement, <em>on the same feature</em>, from a single tokenization mistake.
+      </p>
+
+      <div class="warning-box">
+        <strong>Never inline binary-encoded data into a prompt.</strong> Images, PDFs, audio — always use the provider's dedicated input channel (Files API, vision API, audio endpoint). Base64 in a text prompt is a bill multiplier that will surprise you on Monday.
+      </div>
+    </section>
+
+    <section>
+      <h2>Tokenization quirks worth knowing</h2>
+
+      <p>
+        Not all text tokenizes the same way. Grocery analogy: when you buy flour, a kilo is a kilo. When you buy by the <em>token</em>, the same content can weigh very different amounts depending on what's in it.
+      </p>
+
+      <div class="prompt-example">
+        <div class="prompt-label">Typical token counts (illustrative, tiktoken-style)</div>
+        <ul class="course-list">
+          <li><code>"hello world"</code> → <strong>2 tokens</strong></li>
+          <li><code>"The quick brown fox jumps over the lazy dog."</code> → <strong>10 tokens</strong></li>
+          <li><code>"https://analytics.example.com/v2/users?tag=cohort_42&amp;region=EU-west"</code> → <strong>~25–35 tokens</strong></li>
+          <li>A typical 500-word English paragraph → <strong>~650 tokens</strong></li>
+          <li>Same paragraph in Japanese → <strong>often 1.5–3x more tokens</strong></li>
+          <li>Minified JSON (no whitespace) → <strong>~1.2x more tokens</strong> than pretty-printed</li>
+          <li>Base64-encoded 50KB image blob inlined in a prompt → <strong>tens of thousands of tokens</strong> 😱</li>
+        </ul>
+      </div>
+
+      <p>
+        Three practical implications. One: URLs and IDs are token-hungry; keep them out of system prompts unless they earn their place. Two: non-English languages cost more per "character of meaning" — budget accordingly. Three: never, ever inline raw base64 blobs into a prompt. That's one of the most common "oh god the bill" stories we've ever heard.
+      </p>
+    </section>
+
+    <section>
+      <h2>Counting tokens before you pay for them</h2>
+
+      <p>
+        You don't have to guess token counts. Every major provider ships a free counter — use it before shipping any feature that touches a variable-length prompt.<sup><a href="#src-tokens">5</a></sup>
+      </p>
+
+      <div class="stats-grid">
+        <div class="tool-card">
+          <div class="tool-icon">🔢</div>
+          <div class="tool-name">tiktoken</div>
+          <div class="tool-desc">OpenAI's official BPE tokenizer. Python library, runs fully offline. Use it for GPT-4.x and GPT-5.x. Free; no API calls.</div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-icon">📏</div>
+          <div class="tool-name">Anthropic <code>count_tokens</code></div>
+          <div class="tool-desc">Dedicated endpoint in the Anthropic SDK. Free, does not consume rate limit. Accurate for Claude 3.x/4.x.</div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-icon">🧮</div>
+          <div class="tool-name">Gemini <code>countTokens</code></div>
+          <div class="tool-desc">Endpoint in the Google Generative AI SDK. Wraps SentencePiece; essential for Gemini cost estimates. Free.</div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-icon">🌐</div>
+          <div class="tool-name">Browser token calculators</div>
+          <div class="tool-desc">Quick-and-dirty web tools (token-calculator.net, pricepertoken.com). Fine for estimates; use the SDKs for anything production.</div>
+        </div>
+      </div>
+
+      <p>
+        Wrap these in a 10-line helper in your codebase so any engineer can paste a prompt and get the token count and dollar cost for the three big providers at once. It's the single most useful internal tool you can build this quarter.
+      </p>
+    </section>
+
+    <section>
+      <h2>Streaming, retries, and "phantom" tokens</h2>
+
+      <p>
+        A few billing edge cases surprise people every quarter. None of them are exotic — they're just the gaps between the mental model and what actually hits your invoice.
+      </p>
+
+      <ul class="course-list">
+        <li><strong>Streaming doesn't lower cost.</strong> A streamed response and a non-streamed response with the same input and output length cost exactly the same. Streaming is a UX feature, not a cost lever. If the user disconnects mid-stream, you still typically pay for tokens the model already generated.</li>
+        <li><strong>Retries compound.</strong> A failed request that you retry once bills you twice. If the first call returned 800 output tokens before erroring, those may not be billed (provider-dependent), but most networking-level retries on a 200 OK response that your client botched <em>do</em> double the bill. Idempotency keys help; blind retries hurt.</li>
+        <li><strong>Aborted requests still cost.</strong> If you cancel a generation after 500 of 800 output tokens, you pay for the 500. User-visible "Cancel" buttons are fine, but don't assume they zero out the spend.</li>
+        <li><strong>Function-calling tokens add up.</strong> The model's tool-call JSON counts as output tokens. Several function calls in a row can quietly triple your output-token usage on a single agent turn.</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Gotcha:</strong> If your SDK auto-retries on 529 ("overloaded") errors with the same request body, an outage day can silently quintuple your bill. Configure your retry policy with exponential backoff <em>and</em> a max-attempts cap. Two retries is usually plenty.
+      </div>
+    </section>
+
+    <section>
+      <h2>The token-budget mindset</h2>
+
+      <p>
+        Electricity-tariff thinking: you don't plug in a space heater without knowing the monthly bill impact. Treat prompts the same way. Every AI feature should have a <strong>per-call token budget</strong> written down in the design doc — and a corresponding <strong>dollar budget</strong> that falls out of it.
+      </p>
+
+      <p>A good token budget has four parts:</p>
+
+      <ol class="course-list">
+        <li><strong>Max input tokens per call</strong> — cap the system prompt + retrieved context + user message at a hard number. Reject overruns.</li>
+        <li><strong>Max output tokens per call</strong> — use <code>max_tokens</code> / <code>max_completion_tokens</code> on every request. This is the #1 missed setting in the wild.</li>
+        <li><strong>Max reasoning tokens per call</strong> — cap the thinking budget where the provider exposes it (Anthropic: <code>thinking.budget_tokens</code>; OpenAI: <code>reasoning_effort</code>).</li>
+        <li><strong>Max cost per call</strong> — the derived number. Log it. Alert on p99 spikes.</li>
+      </ol>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> Default every new AI feature to <code>max_tokens = 800</code> unless someone explicitly justifies more. If the feature really needs a 2,000-token answer, that's fine — but it's a deliberate choice, not a blank check. Uncapped output is the single most common cause of a five-figure surprise invoice.
+      </div>
+
+      <h3>Wrapping the equation in a 10-line helper</h3>
+
+      <p>
+        Build this once, reuse forever. The idea is a single function every engineer on the team calls before shipping a prompt change. Don't overthink it — a tiny estimator beats no estimator:
+      </p>
+
+      <div class="prompt-example">
+        <div class="prompt-label">Minimal cost-estimator sketch (pseudocode)</div>
+        <ul class="course-list">
+          <li><code>estimate(prompt, model, expected_output_tokens) → {tokens_in, tokens_out, usd_per_call, usd_at_volume}</code></li>
+          <li>Look up the current <code>input_price</code> and <code>output_price</code> from a small pricing table in code, dated in a comment.</li>
+          <li>Count input tokens with the provider's SDK.</li>
+          <li>Multiply and return the four numbers.</li>
+          <li>Bonus: write a unit test that fails if the pricing table is more than 60 days old — a forcing function for keeping rates fresh.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Order-of-magnitude intuition</h2>
+
+      <p>
+        One thing experienced cost engineers develop is a <strong>feel</strong> for cost without a calculator. Here are rough benchmarks, in April 2026 dollars, for "one 1M-token request at this model tier" — not exact, but close enough to sanity-check any new feature in your head.
+      </p>
+
+      <ul class="course-list">
+        <li><strong>Tiny/nano tier</strong> (GPT-5.4 Nano, Gemini Flash-Lite, similar): roughly <strong>$0.10–$0.30 per 1M mixed tokens</strong>. At this price, a high-volume classification feature is effectively free compared to the engineering effort of caching it.</li>
+        <li><strong>Mini tier</strong> (Haiku 4.5, GPT-5.4 Mini, o4-mini, Gemini Flash): roughly <strong>$1–$3 per 1M mixed tokens</strong>. The sweet spot for most production features in 2026 — good enough for ~80% of jobs.</li>
+        <li><strong>Standard tier</strong> (Sonnet 4.6, GPT-5.4 Standard, Gemini 2.5 Pro): roughly <strong>$5–$15 per 1M mixed tokens</strong>. The default "looks-good" choice; the one most teams default to and overpay for.</li>
+        <li><strong>Premium tier</strong> (Opus 4.7, GPT-5.4 Pro, o3): <strong>$10–$80 per 1M mixed tokens</strong>. Reach for it when quality is the constraint, never by default.</li>
+      </ul>
+
+      <p>
+        Memorize those four brackets and you can sketch the cost of nearly any new AI feature on a napkin. Exact numbers come next chapter; the mental brackets are what makes planning meetings productive.
+      </p>
+    </section>
+
+    <section>
+      <h2>Worked example: the same prompt on three providers</h2>
+
+      <p>
+        Let's price a realistic chat feature: a <strong>4,000-token system prompt</strong>, a <strong>500-token user message</strong>, and an <strong>800-token response</strong>. Same content, three providers, one million calls a month. No caching or batching yet — we'll add those later.
+      </p>
+
+      <!-- source: https://benchlm.ai/blog/posts/openai-api-pricing as of 2026-04 -->
+      <!-- source: https://benchlm.ai/blog/posts/gemini-api-pricing as of 2026-04 -->
+      <div class="cost-breakdown-box">
+        <div class="cost-breakdown-title">1M calls/month — 4,500 input + 800 output tokens each</div>
+        <ul class="cost-breakdown-list">
+          <li><span>Monthly input tokens</span><span>4.5 billion (4,500M)</span></li>
+          <li><span>Monthly output tokens</span><span>0.8 billion (800M)</span></li>
+          <li><span>Claude Sonnet 4.6 — input (4,500M × $3)</span><span>$13,500</span></li>
+          <li><span>Claude Sonnet 4.6 — output (800M × $15)</span><span>$12,000</span></li>
+          <li><span><strong>Sonnet 4.6 total</strong></span><span><strong>$25,500</strong></span></li>
+          <li><span>GPT-5.4 Standard — input (4,500M × $2.50)</span><span>$11,250</span></li>
+          <li><span>GPT-5.4 Standard — output (800M × $15)</span><span>$12,000</span></li>
+          <li><span><strong>GPT-5.4 total</strong></span><span><strong>$23,250</strong></span></li>
+          <li><span>Gemini 2.5 Pro — input (4,500M × $1.25)</span><span>$5,625</span></li>
+          <li><span>Gemini 2.5 Pro — output (800M × $10)</span><span>$8,000</span></li>
+          <li><span><strong>Gemini 2.5 Pro total</strong></span><span><strong>$13,625</strong></span></li>
+          <li class="cost-breakdown-total"><span>Cheapest vs most expensive</span><span>~46% delta</span></li>
+        </ul>
+        <p class="cost-breakdown-footnote">Same prompt, same workload — the pricing alone spans $11,875/month. And we haven't tried Haiku or GPT-5.4 Mini yet. That's the kind of leverage you get just from knowing the price sheet.</p>
+      </div>
+
+      <div class="savings-callout banner">→ Picking the right model on this one feature saves up to <strong>$11,875/month</strong> before a single other optimization.</div>
+    </section>
+
+    <section>
+      <h2>Comparing reasoning vs non-reasoning on the same task</h2>
+
+      <p>
+        One more pattern worth the ink: on many production tasks, a smaller non-reasoning model is competitive with or cheaper than a reasoning model — and only the eval tells you which one to use. Cost estimate for a classification task, 100,000 calls/month, 2,000 input + 300 output visible tokens:
+      </p>
+
+      <ul class="course-list">
+        <li><strong>Haiku 4.5 (non-reasoning):</strong> 100K × (2,000 × $1/M + 300 × $5/M) = <strong>$350/month</strong>.</li>
+        <li><strong>o4-mini with <code>reasoning_effort: low</code> (~500 reasoning tokens avg):</strong> 100K × (2,000 × $1.10/M + 800 × $4.40/M) = <strong>$572/month</strong>.</li>
+        <li><strong>o4-mini with <code>reasoning_effort: high</code> (~5,000 reasoning tokens avg):</strong> 100K × (2,000 × $1.10/M + 5,300 × $4.40/M) = <strong>$2,552/month</strong>.</li>
+      </ul>
+
+      <p>
+        Same task. 7x cost spread depending on model and effort dial. If your eval says Haiku 4.5 passes, you've just left $2,200/month on the table by going with o4-mini-high "because reasoning is smarter." Run the eval first, <em>then</em> pick the tier.
+      </p>
+    </section>
+
+    <section>
+      <h2>Exercise: tokenize a real prompt of yours</h2>
+
+      <div class="exercise-box">
+        <h4>Exercise: Price one real prompt on three providers</h4>
+        <p>Grab a prompt you wrote this week — a system prompt, a retrieval template, anything you actually run in production. Then, in under 20 minutes:</p>
+        <ol>
+          <li><strong>Count the input tokens</strong> with tiktoken (for OpenAI), the Anthropic SDK <code>count_tokens</code> endpoint, and Gemini's <code>countTokens</code>. Record all three numbers — they won't match exactly.</li>
+          <li><strong>Sample 10 real outputs</strong> from your logs for that prompt. Record the average and p95 output-token count.</li>
+          <li><strong>Compute the per-request cost</strong> on Claude Sonnet 4.6, GPT-5.4 Standard, and Gemini 2.5 Pro using April 2026 rates.</li>
+          <li><strong>Multiply by monthly call volume</strong>. Now you have a live cost estimate — probably off from your actual bill, which is useful information.</li>
+          <li><strong>Compare to the actual invoice line</strong> for that feature (if you have per-feature tags from Chapter 1's tip). Within 10%? Congrats, your mental model works. Way off? Investigate before Chapter 9.</li>
+        </ol>
+        <p class="exercise-bonus"><strong>Bonus:</strong> Re-run the math using the model one tier down (Haiku, GPT-5.4 Mini, Gemini Flash). Write down the theoretical savings. You've just pre-computed the ROI for Chapter 7's routing chapter.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>
+        You now have the cost equation burned into your brain and a working intuition for where the tokens go. Chapter 3 zooms out: the full April 2026 pricing landscape across Anthropic, OpenAI, and Google. We'll look at every major model side-by-side, teach you how to read a price sheet in under 60 seconds, and introduce the "cheapest credible model" pattern — a decision rule that saves teams money before they write a line of code.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-anthropic"><a href="https://benchlm.ai/blog/posts/claude-api-pricing" target="_blank" rel="noopener">BenchLM — Claude API Pricing: Haiku 4.5, Sonnet 4.6, Opus 4.7 (April 2026)</a></li>
+        <li id="src-openai"><a href="https://benchlm.ai/blog/posts/openai-api-pricing" target="_blank" rel="noopener">BenchLM — OpenAI API Pricing: GPT-5.4 family, o3, o4-mini (April 2026), incl. 272K tier</a></li>
+        <li id="src-anthropic-thinking"><a href="https://platform.claude.com/docs/en/build-with-claude/extended-thinking" target="_blank" rel="noopener">Anthropic — Building with Extended Thinking (minimum 1,024-token budget, billed as output)</a></li>
+        <li id="src-gemini"><a href="https://benchlm.ai/blog/posts/gemini-api-pricing" target="_blank" rel="noopener">BenchLM — Gemini API Pricing: Pro/Flash/Flash-Lite rates and 200K context tiering (April 2026)</a></li>
+        <li id="src-tokens"><a href="https://www.propelcode.ai/blog/token-counting-tiktoken-anthropic-gemini-guide-2025" target="_blank" rel="noopener">Propel — Token Counting Explained: tiktoken, Anthropic, and Gemini</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="01-why-cost-engineering-matters.html">← Chapter 1</a>
+    <a href="03-2026-pricing-landscape.html">Chapter 3 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

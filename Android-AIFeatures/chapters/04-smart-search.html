@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Smart Search &amp; Autocomplete | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-ai-ux-trust.html">&larr; Prev</a>
+      <a href="05-summarization.html">Next &rarr;</a>
+      <a href="maps/04-smart-search-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Smart Search &amp; Autocomplete</h1>
+    <p class="subtitle">Search that understands intent, not just keywords &mdash; semantic search, suggestions, and AI-powered ranking</p>
+  </header>
+
+  <main>
+
+    <h2>Beyond Keyword Matching</h2>
+
+    <p>Your app has a search bar. A user types "that blue jacket from last week." Your database has an item called "Navy Denim Jacket — Added March 24." Traditional keyword search returns zero results because no field contains the words "blue," "that," or "last week."</p>
+
+    <p>This is the fundamental limitation of keyword search: it matches <em>strings</em>, not <em>meaning</em>. And users don't think in database column names &mdash; they think in fuzzy, human, contextual language.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Priya uses a recipe app with 2,000 saved recipes. She's hungry and types "something spicy with chicken that's quick." Keyword search finds nothing &mdash; no recipe title contains that exact phrase. Semantic search understands the intent and returns "15-Minute Sriracha Chicken Stir-Fry," "Quick Tandoori Chicken Bites," and "Spicy Chicken Quesadilla." Priya taps the first result and starts cooking.</p>
+      <p>That's the difference between search that matches text and search that understands meaning.</p>
+    </div>
+
+    <p>AI-powered search isn't just nicer &mdash; it's a fundamentally different approach. And it's more accessible than you think.</p>
+
+    <h2>Text Embeddings 101</h2>
+
+    <p>The foundation of semantic search is <strong>text embeddings</strong> &mdash; turning words into numbers that capture meaning.</p>
+
+    <p>Imagine a giant map where every word and phrase has a location. "Happy" and "joyful" are neighbors. "Happy" and "socket wrench" are on opposite sides. An embedding model converts text into a point on this map &mdash; technically a vector of 384-768 numbers.</p>
+
+    <p>The magic: you can measure the <em>distance</em> between two points. Similar meanings = close together. Different meanings = far apart. Search becomes "find the content closest to the user's query on the map."</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">384</span>
+        <span class="stat-label">Dimensions in a typical small embedding (all-MiniLM)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">22MB</span>
+        <span class="stat-label">Model size for on-device semantic search</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt;50ms</span>
+        <span class="stat-label">Time to embed a query on a modern phone</span>
+      </div>
+    </div>
+
+    <h2>Building a Local Semantic Search Index</h2>
+
+    <p>The simplest approach to semantic search works entirely on-device. Here's the architecture:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Content</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Embed</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Store Vectors</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Query</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Rank by Similarity</div>
+    </div>
+
+    <p><strong>Step 1: Embed your content.</strong> When the user adds content (recipes, notes, products), run each item through the embedding model and store the vector alongside the item in your database.</p>
+
+    <p><strong>Step 2: Embed the query.</strong> When the user types a search, embed their query into the same vector space.</p>
+
+    <p><strong>Step 3: Find nearest neighbors.</strong> Calculate the distance between the query vector and every content vector. Return the closest matches.</p>
+
+    <p>Let's build this for real.</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: On-Device Semantic Search with TFLite</h3>
+      <p><strong>Goal:</strong> Search recipes by meaning, not keywords, using an on-device embedding model.</p>
+      <p><strong>Step 1:</strong> Add TFLite to your project:</p>
+<pre><code>implementation("org.tensorflow:tensorflow-lite:2.16.1")
+implementation("org.tensorflow:tensorflow-lite-support:0.4.4")</code></pre>
+      <p><strong>Step 2:</strong> Load the embedding model and create a helper:</p>
+<pre><code>class EmbeddingHelper(context: Context) {
+    private val interpreter = Interpreter(
+        FileUtil.loadMappedFile(context, "all-MiniLM-L6-v2.tflite")
+    )
+
+    fun embed(text: String): FloatArray {
+        val input = tokenize(text) // tokenizer for MiniLM
+        val output = Array(1) { FloatArray(384) }
+        interpreter.run(input, output)
+        return output[0]
+    }
+}</code></pre>
+      <p><strong>Step 3:</strong> Store embeddings alongside your content in Room:</p>
+<pre><code>@Entity
+data class Recipe(
+    @PrimaryKey val id: Long,
+    val title: String,
+    val ingredients: String,
+    val embedding: FloatArray // store as BLOB
+)
+
+// When adding a recipe:
+val embedding = embeddingHelper.embed("$title $ingredients")
+dao.insert(recipe.copy(embedding = embedding))</code></pre>
+      <p><strong>Step 4:</strong> Search by cosine similarity:</p>
+<pre><code>fun search(query: String, recipes: List&lt;Recipe&gt;): List&lt;Recipe&gt; {
+    val queryVec = embeddingHelper.embed(query)
+    return recipes
+        .map { it to cosineSimilarity(queryVec, it.embedding) }
+        .sortedByDescending { it.second }
+        .take(10)
+        .map { it.first }
+}
+
+fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
+    val dot = a.zip(b).sumOf { (x, y) -&gt; (x * y).toDouble() }
+    val normA = sqrt(a.sumOf { (it * it).toDouble() })
+    val normB = sqrt(b.sumOf { (it * it).toDouble() })
+    return (dot / (normA * normB)).toFloat()
+}</code></pre>
+      <p>Now "something spicy with chicken" will match recipes about spicy chicken dishes, even if the title says "Sriracha Stir-Fry." The vectors capture the semantic relationship.</p>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>Where to get the model:</strong> Download <code>all-MiniLM-L6-v2</code> in TFLite format from Hugging Face or the TensorFlow Hub. It's ~22MB &mdash; small enough to bundle in your APK or download on first launch.</p>
+    </div>
+
+    <h2>Cloud-Powered Semantic Search</h2>
+
+    <p>On-device embeddings work great for small-to-medium datasets (up to a few thousand items). For higher quality or larger datasets, use a cloud embedding API:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Model</th>
+          <th>Dimensions</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Google</td>
+          <td>Gemini Embedding</td>
+          <td>768</td>
+          <td>Multimodal (text + images), Google ecosystem</td>
+        </tr>
+        <tr>
+          <td>OpenAI</td>
+          <td>text-embedding-3-small</td>
+          <td>1536</td>
+          <td>High quality text embeddings, widely adopted</td>
+        </tr>
+        <tr>
+          <td>Cohere</td>
+          <td>embed-v3</td>
+          <td>1024</td>
+          <td>Multilingual, search-optimized</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The typical pattern: batch-embed your content when it's created or updated (server-side), store the vectors in a database, and embed the user's query in real time for search.</p>
+
+    <div class="warning-box">
+      <p><strong>Don't embed on every search.</strong> Embedding the content only happens once (when content is added). Only the search query needs real-time embedding. For a recipe app with 2,000 recipes, you embed 2,000 items once and only embed the query at search time.</p>
+    </div>
+
+    <h2>Autocomplete That Predicts Intent</h2>
+
+    <p>Great search doesn't wait for the user to finish typing. It starts suggesting as they go.</p>
+
+    <div class="product-pattern">
+      <h3>The Two-Tier Autocomplete Pattern</h3>
+      <p>The best autocomplete systems combine two approaches:</p>
+      <ol>
+        <li><strong>Tier 1 &mdash; Prefix matching (instant, on-device):</strong> As the user types "chic", show items that start with "chic" &mdash; "Chicken Parmesan," "Chickpea Curry." This is instant (&lt;5ms) and requires no AI.</li>
+        <li><strong>Tier 2 &mdash; Semantic prediction (fast, AI-powered):</strong> After a short debounce (200-300ms), run the query through your embedding model to find semantically related results. "chic" now also surfaces "Poultry Stir-Fry" and "Hen Roast" &mdash; items that don't start with "chic" but are related.</li>
+      </ol>
+      <p>Show Tier 1 results immediately. Blend in Tier 2 results as they arrive. The user sees instant suggestions that get smarter as they keep typing.</p>
+      <p><strong>Real-world example:</strong> Google Search does exactly this &mdash; instant prefix suggestions appear immediately, then AI-powered suggestions (trending queries, personalized predictions) blend in within a few hundred milliseconds.</p>
+    </div>
+
+    <h2>Typo Tolerance and Fuzzy Matching</h2>
+
+    <p>Users make typos. A lot. "receipe" should find "recipes." "kotlin coroutenes" should find "Kotlin Coroutines." If your search is strict, it feels broken.</p>
+
+    <p>The good news: semantic search already handles many typos naturally, because the embedding model is trained on noisy text. "reciepe" and "recipe" have similar vectors. But for extreme typos, combine with Levenshtein distance:</p>
+
+<pre><code>fun fuzzyMatch(query: String, candidates: List&lt;String&gt;): List&lt;String&gt; {
+    return candidates
+        .map { it to levenshteinDistance(query.lowercase(), it.lowercase()) }
+        .filter { it.second &lt;= 2 } // allow up to 2 character edits
+        .sortedBy { it.second }
+        .map { it.first }
+}
+
+// Combine with semantic search for the best of both worlds
+fun hybridSearch(query: String, items: List&lt;Recipe&gt;): List&lt;Recipe&gt; {
+    val semantic = semanticSearch(query, items)      // meaning-based
+    val fuzzy = fuzzyTitleSearch(query, items)        // typo-tolerant
+    return mergeResults(semantic, fuzzy).distinct()   // deduplicated
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The 80/20 rule of typo tolerance:</strong> Semantic embeddings handle 80% of typos automatically. Levenshtein distance catches the remaining 20% (severe typos, transposed characters). You rarely need anything more sophisticated.</p>
+    </div>
+
+    <h2>Search Result Ranking with AI</h2>
+
+    <p>Raw semantic similarity gets you most of the way, but the best search results also consider context. A re-ranking layer can boost results based on multiple signals:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Signal</th>
+          <th>Weight</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Semantic similarity</td>
+          <td>Primary</td>
+          <td>How closely the content matches the query's meaning</td>
+        </tr>
+        <tr>
+          <td>Recency</td>
+          <td>Moderate</td>
+          <td>Recently added or viewed items rank higher</td>
+        </tr>
+        <tr>
+          <td>User history</td>
+          <td>Moderate</td>
+          <td>Items similar to what the user has liked/clicked before</td>
+        </tr>
+        <tr>
+          <td>Popularity</td>
+          <td>Light</td>
+          <td>Items that other users have engaged with</td>
+        </tr>
+        <tr>
+          <td>Completeness</td>
+          <td>Light</td>
+          <td>Items with photos, full descriptions rank higher than stubs</td>
+        </tr>
+      </tbody>
+    </table>
+
+<pre><code>fun rerank(results: List&lt;SearchResult&gt;, userId: String): List&lt;SearchResult&gt; {
+    return results.map { result -&gt;
+        val score = result.semanticScore * 0.6f +
+            recencyBoost(result.updatedAt) * 0.15f +
+            userAffinityScore(result, userId) * 0.15f +
+            popularityScore(result) * 0.1f
+        result.copy(finalScore = score)
+    }.sortedByDescending { it.finalScore }
+}</code></pre>
+
+    <p>The weights are a starting point &mdash; tune them with A/B testing (Chapter 11). The important thing is that re-ranking happens <em>after</em> semantic search narrows the candidates, so it's fast even with complex scoring.</p>
+
+    <h2>Building the Search UI in Compose</h2>
+
+    <p>A beautiful search experience needs more than just results. Here's the complete UI architecture:</p>
+
+    <h3>The Search Bar</h3>
+<pre><code>@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SmartSearchBar(viewModel: SearchViewModel) {
+    var query by remember { mutableStateOf("") }
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    val results by viewModel.results.collectAsStateWithLifecycle()
+    var active by remember { mutableStateOf(false) }
+
+    SearchBar(
+        query = query,
+        onQueryChange = { newQuery -&gt;
+            query = newQuery
+            viewModel.onQueryChanged(newQuery) // debounced search
+        },
+        onSearch = { viewModel.search(query) },
+        active = active,
+        onActiveChange = { active = it },
+        placeholder = { Text("Search recipes...") },
+        leadingIcon = { Icon(Icons.Default.Search, "Search") }
+    ) {
+        // Show suggestions while typing
+        suggestions.forEach { suggestion -&gt;
+            ListItem(
+                headlineContent = { Text(suggestion) },
+                leadingContent = { Icon(Icons.Default.History, null) },
+                modifier = Modifier.clickable {
+                    query = suggestion
+                    viewModel.search(suggestion)
+                }
+            )
+        }
+    }
+}</code></pre>
+
+    <h3>Essential Search States</h3>
+    <p>Every search UI needs to handle these states gracefully:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>What to Show</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Empty (no query)</strong></td>
+          <td>Recent searches, trending items, or personalized suggestions</td>
+        </tr>
+        <tr>
+          <td><strong>Typing</strong></td>
+          <td>Real-time autocomplete suggestions (Tier 1 + Tier 2)</td>
+        </tr>
+        <tr>
+          <td><strong>Loading</strong></td>
+          <td>Skeleton cards or subtle shimmer (not a spinner)</td>
+        </tr>
+        <tr>
+          <td><strong>Results</strong></td>
+          <td>Matching items with highlighted match context</td>
+        </tr>
+        <tr>
+          <td><strong>No results</strong></td>
+          <td>"No matches for X. Try: [related suggestions]" &mdash; never a dead end</td>
+        </tr>
+        <tr>
+          <td><strong>Error</strong></td>
+          <td>"Search is temporarily unavailable. Try again?" with fallback to keyword search</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The No-Dead-End Rule</h3>
+      <p>A search that returns "No results" with nothing else is a dead end. Always offer an escape route: suggested alternative queries, category browsing, popular items, or a "Search the web?" fallback. The user should never hit a wall.</p>
+    </div>
+
+    <h2>Personalized Search</h2>
+
+    <p>Over time, your search should learn what <em>this</em> user cares about. If a user always picks spicy recipes, "chicken" should rank "Spicy Chicken" above "Chicken Salad." This doesn't require a fancy recommendation engine &mdash; a simple affinity model works:</p>
+
+<pre><code>// Track what the user clicks in search results
+@Entity
+data class SearchClick(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val query: String,
+    val clickedItemId: Long,
+    val timestamp: Long
+)
+
+// Build a lightweight preference vector
+fun buildUserPreference(clicks: List&lt;SearchClick&gt;, items: Map&lt;Long, Recipe&gt;): FloatArray {
+    val recentClicks = clicks.sortedByDescending { it.timestamp }.take(50)
+    val embeddings = recentClicks.mapNotNull { items[it.clickedItemId]?.embedding }
+    // Average the embeddings of recently clicked items
+    return averageVectors(embeddings)
+}</code></pre>
+
+    <p>The user's preference vector is the average of what they've recently clicked. Blend it with the query vector (e.g., 80% query + 20% preference) for personalized ranking &mdash; all on-device, no data leaves the phone.</p>
+
+    <div class="tip-box">
+      <p><strong>Privacy win:</strong> On-device personalization means the user's search behavior and preferences stay on their phone. No tracking servers, no user profiles in your database, no GDPR headaches. The search gets personal without being creepy.</p>
+    </div>
+
+    <h2>Performance Optimization</h2>
+
+    <p>Search needs to feel instant. Here's how to keep it fast on mid-range devices:</p>
+
+    <h3>Debouncing</h3>
+    <p>Don't run semantic search on every keystroke. Wait for the user to pause:</p>
+
+<pre><code>// In your ViewModel
+private val queryFlow = MutableStateFlow("")
+
+init {
+    queryFlow
+        .debounce(300) // wait 300ms after typing stops
+        .filter { it.length &gt;= 2 } // minimum 2 characters
+        .distinctUntilChanged()
+        .onEach { query -&gt; performSearch(query) }
+        .launchIn(viewModelScope)
+}</code></pre>
+
+    <h3>Embedding Cache</h3>
+    <p>Cache query embeddings for repeated searches. Users often search the same things:</p>
+
+<pre><code>private val embeddingCache = LruCache&lt;String, FloatArray&gt;(100)
+
+fun getEmbedding(text: String): FloatArray {
+    return embeddingCache.get(text) ?: embeddingHelper.embed(text).also {
+        embeddingCache.put(text, it)
+    }
+}</code></pre>
+
+    <h3>Pre-compute Popular Queries</h3>
+    <p>If you know the top 50 queries (from analytics), pre-compute their results and store them. When a user types a common query, serve the cached results instantly while semantic search runs in the background.</p>
+
+    <div class="warning-box">
+      <p><strong>Watch your memory.</strong> Each 384-dimension embedding is ~1.5KB. For 10,000 items, that's ~15MB of vectors in memory. For larger datasets, load embeddings in batches or use an on-device vector database like <a href="https://objectbox.io">ObjectBox</a> with vector search support.</p>
+    </div>
+
+    <h2>The Hybrid Search Stack</h2>
+
+    <p>For production apps, the best search combines multiple approaches. Here's the stack, from fastest to smartest:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Layer 1: Instant (on-device)</p>
+        <p class="prompt-text">Prefix matching + cached popular queries
+Response time: &lt;5ms
+Shows: direct title matches, recent searches</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Layer 2: Smart (on-device AI)</p>
+        <p class="prompt-text">Semantic embedding search + fuzzy matching
+Response time: 30-100ms
+Shows: meaning-based matches, typo-corrected results</p>
+      </div>
+    </div>
+
+    <p>Layer 1 shows results immediately. Layer 2 blends in within a fraction of a second. The user sees the search getting smarter in real time as they type.</p>
+
+    <p>For apps that need even higher quality, add a <strong>Layer 3</strong>: a cloud re-ranking step that uses a large language model to re-score the top 20 results. This adds 200-500ms but can dramatically improve relevance for complex queries.</p>
+
+    <h2>Your Turn: Build Semantic Recipe Search</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Semantic Search for a Recipe App</h3>
+      <p>Build a semantic search feature for an app with 100 recipes. Here's your plan:</p>
+      <ol>
+        <li><strong>Prepare the data:</strong> Create a list of 20+ recipe objects with titles and ingredient lists (e.g., "Spicy Thai Basil Chicken &mdash; chicken, basil, chili, garlic, soy sauce")</li>
+        <li><strong>Set up embeddings:</strong> Use the Gemini Embedding API (or on-device TFLite model) to embed each recipe's title + ingredients into a vector</li>
+        <li><strong>Build the search:</strong> Embed the user's query, compute cosine similarity against all recipe vectors, return top 5 results</li>
+        <li><strong>Build the UI:</strong> Compose <code>SearchBar</code> with debounced input, result cards showing title + ingredient highlights, and a "no results" state with suggestions</li>
+        <li><strong>Test with tricky queries:</strong> Try "something spicy with chicken," "quick vegetarian dinner," "comfort food for a cold day" &mdash; none of these are literal recipe titles, but semantic search should find relevant results</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add a "recent searches" feature that shows the user's last 5 queries when the search bar is empty, and a simple user preference boost based on their search click history.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've built your first full AI feature &mdash; search that understands meaning, not just keywords. You know how embeddings work, how to build a local search index, how to autocomplete with intent prediction, and how to keep it all fast.</p>
+
+    <p>Next, we're moving from finding content to <em>creating</em> it. <strong>Chapter 5: Summarization &amp; Content Generation</strong> covers TL;DR buttons, smart drafts, streaming text, and the art of prompt engineering &mdash; all the skills you need to add generative AI to your app.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="03-ai-ux-trust.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Designing AI UX That Users Trust</span>
+        </a>
+        <a href="05-summarization.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Summarization &amp; Content Generation</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: The Comprehension Workflow | Reviewing AI Code For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Reviewing AI Code For Dummies</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-skill-atrophy.html">&larr; Prev</a>
+      <a href="09-reviewing-colleagues.html">Next &rarr;</a>
+      <a href="maps/08-comprehension-workflow-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>The Comprehension Workflow</h1>
+    <p class="subtitle">A systematic process for understanding AI-generated code &mdash; not just shipping it</p>
+  </header>
+
+  <main>
+
+    <!-- ============================================ -->
+    <h2>Why &ldquo;Mostly Understand&rdquo; Isn&rsquo;t Enough</h2>
+    <!-- ============================================ -->
+
+    <p>Chapter 7 showed you how to keep your skills sharp. This chapter is about applying those skills every single time AI-generated code lands in front of you. Because here&rsquo;s the pattern that kills teams: you review the diff, you <em>mostly</em> get it, you approve and move on. Repeat fifty times. Now you own a codebase full of code you &ldquo;mostly understand&rdquo; &mdash; and &ldquo;mostly&rdquo; is where bugs hide.</p>
+
+    <p>Think of it like <strong>reading a recipe versus cooking from a recipe</strong>. You can skim a recipe and think &ldquo;yeah, I get how souffl&eacute; works.&rdquo; But the first time you actually make one, you discover that &ldquo;fold gently&rdquo; and &ldquo;stir in&rdquo; produce completely different results. The gap between reading code and understanding code works the same way. Skimming is not comprehension.</p>
+
+    <p>Addy Osmani coined the term <strong>comprehension debt</strong> in <a href="https://addyosmani.com/blog/comprehension-debt/">a March 15, 2026 article</a>: the widening gap between the volume of code that exists in a codebase and the volume that any human engineer genuinely understands. Unlike technical debt, comprehension debt is invisible &mdash; tests pass, syntax is clean, CI is green &mdash; but the team&rsquo;s mental model of the system quietly erodes.</p>
+
+    <p>Research backs this up. Xin Xia and colleagues&rsquo; 2018 IEEE field study (78 professional developers, 3,148 working hours) found developers spend roughly <strong>58% of their time on program comprehension</strong>, not writing new code. With AI generating more code faster, that 58% is under pressure. The temptation is to cut comprehension time to ship faster. The result is code nobody owns.</p>
+
+    <div class="highlight-box">
+      <h3>The Core Principle</h3>
+      <p>If you can&rsquo;t teach someone what a piece of code does, you don&rsquo;t understand it. And if you don&rsquo;t understand it, you can&rsquo;t debug it, refactor it, or extend it safely. The comprehension workflow exists to close that gap &mdash; systematically, every time.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Five-Step Comprehension Workflow</h2>
+    <!-- ============================================ -->
+
+    <p>This is the core of the chapter &mdash; a repeatable workflow you apply to every non-trivial AI-generated change. Five steps, each building on the last.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Read</strong><br>
+        What changed?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Intent</strong><br>
+        Why did it change?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Trace</strong><br>
+        How does data flow?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Question</strong><br>
+        What does it assume?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>5. Test</strong><br>
+        Can you predict edge cases?
+      </div>
+    </div>
+
+    <h3>Step 1: Read the Diff &mdash; What Changed?</h3>
+
+    <p>Start with the shape, not the details. Use <code>git diff --stat</code> to see which files were touched and how much changed. This tells you the <em>scope</em> before you dive into specifics.</p>
+
+    <pre><code>$ git diff --stat HEAD~1
+ src/services/payment.ts    | 47 ++++++++++++++++-
+ src/middleware/auth.ts      | 12 ++---
+ src/utils/retry.ts          | 89 +++++++++++++++++++++++++++++++++
+ tests/payment.test.ts       | 31 ++++++++++++
+ 4 files changed, 171 insertions(+), 8 deletions(-)</code></pre>
+
+    <p>Three questions at this stage:</p>
+    <ul>
+      <li><strong>Scope check:</strong> Does the number of files and lines match the expected change? A &ldquo;simple feature&rdquo; touching 8 files deserves a raised eyebrow.</li>
+      <li><strong>Unexpected files:</strong> Is anything modified that shouldn&rsquo;t be? AI loves to &ldquo;helpfully&rdquo; refactor nearby code.</li>
+      <li><strong>New files:</strong> <code>retry.ts</code> is new &mdash; does the project already have retry logic elsewhere? Duplication is a classic AI tell.</li>
+    </ul>
+
+    <h3>Step 2: Identify the Intent &mdash; What Was the AI Trying to Do?</h3>
+
+    <p>Before reading line-by-line, answer: <em>what was the goal?</em> Check the commit message, the ticket, or the prompt that generated this code. If none of those exist, that&rsquo;s already a problem &mdash; code without stated intent is code without accountability.</p>
+
+    <p>Compare the stated intent with the actual diff. Does the change accomplish what it claims? AI often achieves the stated goal while also introducing unrelated changes, over-engineering the solution, or solving a slightly different problem than what was asked.</p>
+
+    <div class="tip-box">
+      <h4>The Intent Mismatch Test</h4>
+      <p>Read the ticket or prompt first, form a mental picture of what the diff <em>should</em> look like, then read the actual diff. Where reality diverges from expectation is where bugs live. If the AI was asked to &ldquo;add retry logic to the payment service&rdquo; and the diff also modifies auth middleware &mdash; that&rsquo;s scope creep that needs investigation.</p>
+    </div>
+
+    <h3>Step 3: Trace the Data Flow &mdash; How Does Data Move?</h3>
+
+    <p>This is where most reviewers stop too early. Don&rsquo;t just read the function &mdash; trace how data enters, transforms, and exits.</p>
+
+    <p>For the payment service example:</p>
+    <ol>
+      <li>Where does the payment request come from? (API endpoint, queue, scheduled job?)</li>
+      <li>What validation happens before it reaches this function?</li>
+      <li>How does the retry logic interact with the payment gateway&rsquo;s idempotency?</li>
+      <li>What happens to the response? Where does it go next?</li>
+      <li>If the function fails, who gets notified? What state is left behind?</li>
+    </ol>
+
+    <p>AI-generated code often handles the function in isolation beautifully but ignores how it connects to the rest of the system. Tracing data flow catches these integration gaps.</p>
+
+    <h3>Step 4: Question the Assumptions &mdash; What Does the AI Take for Granted?</h3>
+
+    <p>Every piece of code makes assumptions. AI code makes more assumptions than human code because it doesn&rsquo;t know your system. Look for:</p>
+
+    <ul>
+      <li><strong>Environment assumptions:</strong> Does it assume a specific database version, network configuration, or environment variable?</li>
+      <li><strong>Input assumptions:</strong> Does it assume inputs are always valid, non-null, within expected ranges?</li>
+      <li><strong>Concurrency assumptions:</strong> Does it assume single-threaded execution when your system is multi-threaded?</li>
+      <li><strong>State assumptions:</strong> Does it assume the database or external service is always available?</li>
+    </ul>
+
+    <pre><code>// AI wrote this retry logic — spot the assumption
+async function retryPayment(paymentId: string, maxRetries = 3) {
+  for (let i = 0; i &lt; maxRetries; i++) {
+    try {
+      return await paymentGateway.charge(paymentId);
+    } catch (err) {
+      if (i === maxRetries - 1) throw err;
+      await sleep(1000 * Math.pow(2, i));
+    }
+  }
+}</code></pre>
+
+    <p>The assumption: retrying a payment is <em>safe</em>. But is the payment gateway idempotent? If the first call succeeded but the response was lost, retrying could charge the customer twice. The AI doesn&rsquo;t know your gateway&rsquo;s idempotency guarantees &mdash; you do.</p>
+
+    <h3>Step 5: Test Your Understanding &mdash; Can You Predict Edge Cases?</h3>
+
+    <p>The final check: without running the code, predict what happens with unexpected input. If you can predict correctly, you understand the code. If you can&rsquo;t, you have gaps.</p>
+
+    <p>For the retry function above:</p>
+    <ul>
+      <li>What happens if <code>paymentId</code> is an empty string?</li>
+      <li>What happens if the network times out after 30 seconds but the retry waits 4 seconds?</li>
+      <li>What happens if <code>maxRetries</code> is 0?</li>
+      <li>What happens if two instances of your service retry the same payment simultaneously?</li>
+    </ul>
+
+    <p>Write your predictions down. Then check against the code. Where your predictions were wrong, that&rsquo;s where your understanding was incomplete &mdash; and where bugs will eventually emerge.</p>
+
+    <!-- ============================================ -->
+    <h2>The &ldquo;Teach It Back&rdquo; Technique</h2>
+    <!-- ============================================ -->
+
+    <p>The single most effective comprehension technique is the oldest one in education: <strong>if you can teach it, you understand it.</strong> This is the Prot&eacute;g&eacute; Effect &mdash; research shows that preparing to teach material produces deeper understanding than simply studying it.</p>
+
+    <p>In practice, this means: after reviewing AI-generated code, explain it to someone. Out loud. In your own words. Not &ldquo;it adds retry logic&rdquo; &mdash; actually explain <em>how</em> the retry works, <em>what</em> triggers it, and <em>why</em> this approach was chosen over alternatives.</p>
+
+    <p>No colleague available? Use the <strong>rubber duck approach</strong>. Explain the code to an inanimate object, a voice memo, or a written note. The act of articulating forces you to confront the parts you don&rsquo;t actually understand. GitHub Copilot CLI&rsquo;s experimental <strong>&ldquo;Rubber Duck&rdquo;</strong> feature, <a href="https://github.blog/ai-and-ml/github-copilot/github-copilot-cli-combines-model-families-for-a-second-opinion/">announced April 6, 2026</a>, productizes the same idea: a second model from a different family (GPT-5.4 when orchestrating with Claude) reviews the agent&rsquo;s plan and work at three checkpoints &mdash; after drafting the plan, after a complex implementation, and after writing tests before executing them. The pairing closed <strong>74.7% of the performance gap</strong> between Sonnet 4.6 and Opus 4.6 alone. The original technique (just talking out loud) still works just as well for human reviewers.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Teach-It-Back (Deep Understanding)</div>
+        <div class="prompt-text">"This function retries failed payments using exponential backoff. It starts with a 1-second delay, doubles each time, and gives up after 3 attempts. The catch block only rethrows on the final attempt. But there's a gap — it doesn't check idempotency, so a timeout could cause a double charge."</div>
+        <div class="prompt-explanation">You articulated the mechanism, the behavior, and a limitation. You understand this code.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Skim-and-Approve (Surface Understanding)</div>
+        <div class="prompt-text">"It retries payments. Looks fine. The tests pass."</div>
+        <div class="prompt-explanation">You described the label, not the behavior. You won&rsquo;t catch the double-charge bug until it hits production.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Asking AI to Explain Its Decisions</h2>
+    <!-- ============================================ -->
+
+    <p>One of the best uses of AI in your comprehension workflow is asking it to explain code <em>it</em> generated. But the quality of the explanation depends entirely on the quality of your prompt.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Prompts That Produce Useful Explanations</div>
+        <div class="prompt-text">"Explain the retry logic in src/services/payment.ts. Why did you use exponential backoff instead of fixed intervals? What assumptions does this code make about the payment gateway's idempotency? What happens if two instances retry the same payment simultaneously?"</div>
+        <div class="prompt-explanation">Specific, targeted questions that probe assumptions and alternatives. The explanation will reveal whether the AI considered edge cases or just generated a common pattern.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Prompts That Produce Useless Explanations</div>
+        <div class="prompt-text">"Explain this code."</div>
+        <div class="prompt-explanation">You&rsquo;ll get a line-by-line narration that restates the code in English. That&rsquo;s not understanding &mdash; it&rsquo;s translation. You need to ask about <em>decisions</em>, not descriptions.</div>
+      </div>
+    </div>
+
+    <p>The key is to ask about <strong>decisions</strong>, not descriptions. &ldquo;Why this approach?&rdquo; is more valuable than &ldquo;what does this do?&rdquo; Because the &ldquo;why&rdquo; reveals whether the AI made a deliberate choice or just generated the most common pattern from its training data.</p>
+
+    <!-- ============================================ -->
+    <h2>Active Reading vs. Passive Scanning</h2>
+    <!-- ============================================ -->
+
+    <p>There are two ways to read code. Most developers default to the wrong one.</p>
+
+    <p><strong>Passive scanning</strong> is reading code the way you read a news article &mdash; your eyes move across the lines, you get a general sense, and you move on. It feels productive. It isn&rsquo;t. You retain almost nothing, and you miss subtle bugs.</p>
+
+    <p><strong>Active reading</strong> is reading code the way you read a contract &mdash; you question every clause, you look for what&rsquo;s missing, and you flag anything you don&rsquo;t fully understand. It&rsquo;s slower. It&rsquo;s also the only way to actually comprehend what you&rsquo;re reviewing.</p>
+
+    <p>Techniques for active reading:</p>
+    <ul>
+      <li><strong>Annotate as you go:</strong> Write quick notes next to each function &mdash; &ldquo;this fetches user data,&rdquo; &ldquo;this validates the token.&rdquo; If you can&rsquo;t write a note, you don&rsquo;t understand the function.</li>
+      <li><strong>Predict before reading:</strong> Before reading a function body, read just the name and signature. Predict what it does. Then read the body and check your prediction.</li>
+      <li><strong>Question defaults:</strong> When you see <code>timeout = 30000</code>, ask: why 30 seconds? Is that appropriate for this context? AI loves plausible-looking defaults that are actually arbitrary.</li>
+      <li><strong>Read tests first:</strong> Tests tell you what the code is <em>supposed</em> to do. Reading tests before implementation gives you a spec to verify against.</li>
+    </ul>
+
+    <h3>When to Read Line-by-Line vs. Skim for Structure</h3>
+
+    <p>Not every line deserves equal attention. Use a <strong>risk-based approach</strong>:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Read Line-by-Line</th>
+          <th>Skim for Structure</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Authentication and authorization logic</td>
+          <td>UI layout and styling changes</td>
+        </tr>
+        <tr>
+          <td>Payment and financial calculations</td>
+          <td>Generated boilerplate (config, imports)</td>
+        </tr>
+        <tr>
+          <td>Data validation and sanitization</td>
+          <td>Test scaffolding (setup/teardown)</td>
+        </tr>
+        <tr>
+          <td>Concurrency and state management</td>
+          <td>Documentation updates</td>
+        </tr>
+        <tr>
+          <td>Database migrations and queries</td>
+          <td>Dependency version bumps</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Osmani&rsquo;s principle: <strong>&ldquo;If code touches auth, payments, secrets, or untrusted input, treat AI as a high-speed intern.&rdquo;</strong> Everything else can get a lighter pass &mdash; but never zero attention.</p>
+
+    <!-- ============================================ -->
+    <h2>Building Mental Models of Unfamiliar Code</h2>
+    <!-- ============================================ -->
+
+    <p>AI generates code in patterns you might not have chosen yourself. That unfamiliarity is actually an opportunity &mdash; if you engage with it rather than skip past it.</p>
+
+    <p>When you encounter an unfamiliar pattern, don&rsquo;t just accept or reject it. <strong>Build a mental model</strong> of how it works:</p>
+
+    <ol>
+      <li><strong>Name the pattern:</strong> Is this a retry with backoff? A circuit breaker? A saga? Naming it connects it to your existing knowledge.</li>
+      <li><strong>Draw the flow:</strong> Even a rough sketch on paper &mdash; boxes for components, arrows for data flow &mdash; makes abstract code concrete.</li>
+      <li><strong>Identify the invariants:</strong> What must always be true for this code to work correctly? Those invariants are your guardrails.</li>
+      <li><strong>Find the failure modes:</strong> How does this code fail? Gracefully? Silently? Catastrophically? The failure mode tells you the real risk.</li>
+    </ol>
+
+    <div class="tip-box">
+      <h4>The &ldquo;Explain It Differently&rdquo; Test</h4>
+      <p>If you can only explain code using the same words and structure as the code itself, you&rsquo;re describing, not understanding. Try explaining it using an analogy, a real-world equivalent, or a diagram. If you can translate it into a completely different representation, you genuinely understand it.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Comprehension Journal</h2>
+    <!-- ============================================ -->
+
+    <p>Chapter 7 introduced the learning journal for tracking knowledge gaps. The <strong>comprehension journal</strong> is its complement &mdash; a record of what you learned from each review, not just what you didn&rsquo;t know.</p>
+
+    <pre><code>## Comprehension Journal — 2026-04-10
+
+**PR reviewed:** #347 — Add retry logic to payment service
+**AI-generated:** Yes (Claude Code session)
+**Time spent understanding:** 15 minutes
+
+**What I learned:**
+- Exponential backoff with jitter prevents thundering herd
+- Our payment gateway IS idempotent (confirmed with team lead)
+- The retry util duplicates logic in src/utils/http-client.ts
+
+**What surprised me:**
+- AI created a new retry utility instead of using existing one
+- The backoff cap was set to 30s — our gateway times out at 15s
+
+**Action taken:**
+- Requested change: use existing retry utility
+- Filed follow-up to align timeout with gateway SLA</code></pre>
+
+    <p>Over time, these entries become a <strong>knowledge map</strong> of your codebase. When you need to touch the payment service six months later, you don&rsquo;t start from scratch &mdash; you read your journal entries and rebuild context in minutes instead of hours.</p>
+
+    <!-- ============================================ -->
+    <h2>Time-Boxing Comprehension</h2>
+    <!-- ============================================ -->
+
+    <p>The uncomfortable truth: you can&rsquo;t spend 45 minutes understanding every AI-generated function. Shipping matters. The goal is to spend the <em>right</em> amount of time &mdash; not zero, and not infinite.</p>
+
+    <p>Here&rsquo;s a practical time-boxing framework:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">2 min</span>
+        <span class="stat-label">Trivial changes: config, formatting, dependency bumps. Skim the diff, check for surprises, approve.</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">10 min</span>
+        <span class="stat-label">Standard features: new endpoints, UI components, utility functions. Run the 5-step workflow at normal speed.</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">30 min</span>
+        <span class="stat-label">Complex or risky changes: auth, payments, data migrations. Full workflow, line-by-line reading, teach-it-back.</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">60+ min</span>
+        <span class="stat-label">Architecture-level changes: new services, schema redesigns, cross-cutting concerns. Pair review recommended.</span>
+      </div>
+    </div>
+
+    <p>The key insight: <strong>match your comprehension investment to the blast radius.</strong> A bug in a config file affects one deployment. A bug in payment logic affects every customer. Allocate your time accordingly.</p>
+
+    <div class="warning-box">
+      <h4>When You&rsquo;re Over the Time Box</h4>
+      <p>If you hit your time limit and still don&rsquo;t understand the code, that&rsquo;s not a sign to approve anyway. It&rsquo;s a sign the code is too complex, poorly structured, or that it needs to be broken into smaller changes. Request the author (or the AI) to refactor into smaller, reviewable pieces. A PR you can&rsquo;t understand in a reasonable time is a PR that shouldn&rsquo;t be merged as-is.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- Required elements -->
+    <!-- ============================================ -->
+
+    <div class="ai-tell-box">
+      <h4>Code That Solves the Problem in a Way You Wouldn&rsquo;t Have Thought Of</h4>
+      <p>Not all AI tells are red flags. Sometimes AI generates a solution using a pattern or technique you&rsquo;ve never seen. Maybe it uses a bitwise operation where you would have used a conditional. Maybe it restructures a loop into a functional pipeline you didn&rsquo;t know the language supported.</p>
+      <p><strong>This is where the most learning happens.</strong> When AI surprises you, don&rsquo;t just approve it because it&rsquo;s clever. Run it through the 5-step workflow. Understand <em>why</em> this approach works. Add it to your comprehension journal. Next time, you&rsquo;ll recognize the pattern &mdash; and you&rsquo;ll be the one teaching it to a colleague.</p>
+      <p>The tell: you find yourself thinking &ldquo;I would never have written it this way.&rdquo; That&rsquo;s not necessarily bad &mdash; it&rsquo;s an invitation to learn.</p>
+    </div>
+
+    <div class="red-flag-box">
+      <h4>Merging Code You &ldquo;Mostly Understand&rdquo;</h4>
+      <p><strong>Scenario:</strong> It&rsquo;s Friday afternoon. You&rsquo;ve been reviewing a 400-line AI-generated PR for 20 minutes. You understand 80% of it. The 20% you don&rsquo;t fully grasp is in the error handling &mdash; some retry logic with cancellation tokens that you&rsquo;ve never used before. Tests pass. CI is green. You think: &ldquo;It probably works. I&rsquo;ll learn it later.&rdquo;</p>
+      <p>You won&rsquo;t learn it later. You&rsquo;ll forget about it until the error handling triggers in production and you can&rsquo;t debug it because you never understood it in the first place.</p>
+      <p><strong>The rule:</strong> If you can&rsquo;t explain the error handling and edge case logic, the PR isn&rsquo;t ready to merge. Those are exactly the parts that matter most during incidents. The happy path will work fine; it&rsquo;s the 20% you skipped that will wake you up at 3 AM.</p>
+    </div>
+
+    <div class="review-checklist">
+      <h4>The Comprehension Workflow Checklist</h4>
+      <ul class="checklist">
+        <li class="checked">Read the diff shape first (<code>git diff --stat</code>) &mdash; does the scope match the intent?</li>
+        <li class="checked">Identify the intent &mdash; read the ticket/prompt before the code</li>
+        <li class="checked">Trace data flow through the change &mdash; where does data enter, transform, and exit?</li>
+        <li class="checked">List the assumptions the code makes about the system</li>
+        <li class="checked">Predict edge case behavior before running the code</li>
+        <li class="checked">Explain the change out loud (teach-it-back) &mdash; can you articulate <em>how</em> it works?</li>
+        <li class="checked">Ask AI targeted &ldquo;why&rdquo; questions, not generic &ldquo;explain this&rdquo;</li>
+        <li class="checked">Time-box your review based on blast radius (2 / 10 / 30 / 60 min)</li>
+        <li class="checked">Log what you learned in your comprehension journal</li>
+        <li class="checked">If you can&rsquo;t explain the error handling, don&rsquo;t approve the PR</li>
+      </ul>
+    </div>
+
+    <div class="practice-drill">
+      <h4>Write the Paragraph</h4>
+      <p>Do this right now. It takes five minutes and tells you exactly how well your comprehension workflow is working.</p>
+      <ol>
+        <li>Find your most recent AI-generated change: <code>git log --oneline -5</code></li>
+        <li>Pick one non-trivial commit</li>
+        <li><strong>Close all AI tools</strong></li>
+        <li>In a scratch file or on paper, write a one-paragraph explanation of:
+          <ul>
+            <li>What the change does</li>
+            <li>Why it was made (the intent)</li>
+            <li>How data flows through it</li>
+            <li>One assumption it makes that could break</li>
+          </ul>
+        </li>
+        <li>Now open the actual diff and compare. What did you miss?</li>
+      </ol>
+      <p>If your paragraph was accurate and complete &mdash; your comprehension is solid. If you missed the data flow or couldn&rsquo;t name an assumption &mdash; use the 5-step workflow on this change right now. That&rsquo;s real practice.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Build Your Comprehension Workflow Habit</h4>
+      <p>Turn the 5-step workflow into a repeatable habit over the next two weeks:</p>
+      <ol>
+        <li><strong>Week 1:</strong> Print the 5-step workflow (or stick it on a monitor note). For every AI-generated PR you review, physically check off each step. Yes, every one.</li>
+        <li><strong>Week 2:</strong> Start a comprehension journal. After each review, write a 3-line entry: what you learned, what surprised you, and one action you took.</li>
+        <li><strong>Ongoing:</strong> At the end of week 2, review your journal. Look for patterns:
+          <ul>
+            <li>Which steps do you skip most often? (That&rsquo;s where your blind spot is)</li>
+            <li>What surprises you most frequently? (That&rsquo;s where your knowledge gaps are)</li>
+            <li>How long does each review actually take? (Calibrate your time boxes)</li>
+          </ul>
+        </li>
+      </ol>
+      <p>The goal isn&rsquo;t perfection &mdash; it&rsquo;s building the muscle memory so the 5-step workflow becomes automatic, like checking your mirrors before changing lanes.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================ -->
+
+    <p>So far this course has focused on you and your code &mdash; your review skills, your comprehension, your discipline. But code review doesn&rsquo;t happen in a vacuum. Your colleagues are using AI too, and their PRs are landing in your review queue.</p>
+
+    <p>In <a href="09-reviewing-colleagues.html">Chapter 9: Reviewing Your Colleagues&rsquo; AI-Assisted PRs</a>, we&rsquo;ll tackle the team dynamics: requiring AI disclosure, having the &ldquo;can you explain this?&rdquo; conversation without being a jerk, pair reviewing, and building a team review culture that values understanding over pure velocity.</p>
+
+    <p>Understanding your own code is the foundation. Understanding your team&rsquo;s code is how you scale.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="07-skill-atrophy.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Fighting Skill Atrophy</span>
+    </a>
+    <a href="09-reviewing-colleagues.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Reviewing Your Colleagues&rsquo; AI-Assisted PRs</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

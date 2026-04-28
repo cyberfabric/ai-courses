@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: How Text Generation Actually Works | How AI Actually Works</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">How AI Actually Works</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-transformer.html">&larr; Prev</a>
+      <a href="07-temperature-and-friends.html">Next &rarr;</a>
+      <a href="maps/06-text-generation-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>How Text Generation Actually Works</h1>
+    <p class="chapter-subtitle">Next-token prediction, autoregressive generation, and the probability game</p>
+  </header>
+
+  <main>
+
+    <p>You know what tokens are (Chapter 4). You know how the transformer processes them (Chapter 5). Now it's time for the big reveal: <em>how does text actually come out?</em></p>
+
+    <p>When you type a prompt into Claude or ChatGPT and words start streaming across your screen &mdash; what's actually happening, step by step? This is the chapter where everything from Chapters 1&ndash;5 clicks together into one complete picture.</p>
+
+    <p>Fair warning: this chapter might change how you see AI tools forever. Once you understand how text generation actually works, you'll never look at a streaming response the same way again.</p>
+
+    <p>And the answer starts with a surprisingly simple truth.</p>
+
+    <!-- ============================================ -->
+    <h2>The Fundamental Truth: One Token at a Time</h2>
+    <!-- ============================================ -->
+
+    <div class="highlight-box">
+      <p>LLMs generate text <strong>one token at a time</strong>. Not one sentence. Not one paragraph. <em>One token.</em></p>
+      <p>Every response you've ever received from ChatGPT, Claude, or any LLM was produced by predicting a single next token, appending it, and repeating &mdash; hundreds or thousands of times.</p>
+    </div>
+
+    <p>This process is called <strong>autoregressive generation</strong>, and it works like this:</p>
+
+    <ol>
+      <li>You provide a prompt: <code>"Write a function that sorts a list"</code></li>
+      <li>The model predicts the most likely <em>first</em> token of the response. Let's say it picks <code>"def"</code>.</li>
+      <li>Now the input becomes: <code>"Write a function that sorts a list" + "def"</code></li>
+      <li>The model predicts the next token given this extended input. It picks <code>" sort"</code>.</li>
+      <li>Now the input is: <code>"Write a function that sorts a list" + "def sort"</code></li>
+      <li>The model predicts the next token: <code>"_list"</code>.</li>
+      <li>And so on, token by token, until it generates a special "stop" token or hits the maximum length.</li>
+    </ol>
+
+    <p>Each new token is generated based on <em>everything that came before it</em> &mdash; both your original prompt and all the tokens the model has generated so far. The response builds on itself, one piece at a time.</p>
+
+    <p>This means the model is essentially making a fresh decision at every single step. "Given everything so far, what's the best next token?" It doesn't plan ahead. It doesn't outline a response structure. It doesn't think "I'll need to close this function bracket later." It just predicts the single next token, and the structure of the response emerges one step at a time.</p>
+
+    <p>This is both amazing (it works!) and a fundamental limitation (it can lose track of complex, long-range structure). Keep this in mind &mdash; it explains a lot about why AI occasionally loses the plot in long responses.</p>
+
+    <div class="analogy-box">
+      <h4>Analogy: Autocomplete on Steroids</h4>
+      <p>You know the autocomplete on your phone keyboard? It suggests 3 possible next words based on what you've typed so far. You tap one, and it suggests 3 more.</p>
+      <p>LLMs work the exact same way, but instead of 3 suggestions, they have <strong>100,000</strong> (one for every token in the vocabulary). And instead of you tapping to choose, the model picks one automatically based on learned probabilities. Then it uses that choice to generate the next 100,000 suggestions. And again. And again.</p>
+      <p>That's it. That's the entire mechanism behind every AI response you've ever seen. Phone autocomplete, but with 100,000 options and a transformer with billions of parameters doing the prediction.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Probability Distribution</h2>
+    <!-- ============================================ -->
+
+    <p>For each step, the model doesn't just pick one token. It computes a <strong>probability score for every single token in its vocabulary</strong>.</p>
+
+    <p>Imagine this: you've prompted the model with "The capital of France is" and it needs to predict the next token. The output of the transformer's final layer is a score for each of the ~100,000 tokens:</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Example: Probability distribution for "The capital of France is ___"</p>
+      <div class="prompt-text">" Paris"     → 92.1%
+" the"       →  1.3%
+" a"         →  0.8%
+" Lyon"      →  0.4%
+" located"   →  0.3%
+" known"     →  0.2%
+...
+" banana"    →  0.00001%
+" def"       →  0.000001%
+
+(~100,000 tokens, each with a probability, all adding up to 100%)</div>
+    </div>
+
+    <p>For a factual question like this, the distribution is very "sharp" &mdash; one token dominates with over 90% probability. The model is very confident about what comes next. But for more open-ended prompts, the distribution can be much flatter, with many tokens having reasonable probabilities.</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Example: Probability distribution for "Once upon a ___"</p>
+      <div class="prompt-text">" time"      → 87.5%
+" midnight"  →  2.1%
+" day"       →  1.4%
+" warm"      →  0.9%
+" cold"      →  0.7%
+" dreary"    →  0.5%
+...
+
+Still "time" is dominant, but more alternatives are plausible.</div>
+    </div>
+
+    <p>For a creative writing prompt like "The dragon opened its mouth and"? The distribution could be very flat, with dozens of tokens having similar probabilities: "roared," "spoke," "breathed," "whispered," "laughed." That's when things get interesting &mdash; and when the choice of sampling strategy really matters.</p>
+
+    <!-- ============================================ -->
+    <h2>Why Not Just Pick the Most Likely Token?</h2>
+    <!-- ============================================ -->
+
+    <p>You might think: "Just always pick the token with the highest probability. Problem solved." This approach is called <strong>greedy decoding</strong>, and it actually works &mdash; but it produces terrible output.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Greedy decoding (always pick #1)</p>
+        <div class="prompt-text">Prompt: "Write a poem about the ocean"
+
+The ocean is a beautiful place.
+The ocean is a beautiful place.
+The ocean is a beautiful place.
+It is a beautiful place to be.
+It is a beautiful place to be.</div>
+        <p class="prompt-explanation">Repetitive, boring, loops. The "most likely" next token after each sentence tends to restart the same pattern.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">With sampling (pick randomly, favoring likely)</p>
+        <div class="prompt-text">Prompt: "Write a poem about the ocean"
+
+Beneath the silver veil of moon,
+the ocean hums a restless tune.
+Salt and shadow, foam and light —
+the tide exhales into the night.</div>
+        <p class="prompt-explanation">Creative, varied, interesting. Occasional "unlikely" token choices produce fresh combinations.</p>
+      </div>
+    </div>
+
+    <p>Greedy decoding gets stuck in loops because the most probable next token is often the same one that was most probable before. The model keeps predicting the same high-probability patterns over and over. It's like a GPS that always takes the "most popular" road &mdash; you'd drive the same route every time, even when there are perfectly good alternatives.</p>
+
+    <p>The solution? Don't always pick the most likely token. Instead, <strong>randomly sample</strong> from the top candidates, with higher-probability tokens being more likely to be chosen.</p>
+
+    <!-- ============================================ -->
+    <h2>Sampling: The Art of Controlled Randomness</h2>
+    <!-- ============================================ -->
+
+    <p>Instead of always picking the #1 token, the model <strong>randomly selects</strong> a token from the probability distribution, where tokens with higher probabilities are more likely to be chosen.</p>
+
+    <p>Think of it like a weighted lottery. If "Paris" has a 92% probability, it will be selected most of the time. But occasionally, "Lyon" or "the" might get picked instead. For factual contexts, this almost never matters because the top token is so dominant. For creative contexts, it's what makes AI interesting.</p>
+
+    <p>This randomness is a <em>feature</em>, not a bug. It's what makes AI responses feel natural and creative rather than robotic and repetitive. Without it, every AI chatbot would sound like a broken record, repeating the most statistically common phrases over and over.</p>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>The exact behavior of this sampling is controlled by parameters like <strong>temperature</strong>, <strong>top-p</strong>, and <strong>top-k</strong>. These are the "creativity knobs" that determine how much randomness to allow. We'll explore them in detail in Chapter 7. For now, just know: sampling = controlled randomness = the reason AI output feels alive.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Full Generation Loop</h2>
+    <!-- ============================================ -->
+
+    <p>Now let's put the complete pipeline together. Here's what happens every time you hit Enter:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Tokenize</strong><br>
+        Break prompt into tokens
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Embed</strong><br>
+        Convert to numbers
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Transform</strong><br>
+        Through all layers
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Score</strong><br>
+        Probabilities for each token
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>5. Sample</strong><br>
+        Pick one token
+      </div>
+    </div>
+
+    <p>After step 5, the selected token is appended to the input, and the loop repeats from step 3. The model generates one token, feeds it back in, generates the next, feeds that back in, and so on until it's done.</p>
+
+    <p>Let's trace a concrete example. You type into Claude Code: <code>"Write a hello world function in Python"</code></p>
+
+    <ol>
+      <li><strong>Tokenize:</strong> Your prompt becomes something like <code>[8144, 264, 24748, 1917, 734, 304, 13325]</code></li>
+      <li><strong>Embed:</strong> Each token ID is converted into a rich numerical representation (embedding)</li>
+      <li><strong>Transform:</strong> These embeddings flow through 80+ transformer layers, with attention connecting every token to every other token</li>
+      <li><strong>Score:</strong> The final layer outputs probabilities for all ~100K tokens. <code>"def"</code> scores highest.</li>
+      <li><strong>Sample:</strong> <code>"def"</code> is selected.</li>
+      <li><strong>Repeat:</strong> Now the input is your prompt + <code>"def"</code>. Process again. <code>" hello"</code> is next. Then <code>"_world"</code>. Then <code>"():"</code>. Then <code>"\n"</code>. Then <code>"    print"</code>. Then <code>("("</code>. Then <code>'"Hello'</code>. And so on, token by token, until the function is complete.</li>
+    </ol>
+
+    <p>Notice something: the model didn't plan the function first and then type it out. It discovered the function structure one token at a time. Each token was simply the most likely continuation of everything before it. The fact that the result looks like a coherent, well-structured function is a testament to how good the patterns in the training data are.</p>
+
+    <p>Each token requires a complete forward pass through the entire transformer. For a 200-token response, that's 200 full passes through billions of parameters. For a long code block of 1,000 tokens? That's 1,000 full passes. The compute adds up fast.</p>
+
+    <!-- ============================================ -->
+    <h2>Why Responses Feel "Creative"</h2>
+    <!-- ============================================ -->
+
+    <p>Now you understand why AI doesn't sound like a robot. The randomness in sampling means the model doesn't just regurgitate the most common patterns &mdash; it explores alternatives. Sometimes a slightly less likely token leads to a much more interesting continuation.</p>
+
+    <p>It's like jazz improvisation. A jazz musician knows the most "correct" note for each moment, but deliberately plays unexpected notes that create tension and surprise. The music is more interesting <em>because</em> of the unpredictability.</p>
+
+    <p>AI writing works the same way. The model knows the "most likely" continuation, but by sometimes picking less likely tokens, it produces text that feels fresh and varied. This is especially important for creative tasks &mdash; poetry, brainstorming, storytelling &mdash; where predictability is the enemy.</p>
+
+    <p>For code generation, though, you usually <em>want</em> predictability. You don't want "creative" variable names or "surprising" syntax. This is why coding tools tend to use less randomness than chatbots. The same model, the same mechanism &mdash; but with the randomness dialed way down. We'll see exactly how this works in Chapter 7.</p>
+
+    <!-- ============================================ -->
+    <h2>Why the Same Prompt Gives Different Answers</h2>
+    <!-- ============================================ -->
+
+    <p>Have you noticed that if you send the exact same prompt to ChatGPT twice, you often get different responses? Now you know exactly why: <strong>sampling is random.</strong></p>
+
+    <p>At every token position, the model randomly selects from the probability distribution. Even if the probabilities are the same each time, the random selection might pick a different token. That different choice cascades &mdash; because the next token's probabilities depend on the previous token, a single different choice early on can lead to a completely different response.</p>
+
+    <div class="warning-box">
+      <h4>The Butterfly Effect of Token Sampling</h4>
+      <p>One different token early in the response can change everything that follows. If the model picks "However" instead of "But" as the first word, the entire sentence structure shifts. The next token probabilities change, leading to different word choices, which lead to different ideas, which lead to a completely different response.</p>
+      <p>This is why you can ask the same question five times and get five genuinely different answers. It's not random noise &mdash; it's the natural consequence of sampling from a probability distribution at each step.</p>
+    </div>
+
+    <p>For code generation, this variability is usually lower because code has more constrained patterns (there are fewer "correct" ways to write a function), so the probability distributions tend to be sharper. But it still happens &mdash; which is why Cursor or Claude Code might suggest slightly different variable names or code structures on different runs.</p>
+
+    <p>This also explains a useful trick: if you're not happy with an AI's response, just regenerate it. You might get a much better answer on the second or third try, simply because different random samples lead to a different (and potentially better) response path.</p>
+
+    <!-- ============================================ -->
+    <h2>Why AI "Hallucinates"</h2>
+    <!-- ============================================ -->
+
+    <p>This is the section that ties the biggest loose end of this book.</p>
+
+    <p>You've probably seen AI confidently state something that's completely wrong. Made-up library names. Nonexistent API methods. Fabricated historical events. Citations to papers that don't exist. Why?</p>
+
+    <p>Now you have the tools to understand: <strong>the model is not trying to be correct. It's trying to predict the most likely next token.</strong></p>
+
+    <p>When you ask "What year was the Battle of Thermopylae?", the model isn't looking up the answer in a database. It's generating a response token by token, each chosen because it's statistically likely given the context. Usually, the statistically likely answer happens to be the correct one (because the training data contained accurate information about Thermopylae many times).</p>
+
+    <p>But when you ask about something obscure, or something the model has seen conflicting information about, or something that wasn't in its training data at all &mdash; the model doesn't know it doesn't know. It has no built-in uncertainty detector. It doesn't pause and think "hmm, I'm not sure about this." It just generates the most plausible-sounding continuation. And plausible-sounding is not the same as correct.</p>
+
+    <p>This is especially dangerous with code. When you ask Claude Code for an API method from a less-popular library, it might generate a method name that <em>looks right</em> (follows the naming conventions, fits the context) but doesn't actually exist. The model isn't lying &mdash; it's just predicting what tokens are most likely in that context, and sometimes the most likely tokens form a hallucination.</p>
+
+    <div class="aha-box">
+      <h4>Aha Moment</h4>
+      <p>Hallucination isn't a bug in the system. It's the system working exactly as designed.</p>
+      <p>The model's entire job is to generate plausible next tokens. It's extraordinarily good at this &mdash; so good that most of the time, "plausible" and "correct" overlap. But when they don't, the model has <strong>no mechanism to prefer truth over plausibility</strong>. It will confidently generate a wrong answer that sounds right, because "sounding right" is literally what it's optimized to do.</p>
+      <p>This isn't something that will be "fixed" with a software update. It's a fundamental property of next-token prediction. Models are getting better at saying "I don't know" (through fine-tuning), but the underlying architecture will always generate <em>something</em> &mdash; it can't simply stay silent when it's uncertain.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>Practical Takeaway</h4>
+      <p>Never trust AI output on critical facts without verification. This isn't a temporary limitation &mdash; it's inherent to how generation works. Use AI for drafting, brainstorming, and code patterns, but verify facts, API references, and library names independently. The model is a writing partner, not a fact database.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Speed Question: Why Generation Is Slow</h2>
+    <!-- ============================================ -->
+
+    <p>In Chapter 5, we celebrated that transformers process input tokens in parallel. So why does generation still feel slow? Why do you see text appearing one word at a time?</p>
+
+    <p>Because reading and writing are fundamentally different operations:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Operation</th>
+          <th>How It Works</th>
+          <th>Speed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Processing your prompt</strong></td>
+          <td>All tokens in parallel</td>
+          <td>Fast (even for long prompts)</td>
+        </tr>
+        <tr>
+          <td><strong>Generating the response</strong></td>
+          <td>One token at a time, sequentially</td>
+          <td>Slow (each token needs a full forward pass)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Your 10,000-token prompt gets processed all at once in a single pass. But the 500-token response has to be generated one token at a time, because each token depends on all previous tokens. You can't generate token #5 until you know what tokens #1&ndash;4 are &mdash; it's inherently sequential.</p>
+
+    <p>This is why you sometimes notice a brief pause after hitting Enter (the model is processing your entire prompt in parallel), followed by text that appears gradually (the model is generating tokens one at a time). The pause is the fast part. The gradual appearance is the slow part.</p>
+
+    <p>It's also why output tokens cost more than input tokens in API pricing &mdash; generating each output token requires more computation than simply processing an input token.</p>
+
+    <h3>Streaming: Why Text Appears Word by Word</h3>
+
+    <p>The word-by-word appearance isn't a fancy animation effect. It's the actual generation happening in real time. Each word appears as soon as the model generates it, without waiting for the full response to be complete.</p>
+
+    <p>This is called <strong>streaming</strong>, and it's a practical design choice. Without streaming, you'd stare at a blank screen for 10-30 seconds and then the entire response would appear at once. With streaming, you get something to read while the model is still working on the rest.</p>
+
+    <p>Streaming also lets you interrupt early. If you see the model going in the wrong direction &mdash; generating the wrong approach, using the wrong library, misunderstanding your intent &mdash; you can stop it before it wastes tokens (and your time and money) completing a bad response. In tools like Claude Code, this is especially valuable: you can see the code taking shape and hit stop if it's not what you want.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">~50-100</div>
+        <div class="stat-label">Tokens per second (typical LLM)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">~500</div>
+        <div class="stat-label">Tokens in a typical response</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">~5-10s</div>
+        <div class="stat-label">Time to generate that response</div>
+      </div>
+    </div>
+
+    <p>When you see Claude Code generating a long code block and the text appears smoothly token by token &mdash; you're watching the model run through its entire neural network (all layers, all attention heads, all parameters) once per token, in real time. Every word you see is the result of trillions of mathematical operations.</p>
+
+    <p>Faster models aren't necessarily "smarter" &mdash; they might just be running on faster hardware, using a smaller architecture, or employing optimization tricks like quantization (reducing the precision of those parameter numbers to make computation faster). There's always a trade-off between speed and quality.</p>
+
+    <!-- ============================================ -->
+    <h2>Putting It All Together</h2>
+    <!-- ============================================ -->
+
+    <ul class="checklist">
+      <li class="checked">LLMs generate text one token at a time &mdash; autoregressive generation.</li>
+      <li class="checked">For each position, the model computes probabilities for every possible next token (~100K candidates).</li>
+      <li class="checked">Always picking the #1 token (greedy) produces repetitive, boring output.</li>
+      <li class="checked">Sampling with randomness produces natural, creative, varied text.</li>
+      <li class="checked">The same prompt gives different answers because sampling is random &mdash; one different token cascades into a completely different response.</li>
+      <li class="checked">Hallucination is inherent: the model generates plausible tokens, not necessarily correct ones. Plausible &ne; true.</li>
+      <li class="checked">Reading your prompt is fast (parallel). Generating a response is slow (sequential, one token at a time).</li>
+      <li class="checked">Streaming shows tokens as they're generated &mdash; it's the actual process, not an animation.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <h4>Exercise: See the Randomness Yourself</h4>
+      <p>Open ChatGPT, Claude, or any AI chatbot and try this experiment:</p>
+      <ol>
+        <li>Send the exact same prompt 3 times: <code>"Write me a haiku about programming"</code></li>
+        <li>Compare the three responses. Are they identical? Similar? Completely different?</li>
+        <li>Now try a factual prompt 3 times: <code>"What is the capital of Japan?"</code></li>
+        <li>Compare again. Are these more consistent? Why?</li>
+      </ol>
+      <p><strong>Explanation:</strong> Creative prompts have flat probability distributions (many plausible next tokens), so sampling produces varied results. Factual prompts have sharp distributions (one token dominates), so responses are more consistent &mdash; but still not always identical.</p>
+      <p><strong>Bonus:</strong> Try asking the model to name a specific, obscure API method from a less-common framework. Does it give a real method or a hallucinated one? Check the documentation to find out. This is hallucination in action.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+    <!-- ============================================ -->
+
+    <p>You now understand the complete generation pipeline &mdash; from prompt to token to probability to output. But we glossed over an important detail: the "creativity knobs."</p>
+
+    <p>How much randomness is the right amount? How do you get predictable code generation vs. creative brainstorming from the same model? What do "temperature" and "top-p" actually do?</p>
+
+    <p>In <a href="07-temperature-and-friends.html">Chapter 7: Temperature, Top-p &amp; Friends</a>, you'll learn exactly how these parameters control the generation process. It's the most practical chapter yet &mdash; you'll know exactly which knobs to turn and when.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="05-transformer.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">The Transformer</span>
+    </a>
+    <a href="07-temperature-and-friends.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Temperature, Top-p &amp; Friends</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

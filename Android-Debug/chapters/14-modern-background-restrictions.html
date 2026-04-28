@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 14: Debugging Background-Work Restrictions on Modern Android (15 / 16) | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="13-16kb-page-size.html">&larr; Prev</a>
+      <a href="maps/14-modern-background-restrictions-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 14</span>
+    <h1>Debugging Background-Work Restrictions on Modern Android (15 / 16)</h1>
+    <p class="subtitle">Your background sync just stopped. Nothing crashed. The OS just decided.</p>
+  </header>
+
+  <main>
+
+    <h2>The Bug You Can&rsquo;t Reproduce on Your Dev Machine</h2>
+
+    <p>You ship a release. The crash dashboard is clean. But three weeks in, support tickets pile up: <em>&ldquo;My nightly sync stopped working.&rdquo; &ldquo;Notifications stopped appearing after I rebooted.&rdquo; &ldquo;The app just doesn&rsquo;t download in the background anymore.&rdquo;</em></p>
+
+    <p>You can&rsquo;t reproduce any of it. Your test device works fine. Your QA emulator works fine. Then you notice: every reporter is on Android 15 or 16. And they all updated to your latest release that targets Android 15+.</p>
+
+    <p>Welcome to the world of <strong>silent background-work restrictions</strong> &mdash; the bug class where the OS quietly refuses to run your code, sometimes throws an exception you have to look hard to find, and other times just&hellip; doesn&rsquo;t fire your job. No crash. No log line on a happy-path device. Just a feature that&rsquo;s broken for a slice of your users.</p>
+
+    <p>Chapter 13 was about a crash you can see in logcat the moment it happens. This chapter is about restrictions that are usually invisible until you know what to grep for. The same diagnostic loop applies &mdash; signature &rarr; AI diagnosis &rarr; root cause &rarr; reusable skill &mdash; but you have to know where the signatures live.</p>
+
+    <h2>The Restriction Landscape: Android 12 &rarr; 16</h2>
+
+    <p>To debug modern background-work bugs you have to hold the timeline in your head. Each version added a new restriction, and the restrictions stack &mdash; if you target Android 16, you inherit every restriction from 12 onward.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>What changed</th>
+          <th>The error you&rsquo;ll see</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Android 12</strong></td>
+          <td>Apps in background can no longer start foreground services (with limited exceptions)</td>
+          <td><code>ForegroundServiceStartNotAllowedException</code></td>
+        </tr>
+        <tr>
+          <td><strong>Android 13</strong></td>
+          <td><code>POST_NOTIFICATIONS</code> runtime permission required; user can revoke notifications even from FGS</td>
+          <td>Notification simply doesn&rsquo;t appear; no exception</td>
+        </tr>
+        <tr>
+          <td><strong>Android 14</strong></td>
+          <td>Foreground services <strong>must</strong> declare a <code>foregroundServiceType</code> in the manifest; new <code>shortService</code> type added</td>
+          <td><code>MissingForegroundServiceTypeException</code></td>
+        </tr>
+        <tr>
+          <td><strong>Android 15</strong></td>
+          <td>BOOT_COMPLETED restrictions on most FGS types; 6-hour cumulative timeout on <code>dataSync</code> &amp; <code>mediaProcessing</code>; new <code>mediaProcessing</code> type</td>
+          <td><code>ForegroundServiceStartNotAllowedException</code> from BOOT_COMPLETED; <code>RemoteServiceException</code> on timeout</td>
+        </tr>
+        <tr>
+          <td><strong>Android 16</strong></td>
+          <td>JobScheduler quotas now enforced even when concurrent with a foreground service or in the active standby bucket</td>
+          <td>Jobs silently delayed / skipped; <code>setImportantWhileForeground()</code> ignored</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>If &ldquo;my background sync stopped&rdquo; reports start trickling in after a release, the first question is: <em>did this release bump <code>targetSdk</code></em>? If yes, the next question is: <em>which version&rsquo;s restrictions just turned on for me</em>? Almost every modern background bug starts with that two-question funnel.</p>
+
+    <h2>Restriction #1: BOOT_COMPLETED Cannot Start Most FGS Types</h2>
+
+    <p>This is the single most common silent regression in 2026. The pattern was solid for years: an app registers a <code>BOOT_COMPLETED</code> receiver, and after every reboot it kicks off a foreground service to resume sync, replay queued notifications, or restore state. On Android 15+, that pattern explodes.</p>
+
+    <div class="debug-trace">
+      <h4>The BOOT_COMPLETED Crash Signature</h4>
+<pre><code>2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime: FATAL EXCEPTION: main
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime: Process: com.example.shop, PID: 4521
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime: android.app.ForegroundServiceStartNotAllowedException:
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime:     Service.startForeground() not allowed due to mAllowStartForeground false:
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime:     service com.example.shop/.SyncService
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime:     BG-FGS-start not allowed: BOOT_COMPLETED restricted for type dataSync
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime:     at android.app.Service.startForeground(Service.java:803)
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime:     at com.example.shop.sync.SyncService.onCreate(SyncService.kt:42)
+2026-04-22 09:14:08.221  4521  4521 E AndroidRuntime:     at com.example.shop.boot.BootReceiver.onReceive(BootReceiver.kt:18)</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) The exception name</strong> &mdash; <code>ForegroundServiceStartNotAllowedException</code> &mdash; pinpoints the class instantly. <strong>(2) The message</strong> includes the magic phrase &ldquo;BG-FGS-start not allowed: BOOT_COMPLETED restricted for type dataSync&rdquo; &mdash; this is the OS telling you exactly which restriction fired. <strong>(3) The stack trace</strong> shows <code>BootReceiver.onReceive</code> &rarr; <code>SyncService.onCreate</code> &rarr; the failed <code>startForeground</code>. <strong>(4) Restricted types</strong> from BOOT_COMPLETED on Android 15+: <code>dataSync</code>, <code>camera</code>, <code>mediaPlayback</code>, <code>mediaProjection</code>, <code>phoneCall</code>, and <code>microphone</code> (which was already restricted from Android 14). <strong>(5) Allowed types</strong> from BOOT_COMPLETED: <code>location</code> (GPS-related), <code>connectedDevice</code>, <code>health</code>, <code>remoteMessaging</code>, <code>specialUse</code>, and <code>systemExempted</code>. (<a href="https://developer.android.com/about/versions/15/behavior-changes-15">developer.android.com/about/versions/15/behavior-changes-15</a>, 2026-04-26)</p>
+    </div>
+
+    <h3>How to Test It Without Bumping Your targetSdk</h3>
+
+    <p>You don&rsquo;t want to wait until users hit it. Force the restriction on for your build with the <em>app-compat</em> framework:</p>
+
+    <pre><code># Force the BOOT_COMPLETED restriction on for your package on any Android 15+ device:
+adb shell am compat enable FGS_BOOT_COMPLETED_RESTRICTIONS com.example.shop
+
+# Reboot the device:
+adb reboot
+
+# Watch for the crash:
+adb logcat -s AndroidRuntime ActivityManager *:E
+
+# When you&rsquo;re done testing:
+adb shell am compat disable FGS_BOOT_COMPLETED_RESTRICTIONS com.example.shop</code></pre>
+
+    <div class="root-cause">
+      <h4>Root Cause Pattern: BootReceiver That Starts a Sync FGS</h4>
+      <p>Almost every legacy Android codebase has one: a <code>BroadcastReceiver</code> that listens for <code>android.intent.action.BOOT_COMPLETED</code> and calls <code>ContextCompat.startForegroundService(...)</code> to launch a sync, queue replay, or session restoration job. On Android 15+ devices the second your app rebuilds with <code>targetSdk = 35</code> or higher, that pattern crashes the moment the user reboots their phone. The fix is rarely &ldquo;keep the FGS&rdquo; &mdash; the right move is to migrate the post-boot work to WorkManager.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Replace BootReceiver-Triggered FGS with WorkManager</h4>
+<pre><code>// BEFORE: crashes on Android 15+ at first reboot
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            ContextCompat.startForegroundService(
+                context, Intent(context, SyncService::class.java)
+            )
+        }
+    }
+}
+
+// AFTER: enqueue a one-time WorkManager job after boot
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            val request = OneTimeWorkRequestBuilder&lt;SyncWorker&gt;()
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                )
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "post-boot-sync",
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        }
+    }
+}
+
+class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // ... your sync logic ...
+        Result.success()
+    }
+}</code></pre>
+      <p><strong>Why this is the right move:</strong> WorkManager handles network constraints, retries, and battery state for free; it doesn&rsquo;t need to be a foreground service for short post-boot work; and it side-steps every BOOT_COMPLETED restriction the OS adds going forward. (<a href="https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start">developer.android.com/develop/background-work/services/fgs/restrictions-bg-start</a>, 2026-04-26)</p>
+    </div>
+
+    <h2>Restriction #2: The 6-Hour dataSync / mediaProcessing Timeout</h2>
+
+    <p>Android 15 added a cumulative ceiling: any <code>dataSync</code> or <code>mediaProcessing</code> foreground service can run for at most <strong>6 hours in a rolling 24-hour window</strong>. The two pools are tracked separately, but each is shared across all of your app&rsquo;s services of that type. Burn six hours of <code>dataSync</code> across two services, and the next <code>startForeground</code> with that type throws <code>ForegroundServiceStartNotAllowedException</code> with the message &ldquo;Time limit already exhausted for foreground service type dataSync.&rdquo; (<a href="https://developer.android.com/develop/background-work/services/fgs/timeout">developer.android.com/develop/background-work/services/fgs/timeout</a>, 2026-04-26)</p>
+
+    <p>The timer resets when the user brings your app to the foreground. Until then, you have to live within the budget &mdash; or, more importantly, <em>shut down gracefully</em> when the OS calls <code>onTimeout()</code>.</p>
+
+    <h3>The onTimeout Callback You Must Implement</h3>
+
+    <pre><code>class BulkSyncService : Service() {
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // The OS just told us our 6-hour budget is up.
+        // We have only a few seconds to call stopSelf() before the
+        // system kills us with a RemoteServiceException.
+        Log.w("BulkSync", "FGS timeout fired (type=$fgsType). Persisting checkpoint.")
+        persistCheckpoint()
+        stopSelf(startId)
+    }
+
+    private fun persistCheckpoint() {
+        // Save where we got to, so the next sync can resume.
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      If you don&rsquo;t implement <code>onTimeout()</code>, or if you take longer than a few seconds to call <code>stopSelf()</code>, the system kills you with: <code>android.app.RemoteServiceException: "A foreground service of type dataSync did not stop within its timeout: ..."</code>. This crashes your process. Implementing the callback is not optional in Android 15+.
+    </div>
+
+    <h3>Forcing the Timeout in Test</h3>
+
+    <pre><code># Enable the time-limit behavior even if your app doesn&rsquo;t target Android 15:
+adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS com.example.shop
+
+# Shorten the dataSync window to 2 minutes for local testing:
+adb shell device_config put activity_manager data_sync_fgs_timeout_duration 120000
+
+# Same for mediaProcessing:
+adb shell device_config put activity_manager media_processing_fgs_timeout_duration 120000
+
+# Reset back to the 6-hour default when you&rsquo;re done:
+adb shell device_config delete activity_manager data_sync_fgs_timeout_duration</code></pre>
+
+    <p>Without this trick you&rsquo;d have to wait six hours of real wall-clock time to see your <code>onTimeout</code> handler fire. With it, you can write a deterministic instrumentation test that flushes a long-running sync and verifies you handle the callback.</p>
+
+    <h2>Restriction #3: Android 16 Job Quotas Concurrent with FGS</h2>
+
+    <p>Pre-Android-16, JobScheduler quotas were paused while a foreground service was running or while the app was in the active standby bucket. That gave you an unspoken loophole: keep an FGS alive and you could run unlimited jobs concurrently with it. <strong>Android 16 closes that loophole.</strong> Jobs now adhere to their runtime quota even when concurrent with an FGS, and even in the active bucket. (<a href="https://developer.android.com/about/versions/16/behavior-changes-all">developer.android.com/about/versions/16/behavior-changes-all</a>, 2026-04-26)</p>
+
+    <p>The symptom: a job that always ran to completion before now stops mid-execution and gets re-scheduled on Android 16. Worse, <code>JobInfo.Builder#setImportantWhileForeground(boolean)</code> &mdash; which used to extend a job&rsquo;s runtime when the app had an FGS &mdash; is silently <strong>ignored</strong> in Android 16. Calling it doesn&rsquo;t throw; it just doesn&rsquo;t do anything anymore.</p>
+
+    <h3>The New Debugging APIs</h3>
+
+    <p>Android 16 also gave us two new JobScheduler APIs that finally tell you <em>why</em> a job didn&rsquo;t run:</p>
+
+    <pre><code>val scheduler = getSystemService(JobScheduler::class.java)
+
+// Why is my job pending right now?
+val reasons = scheduler.getPendingJobReasons(jobId)
+// Returns an int array of PENDING_JOB_REASON_* constants.
+
+// What's the recent history of pending reasons?
+val history = scheduler.getPendingJobReasonsHistory(jobId)
+// Returns the most recent constraint changes &mdash; great for "why was it
+// pending five minutes ago?" investigations.</code></pre>
+
+    <p>Wire these into your in-app debug menu and you can stop guessing whether it&rsquo;s the network constraint, the battery state, or the quota that&rsquo;s holding the job back.</p>
+
+    <h2>The &ldquo;My Background Sync Just Stopped&rdquo; Diagnostic Workflow</h2>
+
+    <p>This is the workflow you reach for when a user reports the silent failure mode: <em>nothing crashed, but my sync isn&rsquo;t running</em>.</p>
+
+    <div class="workflow-steps">
+      <div class="step">📱 Reproduce on Android 15/16</div>
+      <span class="step-arrow">→</span>
+      <div class="step">📋 dumpsys jobscheduler</div>
+      <span class="step-arrow">→</span>
+      <div class="step">🔋 Battery Historian</div>
+      <span class="step-arrow">→</span>
+      <div class="step">🔍 Filter by your package</div>
+      <span class="step-arrow">→</span>
+      <div class="step">🤖 /diagnose-background-restriction</div>
+    </div>
+
+    <h3>Step 1: dumpsys jobscheduler</h3>
+
+    <pre><code># Capture the full JobScheduler state for your app:
+adb shell dumpsys jobscheduler &gt; jobscheduler.txt
+
+# Or filter immediately:
+adb shell dumpsys jobscheduler | grep -A 30 com.example.shop</code></pre>
+
+    <p>Look for sections labeled <code>Pending jobs:</code>, <code>Active jobs:</code>, and most importantly the <em>last execution result</em> per job &mdash; reasons like <code>STOP_REASON_QUOTA</code>, <code>STOP_REASON_TIMEOUT</code>, <code>STOP_REASON_DEVICE_STATE</code>, or <code>STOP_REASON_USER_UI_STOPPED</code> tell you exactly which policy fired.</p>
+
+    <h3>Step 2: Battery Historian</h3>
+
+    <p>You&rsquo;ve already used Battery Historian in <a href="08-battery-power.html">Chapter 8</a> for power debugging. Same tool, different filter: capture a bug report after a 24-hour window where the user reports the issue, and look at the <em>JobScheduler</em> and <em>Foreground Services</em> swimlanes. You&rsquo;ll see exactly when each FGS started, how long it ran, when it was killed, and why.</p>
+
+    <h3>Step 3: Standby Bucket Sanity Check</h3>
+
+    <pre><code># What bucket is the app actually in?
+adb shell am get-standby-bucket com.example.shop
+# active | working_set | frequent | rare | restricted
+
+# Force it back to active for testing:
+adb shell am set-standby-bucket com.example.shop active</code></pre>
+
+    <div class="tip-box">
+      A surprising fraction of &ldquo;background sync stopped&rdquo; reports turn out to be the device parking the app in <code>rare</code> or <code>restricted</code>. The app isn&rsquo;t broken &mdash; the OS just decided you&rsquo;re not popular. The fix is usually about user habit (open the app daily) rather than code, but verifying the bucket as the very first diagnostic step saves a lot of pointless code archaeology.
+    </div>
+
+    <h2>The Predictive Back-Gesture Side Quest</h2>
+
+    <p>Worth a quick mention because it&rsquo;s in the same &ldquo;modern OS quirks that bite background flows&rdquo; bucket. Android 14 introduced predictive back gestures behind a manifest opt-in (<code>android:enableOnBackInvokedCallback="true"</code>); Android 15 fixed the long-standing Pixel-only back-gesture quirk where opting in caused some OEMs to swallow the gesture entirely.</p>
+
+    <p>Why it matters here: many BroadcastReceivers and Service-driven UI flows assumed the legacy <code>onBackPressed()</code> path. If your foreground-service notification opens an Activity that uses the legacy back path on a Pixel that then loses the gesture, users report it as &ldquo;the sync notification doesn&rsquo;t close.&rdquo; The fix is to migrate to <code>OnBackInvokedDispatcher</code> &mdash; treat that migration as part of your modern-OS readiness audit, not a separate project.</p>
+
+    <h2>Building the <code>/diagnose-background-restriction</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/diagnose-background-restriction.md</code>:</p>
+
+    <pre><code># /diagnose-background-restriction — Background Restriction Triage
+
+Take a logcat excerpt + dumpsys output and identify which Android
+background-work restriction fired.
+
+## Input
+- A logcat excerpt (must include any exception/error lines).
+- The output of `adb shell dumpsys jobscheduler &lt;package&gt;`.
+- Optional: the user&rsquo;s `targetSdkVersion` from build.gradle.
+- Optional: the device&rsquo;s Android version.
+
+## Detection Heuristics
+Match against these signatures, in priority order:
+
+1. **BOOT_COMPLETED FGS restriction** — logcat contains
+   `ForegroundServiceStartNotAllowedException` AND
+   `BG-FGS-start not allowed: BOOT_COMPLETED restricted for type &lt;type&gt;`.
+2. **6-hour FGS timeout** — logcat contains
+   `RemoteServiceException` AND
+   `did not stop within its timeout` OR
+   `Time limit already exhausted for foreground service type`.
+3. **Missing FGS type (Android 14+)** — logcat contains
+   `MissingForegroundServiceTypeException`.
+4. **Generic background-FGS-start (Android 12+)** — logcat contains
+   `ForegroundServiceStartNotAllowedException` without a BOOT_COMPLETED
+   marker.
+5. **Job-quota silent skip (Android 16+)** — no exception in logcat,
+   but dumpsys shows `STOP_REASON_QUOTA` or
+   `STOP_REASON_DEVICE_STATE` for the user&rsquo;s job.
+6. **Standby-bucket throttling** — dumpsys shows the app in
+   `RARE` or `RESTRICTED` standby bucket.
+
+## Analysis Steps
+1. Identify which restriction fired (use the highest-priority match).
+2. Cite the Android version that introduced it.
+3. Name the offending component (Service, Receiver, Job ID).
+4. Suggest the fix in priority order:
+   a) For BOOT_COMPLETED FGS: migrate to WorkManager.
+   b) For 6-hour timeout: implement onTimeout(); checkpoint state.
+   c) For missing FGS type: add foregroundServiceType to manifest.
+   d) For Android 16 job quotas: drop setImportantWhileForeground;
+      use getPendingJobReasonsHistory to see why the job is pending.
+   e) For standby bucket: surface to user; review usage patterns.
+5. Provide the exact `adb` command to reproduce locally.
+
+## Output Format
+- **Restriction class:** &lt;name&gt; (introduced in Android &lt;version&gt;)
+- **Offending component:** &lt;Service/Receiver/Job&gt;
+- **What the OS told you:** &lt;quoted log line or dumpsys field&gt;
+- **Recommended fix:** &lt;1–3 sentence remediation&gt;
+- **Reproduce locally:** &lt;adb command&gt;
+- **Verify fix:** &lt;dumpsys field or logcat absence to check&gt;</code></pre>
+
+    <p>This is your one-stop skill for the entire modern-restriction taxonomy. When a teammate pastes a confusing dumpsys, you don&rsquo;t play guess-the-restriction &mdash; the skill tells you which one fired, why, and the migration path.</p>
+
+    <h2>The Migration Playbook: Drop FGS or Keep It?</h2>
+
+    <p>Half the work in this space is deciding whether a piece of background work even <em>needs</em> to be a foreground service in 2026. The decision matrix:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Use case</th>
+          <th>Right tool</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Long-running music playback</td>
+          <td><code>mediaPlayback</code> FGS</td>
+          <td>User-initiated, user expects an ongoing notification, no time limit applies.</td>
+        </tr>
+        <tr>
+          <td>Live navigation with GPS</td>
+          <td><code>location</code> FGS</td>
+          <td>User actively driving; OS treats GPS-driven location as exempt.</td>
+        </tr>
+        <tr>
+          <td>Active phone call (VoIP)</td>
+          <td><code>phoneCall</code> FGS</td>
+          <td>Required for the OS&rsquo;s call-state integration; not subject to the 6-hour limit.</td>
+        </tr>
+        <tr>
+          <td>Resuming sync after reboot</td>
+          <td><strong>WorkManager</strong></td>
+          <td>BOOT_COMPLETED can&rsquo;t legally start most FGS types on Android 15+; WorkManager is the correct API.</td>
+        </tr>
+        <tr>
+          <td>Periodic backup / cloud upload</td>
+          <td><strong>WorkManager</strong> with constraints</td>
+          <td>You&rsquo;ll bust the 6-hour <code>dataSync</code> ceiling on a slow connection; WorkManager handles retry &amp; constraints natively.</td>
+        </tr>
+        <tr>
+          <td>One-shot &ldquo;process this video&rdquo; up to 6 hours</td>
+          <td><code>mediaProcessing</code> FGS, with onTimeout()</td>
+          <td>The right type for video transcoding; just budget for the timeout.</td>
+        </tr>
+        <tr>
+          <td>Quick on-demand task &lt; 3 minutes triggered by user</td>
+          <td><code>shortService</code> FGS</td>
+          <td>Newer FGS type with stricter limits but lighter manifest requirements.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Before / After: A Real Migration Score Card</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Legacy BootReceiver + Long-Running Sync FGS</h4>
+        <p><strong>Crashes after first reboot on Android 15:</strong> ~3% of daily active users (one per session)</p>
+        <p><strong>Silent timeouts on overnight sync:</strong> ~8% of users hit the 6-hour ceiling</p>
+        <p><strong>Top complaint:</strong> &ldquo;App stopped syncing after I rebooted my phone&rdquo;</p>
+        <p><strong>Diagnostic burden:</strong> 1–2 days per support ticket; no signature in Crashlytics for the silent case</p>
+        <p><strong>Code: BOOT_COMPLETED &rarr; <code>startForegroundService(SyncService.class)</code></strong></p>
+      </div>
+      <div class="metric-after">
+        <h4>After: WorkManager + Checkpointed mediaProcessing FGS</h4>
+        <p><strong>Crashes after first reboot on Android 15:</strong> 0% (BOOT_COMPLETED no longer starts an FGS)</p>
+        <p><strong>Silent timeouts:</strong> 0% (sync resumes from checkpoint via OneTimeWorkRequest)</p>
+        <p><strong>Top complaint:</strong> resolved</p>
+        <p><strong>Diagnostic burden:</strong> minutes &mdash; <code>/diagnose-background-restriction</code> identifies any remaining issues from a single dumpsys</p>
+        <p><strong>Code: BOOT_COMPLETED &rarr; <code>WorkManager.enqueueUniqueWork(...)</code></strong></p>
+      </div>
+    </div>
+
+    <h2>How This Connects to the Rest of the Course</h2>
+
+    <p>Modern OS restrictions are a debugging surface, not just an API change. The signatures here plug into skills you already have:</p>
+
+    <ul>
+      <li>Use <code>/analyze-crash</code> (<a href="02-crash-logs-logcat.html">Ch 2</a>) on the BOOT_COMPLETED FGS exception &mdash; the &ldquo;BG-FGS-start not allowed&rdquo; message is one of the most pattern-matchable Android errors that exists.</li>
+      <li>Use <code>/analyze-anr</code> (<a href="03-anr-diagnosis.html">Ch 3</a>) when an FGS that didn&rsquo;t stop in time turns into a watchdog kill.</li>
+      <li>Use <code>/analyze-battery</code> (<a href="08-battery-power.html">Ch 8</a>) on the same Battery Historian capture you took to debug the silent sync &mdash; the wake-lock metric introduced in Ch 8 and the FGS timeouts here are deeply linked.</li>
+      <li>Use <code>/triage-crash</code> (<a href="11-production-monitoring.html">Ch 11</a>) on Crashlytics clusters of <code>ForegroundServiceStartNotAllowedException</code> &mdash; they&rsquo;re almost always the BOOT_COMPLETED pattern and are usually fixable in a single PR.</li>
+      <li>Add <code>/diagnose-background-restriction</code> (this chapter) to your team&rsquo;s <code>.claude/commands/</code> so the on-call rotation can triage a confusing dumpsys without paging the senior Android dev.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <h4>Exercise: Simulate, Diagnose, Fix</h4>
+      <ol>
+        <li><strong>Wire up a deliberately-broken pattern.</strong> In a side project, register a <code>BOOT_COMPLETED</code> receiver that calls <code>ContextCompat.startForegroundService</code> on a <code>dataSync</code>-typed Service. Set <code>targetSdk = 35</code>.</li>
+        <li><strong>Force the restriction</strong> on a real Android 15+ device (or 16 emulator) without bumping the user&rsquo;s manifest:
+<pre><code>adb shell am compat enable FGS_BOOT_COMPLETED_RESTRICTIONS &lt;your-package&gt;
+adb reboot</code></pre>
+        </li>
+        <li><strong>Capture the crash:</strong> <code>adb logcat -d -t 500 *:E &gt; restriction.log</code>.</li>
+        <li><strong>Capture the system state:</strong> <code>adb shell dumpsys jobscheduler &gt; jobscheduler.txt</code>.</li>
+        <li><strong>Run your <code>/diagnose-background-restriction</code> skill</strong> on the two captures. Verify it correctly identifies the BOOT_COMPLETED restriction and recommends a WorkManager migration.</li>
+        <li><strong>Apply the fix from this chapter:</strong> replace the FGS launch with a <code>OneTimeWorkRequest</code> enqueued through WorkManager. Reboot. Confirm the sync still happens via <code>WorkManager.getInstance(context).getWorkInfosByTagLiveData(...)</code> or the in-app debug menu.</li>
+        <li><strong>Bonus:</strong> repeat the loop for the 6-hour timeout. Use:
+<pre><code>adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS &lt;your-package&gt;
+adb shell device_config put activity_manager data_sync_fgs_timeout_duration 60000</code></pre>
+        Run a long-running sync, watch <code>onTimeout()</code> fire after 60 s, verify your checkpoint persists, and confirm a follow-on <code>OneTimeWorkRequest</code> resumes from where you stopped.</li>
+      </ol>
+      <p>By the end of this exercise you have hands-on familiarity with the two restriction patterns that produce ~80% of the modern-Android background bugs, and you&rsquo;ve verified your <code>/diagnose-background-restriction</code> skill against real captured signals.</p>
+    </div>
+
+    <h2>Sources Used in This Chapter</h2>
+
+    <ul>
+      <li><a href="https://developer.android.com/about/versions/15/behavior-changes-15">developer.android.com/about/versions/15/behavior-changes-15</a> &mdash; Android 15 behavior changes (verified 2026-04-26)</li>
+      <li><a href="https://developer.android.com/develop/background-work/services/fgs/timeout">developer.android.com/develop/background-work/services/fgs/timeout</a> &mdash; FGS timeout reference (verified 2026-04-26)</li>
+      <li><a href="https://developer.android.com/about/versions/16/behavior-changes-all">developer.android.com/about/versions/16/behavior-changes-all</a> &mdash; Android 16 behavior changes (verified 2026-04-26)</li>
+      <li><a href="https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start">developer.android.com/develop/background-work/services/fgs/restrictions-bg-start</a> &mdash; Restrictions on starting an FGS from the background (verified 2026-04-26)</li>
+      <li><a href="https://developer.android.com/develop/background-work/services/fgs/changes">developer.android.com/develop/background-work/services/fgs/changes</a> &mdash; FGS API change history (verified 2026-04-26)</li>
+    </ul>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>This is the last chapter in the course as currently scoped. You now have <strong>16 reusable Claude Code skills</strong> covering every debugging surface from crashes through ANRs, leaks, recomposition, networking, builds, battery, profiling, flaky tests, production triage, performance budgets, 16 KB native libs, and modern background-work restrictions. The same loop &mdash; <em>signature &rarr; AI diagnosis &rarr; root cause &rarr; reusable skill &rarr; verification</em> &mdash; works for whatever Android decides to break next. Use it.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="13-16kb-page-size.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Debugging 16 KB Page Size Compatibility for Native Libraries</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

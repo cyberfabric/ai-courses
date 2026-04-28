@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Building Your Own | AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-harness-engineering-in-practice.html">Prev</a>
+      <a href="11-context-and-planning.html">Next</a>
+      <a href="maps/10-building-your-own-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Building Your Own</h1>
+    <p class="subtitle">You don't need to build from scratch &mdash; you're already customizing a harness</p>
+  </header>
+
+  <main>
+
+    <!-- S1: You're Already Building -->
+    <section>
+      <h2>You're Already a Harness Engineer</h2>
+
+      <p>Here's the thing most people miss: you don't need to build a harness from scratch. Every time you write a CLAUDE.md file, create a Cursor rule, configure a custom command, or add an MCP server &mdash; you're engineering a harness. You're deciding what the model knows, what tools it can use, and how it should behave.</p>
+
+      <p>Think of it like customizing your development environment. You didn't build VS Code from source. But you've spent hours on settings, extensions, keybindings, and snippets. That configuration <em>is</em> your IDE &mdash; the raw editor is just the starting point. The same is true for AI coding tools.</p>
+
+      <p>This chapter is your practical guide to making the harness work for <em>your</em> projects, <em>your</em> team, and <em>your</em> workflows. We'll cover five layers of customization, from simplest to most powerful.</p>
+
+      <div class="highlight-box">
+        <h3>The Five Layers of Harness Customization</h3>
+        <p><strong>1. Project instructions</strong> &mdash; CLAUDE.md, AGENTS.md, Cursor rules</p>
+        <p><strong>2. Custom commands</strong> &mdash; reusable workflows your team can share</p>
+        <p><strong>3. Hooks</strong> &mdash; automated verification and enforcement</p>
+        <p><strong>4. MCP servers</strong> &mdash; custom tools for external systems</p>
+        <p><strong>5. Permission tuning</strong> &mdash; balancing autonomy and safety</p>
+        <p>Each layer builds on the previous one. Start with project instructions and add complexity only when you need it.</p>
+      </div>
+    </section>
+
+    <!-- S2: CLAUDE.md Deep Dive -->
+    <section>
+      <h2>CLAUDE.md: Your Most Important File</h2>
+
+      <p>If you do nothing else from this entire course, write a good CLAUDE.md. It's the single highest-impact harness customization you can make. Every conversation with Claude Code starts by reading this file &mdash; it shapes every decision the model makes in your project.</p>
+
+      <h3>The Hierarchy</h3>
+
+      <p>Claude Code loads CLAUDE.md files in layers, from broadest to most specific:</p>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <strong>~/.claude/CLAUDE.md</strong><br>Global &mdash; your personal defaults across all projects
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <strong>./CLAUDE.md</strong><br>Project root &mdash; shared with team via git
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <strong>./src/api/CLAUDE.md</strong><br>Directory-level &mdash; loaded when Claude works in that area
+        </div>
+      </div>
+
+      <p>Each layer adds context. A directory-level file doesn't replace the project file &mdash; it supplements it. This is <strong>progressive disclosure</strong>: broad guidance at the top, specific guidance where it's needed.</p>
+
+      <h3>What to Include</h3>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">A well-structured project CLAUDE.md</div>
+<pre><code># My Project
+
+## Build & Test
+- Build: `npm run build`
+- Test: `npm run test` (vitest)
+- Lint: `npm run lint` (eslint + prettier)
+- Single test: `npm run test -- path/to/file.test.ts`
+
+## Code Conventions
+- Use TypeScript strict mode everywhere
+- Prefer named exports over default exports
+- Error handling: use Result types from `@/lib/result`, not try-catch
+- State management: Zustand, never Redux
+
+## Testing Rules
+- IMPORTANT: Use msw for API mocking, never jest.mock()
+- Test user behavior, not implementation
+- Every new component needs a test file
+
+## Architecture
+- /src/api/ — Express routes, one file per resource
+- /src/lib/ — Shared utilities, no side effects
+- /src/components/ — React components, colocated tests</code></pre>
+      </div>
+
+      <h3>What to Leave Out</h3>
+
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bloated CLAUDE.md &mdash; information Claude can figure out itself</div>
+<pre><code># Don't include these:
+- Write clean, readable code           ← Claude already does this
+- Use TypeScript                        ← Claude can see your tsconfig.json
+- Files in /src contain source code     ← Obvious from the directory name
+- Our API returns JSON                  ← Claude will see this in the code
+- Follow SOLID principles               ← Generic advice that adds noise
+- [500 lines of API documentation]      ← Link to docs instead</code></pre>
+        <p>For every line, ask: "Would removing this cause Claude to make a mistake?" If not, cut it. Bloated files cause the model to ignore actual instructions.</p>
+      </div>
+
+      <div class="tip-box">
+        <h3>The @import Trick</h3>
+        <p>CLAUDE.md supports importing other files with the <code>@path/to/file</code> syntax. Instead of duplicating your git workflow in CLAUDE.md, create a <code>docs/git-workflow.md</code> and import it: <code>@docs/git-workflow.md</code>. This keeps CLAUDE.md lean while making detailed guidance available.</p>
+      </div>
+
+      <h3>AGENTS.md: The Cross-Tool Alternative</h3>
+
+      <p>If your team uses multiple AI tools, AGENTS.md is worth knowing. Now stewarded by the Linux Foundation's Agentic AI Foundation, it's an open format supported by Codex, Cursor, Google Jules, Amp, and Factory.</p>
+
+      <p>The format is similar to CLAUDE.md but uses a hierarchical discovery chain: files are concatenated from the git root down to the current directory. Codex adds <strong>Skills</strong> &mdash; a progressive disclosure pattern where the agent sees only skill names and descriptions until it decides to use one, then loads the full instructions.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">AGENTS.md with skill reference</div>
+<pre><code># Project Agent Instructions
+
+## Overview
+E-commerce API built with Express + PostgreSQL.
+
+## Standards
+- All endpoints must validate input with Zod
+- Database queries use the query builder in /src/db/
+
+## Skills
+See `.agents/skills/` for specialized workflows:
+- `add-endpoint` — scaffold a new API endpoint
+- `write-migration` — create a database migration</code></pre>
+      </div>
+    </section>
+
+    <!-- S3: Custom Commands -->
+    <section>
+      <h2>Custom Commands: Reusable Workflows</h2>
+
+      <p>CLAUDE.md tells the model what to know. Custom commands tell it what to <em>do</em>. They're markdown files that become slash commands &mdash; reusable workflows your entire team can share via git.</p>
+
+      <h3>How They Work</h3>
+
+      <p>Drop a markdown file in <code>.claude/commands/</code> and it becomes a slash command. The filename becomes the command name.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">.claude/commands/review.md &mdash; becomes /project:review</div>
+<pre><code>Review the current git diff for:
+1. Security issues (injection, XSS, secrets in code)
+2. Error handling gaps
+3. Missing test coverage
+4. Performance concerns (N+1 queries, unbounded loops)
+
+For each issue found:
+- Cite the file and line number
+- Explain the risk
+- Suggest a specific fix
+
+If no issues found, say so briefly. Don't invent problems.</code></pre>
+      </div>
+
+      <p>Now anyone on the team types <code>/project:review</code> and gets a consistent, thorough code review. No remembering what to check. No variation between reviewers.</p>
+
+      <h3>Dynamic Arguments</h3>
+
+      <p>Use <code>$ARGUMENTS</code> as a placeholder for whatever the user types after the command:</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">.claude/commands/explain.md &mdash; /project:explain auth middleware</div>
+<pre><code>Explain $ARGUMENTS in this codebase.
+
+1. Find the relevant source files
+2. Trace the execution flow from entry point
+3. Explain what it does in plain language
+4. Note any non-obvious behavior or gotchas
+5. List the key functions and where they're defined</code></pre>
+      </div>
+
+      <h3>Organizing Commands</h3>
+
+      <p>Subdirectories create namespaces. Put frontend commands in <code>.claude/commands/frontend/</code> and they become <code>/project:frontend:component</code>, <code>/project:frontend:storybook</code>, etc.</p>
+
+      <p>Personal commands go in <code>~/.claude/commands/</code> &mdash; available across all your projects but not shared with the team.</p>
+
+      <div class="tip-box">
+        <h3>Commands vs CLAUDE.md</h3>
+        <p>CLAUDE.md defines what Claude should <strong>always know</strong> (conventions, standards, architecture). Commands define what Claude should <strong>do on demand</strong> (review, scaffold, audit, migrate). Commands can reference standards in CLAUDE.md without repeating them &mdash; "Follow the testing rules from CLAUDE.md" is enough.</p>
+      </div>
+    </section>
+
+    <!-- S4: Hooks -->
+    <section>
+      <h2>Hooks: Automated Guardrails</h2>
+
+      <p>CLAUDE.md instructions are advisory &mdash; the model <em>should</em> follow them, but might not. Hooks are deterministic &mdash; they <em>always</em> execute. They're shell commands that run at specific lifecycle points, giving you programmatic control over what the agent does.</p>
+
+      <h3>When Hooks Fire</h3>
+
+      <p>The most useful hook events for day-to-day work:</p>
+
+      <ul>
+        <li><strong>PreToolUse</strong> &mdash; runs before a tool executes. Can block the action (exit code 2) or modify inputs.</li>
+        <li><strong>PostToolUse</strong> &mdash; runs after a tool executes. Great for auto-formatting, logging, or validation.</li>
+        <li><strong>UserPromptSubmit</strong> &mdash; runs when you press Enter. Can transform or validate your input.</li>
+        <li><strong>Stop</strong> &mdash; runs when the agent finishes. Good for final checks.</li>
+      </ul>
+
+      <h3>Practical Examples</h3>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">.claude/settings.json &mdash; auto-format after every file edit</div>
+<pre><code>{
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Edit|Write",
+      "hooks": [{
+        "type": "command",
+        "command": "jq -r '.tool_input.file_path' | xargs npx prettier --write"
+      }]
+    }]
+  }
+}</code></pre>
+        <p>Every time Claude edits or writes a file, Prettier formats it automatically. No "please format" reminders needed.</p>
+      </div>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Block dangerous commands with PreToolUse</div>
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "if echo \"$TOOL_INPUT\" | grep -qE 'rm -rf|drop table|force push'; then echo 'Blocked: dangerous command' >&2; exit 2; fi"
+      }]
+    }]
+  }
+}</code></pre>
+        <p>Exit code 2 blocks the action. The stderr message becomes feedback to Claude, who will adjust its approach.</p>
+      </div>
+
+      <div class="warning-box">
+        <h3>Hooks vs CLAUDE.md Instructions</h3>
+        <p>Don't use hooks for things that CLAUDE.md handles well (style preferences, naming conventions). Use hooks for things that <strong>must</strong> happen reliably: formatting, security checks, test execution. If "usually follows the rule" is good enough, use CLAUDE.md. If "always follows the rule" is required, use a hook.</p>
+      </div>
+    </section>
+
+    <!-- S5: MCP Servers -->
+    <section>
+      <h2>MCP Servers: Extending Your Toolbox</h2>
+
+      <p>Model Context Protocol servers give your AI coding tool access to systems it can't reach natively &mdash; databases, APIs, monitoring dashboards, internal tools. Each MCP server exposes a set of tools that the model can call just like built-in tools.</p>
+
+      <h3>Adding Servers</h3>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Adding MCP servers via CLI</div>
+<pre><code># GitHub integration — PRs, issues, repo management
+claude mcp add github -- npx @anthropic-ai/github-mcp
+
+# PostgreSQL — query your database directly
+claude mcp add postgres -- npx @anthropic-ai/postgres-mcp
+
+# Brave Search — web search from within Claude Code
+claude mcp add brave-search --env BRAVE_API_KEY=your-key -- \
+  npx @anthropic-ai/brave-search-mcp
+
+# Custom internal API
+claude mcp add internal-api --transport http \
+  https://mcp.internal.yourcompany.com/mcp</code></pre>
+      </div>
+
+      <p>Servers are stored in your settings file and started automatically. Project-scoped servers go in <code>.claude/settings.json</code> (shared with team). Personal servers go in <code>~/.claude/settings.json</code>.</p>
+
+      <h3>The Essential Three</h3>
+
+      <p>If you're starting from zero, these three MCP servers cover most development needs:</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">GitHub</div>
+          <div class="stat-label">PRs, issues, code review &mdash; the model can read issues and create PRs directly</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">Web Search</div>
+          <div class="stat-label">Documentation lookups, error research &mdash; the model finds answers instead of hallucinating</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">Playwright</div>
+          <div class="stat-label">Browser automation &mdash; the model can test web UIs and take screenshots</div>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <h3>Don't Over-Tool</h3>
+        <p>Remember Stripe's lesson from Chapter 9: they have ~500 tools available but give each agent a small default set. Every MCP server you add increases the model's tool selection burden. Add servers for tools you'll actually use regularly, not "just in case." You can always add more later.</p>
+      </div>
+    </section>
+
+    <!-- S6: Permission Tuning -->
+    <section>
+      <h2>Permission Tuning: The Trust Spectrum</h2>
+
+      <p>Every AI coding tool balances two forces: the speed of autonomous action and the safety of human oversight. Permission configuration is how you set that balance for your project.</p>
+
+      <h3>Claude Code Permission Rules</h3>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">.claude/settings.json &mdash; tuned permissions for a typical project</div>
+<pre><code>{
+  "permissions": {
+    "allow": [
+      "Bash(npm run test *)",
+      "Bash(npm run lint *)",
+      "Bash(npm run build)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Edit",
+      "Write"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(rm -rf *)",
+      "Bash(npm publish *)",
+      "Read(.env*)"
+    ]
+  }
+}</code></pre>
+        <p>Allow safe, reversible actions. Deny dangerous or irreversible ones. Everything else prompts for approval.</p>
+      </div>
+
+      <p>The evaluation order is: <strong>deny &rarr; ask &rarr; allow.</strong> A deny rule always wins, even if an allow rule matches too. This means you can be generous with allow rules and precise with deny rules.</p>
+
+      <h3>Cursor's Approach</h3>
+
+      <p>Cursor uses a different model: <strong>rule types</strong> with application modes. Rules marked <code>alwaysApply: true</code> are always active. Rules with <code>globs</code> patterns activate when matching files are involved. Rules with descriptions let the agent decide relevance.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">.cursor/rules/api-conventions.md</div>
+<pre><code>---
+description: "REST API design conventions for backend routes"
+alwaysApply: false
+globs: ["src/api/**/*.ts"]
+---
+
+- Validate all inputs with Zod schemas
+- Return consistent error format: { error: string, code: number }
+- Use middleware for auth, not inline checks
+- Log all 5xx errors with request context</code></pre>
+        <p>This rule only activates when Cursor works with files in <code>src/api/</code> &mdash; it doesn't pollute context for frontend work.</p>
+      </div>
+    </section>
+
+    <!-- S7: The Claude Agent SDK -->
+    <section>
+      <h2>When to Build from Scratch: The Agent SDK</h2>
+
+      <p>Most developers should extend existing tools, not build new ones. But if you need a custom agent application &mdash; an internal code review bot, an automated migration tool, a specialized testing agent &mdash; the <strong>Claude Agent SDK</strong> gives you the same harness infrastructure that powers Claude Code.</p>
+
+      <p>The SDK provides the agentic loop (plan &rarr; act &rarr; observe &rarr; repeat), built-in tools (Read, Write, Edit, Bash, Grep, Glob), hooks for validation, MCP integration, and session management. You bring the specific workflow.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Minimal agent with the Claude Agent SDK (TypeScript)</div>
+<pre><code>import { query, ClaudeAgentOptions } from "@anthropic-ai/claude-agent-sdk";
+
+const options: ClaudeAgentOptions = {
+  allowedTools: ["Read", "Edit", "Bash"],
+  systemPrompt: "You review TypeScript files for type safety issues.",
+  maxTurns: 10,
+};
+
+for await (const message of query("Review src/auth/", options)) {
+  console.log(message);
+}</code></pre>
+        <p>Ten lines to create an agent with file access, a focused system prompt, and bounded execution. The SDK handles the tool loop, context management, and model communication.</p>
+      </div>
+
+      <div class="warning-box">
+        <h3>Extend First, Build Second</h3>
+        <p>Before building a custom agent, ask: can I achieve this with a CLAUDE.md section + a custom command + a hook? Custom agents are powerful but require maintenance &mdash; you're taking on the responsibility of the harness. For most workflows, configuring an existing tool is faster, cheaper, and more reliable than building your own.</p>
+      </div>
+    </section>
+
+    <!-- S8: Putting It All Together -->
+    <section>
+      <h2>Putting It All Together</h2>
+
+      <p>Here's what a complete harness configuration looks like for a real project. This is a mid-size TypeScript API with a React frontend &mdash; the kind of project where good configuration pays for itself within a week.</p>
+
+      <div class="inside-look-box">
+        <h3>&#128269; Inside the Harness: Your Project Before and After</h3>
+
+        <h4>Before: Out of the Box</h4>
+        <p>You open Claude Code in your project directory. No CLAUDE.md, no custom commands, no hooks. Claude Code works &mdash; but it guesses your test runner, uses default formatting, doesn't know your architecture, and occasionally runs commands you'd rather it didn't.</p>
+
+        <h4>After: Configured Harness</h4>
+        <p>Here's what you've added:</p>
+
+        <ol>
+          <li><strong>CLAUDE.md</strong> (project root) &mdash; build commands, code conventions, architecture overview. 40 lines.</li>
+          <li><strong>CLAUDE.md</strong> (in <code>src/api/</code>) &mdash; API-specific patterns, validation rules, error format. 15 lines. Loaded only when working on backend.</li>
+          <li><strong>.claude/commands/review.md</strong> &mdash; security-focused code review checklist. Team standard.</li>
+          <li><strong>.claude/commands/add-endpoint.md</strong> &mdash; scaffold a new API endpoint with test, route, and validation.</li>
+          <li><strong>PostToolUse hook</strong> &mdash; auto-formats with Prettier after every edit.</li>
+          <li><strong>PreToolUse hook</strong> &mdash; blocks <code>rm -rf</code>, <code>git push --force</code>, and reads of <code>.env</code> files.</li>
+          <li><strong>GitHub MCP server</strong> &mdash; Claude can read issues and create PRs directly.</li>
+          <li><strong>Permission rules</strong> &mdash; allow test/lint/build, deny push/publish/delete.</li>
+        </ol>
+
+        <p><strong>The result:</strong> Claude Code now follows your conventions on the first try. Reviews are consistent. Formatting is automatic. Dangerous commands are blocked before they execute. And you didn't write a single line of model training code &mdash; just configuration.</p>
+      </div>
+    </section>
+
+    <!-- S9: The Minimal Viable Harness -->
+    <section>
+      <h2>The Minimal Viable Harness</h2>
+
+      <p>Feeling overwhelmed? Here's the simplest harness configuration that still delivers meaningful value. Do this first, add more later.</p>
+
+      <div class="checklist">
+        <div><strong>Step 1:</strong> Run <code>claude /init</code> to generate a starter CLAUDE.md from your project</div>
+        <div><strong>Step 2:</strong> Edit it down to what matters &mdash; build commands, test runner, top 3 conventions the model gets wrong</div>
+        <div><strong>Step 3:</strong> Create one custom command for your most common workflow</div>
+        <div><strong>Step 4:</strong> Commit all of it to git so your team benefits too</div>
+      </div>
+
+      <p>That's it. Four steps, maybe 20 minutes. Everything else in this chapter is a refinement you can add when you need it.</p>
+    </section>
+
+    <!-- S10: What's Next -->
+    <section>
+      <h2>What's Next: The Future of Harness Engineering</h2>
+
+      <p>You've reached the end of this course, but harness engineering is just getting started. Here's where things are heading:</p>
+
+      <p><strong>Self-improving harnesses.</strong> Today you manually tune your CLAUDE.md and hooks. Tomorrow, agents will analyze their own failure patterns and suggest harness improvements. Stripe's eval-driven approach (Chapter 9) is an early version of this.</p>
+
+      <p><strong>Standardization.</strong> AGENTS.md is already governed by the Linux Foundation. MCP is becoming the universal tool protocol. We're moving toward portable harness configurations that work across tools &mdash; write once, run in Claude Code, Cursor, or Codex.</p>
+
+      <p><strong>Autonomous agents.</strong> As harnesses get more sophisticated &mdash; better verification, tighter guardrails, more reliable tool use &mdash; the human-in-the-loop can move further from the keyboard. Not disappear entirely (we covered why in Chapter 9), but shift from approving every action to reviewing outcomes.</p>
+
+      <p><strong>Model-harness co-design.</strong> SWE-1.5 showed that training model and harness together produces better results than optimizing each separately. Expect more tools to follow this path.</p>
+    </section>
+
+    <!-- S11: Exercise -->
+    <section>
+      <h2>Try It Yourself</h2>
+
+      <div class="exercise-box">
+        <h3>&#9997;&#65039; Build Your Complete Harness Configuration</h3>
+        <p>This is the capstone exercise. Set up a real harness configuration for a project you work on daily.</p>
+
+        <ol>
+          <li><strong>Write a CLAUDE.md</strong> (or AGENTS.md if you use Codex/Cursor). Include: build/test commands, your top 5 code conventions, and a brief architecture overview. Target: 30&ndash;50 lines. Run <code>claude /init</code> to start, then edit ruthlessly.</li>
+
+          <li><strong>Create one custom command</strong> for your most repeated workflow. Good candidates:
+            <ul>
+              <li>Code review with your team's checklist</li>
+              <li>Scaffolding a new component/endpoint/migration</li>
+              <li>Running the full test + lint + build pipeline</li>
+            </ul>
+          </li>
+
+          <li><strong>Add one hook.</strong> The easiest high-value hook: auto-format after file edits with your project's formatter (Prettier, Black, gofmt).</li>
+
+          <li><strong>Test before and after.</strong> Give the AI a task you've done before without configuration. Then do the same task with your new configuration. Notice the difference.</li>
+
+          <li><strong>Commit everything to git.</strong> Your team gets the benefits on their next <code>git pull</code>.</li>
+        </ol>
+
+        <p>Here's a starter file tree for Claude Code:</p>
+
+<pre><code>your-project/
+  CLAUDE.md                        # Project instructions
+  .claude/
+    settings.json                  # Permissions + hooks + MCP
+    commands/
+      review.md                    # /project:review
+      scaffold-endpoint.md         # /project:scaffold-endpoint</code></pre>
+
+        <p>You don't need all five layers from this chapter on day one. Start with CLAUDE.md and one command. Add hooks next week. Add MCP servers when you hit a real need. The best harness configuration is one that grows with your workflow.</p>
+      </div>
+    </section>
+
+    <!-- S12: What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>You now have the full toolkit for customizing your harness &mdash; CLAUDE.md, commands, hooks, MCP servers, and permissions. But there's one more question worth exploring: <strong>how do you use the harness engineering tools themselves?</strong></p>
+
+      <p>In Chapter 11, we'll look at two specific harness controls &mdash; plan mode and <code>/clear</code> &mdash; and the surprisingly nuanced decisions around when to constrain your AI's reasoning and when to reset its context. If you've ever wondered whether to clear between tasks or let context accumulate, that chapter has your answer.</p>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-harness-engineering-in-practice.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">9. Harness Engineering in Practice</span>
+      </a>
+      <a href="11-context-and-planning.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">11. Plan Mode &amp; Context Strategy</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

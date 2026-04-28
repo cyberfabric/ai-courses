@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Designing AI UX That iOS Users Trust | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-choosing-ai-stack.html">&larr; Prev</a>
+      <a href="04-smart-text.html">Next &rarr;</a>
+      <a href="maps/03-ai-ux-trust-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Designing AI UX That iOS Users Trust</h1>
+    <p class="subtitle">Loading states, streaming, confidence signals, error handling, and accessibility &mdash; the UX patterns that separate &ldquo;feels magical&rdquo; from &ldquo;feels broken&rdquo;</p>
+  </header>
+
+  <main>
+
+    <h2>The Trust Equation on iOS</h2>
+
+    <p>Here&rsquo;s the thing about iPhone users: they paid $1,000+ for a device that <em>just works</em>. When your AI feature gets something wrong, it doesn&rsquo;t just feel like a bug &mdash; it feels like the premium experience they paid for has broken down. The trust bar on iOS is higher than any other platform.</p>
+
+    <p>Trust is earned in tiny increments and lost in a single bad interaction. An AI feature that&rsquo;s right 95% of the time but handles the other 5% poorly will be remembered for those failures. An AI feature that&rsquo;s right 90% of the time but handles errors gracefully will be remembered as reliable.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Priya opens her journaling app and taps &ldquo;Summarize This Week.&rdquo; She sees a gentle pulsing animation with the text &ldquo;Reading your entries&hellip;&rdquo; After a second, words begin streaming onto the screen, building her summary sentence by sentence. When it finishes, a subtle &ldquo;AI Summary&rdquo; badge appears, along with an &ldquo;Edit&rdquo; button. She tweaks one sentence, taps &ldquo;Save,&rdquo; and the summary is hers.</p>
+      <p>Now imagine the alternative: she taps the button, sees a generic spinner for 3 seconds, then a wall of text appears all at once with no indication it came from AI. Same output. Radically different experience.</p>
+    </div>
+
+    <p>This chapter is about the difference between those two experiences. The AI model is the same &mdash; the UX is what separates trust from frustration.</p>
+
+    <h2>The Three Phases of AI Loading States</h2>
+
+    <p>Traditional loading: show a spinner, wait, show the result. AI loading needs more nuance because the wait is unpredictable and the result is uncertain. Every AI interaction has three phases:</p>
+
+    <div class="product-pattern">
+      <h3>The Three-Phase AI Loading Pattern</h3>
+      <ol>
+        <li><strong>Initiating</strong> &mdash; The user tapped the button. Show a <code>ProgressView</code> with <em>contextual</em> text: &ldquo;Analyzing your receipt&hellip;&rdquo; not &ldquo;Loading&hellip;&rdquo; The user should know what the AI is doing, not just that something is happening.</li>
+        <li><strong>Processing</strong> &mdash; Tokens are arriving. Stream them to the screen with a smooth typing animation. The user sees progress in real time. This phase turns a wait into a reveal.</li>
+        <li><strong>Completing</strong> &mdash; The response is done. Transition smoothly from streaming to the final result. Show action buttons (Edit, Copy, Share), confidence indicators if needed, and the &ldquo;AI generated&rdquo; badge.</li>
+      </ol>
+      <p>Never leave users staring at a spinner with no context. A contextual loading message (&ldquo;Summarizing 3 entries&hellip;&rdquo;) feels faster than a generic one (&ldquo;Please wait&hellip;&rdquo;), even when the actual wait time is identical.</p>
+    </div>
+
+    <h2>Streaming Responses in SwiftUI</h2>
+
+    <p>The ChatGPT-style token-by-token text reveal has trained users to expect it. When text appears all at once, it feels abrupt. When it streams word by word, it feels thoughtful &mdash; like the AI is composing in real time. Here&rsquo;s how to build it:</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Streaming AI Text in SwiftUI</h3>
+      <p><strong>Goal:</strong> Display Foundation Models output token-by-token as it generates, with smooth animation.</p>
+<pre><code>import FoundationModels
+import SwiftUI
+
+struct StreamingTextView: View {
+    let prompt: String
+    @State private var streamedText = ""
+    @State private var isStreaming = false
+    @State private var isDone = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if isStreaming || isDone {
+                Text(streamedText)
+                    .font(.body)
+                    .animation(.easeIn(duration: 0.15), value: streamedText)
+            }
+            if isStreaming {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if isDone {
+                Label("AI Generated", systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task { await generate() }
+    }
+
+    func generate() async {
+        isStreaming = true
+        let session = LanguageModelSession()
+        do {
+            let stream = session.streamResponse(to: prompt)
+            for try await partial in stream {
+                streamedText = partial.content
+            }
+        } catch { streamedText = "Couldn't generate a response." }
+        isStreaming = false
+        isDone = true
+    }
+}</code></pre>
+      <p>The key insight: <code>streamResponse(to:)</code> returns an <code>AsyncSequence</code> of partial results. Each iteration gives you the full text so far, so you just assign it to your <code>@State</code> property and SwiftUI handles the rest.</p>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>Respect Reduce Motion.</strong> Some users have &ldquo;Reduce Motion&rdquo; enabled in Accessibility settings. When that&rsquo;s on, skip the streaming animation and show the complete result at once. Check with <code>UIAccessibility.isReduceMotionEnabled</code> or SwiftUI&rsquo;s <code>@Environment(\.accessibilityReduceMotion)</code>.</p>
+    </div>
+
+    <h2>Apple HIG for AI: The Gold Standard</h2>
+
+    <p>Apple&rsquo;s Human Interface Guidelines have a dedicated section on machine learning. The core principles are:</p>
+
+    <ul>
+      <li><strong>Subtle</strong> &mdash; AI should enhance, not dominate. Writing Tools appears as a quiet option in the text selection menu, not a flashing banner.</li>
+      <li><strong>Integrated</strong> &mdash; AI features should feel like natural parts of the app, not bolt-on additions. Live Text doesn&rsquo;t have its own screen &mdash; it&rsquo;s just there when you point your camera at text.</li>
+      <li><strong>User-controlled</strong> &mdash; Users must always feel in charge. Every AI suggestion can be dismissed, edited, or undone. No forced AI interactions.</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>Writing Tools: The Gold Standard</h3>
+      <p>Study how Apple designed Writing Tools. It appears in the text selection menu &mdash; where you already are. It offers options (Rewrite, Proofread, Summarize) without requiring you to learn anything new. Changes are shown as tracked edits you can accept or reject individually. The AI is powerful, but the user is always in control. This is what your AI features should aspire to.</p>
+    </div>
+
+    <h2>Communicating Confidence</h2>
+
+    <p>One of the trickiest UX decisions: how do you tell users how confident the AI is? The answer depends on the confidence level &mdash; and raw numbers are almost never the right approach.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>AI Confidence</th>
+          <th>What to Show</th>
+          <th>iOS Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>High (&gt;90%)</td>
+          <td>Just show the result &mdash; no qualification</td>
+          <td>QuickType: suggestion appears, tap to accept</td>
+        </tr>
+        <tr>
+          <td>Medium (70&ndash;90%)</td>
+          <td>Show with a subtle &ldquo;AI suggested&rdquo; badge</td>
+          <td>Mail: suggested replies with &ldquo;Siri Suggestion&rdquo; label</td>
+        </tr>
+        <tr>
+          <td>Low (50&ndash;70%)</td>
+          <td>Show multiple options, let the user pick</td>
+          <td>Safari: alternative search suggestions</td>
+        </tr>
+        <tr>
+          <td>Very Low (&lt;50%)</td>
+          <td>Don&rsquo;t show &mdash; ask for clarification or show nothing</td>
+          <td>Siri: &ldquo;I&rsquo;m not sure I understand&rdquo;</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Confidence Done Right</p>
+        <p class="prompt-text">Mail shows three suggested replies at the bottom of an email. No percentages, no confidence scores. If none fit, you just type normally. The AI's uncertainty is invisible.</p>
+        <p class="prompt-explanation">Translate confidence into behavior (show more/fewer options), not numbers.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Confidence Done Wrong</p>
+        <p class="prompt-text">"AI Confidence: 67%" displayed next to a suggestion. The user stares at it. Is 67% good? Bad? Should they trust it? They dismiss the suggestion they would have accepted without the number.</p>
+        <p class="prompt-explanation">Raw confidence scores create anxiety. Users don't know how to interpret them.</p>
+      </div>
+    </div>
+
+    <h2>The &ldquo;AI Suggested&rdquo; Pattern</h2>
+
+    <p>When your app shows AI-generated content alongside user-created content, you need a clear signal. Users must know what came from them and what came from the AI. Apple uses subtle but consistent patterns:</p>
+
+    <ul>
+      <li><strong>Mail:</strong> Suggested replies have a distinct visual style (lighter background, different position)</li>
+      <li><strong>Safari:</strong> AI summaries show an explicit &ldquo;AI Summary&rdquo; badge at the top</li>
+      <li><strong>Writing Tools:</strong> Proposed changes appear as tracked edits with accept/reject controls</li>
+    </ul>
+
+<pre><code>// A reusable AI badge for your SwiftUI views
+struct AIBadge: View {
+    var body: some View {
+        Label("AI Generated", systemImage: "sparkles")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+    }
+}</code></pre>
+
+    <h2>User Control and Override</h2>
+
+    <p>This is non-negotiable: <strong>every AI feature needs an escape hatch.</strong> Users must always feel in control. If they can&rsquo;t dismiss, edit, undo, or turn off an AI suggestion, it&rsquo;s not a feature &mdash; it&rsquo;s a trap.</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Dismiss</strong> &mdash; Swipe away or tap X to remove the suggestion</li>
+      <li class="checked"><strong>Edit</strong> &mdash; Modify the AI&rsquo;s output before using it</li>
+      <li class="checked"><strong>Undo</strong> &mdash; Revert to the original after accepting an AI change</li>
+      <li class="checked"><strong>Feedback</strong> &mdash; &ldquo;Not helpful&rdquo; button that teaches the system</li>
+      <li class="checked"><strong>Manual fallback</strong> &mdash; The non-AI way to do the same thing still exists</li>
+      <li class="checked"><strong>Global off switch</strong> &mdash; A setting to disable AI suggestions entirely</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>App Store Review cares about this.</strong> Apple specifically checks that AI features give users control. If your generative feature produces content with no way to edit, dismiss, or report it, expect a rejection. Build the escape hatches before you build the feature.</p>
+    </div>
+
+    <h2>Error Communication</h2>
+
+    <p>When the AI doesn&rsquo;t know, it should say so. &ldquo;I&rsquo;m not sure&rdquo; is always better than a confident wrong answer. Here&rsquo;s the hierarchy:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Confident? Show result</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Uncertain? Show options</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Lost? Ask for clarification</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Failed? Explain &amp; offer fallback</div>
+    </div>
+
+    <p>Error messages for AI features should be:</p>
+    <ul>
+      <li><strong>Honest</strong> &mdash; &ldquo;I couldn&rsquo;t understand this text&rdquo; not &ldquo;Something went wrong&rdquo;</li>
+      <li><strong>Actionable</strong> &mdash; &ldquo;Try a shorter paragraph&rdquo; not &ldquo;Please try again later&rdquo;</li>
+      <li><strong>Non-blaming</strong> &mdash; Never &ldquo;Invalid input.&rdquo; The user didn&rsquo;t do anything wrong &mdash; the AI reached its limits</li>
+    </ul>
+
+<pre><code>struct AIErrorView: View {
+    let message: String
+    let suggestion: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Label(message, systemImage: "exclamationmark.bubble")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text(suggestion)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Button("Try Again", action: onRetry)
+                .buttonStyle(.bordered)
+        }
+        .padding()
+    }
+}
+
+// Usage:
+AIErrorView(
+    message: "Couldn't summarize this text",
+    suggestion: "Try selecting a shorter section",
+    onRetry: { Task { await regenerate() } }
+)</code></pre>
+
+    <h2>Feedback Loops</h2>
+
+    <p>Great AI features get better over time. To improve, you need user feedback &mdash; but asking for it is an art:</p>
+
+    <h3>Explicit Feedback</h3>
+    <p>Thumbs up/down buttons after AI output. Keep them small and unobtrusive. Don&rsquo;t ask on every interaction &mdash; sampling (every 5th use) reduces fatigue.</p>
+
+    <h3>Implicit Feedback</h3>
+    <p>Did the user accept the suggestion or dismiss it? Did they edit it heavily or use it as-is? Did they tap &ldquo;Regenerate&rdquo;? These signals are gold &mdash; and they don&rsquo;t require the user to do anything extra.</p>
+
+    <div class="tip-box">
+      <p><strong>Collect implicit signals first.</strong> Acceptance rate (% of suggestions used as-is), edit distance (how much users changed the AI output), and dismissal rate tell you more about quality than a thumbs-up button ever will. And they&rsquo;re free &mdash; no user friction at all.</p>
+    </div>
+
+    <h2>Accessibility for AI Features</h2>
+
+    <p>AI features introduce unique accessibility challenges. Dynamic content that appears, streams, and changes requires special attention:</p>
+
+    <h3>VoiceOver</h3>
+    <p>When AI content appears dynamically, VoiceOver users need to be notified. Use accessibility announcements and focus management:</p>
+
+<pre><code>// Announce when AI result is ready
+UIAccessibility.post(
+    notification: .announcement,
+    argument: "AI summary ready. \(summaryText)"
+)
+
+// Move focus to the result
+@AccessibilityFocusState private var focusOnResult: Bool
+
+// After result loads:
+focusOnResult = true</code></pre>
+
+    <h3>Dynamic Type</h3>
+    <p>AI-generated text must respect the user&rsquo;s preferred text size. Never use fixed font sizes for AI output &mdash; always use semantic styles (<code>.body</code>, <code>.headline</code>, <code>.caption</code>) that scale automatically.</p>
+
+    <h3>Reduce Motion</h3>
+    <p>Streaming animations should be disabled when Reduce Motion is on. Show the complete result at once instead:</p>
+
+<pre><code>@Environment(\.accessibilityReduceMotion) var reduceMotion
+
+if reduceMotion {
+    // Show full result immediately
+    Text(fullResponse)
+} else {
+    // Stream token by token
+    StreamingTextView(prompt: prompt)
+}</code></pre>
+
+    <h2>Progressive Disclosure</h2>
+
+    <p>Don&rsquo;t overwhelm users on day one. AI features should reveal complexity gradually:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Level</th>
+          <th>What the User Sees</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Level 1: Simple</td>
+          <td>One-tap AI action with sensible defaults</td>
+          <td>&ldquo;Summarize&rdquo; button &mdash; tap it, get a summary</td>
+        </tr>
+        <tr>
+          <td>Level 2: Customize</td>
+          <td>Options to adjust the AI&rsquo;s behavior</td>
+          <td>Choose summary length: &ldquo;Brief&rdquo; / &ldquo;Detailed&rdquo; / &ldquo;Bullet Points&rdquo;</td>
+        </tr>
+        <tr>
+          <td>Level 3: Power User</td>
+          <td>Advanced settings and fine-tuning</td>
+          <td>Custom instructions, tone preference, output format</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Most users will stay at Level 1 forever. That&rsquo;s fine &mdash; it means you got the defaults right. But power users should be able to dig deeper without the interface getting in the way of casual users.</p>
+
+    <h2>Dark Patterns to Avoid</h2>
+
+    <p>Apple&rsquo;s App Store Review will reject AI features that manipulate, deceive, or trap users. But beyond review, these patterns erode trust:</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Manipulate</p>
+        <p class="prompt-text">"Our AI predicts you'll miss this deal in 2 hours!" — AI-generated fake urgency to pressure a purchase.</p>
+        <p class="prompt-explanation">Using AI to manufacture urgency is deceptive. Apple will reject it.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Deceive</p>
+        <p class="prompt-text">AI-generated product reviews displayed as real user reviews with no disclosure.</p>
+        <p class="prompt-explanation">Presenting AI output as human-created content violates App Store guidelines and user trust.</p>
+      </div>
+    </div>
+
+    <ul>
+      <li><strong>No forced AI</strong> &mdash; Users must be able to turn off AI suggestions. &ldquo;You can&rsquo;t use this feature without AI&rdquo; is a trap.</li>
+      <li><strong>No hidden AI</strong> &mdash; If content is AI-generated, label it. Transparency is not optional.</li>
+      <li><strong>No fake personalization</strong> &mdash; &ldquo;Made just for you&rdquo; when it&rsquo;s the same for everyone is a lie.</li>
+    </ul>
+
+    <h2>Putting It All Together</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Design an &ldquo;AI Email Reply&rdquo; Feature</h3>
+      <p>Design the complete UX flow for an AI feature that generates email reply suggestions. Describe (or sketch) every state:</p>
+      <ol>
+        <li><strong>Empty</strong> &mdash; No AI reply yet. What does the user see? How do they trigger the AI?</li>
+        <li><strong>Initiating</strong> &mdash; The user tapped &ldquo;Suggest Reply.&rdquo; What contextual loading message do you show?</li>
+        <li><strong>Streaming</strong> &mdash; Tokens are arriving. How do you display them? What animation?</li>
+        <li><strong>Results</strong> &mdash; Three reply options are ready. How do you show confidence? How does the user pick one?</li>
+        <li><strong>Error</strong> &mdash; The AI couldn&rsquo;t generate a reply. What message do you show? What&rsquo;s the fallback?</li>
+        <li><strong>User Edit</strong> &mdash; The user picked a reply but wants to modify it. How does editing work?</li>
+        <li><strong>Feedback</strong> &mdash; After sending, how do you collect feedback? Explicit or implicit?</li>
+      </ol>
+      <p>For each state, consider: What does VoiceOver announce? What if Reduce Motion is enabled? Does the feature work on older devices without Foundation Models?</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now have the UX toolkit: loading states, streaming, confidence communication, error handling, accessibility, and the escape hatches that make users feel in control. The foundation is set.</p>
+
+    <p>Time to build something real. <strong>Chapter 4: Smart Text with Foundation Models</strong> puts these UX patterns into practice &mdash; you&rsquo;ll use the <code>@Generable</code> macro for structured output, build a streaming summary feature, integrate Writing Tools, and create a complete &ldquo;Smart Notes&rdquo; feature with classification, entity extraction, and prioritization.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="02-choosing-ai-stack.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Choosing Your AI Stack on iOS</span>
+        </a>
+        <a href="04-smart-text.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Smart Text with Foundation Models</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

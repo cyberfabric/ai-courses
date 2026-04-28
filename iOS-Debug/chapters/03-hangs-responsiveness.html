@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Hangs &amp; Responsiveness Diagnosis | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-crash-reports-symbolication.html">&larr; Prev</a>
+      <a href="04-memory-leaks.html">Next &rarr;</a>
+      <a href="maps/03-hangs-responsiveness-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Hangs &amp; Responsiveness Diagnosis</h1>
+    <p class="subtitle">Use AI to diagnose main thread hangs, watchdog terminations, and the bugs users hate most</p>
+  </header>
+
+  <main>
+
+    <h2>Hangs Are Worse Than Crashes</h2>
+
+    <p>A crash is dramatic &mdash; the app dies, you get a report, you fix it. A hang is insidious. Your app is technically alive, but the UI is frozen. The user taps the screen. Nothing happens. They tap harder (as if that helps). Still nothing. After a few seconds, they force-quit your app and leave a 1-star review.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">53%</div>
+        <div class="stat-label">Users who abandon an app after a freeze lasting more than 3 seconds</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">250ms</div>
+        <div class="stat-label">The threshold where users perceive a UI as "laggy" (MetricKit reports hangs above this)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">0x8BADF00D</div>
+        <div class="stat-label">The watchdog termination code &mdash; "ate bad food" &mdash; iOS kills your unresponsive app</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">20s</div>
+        <div class="stat-label">Watchdog timeout for app launch. After 20 seconds, iOS terminates your app.</div>
+      </div>
+    </div>
+
+    <p>Crashes show up in crash reports. Hangs often don't &mdash; they're invisible unless you're explicitly looking for them with MetricKit, Instruments, or Xcode Organizer. That's what makes them so dangerous.</p>
+
+    <h2>The Watchdog: <code>0x8BADF00D</code></h2>
+
+    <p>iOS runs a watchdog timer that monitors your app's main thread responsiveness. If the main thread is blocked for too long, iOS terminates your app with the exception code <code>0x8BADF00D</code> (read it out loud: "ate bad food").</p>
+
+    <p>The timeout thresholds vary by app state:</p>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>App State</th>
+          <th>Timeout</th>
+          <th>What Triggers It</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Launch</td>
+          <td>~20 seconds</td>
+          <td>App doesn't finish <code>didFinishLaunching</code> in time</td>
+        </tr>
+        <tr>
+          <td>Foreground</td>
+          <td>~10 seconds</td>
+          <td>Main thread blocked while app is visible</td>
+        </tr>
+        <tr>
+          <td>Background task</td>
+          <td>~5-10 seconds</td>
+          <td>Background task handler doesn't call completion</td>
+        </tr>
+        <tr>
+          <td>Suspended &rarr; resume</td>
+          <td>~10 seconds</td>
+          <td><code>applicationWillEnterForeground</code> blocks too long</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <h4>Watchdog Terminations Don't Look Like Crashes</h4>
+      <p>A watchdog kill produces a different crash report format. The exception code is <code>0x8badf00d</code> and the termination reason is <code>scene-create</code>, <code>scene-update</code>, or similar. The key clue: <strong>every thread's backtrace is captured at the moment of termination</strong> &mdash; you see exactly what the main thread was doing when it got killed.</p>
+      <p>This is gold for AI analysis. The entire system state is frozen in time.</p>
+    </div>
+
+    <h2>MetricKit: <code>MXHangDiagnostic</code></h2>
+
+    <p>MetricKit is Apple's framework for receiving performance diagnostics directly from production devices. For hangs, <code>MXHangDiagnostic</code> delivers fully symbolicated call stacks showing exactly what was blocking the main thread &mdash; and it catches hangs as short as 250ms that never trigger the watchdog.</p>
+
+<pre><code>import MetricKit
+
+class MetricSubscriber: NSObject, MXMetricManagerSubscriber {
+
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            if let hangDiagnostics = payload.hangDiagnostics {
+                for hang in hangDiagnostics {
+                    // hang.callStackTree contains the blocking call chain
+                    let callStack = hang.callStackTree.jsonRepresentation()
+                    logger.warning("Hang detected: \(String(data: callStack, encoding: .utf8) ?? "")")
+                }
+            }
+        }
+    }
+}
+
+// Register at app launch:
+MXMetricManager.shared.add(subscriber)</code></pre>
+
+    <p>MetricKit delivers diagnostics once per day (aggregated over 24 hours). The call stacks are already symbolicated &mdash; no dSYM needed. This is structured data that AI analyzes beautifully.</p>
+
+    <div class="tip-box">
+      <h4>MetricKit + Claude Code Pipeline</h4>
+      <p>Export your <code>MXHangDiagnostic</code> payloads to a file or logging service. Then paste them into Claude Code with your <code>/analyze-hang</code> skill (we'll build it below). AI will identify the blocking operation, trace the call chain, and suggest the async alternative &mdash; all from production data you couldn't get any other way.</p>
+    </div>
+
+    <h2>Reading a Hang Report with AI</h2>
+
+    <p>Here's a real watchdog termination report. The main thread was blocked during app launch:</p>
+
+    <div class="debug-trace">
+      <h4>Watchdog Termination &mdash; 0x8BADF00D</h4>
+<pre>Exception Type:  EXC_CRASH (SIGKILL)
+Exception Codes: 0x8badf00d
+Termination Reason: FRONTBOARD 2343432205
+  scene-create watchdog transgression: application&lt;com.myapp&gt;:2305
+  exhausted real (wall clock) time allowance of 19.97 seconds
+
+Filtered Syslog:
+  com.myapp: Launching with database migration...
+  com.myapp: Starting Core Data stack...
+  com.myapp: Running migration v12 → v13...
+
+Thread 0 (main, crashed):
+0  libsqlite3.dylib    sqlite3_step + 428
+1  CoreData            NSSQLiteStatement.execute() + 156
+2  CoreData            NSSQLCore.executeRequest(_:) + 892
+3  MyApp               DatabaseMigrator.migrateV12ToV13() + 2340
+4  MyApp               AppDelegate.setupCoreData() + 456
+5  MyApp               AppDelegate.application(_:didFinishLaunchingWithOptions:) + 128
+6  UIKitCore           -[UIApplication _handleDelegateCallbacksWithOptions:...] + 344</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>Hang type:</strong> Watchdog termination during app launch (scene-create). The app exceeded the ~20-second launch time allowance.</p>
+      <p><strong>Blocking operation:</strong> A Core Data migration (<code>migrateV12ToV13</code>) running <strong>synchronously on the main thread</strong> during <code>didFinishLaunchingWithOptions</code>. The migration involves SQLite operations that took longer than 20 seconds on this device.</p>
+      <p><strong>Root cause:</strong> Heavy database migration executed on the main thread at launch time. On older devices with large databases, this migration exceeds the watchdog threshold.</p>
+      <p><strong>Fix:</strong> Move the migration to a background queue. Show a "Migrating data..." screen on the main thread while the migration runs asynchronously. Only present the main UI once the migration completes.</p>
+    </div>
+
+    <p>Notice how the syslog entries (from <code>os_log</code>) give AI the narrative: "migration started, then the watchdog killed us." Without those logs, AI only sees the SQLite call &mdash; the logs tell the <em>story</em>.</p>
+
+    <h2>Thread Checker: Catch Hangs Before Production</h2>
+
+    <p>Xcode's Thread Checker detects main-thread violations at development time. Enable it in your scheme:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Edit Scheme</strong>
+          <p>Product &rarr; Scheme &rarr; Edit Scheme</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Diagnostics tab</strong>
+          <p>Run &rarr; Diagnostics</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Enable Thread Checker</strong>
+          <p>Check "Main Thread Checker" (on by default in Xcode 26)</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <strong>Run &amp; watch</strong>
+          <p>Purple runtime warnings appear for violations</p>
+        </div>
+      </div>
+    </div>
+
+    <p>When Thread Checker fires, Xcode shows a purple warning with the offending call. Xcode 26's AI can explain these warnings inline &mdash; click the purple marker and Swift Assist will explain why this call must be on the main thread and suggest the fix.</p>
+
+    <h2>Building an <code>/analyze-hang</code> Skill</h2>
+
+    <div class="fix-pattern">
+      <h4>The <code>/analyze-hang</code> Skill</h4>
+      <p>Create <code>.claude/commands/analyze-hang.md</code>:</p>
+<pre>Analyze this iOS hang report, watchdog termination, or
+MXHangDiagnostic payload.
+
+## Analysis Steps:
+1. Identify the hang type:
+   - Watchdog termination (0x8BADF00D) — which app state?
+   - MetricKit hang diagnostic — duration?
+   - User-reported freeze — what was the user doing?
+2. Read Thread 0 (main thread) backtrace completely
+3. Find the BLOCKING operation — the frame where the main
+   thread is stuck (I/O, network, lock, heavy computation)
+4. Trace the call chain: who called the blocking operation?
+5. Read the source file at the blocking frame
+6. Check for os_log/syslog entries that show the timeline
+
+## Output Format:
+- **Hang type:** [watchdog / MetricKit / user-reported]
+- **Duration:** [estimated or reported hang duration]
+- **Blocked thread:** [thread number + name]
+- **Blocking operation:** [specific call that blocks]
+- **Call chain:** [simplified path from entry point to block]
+- **Root cause:** [1-2 sentence explanation]
+- **Async alternative:** [specific refactoring with code example]
+- **Prevention:** [os_signpost, Thread Checker, or test strategy]
+
+## Input:
+$ARGUMENTS</pre>
+    </div>
+
+    <h2>Common Hang Patterns</h2>
+
+    <p>AI has seen these patterns thousands of times. When you paste a hang report, it immediately checks for these culprits:</p>
+
+    <div class="root-cause">
+      <h4>The 6 Most Common iOS Hang Patterns</h4>
+      <p><strong>1. Synchronous network on main thread:</strong> <code>URLSession.shared.dataTask</code> with a completion handler is async, but <code>Data(contentsOf: url)</code> or a semaphore-based wrapper blocks the main thread completely.</p>
+      <p><strong>2. Heavy Core Data fetch on main thread:</strong> A <code>NSFetchRequest</code> with no predicate on a table with 100K+ rows. Or a migration running synchronously in <code>didFinishLaunching</code>.</p>
+      <p><strong>3. Synchronous Keychain access:</strong> <code>SecItemCopyMatching</code> can take seconds when the device is locked or the Keychain is large. Always call from a background queue.</p>
+      <p><strong>4. Large image decoding on main thread:</strong> Loading a 4000x3000 JPEG with <code>UIImage(named:)</code> and immediately displaying it. The decode happens lazily on first render &mdash; on the main thread.</p>
+      <p><strong>5. Excessive Auto Layout recalculation:</strong> A complex view hierarchy with hundreds of constraints being invalidated repeatedly during a single layout pass. Common with dynamically-sized cells in a table view.</p>
+      <p><strong>6. Lock contention:</strong> The main thread tries to acquire a lock (via <code>DispatchSemaphore</code>, <code>NSLock</code>, or <code>os_unfair_lock</code>) that a background thread holds for a long operation.</p>
+    </div>
+
+    <h2>Swift Concurrency and Hangs</h2>
+
+    <p>Swift concurrency (<code>async/await</code>) was supposed to eliminate main-thread blocking. And it does &mdash; when used correctly. But there are subtle ways to still hang your app:</p>
+
+    <h3>Pitfall 1: Blocking Calls Inside <code>@MainActor</code> Context</h3>
+
+<pre><code>@MainActor
+class ProfileViewModel: ObservableObject {
+    @Published var profile: UserProfile?
+
+    func loadProfile() async {
+        // BUG: This blocks the main thread!
+        // Thread.sleep is synchronous — it doesn't suspend
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // BUG: Synchronous file I/O on MainActor
+        let data = try! Data(contentsOf: largeFileURL)
+
+        profile = try? JSONDecoder().decode(UserProfile.self, from: data)
+    }
+}</code></pre>
+
+    <p>The method is <code>async</code>, but <code>Thread.sleep</code> and <code>Data(contentsOf:)</code> are <em>synchronous</em>. They block the MainActor's thread, freezing the UI. The <code>async</code> keyword only means the function <em>can</em> suspend &mdash; it doesn't mean every line inside it is non-blocking.</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt for Concurrency Hang Analysis</h4>
+      <p>"This ViewModel is @MainActor and all its methods are async, but users report the profile screen freezes for 2-3 seconds. Analyze the code for synchronous blocking calls that would hang the main thread despite the async context."</p>
+    </div>
+
+    <h3>Pitfall 2: Task Priority Inversion</h3>
+
+<pre><code>// High-priority UI task waits for low-priority background work
+@MainActor
+func refreshUI() async {
+    // This Task inherits .userInitiated from the MainActor caller
+    let data = await fetchData() // But fetchData runs at .background priority
+
+    // The main thread is waiting for a low-priority task
+    // that keeps getting preempted by higher-priority work
+    updateViews(with: data)
+}</code></pre>
+
+    <p>Claude Code can detect these priority inversions by reading the task hierarchy and actor isolation attributes across your codebase &mdash; something that's nearly impossible to spot by reading a single file.</p>
+
+    <h3>Pitfall 3: <code>nonisolated</code> Misuse</h3>
+
+<pre><code>@MainActor
+class SettingsManager {
+    var cache: [String: Any] = [:]
+
+    // This runs OFF the main thread — but accesses
+    // MainActor-isolated 'cache' property!
+    nonisolated func preloadSettings() {
+        // Swift 6 catches this at compile time
+        // Swift 5.x: silent data race + potential hang
+        let value = heavyComputation()
+        cache["result"] = value // Race condition!
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <h4>Xcode 26 AI for Concurrency Issues</h4>
+      <p>Swift Assist in Xcode 26 is particularly good at concurrency analysis. When you see a purple Thread Checker warning or a <code>Sendable</code> compiler error, Xcode AI explains the isolation boundary violation and suggests whether to use <code>nonisolated</code>, <code>@Sendable</code>, or restructure the actor isolation. For hangs specifically, ask: <em>"Is this blocking the MainActor?"</em></p>
+    </div>
+
+    <h2>Instruments Time Profiler for Hang Analysis</h2>
+
+    <p>When you can reproduce a hang, Instruments Time Profiler shows you exactly where the main thread's time is going:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Record</strong>
+          <p>Instruments &rarr; Time Profiler &rarr; record while reproducing the hang</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Select the hang period</strong>
+          <p>Drag to select the frozen time range in the timeline</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Filter to main thread</strong>
+          <p>Thread filter &rarr; Main Thread only</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <strong>Read the heaviest stack</strong>
+          <p>Bottom-up view &rarr; sort by weight &rarr; the top entry is your hang</p>
+        </div>
+      </div>
+    </div>
+
+    <p>Copy the call tree text and paste it into Claude Code:</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt</h4>
+      <p>"Here's the Time Profiler call tree for the main thread during a 3-second freeze on the settings screen. The top samples are in our code. Identify what's blocking the main thread and suggest how to move it off."</p>
+    </div>
+
+    <h2>Using <code>os_signpost</code> to Measure Hang-Prone Code</h2>
+
+    <p>Signposts let you mark the beginning and end of operations so Instruments (and AI) can see exactly how long each section takes:</p>
+
+<pre><code>import OSLog
+
+private let signposter = OSSignposter(subsystem: "com.myapp", category: "performance")
+
+func loadUserData() {
+    let signpostID = signposter.makeSignpostID()
+
+    // Mark the start
+    let state = signposter.beginInterval("loadUserData", id: signpostID)
+
+    // ... do the work ...
+
+    // Mark the end
+    signposter.endInterval("loadUserData", state)
+}
+
+// For async code:
+func loadUserDataAsync() async {
+    let signpostID = signposter.makeSignpostID()
+    let state = signposter.beginInterval("loadUserDataAsync", id: signpostID)
+
+    await fetchFromNetwork()
+    await processResults()
+
+    signposter.endInterval("loadUserDataAsync", state)
+}</code></pre>
+
+    <p>In Instruments, signposts appear as labeled intervals on the timeline. You can instantly see "this function took 4.2 seconds" and drill into why. Export the signpost data and feed it to Claude Code for automated analysis.</p>
+
+    <h2>XcodeBuildMCP: Automated Hang Detection</h2>
+
+    <p>With XcodeBuildMCP, you can build an automated hang-detection workflow:</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt</h4>
+      <p>"Build and run the app on the iPhone 16 simulator using XcodeBuildMCP. Navigate to the settings screen by launching the UI test SettingsFlowTest. While it runs, check if the main thread is blocked for more than 500ms using Thread Checker diagnostics. Report any hang warnings."</p>
+    </div>
+
+    <p>This lets Claude Code act as an automated QA engineer, running your app flows and checking for hangs without manual intervention.</p>
+
+    <div class="performance-metric">
+      <h4>Hang Duration: Before &amp; After Fixes</h4>
+      <div class="metric-before">
+        <h5>Before (Synchronous on Main Thread)</h5>
+        <ul>
+          <li>App launch with Core Data migration: <strong>18-25 seconds</strong> (watchdog kill)</li>
+          <li>Profile screen load with sync network: <strong>2-8 seconds</strong> (user-perceived freeze)</li>
+          <li>Settings screen with sync Keychain: <strong>1-3 seconds</strong> (laggy feel)</li>
+          <li>Image gallery scroll with main-thread decode: <strong>200-500ms per image</strong> (stuttery scroll)</li>
+        </ul>
+      </div>
+      <div class="metric-after">
+        <h5>After (Async / Background Queue)</h5>
+        <ul>
+          <li>App launch with async migration + loading UI: <strong>0.8s launch + background migration</strong></li>
+          <li>Profile screen with async/await networking: <strong>&lt;100ms to show skeleton UI</strong></li>
+          <li>Settings screen with async Keychain wrapper: <strong>&lt;50ms perceived delay</strong></li>
+          <li>Image gallery with background decode + cache: <strong>&lt;16ms per frame (60fps)</strong></li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Hands-On Exercise</h2>
+
+    <div class="exercise-box">
+      <h4>Exercise: Diagnose and Fix a Deliberate Hang</h4>
+      <p>You'll create a hang, capture it, analyze it with AI, and refactor to async.</p>
+      <ol>
+        <li>
+          <strong>Create the hang.</strong> Add this to a button action or <code>viewDidAppear</code>:
+<pre><code>@MainActor
+func loadData() async {
+    // Deliberate hang: synchronous sleep on main thread
+    Thread.sleep(forTimeInterval: 6.0)
+
+    // Simulate sync file read
+    let url = Bundle.main.url(forResource: "large", withExtension: "json")!
+    let data = try! Data(contentsOf: url)
+    let items = try! JSONDecoder().decode([Item].self, from: data)
+    print("Loaded \(items.count) items")
+}</code></pre>
+        </li>
+        <li><strong>Run and observe.</strong> Tap the button. The UI freezes for 6+ seconds. On a debug build, Thread Checker may fire.</li>
+        <li><strong>Capture with Time Profiler.</strong> Open Instruments &rarr; Time Profiler. Record while reproducing the hang. Select the frozen interval and copy the main thread call tree.</li>
+        <li>
+          <strong>Analyze with Claude Code:</strong>
+<pre><code>claude
+> /analyze-hang [paste the Time Profiler call tree or describe the hang]</code></pre>
+        </li>
+        <li>
+          <strong>Refactor to async.</strong> Claude Code should suggest something like:
+<pre><code>@MainActor
+func loadData() async {
+    // Show loading state immediately
+    isLoading = true
+
+    // Move heavy work off main thread
+    let items = await Task.detached(priority: .userInitiated) {
+        let url = Bundle.main.url(forResource: "large", withExtension: "json")!
+        let data = try! Data(contentsOf: url)
+        return try! JSONDecoder().decode([Item].self, from: data)
+    }.value
+
+    // Back on main thread — update UI
+    self.items = items
+    isLoading = false
+}</code></pre>
+        </li>
+        <li><strong>Verify.</strong> Run the Time Profiler again. The main thread should now show near-zero blocking during the load. The UI stays responsive with a loading indicator.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add <code>os_signpost</code> markers around the data loading to see the exact timing in Instruments. Compare the before/after intervals.</p>
+    </div>
+
+    <div class="highlight-box">
+      <h4>Key Takeaways</h4>
+      <ul>
+        <li><strong>Hangs are worse than crashes</strong> for user experience. Users abandon apps that freeze &mdash; and they don't come back.</li>
+        <li>The watchdog (<code>0x8BADF00D</code>) has different timeouts per app state: ~20s for launch, ~10s for foreground.</li>
+        <li><strong>MetricKit <code>MXHangDiagnostic</code></strong> catches hangs as short as 250ms in production &mdash; crashes miss these entirely.</li>
+        <li><strong><code>async</code> doesn't mean non-blocking.</strong> A synchronous call inside an <code>async</code> method on <code>@MainActor</code> still freezes the UI.</li>
+        <li>Use <strong>Instruments Time Profiler</strong> to capture the hang, <strong>Claude Code <code>/analyze-hang</code></strong> to diagnose it, and <strong><code>os_signpost</code></strong> to verify the fix.</li>
+        <li>Enable <strong>Thread Checker</strong> in your scheme &mdash; catch main-thread violations before your users do.</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Hangs freeze the UI for seconds. Memory leaks kill your app slowly over minutes. In <strong>Chapter 4: Memory Leak Detection with AI</strong>, you'll learn to use Xcode's Memory Graph Debugger and Instruments Allocations with AI to find retain cycles, track down <code>[weak self]</code> mistakes, and build a <code>/analyze-leak</code> skill that reads retention chains and suggests fixes. Your app's memory footprint is about to get a lot healthier.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-crash-reports-symbolication.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Crash Reports, Logs &amp; Symbolication</span>
+      </a>
+      <a href="04-memory-leaks.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Memory Leak Detection with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

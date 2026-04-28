@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4 — Prompt Caching: The 90% Discount You're Not Using</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="03-2026-pricing-landscape.html">← Prev</a>
+      <a href="05-batch-apis.html">Next →</a>
+      <a href="maps/04-prompt-caching-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 4</div>
+    <h1>Prompt Caching: The 90% Discount You're Not Using</h1>
+    <p class="chapter-subtitle">Cache writes, cache reads, TTLs and the break-even math behind the biggest single lever on your AI bill</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The parking-meter receipt trick</h2>
+
+      <p>
+        Imagine you rent a parking meter downtown for $3/hour. The first hour, you pay full price. But the garage has an odd deal: if you come back within the next hour and park in the same slot, you pay 30 cents instead of $3. Same slot, same price list, one small loyalty trick.
+      </p>
+
+      <p>
+        Prompt caching works exactly like this. The first time you send a big chunk of context — a system prompt, a retrieved document, a conversation history — you pay full price, plus a tiny premium. Every time you re-send the <em>same prefix</em> shortly after, you pay roughly 10% of input cost. That's a 90% discount on the bulk of most real prompts.
+      </p>
+
+      <p>
+        If your feature sends any repeated context — and almost every production AI feature does — caching is probably the single highest-return lever in this entire course. We're going to learn the mechanics on each provider, the break-even math, the failure modes that silently kill the cache, and how to stack caching with other discounts.
+      </p>
+
+      <div class="highlight-box">
+        <strong>The core insight:</strong> LLMs don't have memory between calls, but the <em>infrastructure</em> that runs them can keep a warm KV-cache of your prefix for a few minutes. All three major providers now sell that warm slot at a discount. Your job is to make sure your prefix is cache-friendly.
+      </div>
+    </section>
+
+    <section>
+      <h2>What's actually being cached</h2>
+
+      <p>
+        When you send a prompt, the model's attention layer computes a huge internal lookup — the "KV-cache" — for every token in order. That computation is the expensive part. If the first 10,000 tokens of your next request are <em>byte-identical</em> to what you sent before, the provider can skip recomputing that lookup and reuse the warm one. They pass most of that saving back to you.
+      </p>
+
+      <p>
+        The practical corollary: <strong>caching matches on the prefix, not the content</strong>. The cacheable portion always starts at the beginning of the message and ends where the first byte of difference is. If you put anything dynamic (a timestamp, a user ID, a session token) anywhere before your big system prompt, the whole cache benefit vanishes.
+      </p>
+
+      <p>
+        This is why "put dynamic content last" is the single most important caching rule on every provider.
+      </p>
+    </section>
+
+    <section>
+      <h2>Anthropic — explicit with <code>cache_control</code></h2>
+
+      <p>
+        Anthropic's implementation is explicit: you place a <code>cache_control</code> marker on the message block you want to cache. Everything up to and including that block becomes the cacheable prefix. Two TTL options: the default 5-minute cache, and an extended 1-hour cache.<sup><a href="#src-anthropic-cache">1</a></sup>
+      </p>
+
+      <!-- source: https://platform.claude.com/docs/en/build-with-claude/prompt-caching as of 2026-04 -->
+      <div class="pricing-table-box">
+        <h4>Anthropic prompt caching — cost multipliers (April 2026)</h4>
+        <table>
+          <thead>
+            <tr><th>Event</th><th>Multiplier vs base input</th><th>Example (Sonnet 4.6, $3/M input)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Normal input token</td><td>1.00x</td><td>$3.00 / 1M</td></tr>
+            <tr><td>Cache write, 5-min TTL</td><td>1.25x</td><td>$3.75 / 1M</td></tr>
+            <tr><td>Cache write, 1-hour TTL</td><td>2.00x</td><td>$6.00 / 1M</td></tr>
+            <tr><td>Cache read (either TTL)</td><td>0.10x</td><td>$0.30 / 1M</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Four things to internalize about Anthropic caching:
+      </p>
+
+      <ul>
+        <li><strong>The TTL is sliding, not fixed.</strong> Every time the cache is hit, the timer resets. A busy cache stays warm; an idle cache expires at the interval.</li>
+        <li><strong>You pay a small premium on the <em>first</em> call.</strong> That first write at 1.25x (or 2x) is what pays for the subsequent cheap reads.</li>
+        <li><strong>Multiple breakpoints are free.</strong> You can drop <code>cache_control</code> on up to four different points in the prompt (e.g., system prompt, retrieved doc A, retrieved doc B, conversation history) so different prefixes can cache independently.</li>
+        <li><strong>Workspace isolation is enforced.</strong> Since February 2026, caches don't leak across workspaces — good for multi-tenant setups, but your caches also won't share across dev/prod if you split them by workspace.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>OpenAI — automatic, no flags required</h2>
+
+      <p>
+        OpenAI took the opposite design choice: prefix caching is automatic on every GPT-5.4 / GPT-5 and o-series request. You don't mark anything, you don't add any flags. If your prefix is longer than 1,024 tokens and the infrastructure still has it warm, you get the discount automatically.<sup><a href="#src-openai-cache">2</a></sup>
+      </p>
+
+      <!-- source: https://openai.com/index/api-prompt-caching/ as of 2026-04 -->
+      <!-- source: https://developers.openai.com/api/docs/guides/prompt-caching as of 2026-04 -->
+      <ul>
+        <li><strong>Discount:</strong> cached input tokens cost 10% of the normal input rate — a 90% discount.</li>
+        <li><strong>Minimum prefix:</strong> 1,024 tokens. Prompts shorter than that never cache.</li>
+        <li><strong>TTL:</strong> approximately 5–10 minutes after last use. Not guaranteed; OpenAI does not publish a fixed TTL.</li>
+        <li><strong>Cache-write premium:</strong> none — writes are billed at the normal input rate.</li>
+        <li><strong>Match granularity:</strong> prefix is hashed in 128-token chunks, so caching kicks in at 1,024, 1,152, 1,280, …</li>
+      </ul>
+
+      <p>
+        Because there's no write premium, OpenAI caching is almost always "free money" — if your prefix repeats, the discount shows up automatically. The downside: the unpublished TTL means your cache-hit rate can drift under load, and you'll only see it in billing.
+      </p>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> OpenAI's response object includes <code>usage.prompt_tokens_details.cached_tokens</code>. Log it per request, aggregate by feature, and you've got a live cache-hit-rate dashboard with no extra infrastructure. If that number stays near zero for a feature with a big repeated prefix, you probably have a whitespace or dynamic-content bug.
+      </div>
+    </section>
+
+    <section>
+      <h2>Google Gemini — implicit + explicit, two modes</h2>
+
+      <p>
+        Gemini has two caching flavors that confuse almost everyone the first time they meet them.<sup><a href="#src-gemini-cache">3</a></sup>
+      </p>
+
+      <ul>
+        <li><strong>Implicit caching</strong> — automatic, like OpenAI. Prefixes of 1,024+ tokens (Flash) or 2,048+ tokens (Pro) qualify. No storage fee. Discount: 75% on Gemini 2.0, 90% on Gemini 2.5 and later.</li>
+        <li><strong>Explicit context caching</strong> — you create a named cache object, reference it in subsequent requests. Minimum cache size: 32,768 tokens. You pay a small storage fee per hour per 1M cached tokens (billed while the cache lives). Same 75/90% discount on the read side.</li>
+      </ul>
+
+      <p>
+        Rule of thumb: for "normal" caching needs — system prompts, RAG context, chat history — stick with <em>implicit</em>. It's free, no plumbing, and covers the common cases. Use <em>explicit</em> only when you have a very large stable prefix (30K+ tokens — e.g., a full policy manual, a 500-page handbook, a big PDF) and you want to guarantee cache residency beyond the implicit TTL.
+      </p>
+
+      <div class="warning-box">
+        <strong>Watch out:</strong> explicit caches come with a storage bill. If you create a cache and forget to delete it (or pick a long TTL), the hourly storage fee can quietly add up. Always set a TTL that matches how long the cache is actually useful, and tear it down in a <code>finally</code> block.
+      </div>
+    </section>
+
+    <section>
+      <h2>Provider comparison — one table</h2>
+
+      <!-- source: https://platform.claude.com/docs/en/build-with-claude/prompt-caching as of 2026-04 -->
+      <!-- source: https://openai.com/index/api-prompt-caching/ as of 2026-04 -->
+      <!-- source: https://ai.google.dev/gemini-api/docs/caching as of 2026-04 -->
+      <div class="pricing-table-box">
+        <h4>Prompt caching across the big three (April 2026)</h4>
+        <table>
+          <thead>
+            <tr><th>Provider</th><th>Model</th><th>Mode</th><th>Min prefix</th><th>TTL</th><th>Write cost</th><th>Read cost</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Anthropic</td><td>All active Claude</td><td>Explicit</td><td>1,024 (Haiku)<br>1,024 (Sonnet)<br>1,024 (Opus)</td><td>5m or 1h (sliding)</td><td>1.25x or 2x</td><td>0.1x</td></tr>
+            <tr><td>OpenAI</td><td>GPT-5.4, GPT-5, o-series</td><td>Automatic</td><td>1,024</td><td>~5–10m</td><td>1.0x (no premium)</td><td>0.1x</td></tr>
+            <tr><td>Google</td><td>Gemini 2.5+</td><td>Automatic (implicit)</td><td>1,024 (Flash) / 2,048 (Pro)</td><td>provider-managed</td><td>1.0x</td><td>0.1x (90% off)</td></tr>
+            <tr><td>Google</td><td>Gemini 2.5+</td><td>Explicit (named)</td><td>32,768</td><td>you set (+ storage fee)</td><td>1.0x + storage</td><td>0.1x</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        The discounts converge at around 90% off input on cache reads across all three providers — a rare moment of industry agreement. The differences are in the <em>mechanics</em>: Anthropic wants you to be explicit (and charges a write premium in exchange for longer TTL options); OpenAI is automatic and free to write but with an unpublished TTL; Gemini gives you both modes, with the explicit one carrying a storage fee.
+      </p>
+    </section>
+
+    <section>
+      <h2>Break-even math: when does caching actually pay off?</h2>
+
+      <p>
+        Caching isn't always a free lunch on Anthropic — you pay a premium on the write. If the cached prefix is only used once, you've spent 1.25x input for no return. The question is: how many reads before you break even?
+      </p>
+
+      <p>
+        Let <em>X</em> = number of times the same cached prefix is reused (read). For Anthropic 5-minute TTL:
+      </p>
+
+      <pre><code>Without cache:  (X + 1) × 1.00x   = X + 1
+With cache:     1.25x + X × 0.10x = 1.25 + 0.10X
+
+Break-even: X + 1 = 1.25 + 0.10X
+           0.90X = 0.25
+           X = 0.28 reads</code></pre>
+
+      <p>
+        Translation: even a <strong>single</strong> cache read pays for the write premium on the 5-minute TTL. If your prefix is going to be reused at least once within five minutes, cache it.
+      </p>
+
+      <p>
+        For the 1-hour TTL on Anthropic:
+      </p>
+
+      <pre><code>Without cache:  (X + 1) × 1.00x   = X + 1
+With cache:     2.00x + X × 0.10x = 2.00 + 0.10X
+
+Break-even: X + 1 = 2.00 + 0.10X
+           0.90X = 1.00
+           X ≈ 1.11 reads</code></pre>
+
+      <p>
+        You need the prefix reused about <strong>once</strong> within the hour to break even on the 1-hour TTL. Two or more reads and you're clearly in profit territory.
+      </p>
+
+      <p>
+        For OpenAI and Gemini implicit caching, there's no write premium, so the break-even is zero reads — any cache hit is pure savings. You can't lose money by "accidentally" caching a prefix that never repeats.
+      </p>
+    </section>
+
+    <section>
+      <h2>Real-numbers example: a chatbot with a 20K-token system prompt</h2>
+
+      <p>
+        Let's put it together. You're running a customer-support bot on Sonnet 4.6. The system prompt is 20,000 tokens (policies + tone guide + few-shot examples) and the user message averages 500 tokens. The bot handles 1,000 calls per hour — plenty of traffic to keep a cache warm.
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>Support bot — 1,000 calls/hour, 20K system prompt, 500-token user message, 600-token reply (Sonnet 4.6)</h4>
+        <table>
+          <thead>
+            <tr><th>Line</th><th>Tokens</th><th>Rate</th><th>Monthly cost (730h)</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>System prompt — no caching</td>
+              <td>20,000 × 1,000 × 730 = 14.6B</td>
+              <td>$3 / 1M</td>
+              <td>$43,800</td>
+            </tr>
+            <tr>
+              <td>System prompt — 5-min cached (1 write/hour, 999 reads/hour)</td>
+              <td>Write: 20K × 730 = 14.6M<br>Read: 20K × 999 × 730 = 14.59B</td>
+              <td>Write $3.75<br>Read $0.30</td>
+              <td>Write $55 + Read $4,377 = <strong>$4,432</strong></td>
+            </tr>
+            <tr>
+              <td>User message — input (no caching, it varies)</td>
+              <td>500 × 1,000 × 730 = 365M</td>
+              <td>$3 / 1M</td>
+              <td>$1,095</td>
+            </tr>
+            <tr>
+              <td>Reply — output</td>
+              <td>600 × 1,000 × 730 = 438M</td>
+              <td>$15 / 1M</td>
+              <td>$6,570</td>
+            </tr>
+            <tr class="total-row">
+              <td>Monthly total — uncached</td><td></td><td></td><td>$51,465</td>
+            </tr>
+            <tr class="total-row">
+              <td>Monthly total — cached</td><td></td><td></td><td>$12,097</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="savings-callout banner">→ Caching the system prompt alone: <strong>$39,368/month saved (~77% off the total bill).</strong> No quality change. No latency tax.</div>
+
+      <p>
+        The output tokens don't cache — they're generated fresh every call — so the ceiling of the savings is the input side. In most production chatbots, 70–90% of tokens are input, so caching clicks in hard.
+      </p>
+    </section>
+
+    <section>
+      <h2>What to cache, what NOT to cache</h2>
+
+      <p>
+        Not every long chunk of context benefits from caching. Use this rough taxonomy:
+      </p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="prompt-label">Cache these</div>
+          <div class="prompt-text">System prompts (rules, tone, few-shot examples)
+Retrieved documents that repeat across users
+Policy manuals, schemas, code context
+Conversation history (when it stabilizes)
+Tool definitions and function schemas
+Translation glossaries, style guides</div>
+          <div class="prompt-explanation">These are stable, often long, and reused across many calls. Classic cache hits.</div>
+        </div>
+
+        <div class="prompt-example bad">
+          <div class="prompt-label">Do NOT cache these</div>
+          <div class="prompt-text">User IDs, session tokens, timestamps
+A/B test variant IDs
+Random seeds, nonces
+Freshly retrieved documents unique to one query
+Streaming chunks mid-generation
+Anything with PII you don't want retained</div>
+          <div class="prompt-explanation">These break the prefix match, inflate cache churn, or leak identifiers across the cache infrastructure.</div>
+        </div>
+      </div>
+
+      <p>
+        The ordering rule carries the whole design: stable stuff first, dynamic stuff last. If you're building a prompt, think of it as a sandwich — the bread (system + retrieved context) is cacheable, the filling (user's current message) goes at the end.
+      </p>
+    </section>
+
+    <section>
+      <h2>The silent killers: whitespace, invalidation, near-misses</h2>
+
+      <p>
+        Caching looks binary on paper — either your prefix matches or it doesn't — but real-world cache misses almost always trace to one of these five bugs. Most of them cost you money without any warning signs until you look at a cache-hit-rate graph.
+      </p>
+
+      <ul>
+        <li><strong>Trailing whitespace or newline differences.</strong> One extra <code>\n</code> between the cached block and the next block invalidates the whole match. Normalize aggressively.</li>
+        <li><strong>Template-engine re-rendering.</strong> If your system prompt is rendered from Jinja/Handlebars and the template renders even microscopically differently on each call (e.g., dict-ordering in Python &lt;3.7, floating-point formatting), the prefix won't match.</li>
+        <li><strong>Dynamic content inside a "static" section.</strong> The classic: a system prompt that starts with <code>Current date: 2026-04-19 14:33:07</code>. That one timestamp kills the entire cache, every call, every day.</li>
+        <li><strong>Forgotten <code>cache_control</code> on subsequent calls.</strong> Anthropic requires the marker on every request that wants to read from the cache. If half your code paths set it and half don't, half miss.</li>
+        <li><strong>Cache eviction under pressure.</strong> Under sustained load or provider capacity events, caches can be evicted early. Your hit rate drops silently; your bill creeps up. Monitor.</li>
+      </ul>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> When you build a cached prefix, write a unit test that hashes the string and asserts the hash is stable. If the hash changes between runs without a real content change, your template is contaminating the cache. Catch it once in CI, never debug it in production.
+      </div>
+    </section>
+
+    <section>
+      <h2>Semantic caching — the 2026 complement</h2>
+
+      <p>
+        Prefix caching only helps when prefixes are byte-identical. But a huge portion of real traffic is <em>semantically</em> identical with small wording differences: "how do I reset my password" vs "I forgot my password, what do I do" vs "where's the password reset button?"
+      </p>
+
+      <p>
+        <strong>Semantic caching</strong> handles that case. You embed the incoming query, check a vector store for a sufficiently similar cached query, and return the cached response if similarity is above a threshold. When it hits, you skip the LLM entirely — the whole call costs pennies instead of dollars.<sup><a href="#src-semantic">4</a></sup>
+      </p>
+
+      <p>
+        The two popular stacks in 2026:
+      </p>
+
+      <div class="tool-card">
+        <div class="tool-icon">R</div>
+        <div class="tool-info">
+          <div class="tool-name">Redis Semantic Cache (LangChain <code>RedisSemanticCache</code>)</div>
+          <div class="tool-desc">Redis + a vector-similarity index. Default distance threshold 0.2 (cosine). Recommended starting similarity threshold ~0.85. Drop-in wrapper for LangChain apps.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">U</div>
+        <div class="tool-info">
+          <div class="tool-name">Upstash Semantic Cache</div>
+          <div class="tool-desc">Serverless/edge-friendly, built on Upstash Vector. Good for Cloudflare Workers and Vercel edge deployments where you don't want to run Redis yourself.</div>
+        </div>
+      </div>
+
+      <p>
+        Reported savings are real: semantic caching can skip 40–70% of LLM calls on help-desk, FAQ, and documentation workloads, with response latency dropping 40–50% because a vector lookup is much faster than a model call.
+      </p>
+
+      <div class="warning-box">
+        <strong>Warning — similarity threshold sensitivity:</strong> threshold too low and you return wrong answers (the cache "matches" queries that actually need different responses). Too high and the cache never hits. Start at 0.85 similarity (≈ 0.15 cosine distance), log false positives, and tune up or down based on real traffic. Always keep a fallback path to the LLM when confidence is low.
+      </div>
+    </section>
+
+    <section>
+      <h2>ROI comparison: one chatbot, three caching strategies</h2>
+
+      <p>
+        Same 1,000-calls/hour support bot from earlier, but now looking at three approaches over a month of traffic:
+      </p>
+
+      <div class="roi-box">
+        <div class="roi-side scenario-a">
+          <h4>No caching, no optimizations</h4>
+          <p>System prompt of 20K tokens re-sent on every call. User message + output unchanged.</p>
+          <ul>
+            <li>Monthly input cost: $44,895</li>
+            <li>Monthly output cost: $6,570</li>
+            <li><strong>Monthly total: $51,465</strong></li>
+            <li>Effective cost per call: $0.071</li>
+          </ul>
+        </div>
+        <div class="roi-side scenario-b">
+          <h4>Prefix caching + semantic cache (50% hit)</h4>
+          <p>20K system prompt cached (1 write/hour, 999 reads/hour). 50% of user queries served from semantic cache — no LLM call at all.</p>
+          <ul>
+            <li>Prefix caching saves ~$39K (see prior section)</li>
+            <li>50% of calls skipped entirely → ~$6K more saved</li>
+            <li><strong>Monthly total: ~$6,048</strong></li>
+            <li>Effective cost per call: $0.008</li>
+          </ul>
+        </div>
+        <div class="roi-verdict">→ Verdict: combining prefix + semantic caching cuts the bill by ~88% for this workload. $45,000/month saved on one feature.</div>
+      </div>
+
+      <p>
+        The scenarios stack: prefix caching attacks the input tokens of the calls you do make; semantic caching attacks the <em>number</em> of calls you make at all. They're orthogonal — use both.
+      </p>
+    </section>
+
+    <section>
+      <h2>Stacking caching with the other levers</h2>
+
+      <p>
+        Prompt caching is one of the five levers. It gets even better when stacked:
+      </p>
+
+      <ul>
+        <li><strong>Caching + batch (Chapter 5):</strong> batch is already 50% off; adding caching to long repeated prefixes in batch workloads gets you down toward an effective 5–10% of list price.</li>
+        <li><strong>Caching + compression (Chapter 6):</strong> compress the dynamic part of the prompt so that the cacheable part is proportionally bigger. Small content changes don't bust the prefix.</li>
+        <li><strong>Caching + routing (Chapter 7):</strong> different models have different cached system prompts — make sure your router doesn't cause each route to rewrite the cache constantly.</li>
+        <li><strong>Caching + observability (Chapter 9):</strong> instrument <code>cached_tokens</code> per request, watch hit rate trend lines — a 20% drop in cache-hit rate typically signals a template change that broke the prefix.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Exercise: audit one feature's cache-ability</h2>
+
+      <div class="exercise-box">
+        <p>Pick one AI feature you ship. Spend 30 minutes on this:</p>
+        <ol>
+          <li><strong>Dump a typical prompt.</strong> Open your most-called endpoint. Grab the full prompt structure that ships to the provider — system message, retrieved context, user message.</li>
+          <li><strong>Count the tokens in each section.</strong> Use the provider's tokenizer (Anthropic's <code>count_tokens</code>, OpenAI's tiktoken, Gemini's <code>countTokens</code>). Break out: system, context, user, total.</li>
+          <li><strong>Classify each section as static, semi-static, or dynamic.</strong> A section with any token changing call-to-call is dynamic.</li>
+          <li><strong>Compute the cacheable prefix length.</strong> That's the sum of everything static, up to the first dynamic section.</li>
+          <li><strong>Estimate your cache-read rate.</strong> Assume calls land every <em>T</em> seconds on average. If <em>T</em> &lt; 300 (5 min), you're in 5-min-cache territory. If <em>T</em> &gt; 3,600, caching won't help much without the 1-hour TTL.</li>
+          <li><strong>Compute monthly savings.</strong> (cacheable prefix tokens) × (calls/month − 1) × (0.9 × input_rate). That's your ceiling.</li>
+          <li><strong>If the ceiling exceeds 10% of the feature's monthly bill:</strong> this is a work item, not a "nice-to-have." Add it to next sprint.</li>
+        </ol>
+        <p><strong>Bonus:</strong> grep your code for timestamp formatting, UUIDs, or template-variable substitution inside what you intended to be a static prefix. Each hit is a potential cache killer.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The mental model to take away</h2>
+
+      <p>
+        Think of every prompt as a two-part package: a <strong>bread</strong> (static, cacheable prefix) and a <strong>filling</strong> (dynamic, per-call content). The engineering question is always: how thick is the bread, how thin is the filling, and how well-lined-up is the sandwich?
+      </p>
+
+      <ul class="checklist">
+        <li class="checked">Put stable content first, dynamic content last.</li>
+        <li class="checked">Mark the cache explicitly on Anthropic; trust automatic on OpenAI and Gemini.</li>
+        <li class="checked">Verify cache hit rate via <code>cached_tokens</code> in the response.</li>
+        <li class="checked">Normalize whitespace and template output to prevent near-miss churn.</li>
+        <li class="checked">Layer semantic caching on top for high-similarity workloads.</li>
+        <li class="checked">Re-check the cache-hit-rate dashboard weekly — it drifts.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>
+        Caching is the first and biggest lever, but it only helps the <em>cost of each call</em>. The next lever tackles a different axis: the <em>price</em> of the call itself. Chapter 5 covers the <strong>Batch APIs</strong> — a flat 50% discount across every major provider, for any workload that can wait up to 24 hours. And, yes, batch and caching stack: combine them and you're paying roughly 5% of list price on repeated-prefix workloads. Bring your overnight evaluation runs, embedding backfills, and bulk labeling jobs.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-anthropic-cache"><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching" target="_blank" rel="noopener">Anthropic — Prompt Caching docs (cache_control, 5m/1h TTL, 1.25x/2x write, 0.1x read)</a></li>
+        <li id="src-openai-cache"><a href="https://openai.com/index/api-prompt-caching/" target="_blank" rel="noopener">OpenAI — Prompt caching in the API (90% discount, 1024-token minimum, automatic)</a></li>
+        <li id="src-gemini-cache"><a href="https://ai.google.dev/gemini-api/docs/caching" target="_blank" rel="noopener">Google Gemini — Context caching (implicit vs explicit, 1,024/2,048/32,768 minimums, 75/90% discount)</a></li>
+        <li id="src-semantic"><a href="https://redis.io/blog/what-is-semantic-caching/" target="_blank" rel="noopener">Redis — Semantic caching guide (RedisSemanticCache, similarity threshold 0.85, 40–70% call-reduction)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="03-2026-pricing-landscape.html">← Chapter 3</a>
+    <a href="05-batch-apis.html">Chapter 5 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

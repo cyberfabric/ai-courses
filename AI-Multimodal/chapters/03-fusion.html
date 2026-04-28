@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: The Fusion Problem | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-how-machines-perceive.html">← Prev</a>
+      <a href="04-multimodal-prompting.html">Next →</a>
+      <a href="maps/03-fusion-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 3</div>
+    <h1>The Fusion Problem</h1>
+    <p class="subtitle">How models combine seeing, hearing, and reading into one understanding</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>You Have Embeddings. Now What?</h2>
+
+      <p>In Chapter 2, you learned that every modality — images, audio, text — gets converted into embeddings: lists of numbers that capture meaning. Vision encoders produce image embeddings. Audio encoders produce audio embeddings. Text encoders produce text embeddings.</p>
+
+      <p>Great. But here's the problem that kept AI researchers up at night for years:</p>
+
+      <div class="highlight-box">
+        <strong>You have embeddings from different modalities. How do you combine them?</strong><br><br>
+        When you upload a photo to Claude and ask "What's in this image?", the model has image embeddings (from the photo) and text embeddings (from your question). How does it look at <em>both</em> to produce a useful answer?
+      </div>
+
+      <p>This is the <strong>fusion problem</strong> — the core technical challenge of multimodal AI. Get fusion right, and the model understands the relationship between what it sees and what you ask. Get it wrong, and the model treats the image and text as completely separate, unrelated things.</p>
+
+      <p>There are three main approaches, and the best analogy I've found involves cooking.</p>
+    </section>
+
+    <!-- The Three Approaches -->
+    <section>
+      <h2>Three Ways to Combine Modalities</h2>
+
+      <p>Imagine you're a chef with two ingredients: chicken and vegetables. You need to combine them into a dish. You have three fundamental approaches:</p>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h4>🥘 The Stew (Early Fusion)</h4>
+          <p>Throw everything into one pot from the start. The chicken and vegetables cook together, flavors blend from the beginning.</p>
+        </div>
+        <div class="comparison-col">
+          <h4>🍱 The Bento Box (Late Fusion)</h4>
+          <p>Cook each ingredient separately, then arrange them on one plate. Each is prepared perfectly on its own terms.</p>
+        </div>
+      </div>
+
+      <div class="highlight-box" style="text-align: center;">
+        <h4>🎵 The Jazz Band (Cross-Attention Fusion)</h4>
+        <p>Each musician plays their own instrument, but they <em>listen to each other</em> and respond in real-time. The sax player adjusts their melody based on what the piano is doing. The result is richer than any solo performance.</p>
+      </div>
+
+      <p>Each approach has trade-offs, and modern multimodal models use different ones for different purposes. Let's dig into each.</p>
+    </section>
+
+    <!-- Early Fusion -->
+    <section>
+      <h2>Early Fusion: Everything in One Pot</h2>
+
+      <p>The simplest idea: take all your raw data from every modality, mash it together, and feed it into a single model.</p>
+
+      <div class="pipeline-box">
+        <h3>Early Fusion Pipeline</h3>
+        <div class="workflow-steps">
+          <div class="step">
+            <strong>Raw Image</strong>
+            <p>Pixel values (millions of numbers)</p>
+          </div>
+          <div class="step-arrow">+</div>
+          <div class="step">
+            <strong>Raw Text</strong>
+            <p>Token IDs (sequence of numbers)</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Concatenate</strong>
+            <p>Smush them into one big input sequence</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Single Model</strong>
+            <p>One neural network processes everything together</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Output</strong>
+            <p>Combined understanding</p>
+          </div>
+        </div>
+      </div>
+
+      <p>The advantage: the model can discover deep connections between modalities from the very beginning. If there's a subtle relationship between a region of the image and a specific word — early fusion can catch it.</p>
+
+      <p>The disadvantage: it's <strong>expensive</strong>. Feeding raw pixels plus text tokens into a single Transformer means an enormous input sequence. A single 1080p image is ~6 million numbers. That's computationally brutal.</p>
+
+      <div class="tip-box">
+        <strong>Where you'll see early fusion:</strong> Google's Gemini models are the most prominent example. They were trained from the ground up to process text, images, audio, and video as a single interleaved sequence. The model doesn't have a separate "vision module" — it treats image patches and text tokens the same way throughout.
+      </div>
+
+      <p>Think of early fusion like learning a new language by immersion. You don't study grammar rules (separate processing) — you just absorb everything at once. It's powerful but slow and demands a lot of brainpower.</p>
+    </section>
+
+    <!-- Late Fusion -->
+    <section>
+      <h2>Late Fusion: The Bento Box Approach</h2>
+
+      <p>Late fusion takes the opposite approach: process each modality completely separately, then combine the results at the end.</p>
+
+      <div class="pipeline-box">
+        <h3>Late Fusion Pipeline</h3>
+        <div class="workflow-steps">
+          <div class="step">
+            <strong>Image</strong>
+            <p>Vision encoder → image embedding</p>
+          </div>
+          <div class="step-arrow">↘</div>
+          <div class="step">
+            <strong>Combine</strong>
+            <p>Merge final embeddings (average, concatenate, or compare)</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Output</strong>
+            <p>Combined result</p>
+          </div>
+        </div>
+        <div class="workflow-steps" style="margin-top: 0.5rem;">
+          <div class="step">
+            <strong>Text</strong>
+            <p>Text encoder → text embedding</p>
+          </div>
+          <div class="step-arrow">↗</div>
+          <div class="step" style="visibility: hidden;">placeholder</div>
+        </div>
+      </div>
+
+      <p>Each modality gets its own specialized encoder. The image encoder does what it does best — understand visual features. The text encoder does what it does best — understand language. Only at the very end do their outputs get combined.</p>
+
+      <p>The advantage: it's <strong>efficient and modular</strong>. You can swap encoders, upgrade one without touching the other, and each encoder is optimized for its modality. Also fast — you can process image and text in parallel.</p>
+
+      <p>The disadvantage: the modalities never "talk" to each other during processing. The image encoder doesn't know what question you asked, so it can't focus on the relevant part of the image. You lose cross-modal nuance.</p>
+
+      <div class="modality-box">
+        <h3>Late Fusion in the Wild: Image Search</h3>
+        <p>Google Photos search is a classic late fusion system. When you type "beach sunset," the text encoder produces an embedding. Your photos were already encoded by a vision encoder when you uploaded them. The system just compares the text embedding to all the image embeddings and finds the closest matches.</p>
+        <p>The text processing and image processing never interact during encoding — they only meet at the comparison step. That's pure late fusion, and it works beautifully for search.</p>
+      </div>
+    </section>
+
+    <!-- Cross-Attention -->
+    <section>
+      <h2>Cross-Attention Fusion: The Jazz Band</h2>
+
+      <p>This is where it gets interesting — and this is how most modern multimodal LLMs work.</p>
+
+      <p>In cross-attention fusion, each modality has its own encoder, but the encoders (or the downstream model) can <strong>look at each other's outputs during processing</strong>. The text model can "attend to" specific parts of the image. The image processing can be influenced by what the text says.</p>
+
+      <p>If you've worked with Transformers (and if you use LLMs, you have), you know about <strong>attention</strong> — the mechanism that lets each token look at all other tokens to figure out what's relevant. Cross-attention is the same idea, but <em>across modalities</em>: text tokens attend to image patches, and vice versa.</p>
+
+      <div class="pipeline-box">
+        <h3>Cross-Attention Fusion Pipeline</h3>
+        <div class="workflow-steps">
+          <div class="step">
+            <strong>Image Encoder</strong>
+            <p>Image → patch embeddings (e.g., 197 patches)</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Cross-Attention Layers</strong>
+            <p>Text tokens "look at" image patches. "What part of the image answers this question?"</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Language Model</strong>
+            <p>Generates response informed by both text and relevant image regions</p>
+          </div>
+        </div>
+        <div class="workflow-steps" style="margin-top: 0.5rem;">
+          <div class="step">
+            <strong>Text Encoder</strong>
+            <p>Question → token embeddings</p>
+          </div>
+          <div class="step-arrow">↗</div>
+          <div class="step" style="visibility: hidden;">placeholder</div>
+        </div>
+      </div>
+
+      <p>Here's the key insight: when you ask Claude "What color is the car in this photo?", the cross-attention mechanism lets the word "car" attend to the patch embeddings that contain the car, and the word "color" tells the model what property to extract. The text guides where the model looks in the image.</p>
+
+      <div class="prompt-example good">
+        <h4>Why cross-attention makes multimodal Q&A work</h4>
+        <p><strong>You ask:</strong> "What's the error message in this screenshot?"</p>
+        <p><strong>What cross-attention does:</strong></p>
+        <ul>
+          <li>The phrase "error message" attends to image patches containing red/orange UI elements with text</li>
+          <li>The model focuses on the relevant region, ignoring the rest of the screenshot</li>
+          <li>It reads the text from those specific patches and generates a response</li>
+        </ul>
+        <p>Without cross-attention (late fusion), the model would describe the <em>entire</em> screenshot and hope the error message is mentioned somewhere in its general description.</p>
+      </div>
+
+      <p>This is why multimodal LLMs are so impressively good at answering specific questions about images — cross-attention lets the text question guide which parts of the image matter.</p>
+    </section>
+
+    <!-- Comparison Table -->
+    <section>
+      <h2>The Trade-Offs at a Glance</h2>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h4>Early Fusion</h4>
+          <ul>
+            <li><strong>Richness:</strong> ⭐⭐⭐ — deepest cross-modal understanding</li>
+            <li><strong>Cost:</strong> ⭐ — very expensive to train and run</li>
+            <li><strong>Modularity:</strong> ⭐ — can't swap components easily</li>
+            <li><strong>Example:</strong> Gemini</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h4>Late Fusion</h4>
+          <ul>
+            <li><strong>Richness:</strong> ⭐ — no cross-modal interaction</li>
+            <li><strong>Cost:</strong> ⭐⭐⭐ — cheap and parallelizable</li>
+            <li><strong>Modularity:</strong> ⭐⭐⭐ — fully modular</li>
+            <li><strong>Example:</strong> CLIP-based image search</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="highlight-box" style="text-align: center; margin-top: 1rem;">
+        <h4>Cross-Attention Fusion</h4>
+        <p><strong>Richness:</strong> ⭐⭐⭐ | <strong>Cost:</strong> ⭐⭐ | <strong>Modularity:</strong> ⭐⭐</p>
+        <p>The sweet spot for most multimodal LLMs. Used by GPT-4V, Claude vision, and many others.</p>
+      </div>
+
+      <p>In practice, most production multimodal models use a mix. The vision encoder is separate (modularity), but it feeds into the language model via cross-attention (richness). The best of both worlds.</p>
+    </section>
+
+    <!-- CLIP: The Breakthrough -->
+    <section>
+      <h2>CLIP: The Breakthrough That Changed Everything</h2>
+
+      <p>No chapter on fusion is complete without talking about <strong>CLIP</strong> (Contrastive Language-Image Pre-training), released by OpenAI in 2021. CLIP didn't invent fusion, but it solved a specific version of the problem so elegantly that it reshaped the entire field.</p>
+
+      <h3>The Idea: Shared Embedding Space</h3>
+
+      <p>CLIP's insight was deceptively simple: <strong>train an image encoder and a text encoder to produce embeddings in the same space</strong>.</p>
+
+      <p>What does "same space" mean? It means that a photo of a dog and the text "a photo of a dog" produce embeddings that are <strong>close together</strong> — literally nearby when you think of them as points in a high-dimensional space. And a photo of a dog and the text "a red sports car" produce embeddings that are <strong>far apart</strong>.</p>
+
+      <div class="pipeline-box">
+        <h3>How CLIP Was Trained</h3>
+        <div class="workflow-steps">
+          <div class="step">
+            <strong>400M Image-Text Pairs</strong>
+            <p>Photos with captions scraped from the internet</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Encode Both</strong>
+            <p>Image encoder → image embedding<br>Text encoder → text embedding</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Contrastive Learning</strong>
+            <p>Push matching pairs close together.<br>Push non-matching pairs far apart.</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Shared Space</strong>
+            <p>Images and text live in the same embedding space. You can compare them directly.</p>
+          </div>
+        </div>
+      </div>
+
+      <h3>Contrastive Learning: The Matchmaking Game</h3>
+
+      <p>Here's how contrastive learning works in plain English:</p>
+
+      <ol>
+        <li>Take a batch of, say, 32 images with their captions</li>
+        <li>Encode all 32 images → 32 image embeddings</li>
+        <li>Encode all 32 captions → 32 text embeddings</li>
+        <li>The correct pairs (image 1 + caption 1, image 2 + caption 2, etc.) should be <strong>close</strong></li>
+        <li>All wrong pairs (image 1 + caption 7, image 3 + caption 22, etc.) should be <strong>far apart</strong></li>
+        <li>Adjust the encoders to make this more true, repeat billions of times</li>
+      </ol>
+
+      <p>It's like a matchmaking game: "These two go together, these two don't." After seeing 400 million matches, the encoders get really good at it.</p>
+
+      <div class="tip-box">
+        <strong>Why CLIP changed everything:</strong> Before CLIP, if you wanted to classify images, you needed labeled training data for each category. CLIP can classify images it's never seen by just comparing them to text descriptions — <em>"a photo of a cat"</em>, <em>"a photo of a dog"</em>. This is called <strong>zero-shot classification</strong>, and it was a game-changer. It also powers image search (Google Photos), image generation guidance (Stable Diffusion uses CLIP to steer the generation process), and more.
+      </div>
+    </section>
+
+    <!-- How Modern Models Use Fusion -->
+    <section>
+      <h2>How GPT-4V, Claude, and Gemini Actually Work</h2>
+
+      <p>Let's connect all this theory to the models you actually use.</p>
+
+      <div class="model-card">
+        <h3>The "Vision Encoder + LLM" Architecture (GPT-4V, Claude)</h3>
+        <p>Most multimodal LLMs follow this pattern:</p>
+        <ol>
+          <li>A pre-trained <strong>vision encoder</strong> (usually a ViT) processes your image into patch embeddings</li>
+          <li>A <strong>projection layer</strong> maps those image embeddings into the LLM's embedding space (so the LLM can "understand" them)</li>
+          <li>The image embeddings are inserted into the token sequence alongside your text tokens</li>
+          <li>The LLM's <strong>Transformer layers with cross-attention</strong> process everything together</li>
+        </ol>
+        <p>The vision encoder was trained separately, then "bolted on" to the LLM. This is efficient — you can upgrade the vision encoder or the LLM independently.</p>
+      </div>
+
+      <div class="model-card">
+        <h3>The "Native Multimodal" Architecture (Gemini)</h3>
+        <p>Gemini takes a different approach:</p>
+        <ol>
+          <li>Images, text, audio, and video are all converted to tokens/patches</li>
+          <li>Everything is fed into a <strong>single Transformer</strong> from the start</li>
+          <li>The model was trained on all modalities simultaneously from day one</li>
+        </ol>
+        <p>This is early fusion at scale. The advantage: the model develops deep cross-modal understanding from the ground up. The disadvantage: you can't easily swap out the vision component without retraining the whole thing.</p>
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't get hung up on architecture details.</strong> As a developer using these models via API, the fusion strategy is largely invisible to you. You send an image and text, you get a response. What matters is <em>capability</em>, not implementation. But understanding fusion helps you reason about why models behave the way they do — why some are better at visual Q&A, why some are faster, and why image inputs cost tokens.
+      </div>
+    </section>
+
+    <!-- Why This Matters to You -->
+    <section>
+      <h2>OK, But What Can I Build With This?</h2>
+
+      <p>Understanding fusion isn't just academic. It directly affects how you design multimodal features:</p>
+
+      <div class="checklist">
+        <ul>
+          <li><strong>Image search in your app?</strong> That's late fusion (CLIP-style). Encode images and queries separately, compare embeddings. Fast and scalable.</li>
+          <li><strong>Visual Q&A feature?</strong> That needs cross-attention fusion. Use a multimodal LLM (Claude, GPT-4) that can relate the question to specific image regions.</li>
+          <li><strong>Video understanding?</strong> You'll likely combine approaches — late fusion for searching across frames, cross-attention for detailed analysis of specific moments.</li>
+          <li><strong>Building a custom pipeline?</strong> Understanding fusion helps you decide whether to use one model or chain specialized models together.</li>
+        </ul>
+      </div>
+
+      <div class="prompt-example good">
+        <h4>Quick CLIP-style image search in Python</h4>
+<pre><code>from transformers import CLIPProcessor, CLIPModel
+
+model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+# Encode an image and a text query into the same space
+inputs = processor(
+    text=["a photo of a cat", "a photo of a car"],
+    images=image,
+    return_tensors="pt", padding=True
+)
+outputs = model(**inputs)
+# outputs.logits_per_image → similarity scores!
+</code></pre>
+      </div>
+
+      <p>That's CLIP in 10 lines. You encode an image and text descriptions into the same space, then compare them. The highest similarity score wins. This is the foundation of visual search, zero-shot classification, and content moderation.</p>
+    </section>
+
+    <!-- Try It Box -->
+    <section>
+      <h2>See Fusion in Action</h2>
+
+      <div class="try-it-box">
+        <h3>Try It Now: Cross-Attention vs Late Fusion in Your Head</h3>
+        <p>Open Claude or ChatGPT and upload an image — something with multiple objects and some text (a busy screenshot, a photo of a desk, a restaurant menu). Then try two different types of questions:</p>
+        <ol>
+          <li><strong>Specific question:</strong> "What does the red button in the top-right corner say?"</li>
+          <li><strong>General question:</strong> "Describe everything in this image."</li>
+        </ol>
+        <p>Notice the difference:</p>
+        <ul>
+          <li>For the <strong>specific question</strong>, the model uses cross-attention to focus on exactly the right region. The answer is precise.</li>
+          <li>For the <strong>general question</strong>, the model processes the entire image more uniformly — more like late fusion, where it describes each part independently.</li>
+        </ul>
+        <p>Now try a question that requires relating two parts of the image: <em>"Is the text in the header consistent with the chart below it?"</em> This is where cross-attention really shines — the model must attend to multiple regions and reason about their relationship.</p>
+      </div>
+    </section>
+
+    <!-- Native vs Bolted-On -->
+    <section>
+      <h2>Native Multimodal vs Bolted-On: Does It Matter?</h2>
+
+      <p>You'll hear people debate whether "native multimodal" (Gemini) is better than "bolted-on vision" (GPT-4V, Claude). Here's the honest answer:</p>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h4>Native Multimodal (Gemini)</h4>
+          <ul>
+            <li>Trained on all modalities from the start</li>
+            <li>Potentially deeper cross-modal understanding</li>
+            <li>Can handle very long multimodal inputs (1M+ token context)</li>
+            <li>Harder to upgrade individual components</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h4>Bolted-On Vision (GPT-4V, Claude)</h4>
+          <ul>
+            <li>Vision encoder added to an existing LLM</li>
+            <li>Can upgrade vision or language separately</li>
+            <li>Proven to work extremely well in practice</li>
+            <li>More modular, easier to iterate on</li>
+          </ul>
+        </div>
+      </div>
+
+      <p>In practice? Both approaches produce excellent results. The architecture matters less than the training data, scale, and engineering quality. Choose based on <strong>capabilities and performance on your specific task</strong>, not architecture purity.</p>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Which Fusion Strategy?</h3>
+        <p>For each of these real-world features, decide which fusion approach would be most appropriate and why:</p>
+        <ol>
+          <li><strong>A reverse image search engine</strong> (upload a photo, find similar photos) — which fusion?</li>
+          <li><strong>A medical AI that reads X-rays and answers doctor's questions</strong> about specific findings — which fusion?</li>
+          <li><strong>A social media content moderation system</strong> that flags images containing certain objects — which fusion?</li>
+          <li><strong>A voice assistant that can see your screen</strong> and answer questions about what you're looking at — which fusion?</li>
+          <li><strong>A music recommendation system</strong> that matches songs to mood descriptions — which fusion?</li>
+        </ol>
+        <p><strong>Answers:</strong></p>
+        <ul>
+          <li>1: <strong>Late fusion</strong> — encode all images in advance, compare embeddings at search time. Fast and scalable.</li>
+          <li>2: <strong>Cross-attention</strong> — the doctor's question needs to guide which part of the X-ray the model focuses on.</li>
+          <li>3: <strong>Late fusion</strong> — encode images, compare against embeddings of flagged categories. Needs to be fast at scale.</li>
+          <li>4: <strong>Cross-attention / early fusion</strong> — needs deep understanding of both the visual content and the spoken question.</li>
+          <li>5: <strong>Late fusion</strong> (CLIP-style) — encode songs and mood descriptions into the same space, find matches.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>You now understand the three fundamental approaches to combining modalities, how CLIP put images and text in the same space, and how GPT-4V, Claude, and Gemini combine vision and language under the hood.</p>
+
+      <p>With the foundations complete, it's time to get practical. In Chapter 4, we'll roll up our sleeves and actually <strong>send images to LLMs via their APIs</strong>. You'll learn how to format image requests for Claude, GPT-4, and Gemini, write effective multimodal prompts, handle multiple images, and understand the cost and token implications of vision inputs.</p>
+
+      <p>Theory's over. Time to build.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="02-how-machines-perceive.html" class="prev">
+      <span class="nav-direction">← Previous</span>
+      <span class="nav-chapter">How Machines See, Hear, and Read</span>
+    </a>
+    <a href="04-multimodal-prompting.html" class="next">
+      <span class="nav-direction">Next →</span>
+      <span class="nav-chapter">Multimodal Prompting: Sending Images to LLMs</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

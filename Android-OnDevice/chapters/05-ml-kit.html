@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: ML Kit — Google's Plug-and-Play AI — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-mediapipe.html">&larr; Prev</a>
+      <a href="06-gemini-nano.html">Next &rarr;</a>
+      <a href="maps/05-ml-kit-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>ML Kit &mdash; Google's Plug-and-Play AI</h1>
+    <p class="subtitle">Text recognition, barcode scanning, translation, and more — zero ML expertise required</p>
+  </header>
+
+  <main>
+
+    <h2>The Highest-Level AI Toolkit on Android</h2>
+
+    <p>In Chapter 3 you built an image classifier from scratch with TFLite. In Chapter 4 you used MediaPipe for real-time vision tasks with much less code. Now we're going even higher up the abstraction ladder.</p>
+
+    <p><strong>ML Kit</strong> is Google's highest-level on-device ML SDK. It wraps common AI features into APIs so simple they feel like regular Android SDK calls. Want to read text from a photo? Three lines. Scan a barcode? Three lines. Translate a sentence offline? Three lines.</p>
+
+    <p>If TFLite is cooking from raw ingredients and MediaPipe is a meal kit, ML Kit is ordering takeout — you describe what you want and it just appears.</p>
+
+    <h2>When to Use Which</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Framework</th>
+          <th>Best For</th>
+          <th>Flexibility</th>
+          <th>Setup Time</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>ML Kit</strong></td>
+          <td>Common tasks (OCR, barcode, translation, face detection)</td>
+          <td>Low — use their APIs as-is</td>
+          <td>Minutes</td>
+        </tr>
+        <tr>
+          <td><strong>MediaPipe</strong></td>
+          <td>Real-time tracking (hands, face mesh, pose, objects)</td>
+          <td>Medium — configurable but fixed pipelines</td>
+          <td>30 min</td>
+        </tr>
+        <tr>
+          <td><strong>TFLite</strong></td>
+          <td>Custom models, specialized tasks, full control</td>
+          <td>High — any model, any pipeline</td>
+          <td>Hours</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Start at the top.</strong> Check ML Kit first — if it does what you need, you're done. If you need more control or real-time landmark tracking, try MediaPipe. Only drop to raw TFLite when you need a custom model that neither ML Kit nor MediaPipe supports.
+    </div>
+
+    <h2>On-Device vs. Cloud Features</h2>
+
+    <p>ML Kit has two categories of APIs. Know which is which before you ship:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Fully on-device (no network needed)</p>
+        <div class="prompt-text">Text recognition (OCR)
+Barcode / QR scanning
+Face detection &amp; face mesh
+On-device translation (with downloaded packs)
+Smart reply
+Entity extraction
+Digital ink recognition
+Image labeling
+Object detection</div>
+        <p class="prompt-explanation">These work in airplane mode. Models are bundled or downloaded once. No per-request cost.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Requires network / Firebase</p>
+        <div class="prompt-text">Cloud text recognition (document AI)
+Cloud image labeling (more categories)
+Cloud landmark recognition
+Custom model hosting via Firebase ML</div>
+        <p class="prompt-explanation">These send data to Google Cloud. Higher accuracy but require connectivity and may incur API costs.</p>
+      </div>
+    </div>
+
+    <p>This chapter focuses entirely on the on-device features — the ones that work offline and cost nothing.</p>
+
+    <h2>Text Recognition (OCR) — Building a Receipt Scanner</h2>
+
+    <p>This is ML Kit's killer feature. Point the camera at text — any text — and ML Kit extracts it with structure preserved. It understands blocks, lines, words, and even the bounding box of each element.</p>
+
+    <div class="model-pipeline">
+      <p><strong>OCR pipeline — from camera to structured text:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Camera Frame</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">InputImage</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">TextRecognizer</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Text Blocks &rarr; Lines &rarr; Words</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Compose UI</span>
+      </div>
+    </div>
+
+    <p>Add the dependency:</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}</code></pre>
+
+    <p>And recognize text from a camera frame:</p>
+
+<pre><code>val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+// From CameraX ImageProxy:
+analysis.setAnalyzer(executor) { proxy ->
+    val mediaImage = proxy.image ?: return@setAnalyzer proxy.close()
+    val inputImage = InputImage.fromMediaImage(
+        mediaImage, proxy.imageInfo.rotationDegrees
+    )
+
+    recognizer.process(inputImage)
+        .addOnSuccessListener { text ->
+            // text.textBlocks → paragraphs
+            // each block has .lines → lines of text
+            // each line has .elements → individual words
+            for (block in text.textBlocks) {
+                for (line in block.lines) {
+                    Log.d("OCR", line.text)  // "Total: $42.50"
+                }
+            }
+        }
+        .addOnCompleteListener { proxy.close() }
+}</code></pre>
+
+    <p>The result is hierarchical: <code>Text</code> contains <code>TextBlock</code>s (paragraphs), which contain <code>Line</code>s, which contain <code>Element</code>s (words). Each element has a <code>boundingBox</code> — a <code>Rect</code> telling you exactly where that text appears in the image.</p>
+
+    <h3>Building the Receipt Scanner UI</h3>
+
+<pre><code>@Composable
+fun ReceiptResults(blocks: List&lt;TextBlock&gt;) {
+    LazyColumn(modifier = Modifier.padding(16.dp)) {
+        items(blocks) { block ->
+            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    block.lines.forEach { line ->
+                        Text(
+                            text = line.text,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+    }
+}</code></pre>
+
+    <div class="device-benchmark">
+      <p><strong>ML Kit text recognition performance:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Pixel 8 Pro</th>
+            <th>Galaxy A54</th>
+            <th>Accuracy</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Printed receipt (good lighting)</td>
+            <td>~35 ms</td>
+            <td>~80 ms</td>
+            <td>98%+</td>
+          </tr>
+          <tr>
+            <td>Business card</td>
+            <td>~30 ms</td>
+            <td>~70 ms</td>
+            <td>97%+</td>
+          </tr>
+          <tr>
+            <td>Street sign (outdoors)</td>
+            <td>~40 ms</td>
+            <td>~90 ms</td>
+            <td>95%+</td>
+          </tr>
+          <tr>
+            <td>Handwritten notes</td>
+            <td>~50 ms</td>
+            <td>~110 ms</td>
+            <td>80-90%</td>
+          </tr>
+          <tr>
+            <td>Low light / blurry</td>
+            <td>~45 ms</td>
+            <td>~100 ms</td>
+            <td>70-85%</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">ML Kit's Latin script model is bundled automatically (~3MB). For Chinese, Japanese, Korean, or Devanagari, add the corresponding recognizer module (each ~10MB).</p>
+    </div>
+
+    <h2>Barcode and QR Code Scanning</h2>
+
+    <p>ML Kit's barcode scanner is fast, reliable, and handles every format you'll encounter. It's the one feature where ML Kit is clearly the best choice on Android — better than ZXing, faster than any custom solution.</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+}
+
+// Configure which formats to scan (narrower = faster)
+val options = BarcodeScannerOptions.Builder()
+    .setBarcodeFormats(
+        Barcode.FORMAT_QR_CODE,
+        Barcode.FORMAT_EAN_13,
+        Barcode.FORMAT_CODE_128
+    )
+    .build()
+
+val scanner = BarcodeScanning.getClient(options)
+
+scanner.process(inputImage)
+    .addOnSuccessListener { barcodes ->
+        for (barcode in barcodes) {
+            when (barcode.valueType) {
+                Barcode.TYPE_URL -> openUrl(barcode.url!!.url!!)
+                Barcode.TYPE_WIFI -> connectToWifi(barcode.wifi!!)
+                Barcode.TYPE_PRODUCT -> lookupProduct(barcode.rawValue!!)
+            }
+        }
+    }</code></pre>
+
+    <div class="tip-box">
+      <strong>Restrict barcode formats for speed.</strong> If you only need QR codes, don't scan for all 13 formats. Each additional format adds processing time. Scanning just QR codes is about 2x faster than scanning all formats.
+    </div>
+
+    <h2>On-Device Translation</h2>
+
+    <p>ML Kit can translate between 50+ language pairs entirely on-device. Each language model is small (2-5MB), downloaded on demand, and runs without any network connection once downloaded.</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mlkit:translate:17.0.3")
+}
+
+// Create a translator for English → Spanish
+val options = TranslatorOptions.Builder()
+    .setSourceLanguage(TranslateLanguage.ENGLISH)
+    .setTargetLanguage(TranslateLanguage.SPANISH)
+    .build()
+val translator = Translation.getClient(options)
+
+// Download the language model if not already cached
+val conditions = DownloadConditions.Builder()
+    .requireWifi()  // don't burn mobile data
+    .build()
+
+translator.downloadModelIfNeeded(conditions)
+    .addOnSuccessListener {
+        // Model ready — now translate!
+        translator.translate("Hello, how are you?")
+            .addOnSuccessListener { translated ->
+                // translated = "Hola, ¿cómo estás?"
+            }
+    }</code></pre>
+
+    <h3>Managing Downloaded Language Models</h3>
+
+    <p>Each language pair downloads a small model (~2-5MB). On a device with limited storage, you might want to manage these:</p>
+
+<pre><code>val modelManager = RemoteModelManager.getInstance()
+
+// List all downloaded translation models
+modelManager.getDownloadedModels(TranslateRemoteModel::class.java)
+    .addOnSuccessListener { models ->
+        models.forEach { model ->
+            Log.d("Translation", "Downloaded: ${model.language}")
+        }
+    }
+
+// Delete a model to free space
+val spanishModel = TranslateRemoteModel.Builder(TranslateLanguage.SPANISH).build()
+modelManager.deleteDownloadedModel(spanishModel)</code></pre>
+
+    <div class="warning-box">
+      <strong>Translation quality is "travel-grade," not "professional-grade."</strong> On-device translation models are small and optimized for speed, not nuance. They handle everyday phrases, menus, signs, and basic communication well. They struggle with idioms, technical jargon, and literary text. For critical translations, fall back to a cloud API.
+    </div>
+
+    <h2>Smart Reply</h2>
+
+    <p>Smart Reply generates contextual reply suggestions for messaging apps — like the "quick reply" chips in Gmail or Messages. You feed it a conversation history, and it suggests 1-3 appropriate responses.</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mlkit:smart-reply:17.0.4")
+}
+
+val smartReply = SmartReply.getClient()
+
+// Build conversation history
+val conversation = mutableListOf(
+    TextMessage.createForRemoteUser(
+        "Hey, are we still meeting for lunch?", System.currentTimeMillis(), "Alice"
+    ),
+    TextMessage.createForLocalUser(
+        "Yes! Where should we go?", System.currentTimeMillis()
+    ),
+    TextMessage.createForRemoteUser(
+        "How about that new Thai place?", System.currentTimeMillis(), "Alice"
+    )
+)
+
+smartReply.suggestReplies(conversation)
+    .addOnSuccessListener { result ->
+        if (result.status == SmartReplySuggestionResult.STATUS_SUCCESS) {
+            result.suggestions.forEach { suggestion ->
+                Log.d("SmartReply", suggestion.text)
+                // "Sounds great!", "Sure!", "I'm in!"
+            }
+        }
+    }</code></pre>
+
+    <div class="tip-box">
+      Smart Reply works best with 3-10 messages of context. Too few messages and it can't understand the conversation. Too many and older messages add noise. Feed it the most recent, relevant messages.
+    </div>
+
+    <h2>Entity Extraction — Detecting Actionable Items in Text</h2>
+
+    <p>Entity extraction finds structured data in unstructured text: dates, addresses, phone numbers, emails, flight numbers, tracking numbers, payment card numbers, and more. It's like a smart clipboard that knows what to do with copied text.</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mlkit:entity-extraction:16.0.0-beta5")
+}
+
+val extractor = EntityExtraction.getClient(
+    EntityExtractorOptions.Builder(EntityExtractorOptions.ENGLISH).build()
+)
+
+extractor.downloadModelIfNeeded()
+    .addOnSuccessListener {
+        val params = EntityExtractionParams.Builder("Call me at 555-0123 on March 15")
+            .build()
+
+        extractor.annotate(params)
+            .addOnSuccessListener { annotations ->
+                annotations.forEach { annotation ->
+                    val text = annotation.annotatedText  // "555-0123"
+                    annotation.entities.forEach { entity ->
+                        when (entity) {
+                            is PhoneEntity -> dialPhone(text)
+                            is DateTimeEntity -> addToCalendar(entity)
+                            is AddressEntity -> openMaps(text)
+                        }
+                    }
+                }
+            }
+    }</code></pre>
+
+    <h2>Digital Ink Recognition — Handwriting to Text</h2>
+
+    <p>Digital ink recognition converts touch-drawn strokes into text. Unlike OCR (which reads text from photos), this works with live drawing input — perfect for note-taking apps, signature fields, or handwriting input in any language.</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mlkit:digital-ink-recognition:18.1.0")
+}
+
+// Collect strokes from touch events
+val strokeBuilder = Ink.Stroke.builder()
+// In your Canvas onDrag handler:
+strokeBuilder.addPoint(Ink.Point.create(x, y, System.currentTimeMillis()))
+
+// When the user lifts their finger:
+val ink = Ink.builder().addStroke(strokeBuilder.build()).build()
+
+val model = DigitalInkRecognitionModelIdentifier.fromTag("en-US")!!
+val recognizer = DigitalInkRecognition.getClient(
+    DigitalInkRecognizerOptions.builder(
+        DigitalInkRecognitionModel.builder(model).build()
+    ).build()
+)
+
+recognizer.recognize(ink)
+    .addOnSuccessListener { result ->
+        val topCandidate = result.candidates[0].text
+        // topCandidate = "Hello world"
+    }</code></pre>
+
+    <div class="hardware-note">
+      <p><strong>ML Kit on-device feature availability by Android version:</strong></p>
+      <ul>
+        <li><strong>Android 5.0+ (API 21)</strong> — Text recognition, barcode scanning, face detection, image labeling</li>
+        <li><strong>Android 6.0+ (API 23)</strong> — On-device translation, smart reply, entity extraction</li>
+        <li><strong>Android 7.0+ (API 24)</strong> — Digital ink recognition, all remaining features</li>
+        <li><strong>Google Play Services required</strong> — ML Kit on-device models are delivered via Google Play Services. Devices without GMS (some Huawei phones, Amazon Fire tablets) cannot use ML Kit. For those devices, fall back to raw TFLite.</li>
+      </ul>
+    </div>
+
+    <h2>Custom Models via ML Kit</h2>
+
+    <p>ML Kit isn't limited to its built-in features. You can run your own TFLite models through ML Kit's infrastructure, getting model download management, versioning, and OTA updates for free.</p>
+
+    <h3>Local Model (Bundled in APK)</h3>
+
+<pre><code>val localModel = LocalModel.Builder()
+    .setAssetFilePath("my_custom_model.tflite")
+    .build()
+
+val labeler = ImageLabeling.getClient(
+    CustomImageLabelerOptions.Builder(localModel)
+        .setConfidenceThreshold(0.5f)
+        .build()
+)</code></pre>
+
+    <h3>Remote Model (Firebase-Hosted, OTA Updates)</h3>
+
+<pre><code>val remoteModel = CustomRemoteModel.Builder(
+    FirebaseModelSource.Builder("my_model_v2").build()
+).build()
+
+// Check if model is downloaded, fetch if needed
+val downloadConditions = DownloadConditions.Builder()
+    .requireWifi()
+    .build()
+
+RemoteModelManager.getInstance()
+    .download(remoteModel, downloadConditions)
+    .addOnSuccessListener {
+        // Model ready — create labeler with remote model
+        val labeler = ImageLabeling.getClient(
+            CustomImageLabelerOptions.Builder(remoteModel)
+                .setConfidenceThreshold(0.5f)
+                .build()
+        )
+    }</code></pre>
+
+    <div class="highlight-box">
+      <h3>Why Use Firebase ML Model Hosting?</h3>
+      <p>Hosting models on Firebase lets you <strong>update your model without shipping an app update</strong>. Train a better model? Upload it to Firebase, and users get it automatically on next app launch. This is critical for features that improve over time — recommendation models, spam filters, content classifiers. We'll dive deeper into this in Chapter 11 (Production Deployment).</p>
+    </div>
+
+    <h2>Combining ML Kit Features</h2>
+
+    <p>The real power of ML Kit emerges when you combine multiple features. A "smart scanner" that reads text, scans barcodes, and extracts entities from a single camera feed gives users a unified scanning experience:</p>
+
+<pre><code>analysis.setAnalyzer(executor) { proxy ->
+    val image = InputImage.fromMediaImage(
+        proxy.image!!, proxy.imageInfo.rotationDegrees
+    )
+
+    // Run all three in parallel
+    val textTask = textRecognizer.process(image)
+    val barcodeTask = barcodeScanner.process(image)
+
+    Tasks.whenAllComplete(textTask, barcodeTask)
+        .addOnCompleteListener {
+            val text = textTask.result
+            val barcodes = barcodeTask.result
+
+            // Extract entities from recognized text
+            if (text.text.isNotEmpty()) {
+                entityExtractor.annotate(
+                    EntityExtractionParams.Builder(text.text).build()
+                ).addOnSuccessListener { entities ->
+                    updateResults(text, barcodes, entities)
+                }
+            }
+            proxy.close()
+        }
+}</code></pre>
+
+    <h2>Try It: Build a Smart Scanner</h2>
+
+    <div class="exercise-box">
+      <p><strong>Build a "smart scanner" that combines three ML Kit features in one camera view.</strong></p>
+      <ol>
+        <li>Set up ML Kit with text recognition, barcode scanning, and entity extraction dependencies</li>
+        <li>Create a CameraX preview with <code>ImageAnalysis</code></li>
+        <li>Run text recognition and barcode scanning on each frame (in parallel using <code>Tasks.whenAllComplete</code>)</li>
+        <li>When text is found, run entity extraction on the recognized text</li>
+        <li>Display results in a Compose UI:
+          <ul>
+            <li>Recognized text blocks with bounding box highlights</li>
+            <li>Detected barcodes with format and value</li>
+            <li>Extracted entities (phone numbers, dates, addresses) as tappable chips</li>
+          </ul>
+        </li>
+      </ol>
+      <p><strong>Test it on:</strong></p>
+      <ul>
+        <li>A restaurant receipt — extract total, date, phone number</li>
+        <li>A business card — extract name, phone, email, address</li>
+        <li>A product with a barcode — scan the barcode and read the product label</li>
+      </ul>
+      <p>Note how fast each feature processes and whether running all three simultaneously causes any frame drops.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>ML Kit and MediaPipe cover recognition, detection, and extraction brilliantly. But they can't <em>generate</em> text. They can't summarize an article, rewrite a paragraph, or suggest a reply that actually understands context beyond simple pattern matching.</p>
+
+    <p>In <strong>Chapter 6: Gemini Nano — On-Device Generative AI</strong>, we'll enter the newest frontier: running a large language model directly on the phone. You'll build features that generate, summarize, and rewrite text entirely on-device — no cloud API, no per-request cost, no data leaving the phone. It's the most exciting capability to arrive on Android in years.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-mediapipe.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">MediaPipe — Production-Ready AI Features</span>
+      </a>
+      <a href="06-gemini-nano.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Gemini Nano — On-Device Generative AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: MCP: The Universal Adapter | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-tool-design.html">&larr; Prev</a>
+      <a href="07-claude-code-config.html">Next &rarr;</a>
+      <a href="maps/06-mcp-integration-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 6</div>
+    <h1>MCP: The Universal Adapter</h1>
+    <p class="subtitle">The Model Context Protocol &mdash; how Claude connects to any system through one standardized interface</p>
+  </header>
+
+  <main>
+
+    <h2>Completing Domain 2</h2>
+
+    <p>This chapter finishes <strong>Domain 2: Tool Design &amp; MCP Integration (18%)</strong>. In Chapter 5 you learned how to design tools. Now you'll learn how the <strong>Model Context Protocol (MCP)</strong> makes those tools available to Claude through a standardized, pluggable architecture.</p>
+
+    <p>MCP is to AI agents what USB is to computers. Before USB, every device had its own proprietary connector. Before MCP, every AI integration needed custom code. MCP gives you one protocol that works everywhere.</p>
+
+    <div class="highlight-box">
+      <h3>Why MCP Matters on the Exam</h3>
+      <p>The exam expects you to understand MCP <strong>at an implementation level</strong>, not just conceptually. You need to know the architecture (hosts, clients, servers), the three primitives (tools, resources, prompts), transport types (stdio vs Streamable HTTP), and how to configure MCP servers in <code>.mcp.json</code>. A 985/1000 scorer stressed that MCP is "not optional" and appears across multiple question types.</p>
+    </div>
+
+    <h2>The Problem MCP Solves</h2>
+
+    <p>Without MCP, you have the <strong>N&times;M integration problem</strong>. If you have N AI applications and M external tools, you need N&times;M custom integrations. Each app needs its own code to talk to each tool.</p>
+
+    <pre><code># Without MCP: N×M integrations
+Claude Code  → custom code → Slack API
+Claude Code  → custom code → GitHub API
+Claude Code  → custom code → Database
+Claude Desktop → custom code → Slack API  (duplicate!)
+Claude Desktop → custom code → GitHub API (duplicate!)
+VS Code      → custom code → Slack API  (triplicate!)</code></pre>
+
+    <p>With MCP, each tool exposes itself through a standard server. Any MCP-compatible client can connect to it. The math drops from N&times;M to N+M:</p>
+
+    <pre><code># With MCP: N+M integrations
+Claude Code    → MCP Client → MCP Server (Slack)
+Claude Desktop → MCP Client → MCP Server (Slack)  (same server!)
+VS Code        → MCP Client → MCP Server (Slack)  (same server!)
+
+Each tool builds ONE MCP server. Each app builds ONE MCP client.
+Done.</code></pre>
+
+    <div class="exam-tip-box">
+      The exam tests whether you understand the N&times;M problem and how MCP reduces it to N+M. A common question format: "An organization has 4 AI applications and 6 external services. Without MCP, how many integrations are needed? With MCP?" Answer: 24 without, 10 with. Simple multiplication vs addition.
+    </div>
+
+    <h2>MCP Architecture: The Three Participants</h2>
+
+    <p>MCP has three key participants. Understanding their roles and relationships is critical for the exam.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Host</span>
+        <span class="stat-label">The AI application (Claude Code, Claude Desktop, VS Code)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Client</span>
+        <span class="stat-label">A component inside the host that connects to one server</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Server</span>
+        <span class="stat-label">A program that provides tools, resources, or prompts</span>
+      </div>
+    </div>
+
+    <h3>MCP Host</h3>
+    <p>The AI application that coordinates everything. Claude Code is a host. Claude Desktop is a host. VS Code with Claude extension is a host. The host creates one MCP client for <em>each</em> MCP server it connects to.</p>
+
+    <h3>MCP Client</h3>
+    <p>A component inside the host that maintains a dedicated connection to one MCP server. If Claude Code connects to 3 MCP servers, the runtime creates 3 MCP client instances. Each client handles lifecycle management, capability negotiation, and message exchange with its server.</p>
+
+    <h3>MCP Server</h3>
+    <p>A program that provides context to clients. It can expose tools, resources, and prompts. An MCP server might be a local process (accessing your filesystem) or a remote service (connecting to Sentry, Slack, or a database).</p>
+
+    <pre><code># MCP Architecture
+MCP Host (Claude Code)
+├── MCP Client 1 ──── MCP Server A (Filesystem - local, stdio)
+├── MCP Client 2 ──── MCP Server B (Database - local, stdio)
+└── MCP Client 3 ──── MCP Server C (Sentry - remote, HTTP)</code></pre>
+
+    <div class="warning-box">
+      <strong>Don't confuse "server" with "remote."</strong> An MCP server can run locally on your machine (e.g., the filesystem server). The word "server" refers to its role in the protocol (it <em>serves</em> context), not where it runs. Local servers typically use stdio transport; remote servers use Streamable HTTP.
+    </div>
+
+    <h2>The Two Layers</h2>
+
+    <p>MCP has two architectural layers:</p>
+
+    <h3>Data Layer (Inner)</h3>
+    <p>Defines the JSON-RPC 2.0 protocol for communication: how messages are structured, lifecycle management (initialize &rarr; negotiate capabilities &rarr; exchange data &rarr; terminate), and the core primitives (tools, resources, prompts).</p>
+
+    <h3>Transport Layer (Outer)</h3>
+    <p>Defines <em>how</em> messages travel between client and server. The same JSON-RPC messages work regardless of transport.</p>
+
+    <h2>Transport Types: stdio vs. Streamable HTTP</h2>
+
+    <p>This is heavily tested on the exam. You need to know when to use each transport.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Transport</th>
+          <th>How It Works</th>
+          <th>When to Use</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>stdio</strong></td>
+          <td>Standard input/output streams between local processes</td>
+          <td>Local servers on the same machine</td>
+          <td>Filesystem access, local database, local scripts</td>
+        </tr>
+        <tr>
+          <td><strong>Streamable HTTP</strong></td>
+          <td>HTTP POST + optional Server-Sent Events for streaming</td>
+          <td>Remote servers across a network</td>
+          <td>Sentry, Slack, cloud APIs, shared team services</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>stdio</strong> is faster (no network overhead) and simpler (no authentication needed for local processes). It serves a single client at a time.</p>
+
+    <p><strong>Streamable HTTP</strong> supports multiple clients, authentication (bearer tokens, API keys, OAuth), and works across networks. It's what you use when the server is hosted as a service.</p>
+
+    <div class="exam-tip-box">
+      A classic exam question: "A team wants to share an MCP server that connects to their internal database. Multiple developers need to connect from different machines. Which transport should they use?" Answer: <strong>Streamable HTTP</strong>. The key signals are "shared" and "different machines." stdio is for local, single-client use. HTTP is for remote, multi-client use.
+    </div>
+
+    <div class="tip-box">
+      <strong>Note on SSE:</strong> Older documentation mentions Server-Sent Events (SSE) as a separate transport type. SSE has been <strong>deprecated</strong> in favor of Streamable HTTP, which incorporates SSE for streaming capabilities. If the exam mentions SSE as a standalone option, it's a legacy reference &mdash; Streamable HTTP is the current standard for remote transport.
+    </div>
+
+    <h2>The Three MCP Primitives</h2>
+
+    <p>MCP servers expose functionality through three primitives. Think of them as three types of things a server can offer:</p>
+
+    <h3>1. Tools (Actions)</h3>
+    <p>Executable functions that the AI application can invoke. This is what you learned in Chapter 5 &mdash; tools have a name, description, and input schema. MCP tools follow the same design principles.</p>
+
+    <pre><code># MCP tool discovery: tools/list response
+{
+  "tools": [
+    {
+      "name": "query_database",
+      "description": "Execute a read-only SQL query against the project database.
+        Returns rows as JSON. Maximum 100 rows per query.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sql": {"type": "string", "description": "The SQL SELECT query to execute"}
+        },
+        "required": ["sql"]
+      }
+    }
+  ]
+}</code></pre>
+
+    <h3>2. Resources (Data)</h3>
+    <p>Data sources that provide contextual information. Unlike tools (which <em>do</em> something), resources are things you <em>read</em>. A resource might be a file, a database schema, a configuration, or an API response.</p>
+
+    <pre><code># MCP resource: database schema
+{
+  "resources": [
+    {
+      "uri": "db://schema/customers",
+      "name": "Customers Table Schema",
+      "description": "Column definitions for the customers table",
+      "mimeType": "application/json"
+    }
+  ]
+}</code></pre>
+
+    <p>The key difference: <strong>tools are actions (verbs), resources are data (nouns)</strong>. A database MCP server might expose a <code>query_database</code> tool (action) and a <code>db://schema</code> resource (data).</p>
+
+    <h3>3. Prompts (Templates)</h3>
+    <p>Reusable templates that help structure interactions. An MCP server can provide prompt templates with parameters that the client fills in. Think of them as pre-built conversation starters.</p>
+
+    <pre><code># MCP prompt template
+{
+  "prompts": [
+    {
+      "name": "analyze_table",
+      "description": "Generate a data analysis prompt for a specific table",
+      "arguments": [
+        {
+          "name": "table_name",
+          "description": "Name of the database table to analyze",
+          "required": true
+        }
+      ]
+    }
+  ]
+}</code></pre>
+
+    <div class="architect-box">
+      <strong>Design pattern: combine all three primitives in one server.</strong> A well-designed MCP server for a database might expose:
+      <br><br>
+      <strong>Tools:</strong> <code>query_database</code> (execute queries), <code>insert_record</code> (add data)
+      <br><br>
+      <strong>Resources:</strong> Database schema, table descriptions, index information
+      <br><br>
+      <strong>Prompts:</strong> Templates for "analyze this table," "generate report," "find anomalies"
+      <br><br>
+      This gives the AI application everything it needs: data for context, tools for action, and prompts for structured interaction. The exam tests whether you can identify which primitive type is appropriate for a given need.
+    </div>
+
+    <h2>MCP Lifecycle: How Connections Work</h2>
+
+    <p>When an MCP host connects to a server, it follows a lifecycle:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Initialize</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Negotiate Capabilities</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Discover Primitives</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Exchange Data</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Terminate</div>
+    </div>
+
+    <ol>
+      <li><strong>Initialize:</strong> Client sends an <code>initialize</code> request with its capabilities and protocol version</li>
+      <li><strong>Negotiate:</strong> Server responds with its capabilities (which primitives it supports)</li>
+      <li><strong>Discover:</strong> Client calls <code>tools/list</code>, <code>resources/list</code>, <code>prompts/list</code> to discover what's available</li>
+      <li><strong>Exchange:</strong> Client calls <code>tools/call</code>, <code>resources/read</code>, etc. as needed</li>
+      <li><strong>Terminate:</strong> Connection closes gracefully</li>
+    </ol>
+
+    <p>The capability negotiation step is important: it means client and server agree upfront on what they support. If a server doesn't support resources, the client won't try to list them.</p>
+
+    <h2>Configuring MCP Servers</h2>
+
+    <p>In Claude Code, MCP servers are configured in JSON files. There are two levels:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Scope</th>
+          <th>Shared via VCS?</th>
+          <th>Use For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>.mcp.json</code></td>
+          <td>Project-level</td>
+          <td>Yes</td>
+          <td>Team-wide servers (shared database, project APIs)</td>
+        </tr>
+        <tr>
+          <td><code>~/.claude.json</code></td>
+          <td>User-level</td>
+          <td>No</td>
+          <td>Personal/experimental servers</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <pre><code>// .mcp.json — project-level, committed to git
+{
+  "mcpServers": {
+    "project-db": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres",
+               "postgresql://localhost:5432/mydb"],
+      "env": {
+        "DB_PASSWORD": "${DB_PASSWORD}"  // Environment variable expansion
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./src"]
+    }
+  }
+}</code></pre>
+
+    <p>Notice the <code>${DB_PASSWORD}</code> syntax &mdash; MCP configuration supports environment variable expansion, so you don't hardcode secrets in committed files.</p>
+
+    <div class="exam-tip-box">
+      The exam tests the two-level configuration: <code>.mcp.json</code> (project, shared) vs <code>~/.claude.json</code> (user, personal). A common question: "A developer wants to add an experimental MCP server without affecting teammates. Where should they configure it?" Answer: <strong><code>~/.claude.json</code></strong> (user-level, not committed to VCS).
+    </div>
+
+    <h2>Security Boundaries</h2>
+
+    <p>MCP servers have access to whatever systems they connect to. Security is critical:</p>
+
+    <h3>Authentication &amp; Authorization</h3>
+    <ul>
+      <li><strong>Local servers (stdio):</strong> Run with the user's permissions. No additional auth needed, but they inherit all the user's access rights.</li>
+      <li><strong>Remote servers (HTTP):</strong> Support standard HTTP authentication &mdash; bearer tokens, API keys, OAuth. MCP recommends OAuth for token management.</li>
+    </ul>
+
+    <h3>Sandboxing</h3>
+    <ul>
+      <li>MCP servers should follow the <strong>principle of least privilege</strong>. A database MCP server should have read-only access unless writes are explicitly required.</li>
+      <li>Filesystem servers should be scoped to specific directories, not the entire filesystem.</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>Security trap on the exam:</strong> An MCP server that connects to a production database with full read-write access, exposed to all team members via <code>.mcp.json</code>. The correct answer is to scope the server to read-only access and use environment variables for credentials, not to embed credentials in the config file.
+    </div>
+
+    <h2>Common MCP Patterns</h2>
+
+    <p>The exam references several standard MCP server patterns:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">DB</div>
+      <div class="tool-info">
+        <div class="tool-name">Database Access</div>
+        <div class="tool-desc">Tools for querying, resources for schema. Read-only by default. Scoped to specific tables when possible.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">FS</div>
+      <div class="tool-info">
+        <div class="tool-name">Filesystem</div>
+        <div class="tool-desc">Tools for reading/writing files, resources for directory structure. Scoped to project directory.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">API</div>
+      <div class="tool-info">
+        <div class="tool-name">API Gateway</div>
+        <div class="tool-desc">Wraps internal REST/GraphQL APIs as MCP tools. Handles auth, rate limiting, and response formatting.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">Git</div>
+      <div class="tool-info">
+        <div class="tool-name">Version Control</div>
+        <div class="tool-desc">Tools for git operations, resources for repo metadata (branches, recent commits, diff summaries).</div>
+      </div>
+    </div>
+
+    <h2>Notifications: Real-Time Updates</h2>
+
+    <p>MCP servers can send notifications to clients when things change. For example, if a server adds a new tool or a resource is updated, it sends a <code>notifications/tools/list_changed</code> message. The client then re-fetches the tool list.</p>
+
+    <p>This is important for long-running sessions where server capabilities might change mid-conversation. The AI application can dynamically adapt to new tools without restarting.</p>
+
+    <div class="architect-box">
+      <strong>MCP server design tradeoff: granularity of servers.</strong>
+      <br><br>
+      <strong>One big server</strong> that wraps everything (database + filesystem + APIs): simpler configuration, single point of failure, hard to scope permissions.
+      <br><br>
+      <strong>Many small servers</strong> with one per service: more configuration overhead, independent failure domains, precise permission scoping.
+      <br><br>
+      <strong>The exam favors</strong> small, focused servers &mdash; it aligns with the principle of least privilege. Each server connects to one system and exposes only what's needed. This mirrors the tool design principle from Chapter 5: focused, well-described, single-responsibility.
+    </div>
+
+    <h2>Scenario Connections</h2>
+
+    <p>Here's where MCP shows up in the exam scenarios:</p>
+
+    <ul>
+      <li><strong>Customer Support:</strong> MCP server for the ticketing system (tools for ticket CRUD, resources for ticket schemas), MCP server for the knowledge base (tools for search, resources for article index).</li>
+      <li><strong>Developer Productivity:</strong> MCP servers for internal tools &mdash; CI system, deployment platform, monitoring dashboard. This is the primary MCP scenario. The developer connects Claude to their entire toolchain through MCP.</li>
+      <li><strong>Data Extraction:</strong> MCP servers for data sources &mdash; document storage, external APIs, validation services. Resources provide schema definitions; tools do the extraction.</li>
+      <li><strong>CI/CD:</strong> MCP servers integrated into the pipeline for test runners, linters, and deployment tools. Configuration via <code>.mcp.json</code> committed to the repo.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <strong>Exercise: Design an MCP Server Configuration</strong>
+      <p>Your team needs Claude Code to access three systems: a PostgreSQL database, a Jira project tracker, and a private NPM registry. Design the MCP configuration:</p>
+      <ol>
+        <li>For each system, decide: local server (stdio) or remote server (Streamable HTTP)?</li>
+        <li>Write the <code>.mcp.json</code> configuration with all three servers</li>
+        <li>For each server, list what you'd expose as tools vs. resources vs. prompts</li>
+        <li>Where do credentials go? (Hint: environment variables, never hardcoded)</li>
+        <li>Which servers should be in <code>.mcp.json</code> (team-shared) vs <code>~/.claude.json</code> (personal)?</li>
+      </ol>
+      <p><strong>Check yourself:</strong> PostgreSQL is likely local (stdio) if it's a dev database on localhost, or remote (HTTP) if it's a shared staging database. Jira is definitely remote (HTTP) &mdash; it's a cloud service. NPM registry depends on whether it's local or hosted. Credentials go in environment variables via <code>${VAR}</code> syntax. Database and Jira servers are team-shared (<code>.mcp.json</code>). A personal experimental server goes in <code>~/.claude.json</code>.</p>
+    </div>
+
+    <h2>MCP vs. Direct Tool Integration</h2>
+
+    <p>A final question the exam tests: when should you use MCP, and when should you just define tools directly in the API?</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Use MCP When...</th>
+          <th>Use Direct Tools When...</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Multiple AI apps need the same tool</td>
+          <td>Only one app uses the tool</td>
+        </tr>
+        <tr>
+          <td>You want the team to share tool configs</td>
+          <td>The tool is specific to one agent's role</td>
+        </tr>
+        <tr>
+          <td>You need standard discovery and lifecycle</td>
+          <td>You need tight control over tool behavior</td>
+        </tr>
+        <tr>
+          <td>The tool connects to an external system</td>
+          <td>The tool is pure computation (no I/O)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>MCP solves the N&times;M integration problem by standardizing how AI apps connect to tools &mdash; reducing integrations to N+M</li>
+      <li>Three participants: host (AI app), client (connection component), server (provides context) &mdash; one client per server connection</li>
+      <li>Two transports: stdio (local, single client, no auth) vs Streamable HTTP (remote, multi-client, auth support) &mdash; choose based on locality</li>
+      <li>Three primitives: tools (actions/verbs), resources (data/nouns), prompts (templates) &mdash; know which to use for each need</li>
+      <li>Configuration: <code>.mcp.json</code> (project, shared via VCS) vs <code>~/.claude.json</code> (user, personal) &mdash; use env vars for credentials</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>Domain 2 is complete! You now understand tool design and MCP integration. In <strong>Chapter 7: Claude Code Configuration</strong>, we enter <strong>Domain 3: Claude Code Configuration &amp; Workflows (20%)</strong>. You'll learn the CLAUDE.md hierarchy, settings layers, hooks, permissions, and agent skills &mdash; the persistent context engineering that makes Claude Code powerful for teams.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-tool-design.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Designing Agent Tools</span>
+      </a>
+      <a href="07-claude-code-config.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Claude Code Configuration</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

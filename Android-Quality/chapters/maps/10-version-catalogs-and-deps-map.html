@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10 Memory Map &mdash; Version Catalogs &amp; Dependency Health</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../10-version-catalogs-and-deps.html">Chapter</a>
+      <a href="09-debug-build-inspectors-map.html">&larr; Prev Map</a>
+      <a href="11-r8-minification-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Version Catalogs &amp; Dependency Health</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">📚</span>
+      <h3>The Big Idea</h3>
+      <p>One <code>libs.versions.toml</code> file becomes the source of truth for every dependency and version in your project. Two plugins (<code>dependency-analysis</code> + <code>versions</code>) tell you which deps are unused, misused, or outdated. Bot-driven PRs (Renovate / Dependabot) keep them current.</p>
+    </div>
+
+    <h2>📦 The Four Sections of <code>libs.versions.toml</code></h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔢</span>
+        <div class="map-card-title">[versions]</div>
+        <div class="map-card-desc">Named version constants. <code>kotlin = "2.0.21"</code> &mdash; referenced by the rest of the file.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title">[libraries]</div>
+        <div class="map-card-desc">Module + version pairs. <code>retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }</code></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔌</span>
+        <div class="map-card-title">[plugins]</div>
+        <div class="map-card-desc">Plugin IDs + versions. Consumed via <code>alias(libs.plugins.X)</code> in <code>plugins {}</code> blocks.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎁</span>
+        <div class="map-card-title">[bundles]</div>
+        <div class="map-card-desc">Named groups of libraries pulled in with one line. Networking, Compose UI, testing.</div>
+      </div>
+    </div>
+
+    <h2>🔁 The Naming Rule</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📛 TOML key<br><code>androidx-core-ktx</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">⚙️ Gradle DSL<br><code>libs.androidx.core.ktx</code></div>
+    </div>
+
+    <p style="text-align:center;"><em>Hyphens in TOML keys become dots in <code>build.gradle.kts</code>. Pick short, hyphenated names &mdash; not the verbose form.</em></p>
+
+    <h2>🧹 Migration Order &mdash; Don't Skip Steps</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Create the catalog</h4>
+        <p>Copy every existing dep + version into <code>gradle/libs.versions.toml</code> verbatim. No upgrades yet.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Migrate one leaf module first</h4>
+        <p>Smallest module, not <code>:app</code>. Build it. If it builds, your catalog entries are right.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Migrate the rest, module by module</h4>
+        <p>Build between each. One PR per migration unit if the diff gets big.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Migrate the plugins block</h4>
+        <p>Top-level <code>build.gradle.kts</code> uses <code>alias(libs.plugins.X)</code> instead of <code>id() version</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Delete the old version constants</h4>
+        <p><code>buildSrc/Versions.kt</code>, <code>ext {}</code> blocks, hardcoded strings &mdash; all gone.</p>
+      </li>
+      <li class="map-timeline-item" data-step="6">
+        <h4>Now consider upgrades</h4>
+        <p>Separate PR. Don't mix migration with version bumps.</p>
+      </li>
+    </ol>
+
+    <h2>🔍 The Two Health Plugins</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Plugin</th><th>Question it answers</th><th>Task</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>com.autonomousapps.dependency-analysis</code></td>
+          <td>Which deps are unused, misused, or transitively pulled?</td>
+          <td><code>./gradlew buildHealth</code></td>
+        </tr>
+        <tr>
+          <td><code>com.github.ben-manes.versions</code></td>
+          <td>Which deps have newer stable versions available?</td>
+          <td><code>./gradlew dependencyUpdates -Drevision=release</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>📊 Three Categories of <code>buildHealth</code> Advice</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🗑️</span>
+        <div class="map-card-title">Remove</div>
+        <div class="map-card-desc">Unused dependencies. Pure deletion. Lowest risk, biggest APK win.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔄</span>
+        <div class="map-card-title">Change</div>
+        <div class="map-card-desc"><code>api</code> → <code>implementation</code> or vice versa. Catches leaky abstractions across modules.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">➕</span>
+        <div class="map-card-title">Add</div>
+        <div class="map-card-desc">Transitive deps you should declare directly &mdash; protects you from upstream removal.</div>
+      </div>
+    </div>
+
+    <h2>🤖 Bot Wars: Renovate vs Dependabot</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Renovate</th><th>Dependabot</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Setup</td>
+          <td>External app + JSON config</td>
+          <td>Built into GitHub, single YAML</td>
+        </tr>
+        <tr>
+          <td>Grouping</td>
+          <td>Most flexible &mdash; rule-based</td>
+          <td>Pattern-based <code>groups</code></td>
+        </tr>
+        <tr>
+          <td>Automerge</td>
+          <td>Configurable per-rule</td>
+          <td>Branch protection driven</td>
+        </tr>
+        <tr>
+          <td>Best for</td>
+          <td>Power users, monorepos</td>
+          <td>Most teams &mdash; "just turn it on"</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🛡️ The Vulnerability Layer</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">Dependabot Alerts<br>(free, GitHub)</div>
+      <div class="map-rel-node">OWASP Dep-Check<br>(free, build-gating)</div>
+      <div class="map-rel-center">CVE Scanning</div>
+      <div class="map-rel-node">Snyk<br>(paid, polished)</div>
+      <div class="map-rel-node">Sonatype OSS Index</div>
+    </div>
+
+    <p style="text-align:center;"><em>Default starting point: GitHub Dependabot Alerts. Step up to OWASP for build-time gates.</em></p>
+
+    <h2>🎯 The Compose-BOM Trick</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📦 Declare BOM as <code>platform(libs.compose.bom)</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📚 List Compose artifacts <em>without</em> versions</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✅ BOM pins them all in lockstep</div>
+    </div>
+
+    <h2>🤖 The Reusable Skill: <code>/migrate-to-version-catalog</code></h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📥</span>
+        <div class="map-card-title">Inputs</div>
+        <div class="map-card-desc">All <code>build.gradle.kts</code>, <code>buildSrc/Versions.kt</code>, root <code>ext {}</code> blocks, <code>gradle.properties</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📤</span>
+        <div class="map-card-title">Outputs</div>
+        <div class="map-card-desc">A complete <code>libs.versions.toml</code> + unified diffs for every module.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📐</span>
+        <div class="map-card-title">Constraints</div>
+        <div class="map-card-desc">Preserve every version exactly. Use plugin aliases. Hyphenated naming.</div>
+      </div>
+    </div>
+
+    <h2>📚 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Version catalog</dt>
+      <dd>A Gradle-native, type-safe registry of dependency coordinates and versions, declared once in <code>libs.versions.toml</code>.</dd>
+
+      <dt>Bundle</dt>
+      <dd>A named group of library entries you can pull in with a single <code>libs.bundles.X</code> reference.</dd>
+
+      <dt>BOM (Bill of Materials)</dt>
+      <dd>A "platform" artifact that pins compatible versions of related libraries (e.g. <code>compose-bom</code>).</dd>
+
+      <dt><code>buildHealth</code></dt>
+      <dd>The dependency-analysis plugin task that audits your dependency declarations across all modules.</dd>
+
+      <dt>api vs implementation</dt>
+      <dd>Two Gradle configurations &mdash; <code>api</code> exposes a dep to consuming modules, <code>implementation</code> hides it. Picking wrong leaks abstractions.</dd>
+
+      <dt>Transitive dep</dt>
+      <dd>A dependency you don't declare directly but inherit through another dep. Use it &gt; declare it directly so upstream changes don't break you.</dd>
+
+      <dt>Dependabot Alerts</dt>
+      <dd>GitHub's free CVE-notification feature for repo dependencies, distinct from the upgrade-PR Dependabot.</dd>
+
+      <dt><code>rejectVersionIf</code></dt>
+      <dd>The filter on the versions plugin that rejects alpha/RC candidates when your current version is stable.</dd>
+    </dl>
+
+    <h2>🪜 The Adoption Ladder</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📅</span>
+        <div class="map-card-title">Day 1</div>
+        <div class="map-card-desc">Create catalog with current versions. Migrate one leaf module. Verify it builds. ~60 min.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📆</span>
+        <div class="map-card-title">Week 1</div>
+        <div class="map-card-desc">Migrate all modules + plugins. Add bundles. Apply both health plugins. Remove top 5 unused deps.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📈</span>
+        <div class="map-card-title">Month 1</div>
+        <div class="map-card-desc">Dependabot/Renovate config. <code>buildHealth</code> in CI as warning. Enable Dependabot Alerts.</div>
+      </div>
+    </div>
+
+    <h2>🚫 Pitfalls to Skip</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⛔</span>
+        <div class="map-card-title">Don't migrate &amp; upgrade together</div>
+        <div class="map-card-desc">Two PRs. Migration is mechanical; upgrades carry risk. Don't conflate.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title">Don't fix all of <code>buildHealth</code> at once</div>
+        <div class="map-card-desc">First report has hundreds of items. Tackle "remove" first &mdash; lowest risk.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🌊</span>
+        <div class="map-card-title">Don't skip Dependabot grouping</div>
+        <div class="map-card-desc">Ungrouped Dependabot opens 50 PRs/week. Group from day one or get drowned.</div>
+      </div>
+    </div>
+
+    <h2>📊 Before / After</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Task</th><th>Before</th><th>After</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Bump Retrofit version</td>
+          <td>Grep + 8-file edit + hope</td>
+          <td>One line in TOML</td>
+        </tr>
+        <tr>
+          <td>"Is Lottie still used?"</td>
+          <td>Nobody knows; nobody dares delete</td>
+          <td><code>buildHealth</code> says "remove"</td>
+        </tr>
+        <tr>
+          <td>"What's outdated?"</td>
+          <td>Manual Maven Central crawl</td>
+          <td><code>dependencyUpdates</code> report</td>
+        </tr>
+        <tr>
+          <td>"Any CVEs?"</td>
+          <td>Hope and read security blogs</td>
+          <td>Dependabot Alerts notification</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Where does the version catalog file live, and does it need registration?</summary>
+        <p class="quiz-answer"><code>gradle/libs.versions.toml</code>. Gradle 7.0+ picks it up automatically &mdash; no <code>settings.gradle.kts</code> registration needed.</p>
+      </details>
+      <details>
+        <summary>How does TOML key <code>androidx-core-ktx</code> look in <code>build.gradle.kts</code>?</summary>
+        <p class="quiz-answer"><code>libs.androidx.core.ktx</code>. Hyphens become dots.</p>
+      </details>
+      <details>
+        <summary>Why declare <code>compose-bom</code> as <code>platform(libs.compose.bom)</code> and the individual artifacts without versions?</summary>
+        <p class="quiz-answer">The BOM pins compatible versions for all Compose artifacts in lockstep. You upgrade the BOM once, every Compose dep follows.</p>
+      </details>
+      <details>
+        <summary>What are the three categories of advice from <code>buildHealth</code>?</summary>
+        <p class="quiz-answer">Remove (unused), Change (api/implementation reshuffle), Add (transitive deps used directly).</p>
+      </details>
+      <details>
+        <summary>What's the one filter you must add to the <code>versions</code> plugin and why?</summary>
+        <p class="quiz-answer"><code>rejectVersionIf { !isStable(candidate.version) &amp;&amp; isStable(currentVersion) }</code> &mdash; otherwise the report includes alphas/snapshots and becomes pure noise.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">One <code>gradle/libs.versions.toml</code> = source of truth for every dep + version. Picked up automatically by Gradle 7+.</li>
+        <li class="map-summary-item">Four sections: <code>[versions]</code>, <code>[libraries]</code>, <code>[plugins]</code>, <code>[bundles]</code>.</li>
+        <li class="map-summary-item">Hyphens in TOML keys become dots in DSL. Pick short, hyphenated names.</li>
+        <li class="map-summary-item">Migrate before upgrading. Two PRs, two diffs, two reviews. Faster overall.</li>
+        <li class="map-summary-item"><code>dependency-analysis-gradle-plugin</code> &rarr; finds unused, misused, and transitive deps via <code>./gradlew buildHealth</code>.</li>
+        <li class="map-summary-item"><code>ben-manes/versions</code> &rarr; finds outdated deps. Add the <code>isStable</code> filter or drown in alpha noise.</li>
+        <li class="map-summary-item">CVE default: GitHub Dependabot Alerts. Step up to OWASP DC for build gating.</li>
+        <li class="map-summary-item">Dependabot or Renovate &rarr; weekly grouped PRs. <strong>Group, or you'll get 50 PRs/week.</strong></li>
+        <li class="map-summary-item">Reusable skill: <code>/migrate-to-version-catalog</code> &mdash; one-shot for any new project.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="09-debug-build-inspectors-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 9</span>
+      </a>
+      <a href="11-r8-minification-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Chapter 11</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

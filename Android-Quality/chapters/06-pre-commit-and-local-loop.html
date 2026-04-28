@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6 &mdash; Pre-commit &amp; Local Loop | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="05-ktlint-and-spotless.html">&larr; Prev</a>
+      <a href="07-strictmode.html">Next &rarr;</a>
+      <a href="maps/06-pre-commit-and-local-loop-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Pre-commit Hooks &amp; The Local Dev Loop</h1>
+    <p class="subtitle">Stop finding out about formatting failures 7 minutes into a CI run. Move every cheap check to the moment of <code>git commit</code> &mdash; feedback in seconds, not coffee breaks.</p>
+  </header>
+
+  <main>
+
+    <h2>The 7-minute round trip</h2>
+
+    <p>Picture the loop without local hooks. You write code. You commit. You push. You open a PR. You context-switch to Slack. Seven minutes later GitHub Actions emails you: <em>spotlessCheck failed</em>. You switch back, stare at a one-line error, run <code>./gradlew spotlessApply</code>, commit, push, wait again. Total cost of that one missing trailing comma: 14 minutes plus two context switches.</p>
+
+    <p>Now picture it with a pre-commit hook. You write code. You type <code>git commit</code>. Half a second later: <em>"spotlessCheck failed on Foo.kt &mdash; fixed; please re-stage."</em> You re-stage, commit again, push. Total cost: 5 seconds. Same check, same rule, different layer. <strong>Left-shift</strong> is not a mantra; it's arithmetic.</p>
+
+    <p>This chapter wires up the local dev loop &mdash; the IDE, the save action, the pre-commit hook, the pre-push hook &mdash; so by the time CI runs, it's a formality. The same checks already passed locally, in seconds, before anything left your laptop.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">~7 min</span>
+        <div class="stat-label">round trip from push to CI failure email</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~300 ms</span>
+        <div class="stat-label">pre-commit on staged files (well-tuned)</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~1400&times;</span>
+        <div class="stat-label">faster feedback. Same check, different layer.</div>
+      </div>
+    </div>
+
+    <div class="tool-profile-box">
+      <div class="tool-name">lefthook</div>
+      <p>A fast, language-agnostic Git hook manager written in Go. Single binary, no Python or Node dependency, and it runs hooks in parallel.</p>
+      <dl>
+        <dt>What it catches</dt>
+        <dd>Anything you tell it to &mdash; ktlint, detekt, lint, custom scripts &mdash; on the <em>staged subset</em> of files only, so commits stay snappy.</dd>
+        <dt>Install</dt>
+        <dd><code>brew install lefthook</code> or <code>scoop install lefthook</code>, then <code>lefthook install</code> in the repo. The config lives at <code>lefthook.yml</code> in the repo root.</dd>
+        <dt>Runtime cost</dt>
+        <dd>Pre-commit on staged files: typically 200ms&ndash;2s. Pre-push (full module check): 30s&ndash;2min. Native parallelism keeps it tight.</dd>
+        <dt>When to skip it</dt>
+        <dd>If your repo already has a working JS/TS toolchain, <code>husky</code> is fine &mdash; you save a binary install. For Android-only repos, lefthook avoids dragging Node in just for hooks.</dd>
+      </dl>
+    </div>
+
+    <h2>The dev loop ladder</h2>
+
+    <p>You don't pick one layer. You build the ladder. Each rung catches what the rung below missed; each is faster than the one above.</p>
+
+    <div class="workflow-steps">
+      <span class="step">IDE inspection</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Format on save</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Pre-commit</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Pre-push</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">CI gate</span>
+    </div>
+
+    <ul>
+      <li><strong>IDE inspection</strong> &mdash; live highlighting as you type. Fastest feedback in existence (zero seconds).</li>
+      <li><strong>Format on save</strong> &mdash; ktlint/Spotless rewrites the file on Ctrl+S. Catches 95% of formatting issues before you even notice.</li>
+      <li><strong>Pre-commit</strong> &mdash; runs on the staged file subset. Catches what the IDE missed (custom rules, files edited outside the IDE, contributors with different settings).</li>
+      <li><strong>Pre-push</strong> &mdash; runs the heavier checks (full lint, detekt, unit tests of changed modules) before the network ever sees your branch.</li>
+      <li><strong>CI gate</strong> &mdash; the safety net. If the local layers worked, CI is a stamp; if not, it's the wall.</li>
+    </ul>
+
+    <h2>Native Git hooks &mdash; and why they're not enough</h2>
+
+    <p>Git ships with hooks already. Drop a script at <code>.git/hooks/pre-commit</code>, mark it executable, and Git runs it. So why not stop there?</p>
+
+    <ul>
+      <li><strong>Per-clone, not per-repo.</strong> The <code>.git/</code> directory is local-only; hooks aren't checked in. Every developer has to install them manually. New hire? Hooks won't run until they remember to copy a script. CI agent? Doesn't have them. Inconsistent.</li>
+      <li><strong>Easy to skip.</strong> <code>git commit --no-verify</code> bypasses hooks silently. That's sometimes legitimate; usually it's "I'm in a hurry, who cares."</li>
+      <li><strong>Bash-only by default.</strong> Cross-platform shell scripting is a tax most teams don't want to pay.</li>
+      <li><strong>No parallelism, no scoping.</strong> A vanilla hook that runs <code>./gradlew spotlessApply</code> on every commit takes 8 seconds. Run it on staged files only and it's 300ms. The native system gives you no help with that.</li>
+    </ul>
+
+    <p>Hook frameworks fix all four. Config goes in source control, install is one command, scripts are declarative, and most frameworks parallelize and scope to staged files automatically.</p>
+
+    <h2>Picking a framework</h2>
+
+    <table>
+      <thead>
+        <tr><th>Framework</th><th>Runtime</th><th>Best for</th><th>Caveat</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>lefthook</code></td><td>Single Go binary</td><td>Android-only repos. Fast, parallel, no language deps.</td><td>Each dev installs the binary; <code>brew</code> / <code>scoop</code> / direct download.</td></tr>
+        <tr><td><code>husky</code></td><td>Node.js</td><td>Repos that already use npm/yarn (web layer, RN module).</td><td>Brings Node into Android-only repos that don't otherwise need it.</td></tr>
+        <tr><td><code>pre-commit</code></td><td>Python</td><td>Polyglot teams; rich plugin ecosystem.</td><td>Slower. Python install across Mac/Windows/Linux is the babysitting tax.</td></tr>
+        <tr><td>Native <code>.git/hooks</code></td><td>Whatever's there</td><td>Solo projects. Throwaway scripts.</td><td>Not in source control. New devs always forget. Don't.</td></tr>
+      </tbody>
+    </table>
+
+    <p>For most Android teams, the answer is <strong>lefthook</strong>. It's the cleanest "no extra runtime" choice on a JVM project. The rest of this chapter assumes lefthook; the concepts translate one-to-one to husky and pre-commit if your repo's situation pushes you that way.</p>
+
+    <h2>Installing lefthook</h2>
+
+    <p>Three steps. The first two are per-developer setup; the third is what gets checked in.</p>
+
+    <ol>
+      <li><strong>Install the binary.</strong> macOS: <code>brew install lefthook</code>. Windows: <code>scoop install lefthook</code>. Linux: <code>curl</code> from GitHub releases or use the Snap. Verify with <code>lefthook version</code>.</li>
+      <li><strong>Wire it into the repo.</strong> Run <code>lefthook install</code> from the repo root. This writes the actual <code>.git/hooks/*</code> scripts that delegate to lefthook's config.</li>
+      <li><strong>Commit <code>lefthook.yml</code>.</strong> The config lives at the repo root. Every clone of the repo, every CI agent, every new hire's first checkout sees it &mdash; and a <code>lefthook install</code> in the README setup steps wires it up.</li>
+    </ol>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">lefthook.yml (repo root)</div>
+<pre><code># Pre-commit: fast checks on staged files only.
+# Goal: under 2 seconds total. Anything slower goes to pre-push.
+pre-commit:
+  parallel: true
+  commands:
+    spotless:
+      glob: "*.{kt,kts}"
+      run: ./gradlew spotlessApply -PspotlessFiles="{staged_files}"
+      stage_fixed: true
+    detekt-staged:
+      glob: "*.{kt,kts}"
+      run: ./gradlew detekt -PdetektInput="{staged_files}"
+
+# Pre-push: heavier checks before the network ever sees your branch.
+# Goal: under 2 minutes. If it's slower, demote it to CI only.
+pre-push:
+  parallel: true
+  commands:
+    lint:
+      run: ./gradlew :app:lintDebug
+    detekt-full:
+      run: ./gradlew detekt
+    spotless-check:
+      run: ./gradlew spotlessCheck</code></pre>
+      <div class="recipe-note">The <code>{staged_files}</code> token is lefthook magic &mdash; it's substituted with the list of files Git is about to commit. <code>stage_fixed: true</code> auto-stages files that the hook modified (e.g., spotlessApply rewriting indentation), so the commit captures the cleaned version.</div>
+    </div>
+
+    <h2>Format on commit vs format on save</h2>
+
+    <p>Both are good. They cover different gaps.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Format on save</div>
+        <div class="prompt-text">Triggers on Ctrl+S in the IDE.
+Catches 95% of formatting before
+the file even hits disk in
+"unformatted" form.
+
+Limit: only fires for the dev's
+chosen IDE. Files edited from
+the terminal, contributors with
+different IDEs, AI-generated
+patches &mdash; none of those go
+through it.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Format on commit (pre-commit)</div>
+        <div class="prompt-text">Triggers on git commit.
+Catches the remaining 5% &mdash;
+files edited from the terminal,
+contributor IDEs without
+format-on-save, generated code,
+patches dropped in via cherry-pick.
+
+Limit: ~300ms&ndash;2s of latency on
+the commit. Fast enough to be
+invisible if scoped to staged
+files.</div>
+      </div>
+    </div>
+
+    <p>Run both. Format-on-save is the convenience; pre-commit is the guarantee.</p>
+
+    <h2>The pre-push hook &mdash; bigger checks, still local</h2>
+
+    <p>Some checks are too slow for pre-commit (full lint takes 30 seconds; detekt across all modules takes a minute). They don't belong in the half-second window between Enter and your prompt returning. They <em>do</em> belong before <code>git push</code>, where you've mentally moved on but haven't paid the CI tax yet.</p>
+
+    <p>The pre-push hook is the right home for: full lint, detekt across all modules (not just staged files), <code>./gradlew :app:assembleDebug</code> if you want a compile sanity check, and unit tests of modules whose files changed since last push.</p>
+
+    <div class="tip-box">
+      <strong>The 2-minute rule.</strong> If your pre-push hook takes longer than two minutes, demote the slowest task to CI. Anything beyond that and developers will <em>--no-verify</em> their way around it &mdash; and your local layer becomes useless. Pre-push is for "fast enough to wait through"; the heaviest stuff (instrumented tests, R8 release builds, dependency-vulnerability scans) belongs in CI.
+    </div>
+
+    <h2>Speeding up local checks</h2>
+
+    <p>The fastest hook is one that doesn't fire on irrelevant files. Beyond that, three Gradle settings are worth flipping.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">gradle.properties</div>
+<pre><code># Keep the daemon alive between invocations &mdash; cold starts cost ~3s.
+org.gradle.daemon=true
+
+# Cache configuration phase between builds. Massive win for hooks
+# that invoke Gradle 5+ times a day.
+org.gradle.configuration-cache=true
+
+# Parallel execution across modules.
+org.gradle.parallel=true
+
+# Build cache: reuse outputs of unchanged tasks.
+org.gradle.caching=true
+
+# Don't rebuild the world when only one module changed.
+org.gradle.configureondemand=true</code></pre>
+      <div class="recipe-note">Configuration cache is the biggest single win for hook latency &mdash; Gradle 8+ supports it for almost all configurations. If you hit a plugin that's incompatible, the build will tell you exactly which one. File an issue upstream and disable selectively, not globally.</div>
+    </div>
+
+    <p>For pre-commit specifically, scope the work. Don't run <code>./gradlew detekt</code> across the whole repo on every commit; pass only the staged files via <code>{staged_files}</code>. Don't run <code>./gradlew lint</code> at all in pre-commit &mdash; it touches the manifest and resources, which means full module recompilation. Save it for pre-push.</p>
+
+    <h2>The IDE rung</h2>
+
+    <p>Hooks are great. The IDE catching it half a second after you type it is better. Flip these in Android Studio:</p>
+
+    <ul>
+      <li><strong>Settings &rarr; Editor &rarr; Inspections &rarr; Android &rarr; Lint.</strong> Enable inline lint surfacing for the categories you promoted to <code>error</code> in Chapter 3 &mdash; <code>NewApi</code>, <code>HardcodedText</code>, <code>WrongConstant</code>. They show up as red squiggles before you save.</li>
+      <li><strong>Settings &rarr; Tools &rarr; Actions on Save.</strong> Enable "Reformat code," "Optimize imports," "Run code cleanup." All firing on Ctrl+S.</li>
+      <li><strong>Settings &rarr; Version Control &rarr; Commit.</strong> Enable "Run inspections before commit" &mdash; the IDE runs its own inspection set inside the commit dialog, complementing the lefthook hook.</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>Don't make IDE settings your source of truth.</strong> Anything you change in the IDE is per-developer and not checked in. The settings above are <em>convenience</em> &mdash; the actual gates are <code>.editorconfig</code>, <code>lefthook.yml</code>, and CI YAML. If you're tempted to "ask the team to enable X in their IDE" as a quality gate, you're building a system that depends on memory. Don't.
+    </div>
+
+    <h2>AI-Assisted Setup &mdash; the <code>/draft-lefthook-config</code> skill</h2>
+
+    <p>Lefthook configs are short but project-specific. The right glob, the right Gradle task names, the right modules to check &mdash; these depend on your repo. Hand-writing one means reading the lefthook docs and remembering all your task names. Letting Claude draft it from your <code>build.gradle.kts</code> + your project structure is a 60-second job.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Skill: /draft-lefthook-config</div>
+      <div class="prompt-text">Read the root build.gradle.kts and settings.gradle.kts to understand
+this project's modules and the registered Gradle tasks. Then produce
+a lefthook.yml at the repo root with:
+
+- pre-commit: spotlessApply on staged Kotlin files (use the
+  {staged_files} token), with stage_fixed: true so cleaned files
+  re-enter the commit. Add detekt on staged files only.
+- pre-push: full ./gradlew spotlessCheck, ./gradlew detekt, and
+  ./gradlew :app:lintDebug. Mark them parallel: true.
+
+Use only tasks that actually exist in this project (verify by
+running ./gradlew tasks first). If a task is missing, suggest
+the most likely candidate and flag it for me to confirm.
+
+Optimize for "all under 2 seconds on pre-commit, all under
+2 minutes on pre-push." Comment any line that has a non-obvious
+choice.</div>
+      <div class="prompt-explanation">Save this to <code>.claude/commands/draft-lefthook-config.md</code>. The "verify tasks first" line matters &mdash; without it, you sometimes get a config referencing a task that doesn't exist in this particular module setup, and the hook fails on first commit.</div>
+    </div>
+
+    <p>Companion skill worth standing up: <code>/explain-hook-failure</code>. When a teammate's commit is blocked by a hook and they don't know why, paste the hook output and have Claude diagnose it. Most often it's a missing IDE setting, occasionally a stale Gradle daemon.</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Skill: /draft-lefthook-config (don't do this)</div>
+      <div class="prompt-text">Generate a lefthook config for an Android project.</div>
+      <div class="prompt-explanation">No grounding in your project's task names, modules, or scoping conventions. You'll get a generic template that often references tasks that don't exist (<code>:app:detekt</code> when your project has it at the root, <code>:app:lintRelease</code> when only <code>:lintDebug</code> is wired up). The hook fails on the first commit and the team thinks lefthook is broken. Always feed the skill your real <code>build.gradle.kts</code> first.</div>
+    </div>
+
+    <h3>The bonus: commit-msg hook for conventional commits</h3>
+
+    <p>If your team has decided on Conventional Commits (or any structured commit format), a <code>commit-msg</code> hook is the cheap enforcement. It runs after the commit message is typed but before the commit lands, and rejects messages that don't match the pattern.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">lefthook.yml (additional block)</div>
+<pre><code># commit-msg: validate the message format itself.
+# Runs after the dev types their message, before the commit lands.
+commit-msg:
+  commands:
+    conventional-commits:
+      run: |
+        if ! head -n 1 "{1}" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\(.+\))?: .{1,72}$'; then
+          echo "Commit message must follow Conventional Commits."
+          echo "Format: type(scope): description"
+          echo "Example: feat(auth): add biometric login fallback"
+          exit 1
+        fi</code></pre>
+      <div class="recipe-note">The <code>{1}</code> token is the path to the commit message file Git is about to use. The regex covers the standard Conventional Commit prefixes; extend as needed. Don't go overboard &mdash; teams that try to validate the whole message body in a hook lose their patience within a week.</div>
+    </div>
+
+    <h2>The <code>--no-verify</code> question</h2>
+
+    <p>Sooner or later someone on the team will hit <code>git commit --no-verify</code>. Don't ban it &mdash; that's a recipe for resentment. But treat its frequency as a quality signal.</p>
+
+    <ul>
+      <li><strong>Used once a quarter</strong> for a genuine emergency (production hotfix, hook is broken)? Fine. The escape hatch exists for a reason.</li>
+      <li><strong>Used once a week</strong> by the same person? Either the hooks are too slow (fix that) or the rules don't fit reality (fix that).</li>
+      <li><strong>Used silently across the team</strong>? Your hooks are theater. Find out why &mdash; usually one slow check is the culprit.</li>
+    </ul>
+
+    <p>The right answer to repeated <code>--no-verify</code> is never "ban it." It's "make the hook fast and accurate enough that nobody wants to skip it." A 200ms pre-commit doesn't get bypassed; an 8-second one gets bypassed by everyone, eventually.</p>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        Install lefthook (<code>brew install lefthook</code>). Add a minimal <code>lefthook.yml</code> with one pre-commit task: <code>spotlessApply</code> on staged files, <code>stage_fixed: true</code>. Add <code>lefthook install</code> to README setup. Commit and push.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        Add detekt-on-staged to pre-commit. Add <code>spotlessCheck</code>, <code>detekt</code>, and <code>:app:lintDebug</code> to pre-push. Enable Gradle configuration cache. Standardize IDE Actions-on-Save settings via a team doc.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        Track <code>--no-verify</code> usage in the team channel for a sprint. Fix the slow hook(s) people skip. Add a <code>commit-msg</code> hook for conventional-commit format if your team cares. Document the local-loop expectations in CONTRIBUTING.md.
+      </div>
+    </div>
+
+    <h2>What it looks like in practice</h2>
+
+    <p>Day in the life, post-Chapter-6: you change a <code>ViewModel</code>. Save. Format-on-save reflows imports. Compile errors light up red as you type. You stage. You type <code>git commit -m "fix: refresh state on resume"</code>. Lefthook fires &mdash; spotless rewrites a trailing comma you missed, detekt clears, the commit captures the cleaned version. You type <code>git push</code>. Pre-push runs full lint and detekt in 90 seconds. Push goes through. PR opens. CI runs the same gates &mdash; passes in 4 minutes flat because everything was already clean.</p>
+
+    <p>You did not see a single style nit. You did not wait 7 minutes to learn about a missing import. The local loop carried the weight, exactly as designed.</p>
+
+    <div class="highlight-box">
+      <h3>Left-shift, quantified</h3>
+      <p>A team of 8 devs, each making 5 commits a day, runs ~200 commits a week. If pre-commit catches just two of those before they need a CI round-trip, you've saved 14 minutes &times; 2 = 28 minutes of someone's full attention every week. Multiply by 50 weeks. That's a developer-day per quarter, recovered with a 30-line YAML file.</p>
+    </div>
+
+    <h2>Common pitfalls</h2>
+
+    <ul>
+      <li><strong>Hooks that ignore <code>{staged_files}</code>.</strong> Running <code>./gradlew detekt</code> with no scoping on every commit means every commit takes 30 seconds. Always scope to staged files in pre-commit.</li>
+      <li><strong>Forgetting <code>stage_fixed: true</code>.</strong> Without it, spotless rewrites a file but the un-rewritten version is what gets committed. Five commits later you wonder why CI keeps complaining about already-fixed code.</li>
+      <li><strong>Pre-push that takes 4 minutes.</strong> People will <code>--no-verify</code> their way around it. Demote the slowest task to CI.</li>
+      <li><strong>Running tests in pre-commit.</strong> Unit tests are great, just not on every commit. They take seconds-to-minutes; pre-commit is for things that take milliseconds. Tests live in pre-push at the earliest.</li>
+      <li><strong>Forgetting to commit <code>lefthook.yml</code>.</strong> If the file isn't in source control, new hires don't get the hooks. Verify with <code>git ls-files | grep lefthook</code>.</li>
+    </ul>
+
+    <h3>Onboarding new contributors</h3>
+
+    <p>Update your README's setup section with three lines:</p>
+
+    <pre><code># Install lefthook (one-time, per machine):
+brew install lefthook   # or scoop install lefthook on Windows
+
+# Wire it into this checkout (one-time, per clone):
+lefthook install</code></pre>
+
+    <p>That's it. Three lines added to onboarding, infinite hours of CI round-trips removed. Add a sanity step too: <code>lefthook run pre-commit</code> &mdash; runs the hook on the current state without committing, useful for "did I set this up right?"</p>
+
+    <div class="exercise-box">
+      <strong>Your turn.</strong>
+      <ol>
+        <li>Install lefthook on your machine (<code>brew install lefthook</code> or your platform's equivalent).</li>
+        <li>Run the <code>/draft-lefthook-config</code> skill against your repo. Save the output to <code>lefthook.yml</code> in the repo root.</li>
+        <li>Run <code>lefthook install</code>. Confirm <code>.git/hooks/pre-commit</code> now exists and is one line that delegates to lefthook.</li>
+        <li>Make a deliberately bad commit: edit a Kotlin file, break the indentation, stage, and run <code>git commit</code>. Watch lefthook reformat it and re-stage. Note the latency.</li>
+        <li>Run <code>lefthook run pre-push</code> manually. Time the full pre-push pass. If it's over 2 minutes, identify the slowest task and decide whether to demote it to CI-only.</li>
+        <li>Add the <code>brew install lefthook</code> + <code>lefthook install</code> lines to your project README.</li>
+        <li>Commit and push the <code>lefthook.yml</code> + README changes. Brag in your team channel about the new local loop.</li>
+      </ol>
+      <p>Stretch goal: track <code>--no-verify</code> usage for a week (a quick <code>git log --grep</code> won't find it &mdash; ask the team to self-report). The result tells you whether your hooks are too slow or just right.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>Static analysis is now wired into every layer of your loop &mdash; IDE, save, commit, push, and CI. The build itself is on tight rails. But there's a whole category of bugs your build cannot see: the ones that only happen when the app is <em>running</em>. Disk reads on the main thread. Leaked Activities. Network on UI. Chapter 7 turns on StrictMode &mdash; Android's runtime safety net &mdash; so you find those before your users do, in dev, where they're cheap.</p>
+
+    <footer class="chapter-nav">
+      <a href="05-ktlint-and-spotless.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Ktlint &amp; Spotless</span>
+      </a>
+      <a href="07-strictmode.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">StrictMode</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

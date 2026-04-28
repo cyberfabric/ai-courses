@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Running the Factory Programmatically &mdash; The Claude Agent SDK | From Zero to App With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">From Zero to App With AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-factory-playbook.html">&larr; Prev</a>
+      <a href="maps/13-agent-sdk-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Running the Factory Programmatically &mdash; The Claude Agent SDK</h1>
+    <p class="subtitle">From interactive Claude Code to autonomous library: the same factory, now scriptable</p>
+  </header>
+
+  <main>
+
+    <!-- ===== Opening ===== -->
+    <section>
+      <h2>The Factory, Now as a Library</h2>
+
+      <p>
+        Twelve chapters in, you have a 7-role pipeline that runs interactively in Claude Code:
+        you type <code>/orchestrate "build the recipes app"</code>, hit enter, and watch the
+        roles fire one after another. That's perfect for greenfield work where a human
+        wants to be in the loop.
+      </p>
+
+      <p>
+        But what about <em>nightly</em> app generation? Triggering the factory on a config
+        change? Running it inside CI for client work, or embedding it inside an existing
+        dev tool? Interactive Claude Code can't do that &mdash; it's a CLI, not a library.
+      </p>
+
+      <p>
+        Enter the <strong>Claude Agent SDK</strong>: the exact same agent loop, tools,
+        sub-agents, hooks, skills, and MCP support that power Claude Code, packaged as
+        an importable Python and TypeScript library. The factory you built in chapters
+        4&ndash;11 runs unchanged &mdash; just headless.
+      </p>
+
+      <div class="tip-box">
+        <strong>The SDK was renamed in 2026.</strong> What used to be the "Claude Code SDK"
+        is now the <strong>Claude Agent SDK</strong>. The old <code>@anthropic-ai/claude-code</code>
+        package still exists for the CLI binary; the library you import for programmatic
+        use is <code>@anthropic-ai/claude-agent-sdk</code> (TypeScript) or
+        <code>claude-agent-sdk</code> (Python). If you have older code referencing
+        <code>claude-code-sdk</code>, see the migration guide in the official docs.
+      </div>
+    </section>
+
+    <!-- ===== SDK vs Claude Code ===== -->
+    <section>
+      <h2>Claude Code vs Agent SDK: One Loop, Two Surfaces</h2>
+
+      <p>
+        The Agent SDK and Claude Code share an engine. The CLI is a UI on top of the SDK.
+        Anything you can configure for Claude Code &mdash; skills, sub-agents, hooks,
+        MCP servers, tool permissions, settings &mdash; is configurable in the SDK with
+        the same semantics.
+      </p>
+
+      <table class="comparison" style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Claude Code (CLI)</th>
+            <th>Claude Agent SDK</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Surface</strong></td>
+            <td>Terminal session, you type prompts</td>
+            <td>Library function, you call <code>query()</code></td>
+          </tr>
+          <tr>
+            <td><strong>Best for</strong></td>
+            <td>Interactive development, one-off tasks</td>
+            <td>CI/CD, batch jobs, custom apps, production automation</td>
+          </tr>
+          <tr>
+            <td><strong>Skills</strong></td>
+            <td>Loaded from <code>.claude/skills/</code></td>
+            <td>Loaded from <code>.claude/skills/</code> (same files, same semantics)</td>
+          </tr>
+          <tr>
+            <td><strong>Sub-agents</strong></td>
+            <td><code>.claude/agents/&lt;name&gt;.md</code></td>
+            <td>Same file format, OR programmatic <code>AgentDefinition</code></td>
+          </tr>
+          <tr>
+            <td><strong>Tools</strong></td>
+            <td>Built-ins + MCP + bash/edit</td>
+            <td>Identical set, configured via <code>allowed_tools</code></td>
+          </tr>
+          <tr>
+            <td><strong>Authentication</strong></td>
+            <td>Browser login or API key</td>
+            <td>API key only (Bedrock/Vertex/Foundry supported)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="highlight-box">
+        <h4>The headline: same factory, two execution modes</h4>
+        <p>
+          Workflows translate directly. A team can run the factory interactively during
+          design (CLI), then re-run it in CI for a nightly regression build (SDK), without
+          rewriting a single skill file. The <code>.claude/</code> directory is the
+          shared contract between the two surfaces.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===== Installation ===== -->
+    <section>
+      <h2>Install and First Run</h2>
+
+      <p>
+        Install in whichever runtime fits your stack. Python 3.10+ or Node.js 18+ are
+        the minimums. The TypeScript SDK bundles a native Claude Code binary as an
+        optional dependency, so you don't need to install Claude Code separately.
+      </p>
+
+      <div class="config-block" style="font-family: var(--font-mono); padding: 1rem; background: var(--color-code-bg); border-radius: 8px; margin: 1rem 0;">
+<pre><code># TypeScript / Node.js
+npm install @anthropic-ai/claude-agent-sdk
+
+# Python
+pip install claude-agent-sdk
+
+# Set your API key
+export ANTHROPIC_API_KEY=your-api-key
+
+# Opus 4.7 requires SDK v0.2.111 or later
+</code></pre>
+      </div>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">First Agent &mdash; Python</span>
+<pre><code>import asyncio
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+async def main():
+    async for message in query(
+        prompt="What files are in this directory?",
+        options=ClaudeAgentOptions(allowed_tools=["Bash", "Glob"]),
+    ):
+        if hasattr(message, "result"):
+            print(message.result)
+
+asyncio.run(main())</code></pre>
+      </div>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">First Agent &mdash; TypeScript</span>
+<pre><code>import { query } from "@anthropic-ai/claude-agent-sdk";
+
+for await (const message of query({
+  prompt: "What files are in this directory?",
+  options: { allowedTools: ["Bash", "Glob"] }
+})) {
+  if ("result" in message) console.log(message.result);
+}</code></pre>
+      </div>
+
+      <p>
+        That's it. <code>query()</code> is an async iterator that streams messages as
+        Claude works through the agent loop &mdash; tool calls, results, intermediate
+        reasoning, and the final response. No tool-execution loop to implement; the SDK
+        handles it.
+      </p>
+    </section>
+
+    <!-- ===== Loading Existing Skills ===== -->
+    <section>
+      <h2>Loading the Factory's Skills (Zero Code Changes)</h2>
+
+      <p>
+        Here's the pivotal feature for our purposes: <strong>the SDK auto-loads every
+        skill, sub-agent, and CLAUDE.md from your working directory's
+        <code>.claude/</code> folder by default</strong>. The exact same skill files
+        you wrote in chapters 4&ndash;11 work in the SDK without any edits.
+      </p>
+
+      <table class="comparison" style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr><th>Feature</th><th>Location</th><th>Auto-loaded by SDK?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Skills</td><td><code>.claude/skills/&lt;name&gt;/SKILL.md</code></td><td>Yes</td></tr>
+          <tr><td>Slash commands</td><td><code>.claude/commands/&lt;name&gt;.md</code></td><td>Yes (merged with skills)</td></tr>
+          <tr><td>Sub-agents</td><td><code>.claude/agents/&lt;name&gt;.md</code></td><td>Yes</td></tr>
+          <tr><td>Memory</td><td><code>CLAUDE.md</code> or <code>.claude/CLAUDE.md</code></td><td>Yes</td></tr>
+          <tr><td>Plugins</td><td>Programmatic <code>plugins</code> option</td><td>On request</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip-box">
+        <strong>Restrict what the SDK loads.</strong> Set <code>setting_sources</code>
+        (Python) or <code>settingSources</code> (TypeScript) in <code>ClaudeAgentOptions</code>
+        to <code>["project"]</code> or <code>["user"]</code> if you want to scope down.
+        For CI, restrict to <code>["project"]</code> so the runner only sees the repo's
+        skills, never a developer's <code>~/.claude/</code>.
+      </div>
+
+      <p>
+        That means the orchestrator skill from chapter 11 already runs under the SDK
+        unchanged. The Architect, Developer, Reviewer, and friends all work the same
+        way &mdash; auto-loaded from the project's <code>.claude/</code> directory.
+      </p>
+    </section>
+
+    <!-- ===== Re-implementing the Orchestrator ===== -->
+    <section>
+      <h2>The Factory as a Python Script</h2>
+
+      <p>
+        Let's stitch the pipeline together programmatically &mdash; not because we can't
+        invoke <code>/orchestrate</code> via the SDK (we can), but because explicit
+        Python gives us per-stage control: budget caps, structured outputs, custom
+        retries, and observability.
+      </p>
+
+      <div class="role-card">
+        <div class="role-name">Programmatic Orchestrator (SDK form)</div>
+        <div class="role-input">
+          <strong>Input:</strong> Seed idea (string), config (model lanes, budget, output dir)
+        </div>
+        <div class="role-output">
+          <strong>Output:</strong> Generated codebase + ship-readiness report + cost ledger
+        </div>
+        <div class="role-output">
+          <strong>Model:</strong> Opus 4.7 for the orchestrator's judgment calls (advance / re-dispatch / escalate)
+        </div>
+      </div>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">orchestrate.py &mdash; minimal pipeline</span>
+<pre><code>import asyncio, json, pathlib
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+PROJECT_DIR = pathlib.Path("./recipes-app")
+SETTINGS = ClaudeAgentOptions(
+    cwd=str(PROJECT_DIR),
+    setting_sources=["project"],     # only this repo's .claude/
+    allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent"],
+    model="claude-opus-4-7",         # orchestrator runs on Opus 4.7
+)
+
+async def run_role(prompt: str, options: ClaudeAgentOptions) -> str:
+    final = ""
+    async for message in query(prompt=prompt, options=options):
+        if hasattr(message, "result"):
+            final = message.result
+    return final
+
+async def main(idea: str):
+    # Phase 1 — Discovery
+    vision = await run_role(f"/product-owner {idea}", SETTINGS)
+    specs  = await run_role(f"/product-manager (use vision.md from previous step)", SETTINGS)
+
+    # Phase 2 — Design
+    arch   = await run_role("/architect (use specs.md)", SETTINGS)
+    plan   = await run_role("/implementation-planner (use architecture.md)", SETTINGS)
+
+    # Phase 3 — Build (loop per task)
+    for task in json.loads(plan)["tasks"]:
+        await run_role(f"/developer {task['id']}", SETTINGS)
+        verdict = await run_role(f"/code-reviewer {task['id']}", SETTINGS)
+        if "BLOCK" in verdict:
+            await run_role(f"/developer fix {task['id']}", SETTINGS)
+
+    # Phase 4 — Ship
+    sec = await run_role("/security-reviewer", SETTINGS)
+    qa  = await run_role("/qa-engineer", SETTINGS)
+    print({"sec": sec, "qa": qa})
+
+asyncio.run(main("offline-first Android recipes app"))</code></pre>
+      </div>
+
+      <p>
+        Each <code>run_role</code> call dispatches a fresh agent loop with the project's
+        skills auto-loaded. The skill names (<code>/product-owner</code>,
+        <code>/architect</code>, etc.) are exactly the same ones from chapters 4&ndash;11
+        &mdash; no rewrite needed.
+      </p>
+    </section>
+
+    <!-- ===== Headless Execution ===== -->
+    <section>
+      <h2>Headless: CI, Cron, Webhooks</h2>
+
+      <p>
+        Once the orchestrator is a script, you can wire it into anything that runs
+        scripts. Three common patterns:
+      </p>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">CI Pipeline</span>
+          <div class="step-content">
+            <strong>GitHub Actions, GitLab CI, or Jenkins.</strong> A push to
+            <code>main</code> triggers a job that runs <code>python orchestrate.py</code>.
+            The skills directory ships with the repo, so the CI runner has everything
+            it needs. Use it for nightly regression builds, PR-triggered scaffolding,
+            or release-branch validation.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">Cron / Scheduled</span>
+          <div class="step-content">
+            <strong>Daily idea-to-prototype runs.</strong> A cron job pulls the latest
+            seed from a "ideas" backlog file or Linear ticket and spins up a prototype
+            branch. Useful for spike-style explorations or content factories (the same
+            pipeline can generate a marketing site as easily as an Android app).
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">Webhook</span>
+          <div class="step-content">
+            <strong>Trigger on config or schema change.</strong> A small HTTP service
+            wraps <code>orchestrate.py</code>. POST a payload (idea, target platform,
+            budget cap) and the service runs the pipeline and posts the result. Great
+            for client-work shops where each engagement starts with a one-page brief.
+          </div>
+        </div>
+      </div>
+
+      <div class="warning-box">
+        <strong>Headless = no humans in the loop.</strong> All three patterns lose the
+        interactive checkpoints that Claude Code gives you for free (the Architect
+        review, the Code Reviewer block-then-confirm, the Security Reviewer escalation).
+        You'll re-add those as code: an approval gate that emails a human between
+        Phase 2 and Phase 3, a Slack-prompt before deploy. See
+        <a href="../../AI-Workflow/chapters/index.html">AI-Workflow</a>
+        for automation patterns that fit here.
+      </div>
+    </section>
+
+    <!-- ===== Structured Outputs ===== -->
+    <section>
+      <h2>Structured Outputs</h2>
+
+      <div class="tip-box">
+        <strong>Two ways to get JSON instead of Markdown back:</strong>
+        <strong>(1) Skill-side</strong> &mdash; have the role emit a JSON block at the
+        end of its output and parse it from the orchestrator. Keeps the human-readable
+        artifact intact. <strong>(2) SDK-side</strong> &mdash; pass a Pydantic/Zod schema
+        via the SDK's structured-output option; the response validates and retries once
+        on mismatch. Use skill-side for design roles where prose helps human review;
+        SDK-side for verdict roles (Reviewer, Security, QA) where you only want typed
+        pass/fail + findings.
+      </div>
+    </section>
+
+    <!-- ===== Cost Monitoring ===== -->
+    <section>
+      <h2>The Factory Reports Its Own Spend</h2>
+
+      <p>
+        Each <code>query()</code> result includes a usage block: input tokens, output
+        tokens, total cost. Aggregate across role calls and you have a per-pipeline
+        cost ledger that beats the CLI's anecdotal "~$6.50" estimate.
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">Budget enforcement via PreToolUse hook</span>
+<pre><code>from claude_agent_sdk import query, ClaudeAgentOptions, HookMatcher
+
+BUDGET_USD = 8.00
+spent = {"total": 0.0}
+
+async def enforce_budget(input_data, tool_use_id, context):
+    if spent["total"] >= BUDGET_USD:
+        return {"decision": "block", "reason": f"budget exceeded: ${spent['total']:.2f}"}
+    return {}
+
+async def track_spend(input_data, tool_use_id, context):
+    cost = input_data.get("usage", {}).get("cost_usd", 0)
+    spent["total"] += cost
+    return {}
+
+opts = ClaudeAgentOptions(
+    hooks={
+        "PreToolUse":  [HookMatcher(matcher="*", hooks=[enforce_budget])],
+        "PostToolUse": [HookMatcher(matcher="*", hooks=[track_spend])],
+    },
+)</code></pre>
+      </div>
+
+      <p>
+        Now the pipeline auto-halts when it hits the cap. Pair this with the model lanes
+        from chapter 12 (Opus 4.7 for judgment, Sonnet 4.6 for daily work, Haiku 4.5 for
+        mechanical) and you have a self-governing cost system: the Factory knows what it
+        costs, when to slow down, and when to escalate. That's the kind of feedback loop
+        you can't build interactively.
+      </p>
+    </section>
+
+    <!-- ===== Hybrid Usage / When to Graduate ===== -->
+    <section>
+      <h2>Hybrid Usage and When to Graduate</h2>
+
+      <p>
+        The pragmatic 2026 pattern is to use both surfaces. Architect-stage iteration
+        runs in Claude Code (humans iterate on rules with interactive feedback);
+        Discovery + Build + Review runs in CI via the SDK once the architecture is
+        locked. Both share the same <code>.claude/</code> directory, so a skill edit
+        made interactively is immediately live for the next CI run &mdash; no library
+        version drift.
+      </p>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h3>Stay on Claude Code (CLI) when&hellip;</h3>
+          <ul>
+            <li>The pipeline runs less than once a week</li>
+            <li>Each run is bespoke (different ideas, different scopes)</li>
+            <li>You want a human in the loop for design decisions</li>
+            <li>Team is one or two engineers</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h3>Move to Agent SDK when&hellip;</h3>
+          <ul>
+            <li>The pipeline runs daily or on every push</li>
+            <li>Multiple projects or clients run the same skills</li>
+            <li>You need cost ceilings and audit logs</li>
+            <li>The Factory is part of a product or needs Slack/PR approvals</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Security Caveats ===== -->
+    <section>
+      <h2>Security Caveats: Re-add the Humans</h2>
+
+      <p>
+        Headless mode loses every safety rail Claude Code gives you for free. The CLI
+        prompts before destructive operations; the SDK doesn't unless you wire it.
+        For the Factory specifically:
+      </p>
+
+      <div class="warning-box">
+        <strong>Three places to re-add a human gate in the SDK:</strong>
+        <ul style="margin-top: 0.5rem;">
+          <li><strong>After Architect (end of Phase 2):</strong> ship the
+          <code>architecture.md</code> + <code>rules.md</code> to a review channel.
+          Block the loop until a human responds.</li>
+          <li><strong>After Security verdict (Phase 4):</strong> if any HIGH/CRITICAL
+          finding exists, do NOT auto-merge. Send to security oncall.</li>
+          <li><strong>Before any deploy or external API call:</strong> the SDK has a
+          <code>permission_mode: "acceptEdits"</code> setting that auto-approves edits
+          but still prompts for shell commands. Use this aggressively.</li>
+        </ul>
+      </div>
+
+      <p>
+        Also be deliberate about <em>which</em> tools you allow. A pipeline that should
+        write code to a directory does not need <code>WebFetch</code> or
+        <code>WebSearch</code>. Tighten <code>allowed_tools</code> to the minimum set
+        per role; the SDK will refuse anything outside that list. (For more on this,
+        the OWASP LLM Top 10's "Excessive Agency" is exactly this category &mdash; see
+        chapter 10 for the Factory-side mitigations.)
+      </p>
+    </section>
+
+    <!-- ===== Worked Example ===== -->
+    <section>
+      <h2>Worked Example: RecipeVault in CI</h2>
+
+      <p>
+        Putting it all together, here's the .github/workflows file that runs RecipeVault
+        nightly. The skill directory lives in the repo; the orchestrator script lives
+        in <code>scripts/</code>; the API key is a GitHub secret.
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">.github/workflows/nightly-factory.yml</span>
+<pre><code>name: Nightly Factory Build
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 2am UTC
+  workflow_dispatch:
+
+jobs:
+  factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - run: pip install claude-agent-sdk
+
+      - name: Run the AI Factory
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/orchestrate.py "offline-first Android recipes app"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: recipes-app-${{ github.run_id }}
+          path: |
+            recipes-app/
+            ship-readiness-report.json
+            cost-ledger.json</code></pre>
+      </div>
+
+      <p>
+        The total per-run cost is bounded by the budget hook (~$8). Each morning the
+        team gets a fresh build artifact, a ship-readiness report, and a cost ledger.
+        The skills evolved interactively in Claude Code during business hours; the
+        nightly run validates them at scale.
+      </p>
+    </section>
+
+    <!-- ===== Cross-references ===== -->
+    <section>
+      <h2>Where This Connects</h2>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">CLAUDE.md</div>
+          <div class="stat-label"><a href="../../AI-Engineering/chapters/index.html">AI-Ready Engineering</a> Ch 7 &mdash; the CLAUDE.md and rules format the SDK auto-loads</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">Automation</div>
+          <div class="stat-label"><a href="../../AI-Workflow/chapters/index.html">AI-Workflow</a> &mdash; CI/CD, hooks, and approval-gate patterns to wrap the SDK with</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">SDK Surface</div>
+          <div class="stat-label"><a href="../../Claude-Power/chapters/index.html">Claude Power User</a> &mdash; the SDK as the advanced surface beyond the CLI</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">Agent Theory</div>
+          <div class="stat-label"><a href="../../AI-Agents/chapters/index.html">Building AI Agents</a> &mdash; the multi-agent patterns the SDK makes operational</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Exercise ===== -->
+    <section>
+      <h2>Exercise: Headless Your Factory</h2>
+
+      <div class="exercise-box">
+        <h4>Run the RecipeVault Pipeline via SDK</h4>
+        <ol>
+          <li>
+            <strong>Install the SDK</strong> in your factory project's environment
+            (<code>pip install claude-agent-sdk</code> or
+            <code>npm install @anthropic-ai/claude-agent-sdk</code>).
+          </li>
+          <li>
+            <strong>Write a 30-line orchestrate.py</strong> that loops through your
+            existing skills (<code>/product-owner</code> &rarr; <code>/architect</code>
+            &rarr; one Developer dispatch). Verify it loads your <code>.claude/skills/</code>
+            without modification.
+          </li>
+          <li>
+            <strong>Add a budget hook.</strong> Set the cap at $2 for testing.
+            Confirm the loop halts when the cap is hit.
+          </li>
+          <li>
+            <strong>Add an approval gate.</strong> Between Architect and Developer,
+            print the <code>architecture.md</code> and prompt the user to type "yes"
+            on stdin. If they say no, exit. (In production, replace with a Slack hook.)
+          </li>
+          <li>
+            <strong>Wire it to GitHub Actions.</strong> Add the workflow above; trigger
+            it via <code>workflow_dispatch</code> first to validate before scheduling.
+          </li>
+          <li>
+            <strong>Compare costs.</strong> Run the same pipeline interactively in
+            Claude Code and via the SDK. The token counts should match within a few
+            percent &mdash; same loop, same model, same skills.
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== Closing ===== -->
+    <section>
+      <h2>The Factory is Now a Library</h2>
+
+      <p>
+        The CLI taught you the moves. The SDK lets you compose them. The 80/20 split
+        from chapter 12 still holds &mdash; the SDK doesn't replace the human in the
+        loop; it lets the human <em>set</em> the loop instead of being inside it.
+        Write the skills once, wire the budget once, wire the approvals once &mdash;
+        then the factory runs without you, on the cron of your choice. That's the
+        production end-state: a 7-role pipeline, a script that runs it, and a ledger
+        that proves what it cost.
+      </p>
+    </section>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="12-factory-playbook.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Your AI Factory Playbook</span>
+    </a>
+    <a href="index.html" class="next">
+      <span class="nav-direction">Back to Contents &rarr;</span>
+      <span class="nav-chapter">From Zero to App With AI For Dummies</span>
+    </a>
+  </nav>
+
+  <footer class="site-footer">
+    <p>From Zero to App With AI For Dummies &copy; 2026</p>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

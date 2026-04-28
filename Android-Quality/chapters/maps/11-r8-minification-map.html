@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11 Memory Map &mdash; R8: Minification Without Mysteries</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../11-r8-minification.html">Chapter</a>
+      <a href="10-version-catalogs-and-deps-map.html">&larr; Prev Map</a>
+      <a href="12-convention-plugins-and-ci-gate-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>R8: Minification Without Mysteries</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">📦</span>
+      <h3>The Big Idea</h3>
+      <p>R8 strips, optimizes, and renames everything not reachable from a manifest entry or a keep rule. Your job: tell it about reflection, JNI, and string-named lookups via <code>proguard-rules.pro</code>. The reward is a 20-40% smaller APK and a faster cold start &mdash; if you keep <code>mapping.txt</code>, every release-only crash stays readable.</p>
+    </div>
+
+    <h2>⚙️ The Four Phases of R8</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">🗑️ Shrink<br>strip unreachable</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">⚡ Optimize<br>inline, merge, propagate</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🎭 Obfuscate<br>rename to a.b.C.d</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✅ Preverify<br>runtime metadata</div>
+    </div>
+
+    <h2>🔓 The Two Magic Lines</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🪓</span>
+        <div class="map-card-title"><code>isMinifyEnabled = true</code></div>
+        <div class="map-card-desc">Turns on the full R8 pipeline: shrink + optimize + obfuscate.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🖼️</span>
+        <div class="map-card-title"><code>isShrinkResources = true</code></div>
+        <div class="map-card-desc">Strips unused PNG/XML/strings. Requires <code>minifyEnabled</code> to be on first.</div>
+      </div>
+    </div>
+
+    <h2>👀 The Three Things R8 Can't See</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">🔍 Reflection<br>Gson, Moshi, Hilt, Retrofit</div>
+      <div class="map-rel-node">🌉 JNI<br>native ↔ JVM bridge</div>
+      <div class="map-rel-center">Needs Keep Rules</div>
+      <div class="map-rel-node">📄 XML / strings<br>custom views, manifests</div>
+      <div class="map-rel-node">🏷️ Annotation lookups<br><code>@JsonClass</code>, <code>@Inject</code></div>
+    </div>
+
+    <p style="text-align:center;"><em>Anything reflected, JNI'd, or named-by-string needs a keep rule. Everything else, R8 figures out automatically.</em></p>
+
+    <h2>🛡️ Keep-Rule Patterns</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Pattern</th><th>When</th><th>Example</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>-keep class X.** { *; }</code></td>
+          <td>Sledgehammer; last resort</td>
+          <td>API DTOs, models</td>
+        </tr>
+        <tr>
+          <td><code>-keepclasseswithmembernames</code></td>
+          <td>Preserve named members of matched classes</td>
+          <td><code>native &lt;methods&gt;</code></td>
+        </tr>
+        <tr>
+          <td><code>-keep,allowobfuscation,allowshrinking</code></td>
+          <td>Signature-only preservation, can still rename</td>
+          <td>Retrofit interface markers</td>
+        </tr>
+        <tr>
+          <td><code>-keepattributes</code></td>
+          <td>Preserve bytecode metadata</td>
+          <td><code>SourceFile,LineNumberTable</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🗺️ The <code>mapping.txt</code> Pipeline</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Build produces <code>mapping.txt</code></h4>
+        <p>Located at <code>app/build/outputs/mapping/release/mapping.txt</code> after every R8 build.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Auto-upload to crash reporter</h4>
+        <p>Crashlytics, Sentry, Bugsnag &mdash; all auto-upload via their Gradle plugins. Belt: also commit to a private bucket per release.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Crash arrives obfuscated</h4>
+        <p><code>at a.b.C.d(:0)</code> &mdash; meaningless on its own.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Retrace via Studio or <code>retrace.jar</code></h4>
+        <p>Build &rarr; Analyze APK &rarr; ProGuard ReTrace, OR run <code>retrace.jar mapping.txt trace.txt</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Read the retraced trace</h4>
+        <p>First frame in <em>your</em> package = entry point. Walk down to framework boundary.</p>
+      </li>
+    </ol>
+
+    <h2>🚨 Crash → Keep-Rule Diagnostic</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Crash type</th><th>What R8 stripped</th><th>Fix shape</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>NoSuchMethodError</code></td>
+          <td>A method name needed by reflection</td>
+          <td><code>-keepclassmembers class X { methodName(...); }</code></td>
+        </tr>
+        <tr>
+          <td><code>ClassNotFoundException</code></td>
+          <td>An entire class looked up by string</td>
+          <td><code>-keep class com.example.X</code></td>
+        </tr>
+        <tr>
+          <td><code>NoClassDefFoundError</code></td>
+          <td>A class referenced by another class but stripped together</td>
+          <td><code>-keep class com.example.pkg.** { *; }</code></td>
+        </tr>
+        <tr>
+          <td>Retrofit "Unable to invoke ..."</td>
+          <td>API interface methods</td>
+          <td><code>-keep interface com.example.api.** { *; }</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>📚 Where Library Rules Come From</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📦 Library AAR</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step"><code>META-INF/proguard/*.pro</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🤖 R8 picks up automatically</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✨ No manual rules needed</div>
+    </div>
+
+    <p style="text-align:center;"><em>Modern AndroidX, Retrofit, OkHttp, Moshi, Hilt, Compose, Coil, Glide all ship consumer rules. Older / smaller libs sometimes don't.</em></p>
+
+    <h2>🎚️ The Three Optimization Knobs</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Flag</th><th>Effect</th><th>Recommendation</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>android.enableR8.fullMode</code></td>
+          <td>More aggressive optimizations</td>
+          <td>✅ Default since AGP 8 &mdash; leave on</td>
+        </tr>
+        <tr>
+          <td><code>-allowaccessmodification</code></td>
+          <td>Lets R8 widen <code>private</code>/<code>protected</code> for inlining</td>
+          <td>✅ Safe, keep enabled</td>
+        </tr>
+        <tr>
+          <td><code>-repackageclasses ''</code></td>
+          <td>Move all classes to root package</td>
+          <td>⚠️ Only if benchmarking last KB</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🤖 The Reusable Skill: <code>/draft-keep-rules</code></h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📥</span>
+        <div class="map-card-title">Inputs</div>
+        <div class="map-card-desc">Retraced stack trace, library involved, current rules file, minify config.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📤</span>
+        <div class="map-card-title">Outputs</div>
+        <div class="map-card-desc">Minimal keep rule(s) + placement + narrower variant + WHY R8 stripped it.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">Constraints</div>
+        <div class="map-card-desc">Avoid wildcard <code>-keep ** { *; }</code> unless no narrower rule exists.</div>
+      </div>
+    </div>
+
+    <h2>📚 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>R8</dt>
+      <dd>The bundled minifier in Android Gradle Plugin since AGP 3.4 (replaced ProGuard).</dd>
+
+      <dt>Keep rule</dt>
+      <dd>A directive in <code>proguard-rules.pro</code> telling R8 not to remove or rename specific classes/members.</dd>
+
+      <dt><code>mapping.txt</code></dt>
+      <dd>The build-specific file mapping original symbol names to obfuscated names &mdash; required to retrace any release-only stack.</dd>
+
+      <dt>Retrace</dt>
+      <dd>The act of converting an obfuscated stack back to readable form using <code>mapping.txt</code>.</dd>
+
+      <dt>Consumer ProGuard rules</dt>
+      <dd>Keep rules a library ships inside its AAR (under <code>META-INF/proguard/</code>) so its consumers don't have to write them.</dd>
+
+      <dt>Full mode</dt>
+      <dd>R8's more aggressive optimization profile, enabled via <code>android.enableR8.fullMode</code>; default in AGP 8+.</dd>
+
+      <dt>Baseline Profile</dt>
+      <dd>An AOT-compilation hint shipped alongside an APK that pre-compiles hot code paths for a faster cold start.</dd>
+
+      <dt>fullMode</dt>
+      <dd>R8's stricter mode that drops some legacy ProGuard compatibility for better optimization.</dd>
+    </dl>
+
+    <h2>🪜 The Adoption Ladder</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📅</span>
+        <div class="map-card-title">Day 1</div>
+        <div class="map-card-desc">Enable minify + shrinkResources on a branch. Add common keep rules. Diff APK size: expect 20-35% smaller.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📆</span>
+        <div class="map-card-title">Week 1</div>
+        <div class="map-card-desc">Smoke-test on real device. Fix release-only crashes via <code>/draft-keep-rules</code>. Wire mapping auto-upload. Staged rollout.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📈</span>
+        <div class="map-card-title">Month 1</div>
+        <div class="map-card-desc">Confirm <code>fullMode</code>. Audit rules &mdash; remove what newer libs now ship. Schedule Baseline Profile work.</div>
+      </div>
+    </div>
+
+    <h2>🚫 Pitfalls</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⏳</span>
+        <div class="map-card-title">"We'll turn it on later"</div>
+        <div class="map-card-desc">Later never comes. Enable in a branch, fix the rules, ship. Two hours of work.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔨</span>
+        <div class="map-card-title">Wildcard <code>-keep</code></div>
+        <div class="map-card-desc">Sledgehammer keeps work but waste bytes and reveal class names. Narrow when you can.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗑️</span>
+        <div class="map-card-title">Lost <code>mapping.txt</code></div>
+        <div class="map-card-desc">No mapping = unreadable crashes forever. Auto-upload AND commit to private store.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📁</span>
+        <div class="map-card-title">Editing the wrong file</div>
+        <div class="map-card-desc">Your rules go in <code>proguard-rules.pro</code>, not <code>proguard-android-optimize.txt</code> (overwritten on AGP upgrades).</div>
+      </div>
+    </div>
+
+    <h2>📊 Before / After</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Metric</th><th>Before</th><th>After</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Release APK size</td>
+          <td>38 MB</td>
+          <td>24 MB (37% smaller)</td>
+        </tr>
+        <tr>
+          <td>Cold start</td>
+          <td>1.8s</td>
+          <td>1.4s</td>
+        </tr>
+        <tr>
+          <td>Reverse-engineering</td>
+          <td>Class names readable in <code>jadx</code></td>
+          <td><code>a.b.C.d()</code> obfuscated tokens</td>
+        </tr>
+        <tr>
+          <td>Crash readability</td>
+          <td>"Try minify? It broke once"</td>
+          <td>Auto-retraced server-side</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>What's the minimum config to enable R8 in a release build?</summary>
+        <p class="quiz-answer"><code>isMinifyEnabled = true</code> + <code>isShrinkResources = true</code> in the <code>release</code> buildType, with <code>proguard-android-optimize.txt</code> + your own <code>proguard-rules.pro</code> in <code>proguardFiles</code>.</p>
+      </details>
+      <details>
+        <summary>Why must <code>mapping.txt</code> be saved per release?</summary>
+        <p class="quiz-answer">Because the obfuscation is build-specific. A mismatched mapping retraces to wrong lines, not "no line." Lose it and every crash from that build is unreadable forever.</p>
+      </details>
+      <details>
+        <summary>What two attributes should you keep so Crashlytics shows file/line info?</summary>
+        <p class="quiz-answer"><code>-keepattributes SourceFile,LineNumberTable</code> &mdash; without them the retraced trace shows class &amp; method but no line numbers.</p>
+      </details>
+      <details>
+        <summary>What does <code>-keep class com.example.api.dto.** { *; }</code> protect?</summary>
+        <p class="quiz-answer">All classes in the <code>com.example.api.dto</code> package and its subpackages, with all their fields/methods, from being shrunk or obfuscated &mdash; the typical pattern for Gson/Moshi DTOs accessed by reflection.</p>
+      </details>
+      <details>
+        <summary>Where do most modern libraries ship their keep rules?</summary>
+        <p class="quiz-answer">Inside the AAR at <code>META-INF/proguard/*.pro</code> &mdash; R8 picks them up automatically. Inspect via <code>unzip -p library.aar META-INF/proguard/library.pro</code>.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Two lines turn it on: <code>isMinifyEnabled = true</code> + <code>isShrinkResources = true</code> in the <code>release</code> buildType.</li>
+        <li class="map-summary-item">R8 strips everything not reachable from a manifest entry or keep rule. Reflection / JNI / string-name lookups need keep rules.</li>
+        <li class="map-summary-item">Always keep <code>SourceFile,LineNumberTable</code> attributes &mdash; or your retraced traces have no line numbers.</li>
+        <li class="map-summary-item">Most modern libraries ship consumer rules in their AAR. The libraries you write keep rules for are old, small, or your own DTOs/APIs.</li>
+        <li class="map-summary-item"><code>mapping.txt</code> is non-negotiable. Auto-upload to your crash reporter on every release build. Lose it = crashes unreadable forever.</li>
+        <li class="map-summary-item">Prefer narrow keeps (<code>-keepclasseswithmembers</code>, package boundaries) over wildcards. Wildcards waste bytes and leak names.</li>
+        <li class="map-summary-item">Three crash patterns map cleanly to keep rules: <code>NoSuchMethodError</code> &rarr; member name; <code>ClassNotFoundException</code> &rarr; class; <code>NoClassDefFoundError</code> &rarr; whole package.</li>
+        <li class="map-summary-item">Reusable skill: <code>/draft-keep-rules</code> &mdash; turns retraced stacks into the precise rules that fix them.</li>
+        <li class="map-summary-item">Once R8 is solid, the next perf lever is Baseline Profiles &mdash; 20-40% startup gains.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="10-version-catalogs-and-deps-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 10</span>
+      </a>
+      <a href="12-convention-plugins-and-ci-gate-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Chapter 12</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

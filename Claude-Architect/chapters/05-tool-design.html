@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Designing Agent Tools | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-orchestration-patterns.html">&larr; Prev</a>
+      <a href="06-mcp-integration.html">Next &rarr;</a>
+      <a href="maps/05-tool-design-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 5</div>
+    <h1>Designing Agent Tools</h1>
+    <p class="subtitle">Tool schemas, descriptions, granularity, and error handling &mdash; the interface between the agent's brain and the outside world</p>
+  </header>
+
+  <main>
+
+    <h2>Welcome to Domain 2</h2>
+
+    <p>We're entering <strong>Domain 2: Tool Design &amp; MCP Integration</strong>, which makes up <strong>18% of the exam (~11 questions)</strong>. This chapter covers tool design; Chapter 6 covers MCP. Together they prepare you for every Domain 2 question.</p>
+
+    <p>Tools are how Claude interacts with the outside world. Without tools, an agent is just a chatbot &mdash; it can only generate text. With tools, it can search databases, call APIs, read files, create resources, and take real actions. Tool design is where architecture meets implementation.</p>
+
+    <div class="highlight-box">
+      <h3>Why Tool Design Matters on the Exam</h3>
+      <p>The biggest source of exam mistakes in Domain 2 is <strong>not understanding how tool descriptions drive Claude's tool selection</strong>. Claude picks tools based on their descriptions, not their names. A poorly described tool won't get used &mdash; or worse, it'll get used incorrectly. The exam tests this heavily.</p>
+    </div>
+
+    <h2>Anatomy of a Tool Definition</h2>
+
+    <p>Every tool in the Claude API has three components:</p>
+
+    <pre><code>{
+  "name": "search_knowledge_base",
+  "description": "Search the customer support knowledge base for articles
+    matching a query. Returns the top 5 most relevant articles with titles,
+    URLs, and relevance scores. Use this tool when a customer asks a question
+    that might be answered by existing documentation. Do NOT use this for
+    account-specific queries — use lookup_account instead.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "The search query. Use keywords from the customer's
+          question. Prefer specific terms over broad ones."
+      },
+      "category": {
+        "type": "string",
+        "enum": ["billing", "technical", "shipping", "general"],
+        "description": "Filter results by category. Omit for cross-category search."
+      },
+      "max_results": {
+        "type": "integer",
+        "description": "Maximum number of results to return. Default: 5.",
+        "default": 5
+      }
+    },
+    "required": ["query"]
+  }
+}</code></pre>
+
+    <p>Let's break down each component:</p>
+
+    <h3>1. Name</h3>
+    <p>Use descriptive, distinct names. <code>search_knowledge_base</code> is clear. <code>search</code> is ambiguous when you have multiple search tools. <code>skb</code> is cryptic. The name should immediately tell Claude (and you) what the tool does.</p>
+
+    <h3>2. Description (The Most Important Part)</h3>
+    <p>This is by far the most critical field. Anthropic's official guidance: <strong>aim for at least 3&ndash;4 sentences per tool description</strong>. Include:</p>
+
+    <ul>
+      <li>What the tool does</li>
+      <li>When to use it (and when NOT to use it)</li>
+      <li>What it returns</li>
+      <li>Important caveats or limitations</li>
+    </ul>
+
+    <div class="exam-tip-box">
+      The exam tests the principle that <strong>tool descriptions are the primary mechanism for tool selection</strong>. Claude reads the descriptions to decide which tool to call. If two tools have similar names but different descriptions, Claude picks based on the descriptions. If a description is vague, Claude may call the tool at the wrong time or with wrong parameters. Exam questions frequently present a scenario where the agent picks the wrong tool, and the answer is "improve the tool description."
+    </div>
+
+    <h3>3. Input Schema</h3>
+    <p>A JSON Schema object defining the parameters Claude should pass. Key design decisions:</p>
+
+    <ul>
+      <li><strong>Required vs. optional:</strong> Only mark parameters as required if the tool literally can't function without them</li>
+      <li><strong>Enums:</strong> Use enums when a parameter has a fixed set of valid values &mdash; this constrains Claude's output</li>
+      <li><strong>Descriptions on parameters:</strong> Each parameter should have its own description explaining format and usage</li>
+      <li><strong>Defaults:</strong> Specify defaults so Claude doesn't need to guess</li>
+    </ul>
+
+    <h2>Tool Description Design: Good vs. Bad</h2>
+
+    <p>This is the most exam-relevant section in this chapter. Let's see the difference:</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad Description</div>
+        <div class="prompt-text">"Searches the database."</div>
+        <div class="prompt-explanation">Which database? What kind of search? What does it return? When should Claude use it vs other search tools? This description gives Claude nothing to work with.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Description</div>
+        <div class="prompt-text">"Search the customer support knowledge base for articles matching a query. Returns top 5 articles with titles, URLs, and relevance scores. Use when the customer asks a question that might be in existing docs. Do NOT use for account-specific queries — use lookup_account instead."</div>
+        <div class="prompt-explanation">What it does, what it returns, when to use it, when NOT to use it. Claude can make an informed decision.</div>
+      </div>
+    </div>
+
+    <h3>The "When NOT to Use" Pattern</h3>
+
+    <p>Including when NOT to use a tool is just as important as saying when to use it. This is especially critical when you have similar tools:</p>
+
+    <pre><code>// Tool 1
+"name": "search_knowledge_base",
+"description": "...Use for general questions about policies and procedures.
+  Do NOT use for customer-specific data like orders or account details."
+
+// Tool 2
+"name": "lookup_account",
+"description": "...Use when you need customer-specific information like
+  order history, account status, or billing details. Do NOT use for
+  general policy questions — use search_knowledge_base instead."</code></pre>
+
+    <p>Each tool explicitly says "use me for X, not for Y &mdash; use that other tool for Y." This cross-referencing eliminates ambiguity.</p>
+
+    <div class="architect-box">
+      <strong>The tool description is an instruction manual for an agent.</strong> Think of Claude as a new employee who's never seen your system before. The tool descriptions are the only documentation they have. Would they know which tool to use, when, and how? If not, your descriptions need work.
+      <br><br>
+      <strong>Design principle:</strong> Write tool descriptions as if you're training someone who's smart but has zero context about your system. Include the what, when, when-not, returns, and caveats. This single practice eliminates most tool selection errors.
+    </div>
+
+    <h2>Tool Granularity: One-Purpose vs. Swiss Army Knife</h2>
+
+    <p>How many tools should you give an agent? And how broad should each tool be?</p>
+
+    <h3>One-Purpose Tools</h3>
+    <p>Each tool does exactly one thing: <code>get_order_status</code>, <code>process_refund</code>, <code>update_address</code>. Clear, testable, easy to describe. But if you have 30 of them, Claude wastes reasoning tokens deciding which one to use.</p>
+
+    <h3>Swiss Army Knife Tools</h3>
+    <p>One tool that does many things: <code>customer_operations(action="refund")</code>, <code>customer_operations(action="lookup")</code>. Fewer tools to choose from, but the description gets complex and Claude might pass the wrong action.</p>
+
+    <h3>The Sweet Spot</h3>
+
+    <div class="tip-box">
+      Anthropic's recommendation: <strong>consolidate related operations into fewer, more capable tools</strong>. This reduces selection ambiguity. But each tool should still have a clear purpose. The ideal is 5&ndash;10 well-described tools per agent, not 30 micro-tools or 1 mega-tool. Think of it like REST API design: you don't want one endpoint for everything, but you also don't want 100 endpoints when 10 would do.
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Approach</th>
+          <th>Pros</th>
+          <th>Cons</th>
+          <th>When to Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Many small tools (20+)</td>
+          <td>Clear responsibility</td>
+          <td>Selection confusion, token cost</td>
+          <td>Only when tool overlap is zero</td>
+        </tr>
+        <tr>
+          <td>Few broad tools (2&ndash;3)</td>
+          <td>Easy selection</td>
+          <td>Complex parameters, hard to describe</td>
+          <td>Simple agents with few capabilities</td>
+        </tr>
+        <tr>
+          <td><strong>Balanced (5&ndash;10)</strong></td>
+          <td><strong>Clear + manageable</strong></td>
+          <td><strong>Requires good descriptions</strong></td>
+          <td><strong>Most production agents</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="exam-tip-box">
+      When the exam says an agent "frequently selects the wrong tool" or "fails to use available tools," the most common correct answer is either: (1) improve the tool descriptions, or (2) reduce the number of tools. If an agent has 25 tools, the exam expects you to recognize that <strong>tool overload</strong> is the likely cause. The fix is consolidation and better descriptions.
+    </div>
+
+    <h2>The Reasoning Boundary</h2>
+
+    <p>One of the most important architectural decisions: <strong>what should the agent decide, and what should the tool enforce?</strong></p>
+
+    <p>The agent (Claude) is good at:</p>
+    <ul>
+      <li>Understanding natural language</li>
+      <li>Deciding which tool to call and with what parameters</li>
+      <li>Interpreting results and deciding next steps</li>
+      <li>Synthesizing information from multiple sources</li>
+    </ul>
+
+    <p>The tool (your code) is good at:</p>
+    <ul>
+      <li>Deterministic operations (calculations, database queries)</li>
+      <li>Enforcing business rules (validation, authorization)</li>
+      <li>Accessing external systems (APIs, databases)</li>
+      <li>Returning structured, reliable data</li>
+    </ul>
+
+    <pre><code># BAD: Agent does the calculation
+Agent: "The customer ordered 3 items at $29.99 each.
+        The total is... $89.97"  # What if it hallucinates?
+
+# GOOD: Tool does the calculation
+Agent calls: calculate_order_total(order_id="12345")
+Tool returns: {"total": 89.97, "items": 3, "subtotal": 89.97, "tax": 0}
+# Deterministic. Correct every time.</code></pre>
+
+    <div class="warning-box">
+      <strong>Never let the agent do math, date calculations, or business logic.</strong> LLMs are unreliable at arithmetic. If the agent needs to calculate a refund amount, total, or date difference, that's a tool's job. The agent decides <em>when</em> to calculate; the tool does the calculation. This boundary is tested on the exam.
+    </div>
+
+    <h2>Parallel Tool Calls</h2>
+
+    <p>Claude can request multiple tool calls in a single response. When it does, those calls can execute in parallel:</p>
+
+    <pre><code># Claude's response includes multiple tool_use blocks
+[
+  {"type": "tool_use", "name": "lookup_account", "input": {"customer_id": "C123"}},
+  {"type": "tool_use", "name": "search_knowledge_base", "input": {"query": "return policy"}},
+  {"type": "tool_use", "name": "get_order_status", "input": {"order_id": "O456"}}
+]
+
+# Your code executes all three in parallel
+# Then returns all three tool_results in the next message</code></pre>
+
+    <p>This is a significant performance optimization. Instead of three round trips to the API (call tool 1 &rarr; return result &rarr; call tool 2 &rarr; ...), everything happens in one round trip.</p>
+
+    <p>For parallel tool calls to work well, the tools should be <strong>independent</strong> &mdash; the output of one shouldn't be needed as input to another. Claude is smart enough to call tools in parallel only when their inputs don't depend on each other.</p>
+
+    <h2>Error Responses That Help the Agent Recover</h2>
+
+    <p>When a tool fails, what you return in the <code>tool_result</code> determines whether the agent recovers gracefully or spirals into confusion.</p>
+
+    <h3>Structured Error Responses</h3>
+
+    <p>The exam specifically tests a structured error format with three fields:</p>
+
+    <pre><code># Structured error response
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_abc123",
+  "is_error": true,
+  "content": {
+    "error": "Customer not found",
+    "errorCategory": "NOT_FOUND",
+    "isRetryable": false,
+    "suggestion": "Verify the customer ID. The customer may have
+      been merged or deleted. Try searching by email instead."
+  }
+}</code></pre>
+
+    <p>The key fields:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Purpose</th>
+          <th>Why It Matters</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>is_error</code></td>
+          <td>Marks the result as an error</td>
+          <td>Tells Claude not to treat this as a successful result</td>
+        </tr>
+        <tr>
+          <td><code>errorCategory</code></td>
+          <td>Classifies the error type</td>
+          <td>Helps Claude decide whether to retry, try another approach, or give up</td>
+        </tr>
+        <tr>
+          <td><code>isRetryable</code></td>
+          <td>Whether retrying might succeed</td>
+          <td>Prevents infinite retry loops on permanent failures</td>
+        </tr>
+        <tr>
+          <td><code>suggestion</code></td>
+          <td>What the agent should try instead</td>
+          <td>Guides recovery without requiring the agent to guess</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad Error Response</div>
+        <div class="prompt-text">"Error: something went wrong"</div>
+        <div class="prompt-explanation">Claude has no idea what failed, whether to retry, or what to do next. It'll either give up or retry blindly.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Error Response</div>
+        <div class="prompt-text">"Error: Rate limit exceeded (429). isRetryable: true. Suggestion: Wait 5 seconds and retry. The API allows 100 requests per minute."</div>
+        <div class="prompt-explanation">Claude knows it's temporary, should retry after a delay, and understands the constraint.</div>
+      </div>
+    </div>
+
+    <div class="exam-tip-box">
+      The exam tests whether you understand the <code>is_error</code>, <code>isRetryable</code>, and <code>errorCategory</code> fields in tool results. A common exam pattern: "The agent keeps retrying a failed tool call. What's the most likely cause?" Answer: the error response doesn't include <code>isRetryable: false</code>, so the agent doesn't know the error is permanent.
+    </div>
+
+    <h2>Strict Tool Use</h2>
+
+    <p>The Claude API supports a <code>strict: true</code> option on tool definitions. When enabled, Claude's tool calls are <strong>guaranteed to conform to your JSON Schema exactly</strong> &mdash; no extra fields, no wrong types, no missing required parameters.</p>
+
+    <pre><code>{
+  "name": "process_refund",
+  "description": "Process a customer refund...",
+  "strict": true,  // Guarantees schema conformance
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "order_id": {"type": "string"},
+      "amount": {"type": "number"},
+      "reason": {"type": "string", "enum": ["defective", "wrong_item", "changed_mind"]}
+    },
+    "required": ["order_id", "amount", "reason"]
+  }
+}</code></pre>
+
+    <p>Without <code>strict: true</code>, Claude usually follows the schema &mdash; but occasionally it might add extra fields or use slightly wrong types. With it enabled, schema conformance is guaranteed. Use it for any tool where parameter correctness is critical.</p>
+
+    <h2>Tool Testing Strategies</h2>
+
+    <p>Tools should be testable independently of the model. This is a key architectural principle:</p>
+
+    <ol>
+      <li><strong>Unit test the tool itself:</strong> Does <code>search_knowledge_base</code> return the right results for a given query? Test this without Claude in the loop.</li>
+      <li><strong>Test the schema:</strong> Does the input_schema validate correctly? Are required fields actually required?</li>
+      <li><strong>Test error handling:</strong> What happens when the tool gets invalid input? Does it return a structured error that helps the agent?</li>
+      <li><strong>Integration test with the agent:</strong> Does Claude call the tool at the right time with reasonable parameters? This is the last step, not the first.</li>
+    </ol>
+
+    <div class="architect-box">
+      <strong>Design pattern: tools as a testable API layer.</strong> Treat your tools like a REST API. Each tool has a well-defined interface (input schema), documented behavior (description), predictable error responses, and unit tests. The agent is just another client calling this API.
+      <br><br>
+      This separation is powerful: you can improve tool reliability without touching the agent, and you can improve agent behavior without changing tools. It's the same reason we separate frontend from backend in web development.
+    </div>
+
+    <h2>Tool Versioning and Backward Compatibility</h2>
+
+    <p>In production, tools evolve. You might add parameters, change return formats, or deprecate old tools. Best practices:</p>
+
+    <ul>
+      <li><strong>Add optional parameters</strong> instead of changing existing ones &mdash; old agents still work</li>
+      <li><strong>Return format changes</strong> should be additive (add fields, don't remove them)</li>
+      <li><strong>Deprecation path:</strong> If you must remove a tool, update the agent's system prompt to stop using it before removing the tool from the available tools list</li>
+    </ul>
+
+    <h2>Tool Choice Parameter</h2>
+
+    <p>The <code>tool_choice</code> parameter in the API controls how Claude selects tools:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Value</th>
+          <th>Behavior</th>
+          <th>Use Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>"auto"</code></td>
+          <td>Claude decides whether to use a tool</td>
+          <td>Default for most agents</td>
+        </tr>
+        <tr>
+          <td><code>"any"</code></td>
+          <td>Claude must use at least one tool</td>
+          <td>Force tool use when you know it's needed</td>
+        </tr>
+        <tr>
+          <td><code>{"type": "tool", "name": "..."}</code></td>
+          <td>Claude must use this specific tool</td>
+          <td>When you know exactly which tool should run</td>
+        </tr>
+        <tr>
+          <td><code>"none"</code></td>
+          <td>Claude can't use any tools</td>
+          <td>Force text-only response</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      In most agent loops, you use <code>"auto"</code> and let Claude decide. But sometimes you know a tool call is needed &mdash; for example, in the <strong>Structured Data Extraction</strong> scenario, you might force <code>tool_choice: {"type": "tool", "name": "extract_fields"}</code> to guarantee structured output rather than freeform text.
+    </div>
+
+    <h2>Scenario Connections</h2>
+
+    <p>Here's how tool design shows up in each exam scenario:</p>
+
+    <ul>
+      <li><strong>Customer Support:</strong> Tools for ticket lookup, knowledge base search, refund processing. Description design is critical for routing to the right tool. Error responses guide recovery when account lookups fail.</li>
+      <li><strong>Code Generation:</strong> Tools like FileRead, FileWrite, Bash. These follow Anthropic's own tool design patterns from Claude Code.</li>
+      <li><strong>Multi-Agent Research:</strong> Search tools for each subagent. Consistent return formats across tools so the orchestrator can aggregate results.</li>
+      <li><strong>Developer Productivity:</strong> MCP-connected tools for internal systems. Tool descriptions must explain the internal system's quirks.</li>
+      <li><strong>CI/CD:</strong> Tools for running tests, checking linting, deploying. Each tool needs clear success/failure signaling.</li>
+      <li><strong>Data Extraction:</strong> Tools with strict schemas for structured output. <code>strict: true</code> is essential here.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <strong>Exercise: Design a Tool Set for Customer Support</strong>
+      <p>Design 5 tools for the Customer Support Resolution Agent scenario. For each tool, write:</p>
+      <ol>
+        <li>The <code>name</code></li>
+        <li>A description (at least 3 sentences: what it does, when to use it, when NOT to use it)</li>
+        <li>The <code>input_schema</code> with required and optional parameters</li>
+        <li>An example error response with <code>errorCategory</code> and <code>isRetryable</code></li>
+      </ol>
+      <p>Suggested tools: <code>lookup_customer</code>, <code>search_knowledge_base</code>, <code>get_order_status</code>, <code>process_refund</code>, <code>escalate_to_human</code>.</p>
+      <p><strong>Check yourself:</strong> Each description should cross-reference related tools ("For X, use Y instead"). The <code>process_refund</code> tool should have a <code>reason</code> enum, not a freeform string. <code>escalate_to_human</code> should require a <code>summary</code> parameter. Error responses should distinguish retryable (API timeout) from permanent (customer not found) failures.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Tool descriptions are the #1 factor in tool selection &mdash; write 3&ndash;4 sentences minimum, include when-to-use and when-NOT-to-use</li>
+      <li>Aim for 5&ndash;10 well-described tools per agent &mdash; too many causes selection confusion, too few means over-complex parameters</li>
+      <li>The reasoning boundary: agent decides what to do, tool does the deterministic work &mdash; never let the agent do math or business logic</li>
+      <li>Structured error responses need <code>is_error</code>, <code>errorCategory</code>, <code>isRetryable</code>, and a <code>suggestion</code> &mdash; vague errors cause blind retries</li>
+      <li>Use <code>strict: true</code> for tools where parameter correctness is critical &mdash; guarantees schema conformance</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>You now know how to design tools that Claude can use effectively. In <strong>Chapter 6: MCP &mdash; The Universal Adapter</strong>, we'll explore how the Model Context Protocol lets you connect Claude to any external system through a standardized interface. MCP is the other half of Domain 2, and it's where tool design meets system integration.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-orchestration-patterns.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Orchestration Patterns</span>
+      </a>
+      <a href="06-mcp-integration.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">MCP: The Universal Adapter</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

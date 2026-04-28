@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Tools and Tool Use — AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-context-engineering.html">Prev</a>
+      <a href="05-memory-and-state.html">Next</a>
+      <a href="maps/04-tools-and-tool-use-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Tools and Tool Use</h1>
+    <p class="subtitle">How LLMs call functions &mdash; the mechanism that turns a text generator into an agent</p>
+  </header>
+
+  <main>
+
+    <p>
+      Chapter 3 covered what the model <em>sees</em>. This chapter is about what the model <em>does</em>. And the answer is deceptively simple: LLMs can't do anything except generate text. Every action you've ever seen an AI tool take &mdash; reading a file, editing code, running tests, searching the web &mdash; happened because the harness gave the model <strong>tools</strong>.
+    </p>
+
+    <!-- The Smartphone Analogy -->
+    <h2>Apps on a Smartphone</h2>
+
+    <p>
+      Think of tools like <strong>apps on a smartphone</strong>. Your phone's processor can do basic things on its own &mdash; calculate, display text. But it's the apps that make it genuinely useful: a camera app takes photos, a maps app gives directions, a messaging app sends texts.
+    </p>
+
+    <p>
+      The phone doesn't take photos itself. It sends a signal to the camera hardware, which takes the photo and returns the result to the phone for display. Tools work the same way: the model sends a structured request to the harness, the harness executes the action, and the result goes back to the model.
+    </p>
+
+    <p>
+      Without tools, an LLM is a phone with no apps &mdash; it can have a conversation, but it can't <em>do</em> anything.
+    </p>
+
+    <!-- What Tool Use Actually Is -->
+    <h2>What Tool Use Actually Is</h2>
+
+    <p>
+      Tool use (also called "function calling") is a mechanism where the model outputs a <strong>structured request</strong> instead of regular text. The model says: "I'd like to call this tool with these parameters." The harness intercepts, executes, and returns the result.
+    </p>
+
+    <p>
+      Here's the actual shape of a tool call from the Claude API:
+    </p>
+
+<pre><code>// Model's response (tool call request)
+{
+  "type": "tool_use",
+  "id": "toolu_01A09q90qw90lq917835lq9",
+  "name": "Read",
+  "input": {
+    "file_path": "/src/auth.ts",
+    "limit": 50
+  }
+}
+
+// Harness sends back (tool result)
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+  "content": "1\timport express from 'express';\n2\t..."
+}</code></pre>
+
+    <p>
+      Notice: the model didn't read the file. It asked for the file to be read. The harness did the reading, checked permissions, and sent back the contents. This distinction matters &mdash; <strong>the model proposes, the harness disposes.</strong>
+    </p>
+
+    <!-- The Tool Use Loop -->
+    <h2>The Tool Use Loop</h2>
+
+    <p>
+      Tool use isn't a single call. It's a <strong>loop</strong> that repeats until the model has enough information to give a final answer.
+    </p>
+
+    <div class="workflow-steps">
+      <span class="step">User Message</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Model Reasons</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Tool Call</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Harness Executes</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Result Back</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Model Reasons Again</span>
+    </div>
+
+    <p>
+      That last step is the key: the model reasons <em>again</em> with the tool result in context. It might decide to call another tool, or it might have enough to answer. A single user request might trigger 2, 5, or 20 tool calls in a loop before the model produces a final response.
+    </p>
+
+    <p>
+      When you ask Claude Code to "refactor the login function," the loop might go:
+    </p>
+
+    <ol>
+      <li>Grep for the function &rarr; finds <code>src/auth.ts:42</code></li>
+      <li>Read the file around line 42 &rarr; sees the callback-based code</li>
+      <li>Edit the file &rarr; replaces callbacks with async/await</li>
+      <li>Bash <code>npm test</code> &rarr; tests pass</li>
+      <li>Final response: "Done. Refactored login to async/await. Tests pass."</li>
+    </ol>
+
+    <p>
+      Five tool calls, one user message. The harness orchestrated all of it.
+    </p>
+
+    <!-- Tool Schemas -->
+    <h2>Tool Schemas: Teaching the Model What's Available</h2>
+
+    <p>
+      The model doesn't magically know what tools exist. The harness <strong>describes</strong> each tool using a schema &mdash; a structured definition that includes the tool's name, what it does, and what parameters it accepts.
+    </p>
+
+<pre><code>{
+  "name": "Bash",
+  "description": "Executes a bash command and returns its output. Use for running tests, builds, git commands, and system operations. Avoid using for tasks that have dedicated tools (use Read instead of cat, Grep instead of grep).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The command to execute"
+      },
+      "timeout": {
+        "type": "number",
+        "description": "Optional timeout in milliseconds (max 600000)"
+      }
+    },
+    "required": ["command"]
+  }
+}</code></pre>
+
+    <p>
+      That description is doing heavy lifting. It's not just documentation &mdash; it directly influences <strong>when and how the model uses the tool</strong>. A vague description leads to misuse. A precise description leads to accurate tool selection.
+    </p>
+
+    <div class="tip-box">
+      Tool descriptions are one of the most underrated pieces of harness engineering. Cursor discovered that naming tools to match Unix commands the model was trained on (like <code>rg</code> for ripgrep) significantly improved tool adoption. The model is more likely to use a tool it "recognizes." <strong>Good tool naming and descriptions can improve tool selection as much as a prompt improvement.</strong>
+    </div>
+
+    <!-- Categories of Tools -->
+    <h2>Categories of Tools</h2>
+
+    <p>
+      Not all tools are created equal. They fall into clear categories based on what they do:
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Examples</th>
+          <th>What They Do</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>File System</strong></td>
+          <td>Read, Write, Edit, Glob, Grep</td>
+          <td>Navigate, read, and modify code</td>
+        </tr>
+        <tr>
+          <td><strong>Terminal</strong></td>
+          <td>Bash, shell execution</td>
+          <td>Run commands, tests, builds</td>
+        </tr>
+        <tr>
+          <td><strong>Web Access</strong></td>
+          <td>WebSearch, WebFetch</td>
+          <td>Search the web, fetch URLs</td>
+        </tr>
+        <tr>
+          <td><strong>Code Intelligence</strong></td>
+          <td>Semantic search, linting</td>
+          <td>Understand code beyond text</td>
+        </tr>
+        <tr>
+          <td><strong>Agent Management</strong></td>
+          <td>Agent (subagent), Task tools</td>
+          <td>Spawn sub-agents for parallel work</td>
+        </tr>
+        <tr>
+          <td><strong>External Services</strong></td>
+          <td>MCP tools (GitHub, Slack, DB)</td>
+          <td>Interact with external systems</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      The first two categories (file system and terminal) are what make coding agents possible. Without them, the model can only talk about code. With them, it can read, write, and test code.
+    </p>
+
+    <!-- How the Model Decides -->
+    <h2>How the Model Picks a Tool</h2>
+
+    <p>
+      Here's something that surprises people: <strong>tool selection is just another text generation decision.</strong> The model doesn't have a special "tool selector" module. It reads the tool descriptions, considers the user's request, and generates the tool call that seems most appropriate &mdash; the same way it generates any other text.
+    </p>
+
+    <p>
+      This means tool selection quality depends on:
+    </p>
+
+    <ul>
+      <li><strong>Tool descriptions</strong> &mdash; Clear, specific descriptions lead to better selection</li>
+      <li><strong>Number of tools</strong> &mdash; More tools means more confusion (more on this in a moment)</li>
+      <li><strong>System prompt guidance</strong> &mdash; The harness can steer the model: "Use Read instead of cat, Grep instead of grep"</li>
+      <li><strong>Training data</strong> &mdash; Models trained with specific tools will use them more naturally</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>More tools isn't always better.</strong> Research shows tool selection accuracy drops significantly after 30&ndash;50 available tools. One study found accuracy plummeting from 43% with 4 tools to just 2% with 51 tools on a scheduling task. Tools get buried in a "blind spot" and the model overlooks the right one.
+    </div>
+
+    <!-- Parallel Tool Calls -->
+    <h2>Parallel Tool Calls</h2>
+
+    <p>
+      Sometimes the model needs to do multiple independent things at once. Instead of calling tools one by one (sequential), some harnesses let the model request <strong>multiple tools in a single response</strong>.
+    </p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Sequential (slow)</p>
+        <div class="prompt-text">Turn 1: Read file A → wait → result
+Turn 2: Read file B → wait → result
+Turn 3: Read file C → wait → result
+Total: 3 round trips</div>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Parallel (fast)</p>
+        <div class="prompt-text">Turn 1: Read file A + Read file B + Read file C
+         → all execute concurrently → all results return
+Total: 1 round trip</div>
+      </div>
+    </div>
+
+    <p>
+      The latency drops from the <em>sum</em> of all calls to the <em>duration of the slowest one</em>. For I/O-heavy tasks (reading multiple files, making API calls), this is a 2&ndash;4x speedup with zero additional cost.
+    </p>
+
+    <p>
+      Claude Code uses parallel tool calls extensively. When it needs to explore your codebase, it might spawn multiple Read and Grep calls simultaneously rather than waiting for each one to finish.
+    </p>
+
+    <!-- Deferred Tool Loading -->
+    <h2>Deferred Tool Loading: When You Have Too Many Tools</h2>
+
+    <p>
+      Every tool description costs tokens. A typical tool definition is 200&ndash;500 tokens. If you have 50 tools, that's 10,000&ndash;25,000 tokens <em>just for tool descriptions</em> &mdash; before any conversation even starts.
+    </p>
+
+    <p>
+      Now imagine connecting 5 MCP servers with 400 total tools. That could eat 67,000+ tokens &mdash; a third of your entire context window, gone before you type a word.
+    </p>
+
+    <p>
+      The solution: <strong>deferred loading</strong>. The harness registers tools with a flag that says "don't load this tool's full description until it's needed." Instead, the model gets access to a <code>ToolSearch</code> tool that can discover relevant tools on demand.
+    </p>
+
+<pre><code>// Tool registered with deferred loading
+{
+  "name": "github_create_issue",
+  "description": "Create a new GitHub issue",
+  "defer_loading": true
+}
+
+// Model discovers it via ToolSearch when needed
+ToolSearch(query: "create github issue")
+→ Returns full schema for github_create_issue
+→ Model can now call it</code></pre>
+
+    <p>
+      Result: <strong>85%+ token reduction</strong> in tool descriptions. The model loads only the 3&ndash;5 tools it actually needs for each task, not the entire catalog.
+    </p>
+
+    <!-- MCP -->
+    <h2>MCP: The Universal Tool Connector</h2>
+
+    <p>
+      Imagine if every phone manufacturer required different charger cables. That was the state of AI tool integration until recently &mdash; every harness had its own way of connecting external tools.
+    </p>
+
+    <p>
+      The <strong>Model Context Protocol (MCP)</strong> is the USB-C of AI tools. It's an open standard (introduced by Anthropic in late 2024, adopted by OpenAI, Cursor, and others in 2025) that standardizes how AI applications connect to external systems.
+    </p>
+
+    <p>
+      MCP defines three primitives:
+    </p>
+
+    <ul>
+      <li><strong>Tools</strong> &mdash; Executable functions with side effects (write files, call APIs, send messages)</li>
+      <li><strong>Resources</strong> &mdash; Read-only data sources (database schemas, document libraries, configs)</li>
+      <li><strong>Prompts</strong> &mdash; Predefined templates exposed as slash commands</li>
+    </ul>
+
+    <p>
+      In practice, you configure MCP servers in your settings, and the harness connects to them automatically:
+    </p>
+
+<pre><code>// .claude/settings.json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "..." }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": { "DATABASE_URL": "..." }
+    }
+  }
+}</code></pre>
+
+    <p>
+      Now the model can create GitHub issues, query your database, and do whatever else these servers expose &mdash; through the same tool-use mechanism as built-in tools. Same loop, same permission checks, same harness orchestration.
+    </p>
+
+    <!-- Compare Box: Tool Registries -->
+    <h2>Tool Registries Compared</h2>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Claude Code</div>
+        <p><strong>Built-in tools:</strong> ~18 (Read, Edit, Write, Bash, Glob, Grep, WebSearch, WebFetch, Agent, etc.)</p>
+        <p><strong>Extension:</strong> MCP servers for custom tools. Deferred loading for large registries.</p>
+        <p><strong>Key design:</strong> Detailed tool descriptions in system prompt steer usage. Explicit guidance: "Use Read instead of cat."</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Cursor</div>
+        <p><strong>Built-in tools:</strong> 15+ specialized tools including semantic code search, <code>rg</code> (ripgrep), <code>read_lints</code>.</p>
+        <p><strong>Extension:</strong> MCP integration + subagents (Explore, Bash, Browser) with isolated contexts.</p>
+        <p><strong>Key design:</strong> Unix-aligned tool names match model training data. Custom embedding model for semantic search.</p>
+      </div>
+    </div>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Codex</div>
+        <p><strong>Architecture:</strong> JSON-RPC App Server with bidirectional communication. Items, turns, and threads as core abstractions.</p>
+        <p><strong>Extension:</strong> Custom tool registration via JSON-RPC protocol. Built-in approval workflow for sensitive operations.</p>
+        <p><strong>Key design:</strong> Rich session semantics (streaming diffs, approval flows) designed for IDE integration. Chose JSON-RPC over MCP for richer interaction patterns.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Windsurf</div>
+        <p><strong>Architecture:</strong> Cascade uses real-time awareness tracking (edits, terminal, clipboard) as implicit tool inputs.</p>
+        <p><strong>Extension:</strong> Built-in tool suite focused on code editing and terminal. MCP support added.</p>
+        <p><strong>Key design:</strong> Persistent agentic approach &mdash; tools operate within a continuous context rather than stateless calls.</p>
+      </div>
+    </div>
+
+    <!-- Inside the Harness -->
+    <h2>Inside the Harness: A File Read, an Edit, and a Test</h2>
+
+    <p>
+      Let's trace the complete tool-use loop for a simple task: reading a file, editing it, and running tests.
+    </p>
+
+    <div class="inside-look-box">
+      <p><strong>You type:</strong> <code>add input validation to the createUser function</code></p>
+
+      <p><strong>Round 1 &mdash; Finding the code:</strong><br>
+      The model generates: <code>Grep(pattern="function createUser", type="ts")</code><br>
+      The harness checks permissions (Grep is read-only &mdash; auto-approved), executes the search, returns: <code>src/services/user.ts:28</code>. Total round-trip: ~200ms.</p>
+
+      <p><strong>Round 2 &mdash; Reading the file:</strong><br>
+      The model generates: <code>Read(file_path="src/services/user.ts", offset=20, limit=30)</code><br>
+      Harness executes, returns 30 lines of TypeScript. The model now sees the function and its parameters.</p>
+
+      <p><strong>Round 3 &mdash; Making the edit:</strong><br>
+      The model generates: <code>Edit(file_path="src/services/user.ts", old_string="function createUser(data) {", new_string="function createUser(data) {\n  if (!data.email) throw new Error('Email required');\n  if (!data.name) throw new Error('Name required');")</code><br>
+      Harness checks permissions &mdash; Edit modifies a file. Depending on your permission mode, it either auto-approves or prompts you. You approve. The edit is applied.</p>
+
+      <p><strong>Round 4 &mdash; Verifying:</strong><br>
+      The model generates: <code>Bash(command="npm test -- --grep createUser")</code><br>
+      Harness checks permissions: <code>npm test</code> matches your allow list. Runs the tests. Returns output: "4 tests passed." The model summarizes the result for you.</p>
+
+      <p><strong>Four tool calls, one user message.</strong> The model decided which tools to use, generated structured requests, and reasoned about each result. The harness validated permissions, executed each action, and fed results back. Neither could have done this alone.</p>
+    </div>
+
+    <!-- Exercise -->
+    <h2>Try It Yourself</h2>
+
+    <div class="exercise-box">
+      <p><strong>Catalog Your Tool's Actions</strong></p>
+      <p>
+        Use your AI coding tool for a real task &mdash; something that involves multiple steps (fix a bug, add a feature, write tests). As you work, keep a running list:
+      </p>
+      <ol>
+        <li><strong>List every action</strong> the tool takes beyond generating text. Did it read files? Search? Run commands? Edit code?</li>
+        <li><strong>Categorize each action</strong> using the table above: file system, terminal, web access, code intelligence, agent management, or external service.</li>
+        <li><strong>Count the tool calls.</strong> How many tool calls did a single request trigger? Were any done in parallel?</li>
+        <li><strong>Spot the permission checks.</strong> Which actions did the tool ask permission for? Which did it do automatically?</li>
+      </ol>
+      <p>
+        If you're using Claude Code, try running with <code>--verbose</code> to see tool calls as they happen. You'll see the exact loop: model reasons, calls a tool, gets a result, reasons again.
+      </p>
+      <p>
+        <strong>Bonus:</strong> If you have MCP servers configured, ask the model to do something that requires an MCP tool. Watch how it discovers and uses the tool through the same mechanism as built-in ones.
+      </p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What's Next</h2>
+
+    <p>
+      Tools give the model hands. But hands without memory are clumsy &mdash; you'd drop something after every step. In <strong>Chapter 5: Memory and State</strong>, we'll explore the different layers of memory that create the illusion of continuity, from the conversation in your context window to persistent knowledge that survives across sessions.
+    </p>
+
+    <p>
+      The fundamental truth: LLMs have zero memory. Every time you think the model "remembers" something, the harness is doing the work. Let's see how.
+    </p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-context-engineering.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">3. Context Engineering</span>
+      </a>
+      <a href="05-memory-and-state.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">5. Memory and State</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

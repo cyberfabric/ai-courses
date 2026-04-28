@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Create ML — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-model-optimization.html">&larr; Prev</a>
+      <a href="10-mlx-swift.html">Next &rarr;</a>
+      <a href="maps/09-create-ml-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Create ML &mdash; Training Your Own Models</h1>
+    <p class="subtitle">Your Data, Your Model, No Python Required</p>
+  </header>
+
+  <main>
+
+    <h2>Why Train Your Own Model?</h2>
+
+    <p>Every chapter so far has used models that someone else trained. Apple's Vision framework, pre-trained MobileNet, Hugging Face checkpoints &mdash; they're fantastic for general tasks. But what happens when you need to classify <em>your</em> company's products? Or detect <em>your</em> specific machine parts? Or recognize <em>your</em> custom sound events?</p>
+
+    <p>That's where Create ML comes in. Think of it as the "iMovie of machine learning" &mdash; Apple's tool that lets you train custom models by dragging in your data and clicking Train. No Python. No Jupyter notebooks. No GPU rental. Just your Mac and some labeled data.</p>
+
+    <div class="highlight-box">
+      <h3>What Create ML Gives You</h3>
+      <ul>
+        <li><strong>No-code training</strong> &mdash; the Create ML app has a drag-and-drop GUI</li>
+        <li><strong>Code-based training</strong> &mdash; Create ML Components framework lets you train in Swift</li>
+        <li><strong>Transfer learning</strong> &mdash; start from Apple's pre-trained feature extractors, fine-tune with as few as 50 images per class</li>
+        <li><strong>On-device personalization</strong> &mdash; update models on the user's iPhone with their data via MLUpdateTask</li>
+        <li><strong>Standard output</strong> &mdash; every trained model is a .mlmodel file, ready for Core ML</li>
+      </ul>
+    </div>
+
+    <h2>The Create ML App</h2>
+
+    <p>Open Xcode &rarr; menu bar &rarr; <strong>Open Developer Tool &rarr; Create ML</strong>. That's it. You're now looking at a model training environment that runs entirely on your Mac.</p>
+
+    <p>The app walks you through three steps:</p>
+
+    <div class="model-pipeline">
+      <h3>Create ML Workflow</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Choose Model Type</strong>
+            <p>Image, text, sound, tabular, or action classifier</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Add Training Data</strong>
+            <p>Drag in labeled folders, CSVs, or annotated files</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Train &amp; Evaluate</strong>
+            <p>Click Train, review metrics, export .mlmodel</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>All the Model Types</h2>
+
+    <p>Create ML isn't just for images. Here's the full menu of what you can train:</p>
+
+    <div class="apple-framework">
+      <h3>Create ML Model Types</h3>
+      <table>
+        <thead>
+          <tr><th>Category</th><th>Model Type</th><th>What It Does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td rowspan="4"><strong>Vision</strong></td><td>Image Classification</td><td>Label entire images ("dog", "cat", "car")</td></tr>
+          <tr><td>Object Detection</td><td>Find and locate objects with bounding boxes</td></tr>
+          <tr><td>Hand Pose Classification</td><td>Recognize hand gestures from pose data</td></tr>
+          <tr><td>Body Pose Classification</td><td>Classify body positions (squats, push-ups)</td></tr>
+          <tr><td rowspan="2"><strong>Video</strong></td><td>Action Classification</td><td>Identify activities in video clips</td></tr>
+          <tr><td>Hand Action Classification</td><td>Recognize hand gesture sequences</td></tr>
+          <tr><td rowspan="2"><strong>Text</strong></td><td>Text Classification</td><td>Categorize text (spam, sentiment, topic)</td></tr>
+          <tr><td>Word Tagging</td><td>Label individual words (entity types)</td></tr>
+          <tr><td><strong>Audio</strong></td><td>Sound Classification</td><td>Identify sounds (cough, siren, applause)</td></tr>
+          <tr><td rowspan="2"><strong>Tabular</strong></td><td>Tabular Classification</td><td>Predict categories from structured data</td></tr>
+          <tr><td>Tabular Regression</td><td>Predict numbers from structured data</td></tr>
+          <tr><td><strong>Other</strong></td><td>Style Transfer</td><td>Apply artistic styles to images</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tip-box">
+      <h4>Which Model Type Should You Pick?</h4>
+      <p><strong>Image Classification</strong> is the most common starting point. If you need to label an entire photo ("is this a receipt or a business card?"), start here. If you need to find <em>where</em> something is in the image (bounding boxes), choose Object Detection. For everything else, match the data type to the model type.</p>
+    </div>
+
+    <h2>Image Classification: The 10-Minute Custom Model</h2>
+
+    <p>Let's build an image classifier. The data format is dead simple: one folder per class, images inside each folder.</p>
+
+<pre><code>TrainingData/
+  ├── coffee_mug/          ← 30+ photos of coffee mugs
+  │   ├── mug_001.jpg
+  │   ├── mug_002.jpg
+  │   └── ...
+  ├── water_bottle/        ← 30+ photos of water bottles
+  │   ├── bottle_001.jpg
+  │   └── ...
+  ├── keyboard/            ← 30+ photos of keyboards
+  │   ├── kb_001.jpg
+  │   └── ...
+  └── headphones/          ← 30+ photos of headphones
+      ├── hp_001.jpg
+      └── ...</code></pre>
+
+    <p>That's your entire "dataset." The folder names become the class labels. Now open Create ML, choose Image Classification, and drag the <code>TrainingData</code> folder into the Training Data well.</p>
+
+    <h3>Configuring Augmentations</h3>
+
+    <p>Before clicking Train, enable augmentations. These are automatic image transformations that create variations of your training photos &mdash; giving the model more examples to learn from without you taking more photos.</p>
+
+    <div class="checklist">
+      <h4>Recommended Augmentations</h4>
+      <ul>
+        <li><strong>Crop</strong> &mdash; random crops force the model to recognize objects that aren't perfectly centered</li>
+        <li><strong>Rotation</strong> &mdash; ±15&deg; rotations handle tilted camera angles</li>
+        <li><strong>Flip (horizontal)</strong> &mdash; doubles your effective dataset for symmetric objects</li>
+        <li><strong>Blur</strong> &mdash; slight blur simulates motion and out-of-focus shots</li>
+        <li><strong>Noise</strong> &mdash; random noise teaches robustness to low-light conditions</li>
+        <li><strong>Exposure</strong> &mdash; brightness variations handle different lighting environments</li>
+      </ul>
+    </div>
+
+    <p>With augmentations, your 30 images per class effectively become 200+. The model sees coffee mugs that are rotated, cropped, blurred, and at different exposures &mdash; making it much more robust in the real world.</p>
+
+    <h3>Transfer Learning: The Secret Sauce</h3>
+
+    <p>Create ML doesn't train from scratch. It uses <strong>transfer learning</strong> &mdash; starting from Apple's pre-trained feature extractor that already understands edges, textures, shapes, and objects from millions of images. Your training only fine-tunes the top layers to distinguish <em>your</em> specific classes.</p>
+
+    <p>This is why 30-50 images per class is enough. The model already knows what "round" and "shiny" and "handle" look like. You're just teaching it that "round + shiny + handle = coffee mug."</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Transfer Learning (Create ML)</h4>
+        <ul>
+          <li>30-50 images per class</li>
+          <li>2-5 minutes training on M1+</li>
+          <li>90-98% accuracy typical</li>
+          <li>Uses Apple's base feature extractor</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Training from Scratch</h4>
+        <ul>
+          <li>10,000+ images per class</li>
+          <li>Hours or days of GPU training</li>
+          <li>Requires ML expertise to tune</li>
+          <li>Needs powerful hardware</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Evaluating Your Model</h3>
+
+    <p>After training, Create ML shows you a <strong>confusion matrix</strong> &mdash; a grid showing where the model gets confused. If it keeps mistaking water bottles for coffee mugs, you know you need more diverse photos of each, or they're genuinely similar from certain angles.</p>
+
+    <p>Key metrics to check:</p>
+    <ul>
+      <li><strong>Training accuracy</strong> &mdash; how well it performs on data it trained on (should be 95%+)</li>
+      <li><strong>Validation accuracy</strong> &mdash; how well it performs on held-out data (the real measure)</li>
+      <li><strong>Per-class precision/recall</strong> &mdash; which specific classes are weakest</li>
+    </ul>
+
+    <div class="warning-box">
+      <h4>The Overfitting Trap</h4>
+      <p>If training accuracy is 99% but validation accuracy is 70%, your model memorized the training photos instead of learning general patterns. Fix it: add more diverse photos, enable more augmentations, or reduce the number of training iterations.</p>
+    </div>
+
+    <h2>Object Detection Training</h2>
+
+    <p>Image classification labels the whole image. Object detection finds <em>where</em> things are &mdash; drawing bounding boxes around specific objects. Think: "there's a coffee mug at position (120, 80) to (280, 240)."</p>
+
+    <p>The data format is different. You need images plus annotations &mdash; JSON or CSV files that specify bounding box coordinates for each object in each image.</p>
+
+<pre><code>// annotations.json format for Create ML
+[
+  {
+    "image": "photo_001.jpg",
+    "annotations": [
+      {
+        "label": "coffee_mug",
+        "coordinates": {
+          "x": 150, "y": 200,
+          "width": 120, "height": 140
+        }
+      }
+    ]
+  }
+]</code></pre>
+
+    <p>Create ML includes a built-in annotation tool &mdash; open your images and draw bounding boxes directly in the app. For larger datasets, tools like RoboFlow or Label Studio can export in Create ML's JSON format.</p>
+
+    <div class="tip-box">
+      <h4>Object Detection Data Tips</h4>
+      <p>You need more data than for classification &mdash; aim for <strong>100+ annotated images</strong> with varied object positions, sizes, and backgrounds. Include images with multiple objects, partial occlusion, and different lighting. The model needs to learn not just <em>what</em> the object looks like, but <em>where</em> it can appear.</p>
+    </div>
+
+    <h2>Sound and Text Classification</h2>
+
+    <p><strong>Sound classification</strong> uses the same folder-per-class structure as images &mdash; one folder per sound category, 50+ audio clips (1-5 seconds each) per folder. Create ML extracts mel-frequency features automatically and the resulting model integrates directly with SoundAnalysis from Chapter 5.</p>
+
+    <p><strong>Text classification</strong> uses a JSON or CSV with text samples and labels. Create ML offers two backends: <strong>Maximum Entropy</strong> (fast, works with 100+ samples) and <strong>Transfer Learning</strong> (better accuracy, needs 200+ samples per class). For most apps, the transfer learning backend wins.</p>
+
+    <h2>Create ML Components: Training in Swift</h2>
+
+    <p>The Create ML app is great for prototyping, but what if you want to train models programmatically? The <strong>Create ML Components</strong> framework lets you build training pipelines in pure Swift.</p>
+
+<pre><code>import CreateMLComponents
+import CoreImage
+
+// Define a training pipeline for image classification
+let pipeline = ImageFeaturePrint()
+    .appending(LinearClassifier())
+
+// Load training data
+let trainingData = try AnnotatedFiles(
+    labeledDirectoryAt: trainingURL
+)
+
+// Train the model
+let trained = try await pipeline.train(
+    trainingData,
+    annotationKeyPath: \.label
+)
+
+// Export as Core ML model
+let mlModel = try trained.export()
+try mlModel.write(to: outputURL)</code></pre>
+
+    <p>Create ML Components is composable &mdash; chain transformers and estimators like UNIX pipes: <code>ImageFeaturePrint</code> (feature extractor) &rarr; <code>LinearClassifier</code> (classification head). Other estimators include <code>BoostedTreeClassifier</code> for tabular data and <code>TimeSeriesForecaster</code> for time-series predictions.</p>
+
+    <div class="tip-box">
+      <h4>When to Use the App vs Components</h4>
+      <p><strong>Use the Create ML app</strong> for exploring model types, quick prototyping, and one-off training sessions. <strong>Use Create ML Components</strong> when you need automated training pipelines, integration with CI/CD, or on-device training triggered by app logic.</p>
+    </div>
+
+    <h2>On-Device Personalization with MLUpdateTask</h2>
+
+    <p>Here's the killer feature: you can update a model <em>on the user's iPhone</em> using their data. The model improves for each user individually, and their data never leaves the device.</p>
+
+    <p>Think of it as "the model adapts to you." A handwriting recognizer that learns your letter shapes. A food classifier that learns your specific meal preferences. A gesture detector that calibrates to your hand movements.</p>
+
+    <h3>How It Works</h3>
+
+    <div class="model-pipeline">
+      <h3>On-Device Personalization Flow</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Ship Base Model</strong>
+            <p>Bundle an updatable .mlmodel in your app</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Collect User Data</strong>
+            <p>User labels examples through normal app usage</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Update On-Device</strong>
+            <p>MLUpdateTask fine-tunes the top layers locally</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Better Predictions</strong>
+            <p>Model improves for this specific user</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>The key constraint: only specific layers are marked as updatable during model creation. Typically, you freeze the feature extractor and only update the classification head. This keeps the update fast (seconds, not minutes) and prevents catastrophic forgetting.</p>
+
+<pre><code>import CoreML
+
+func personalizeModel(
+    with trainingData: MLBatchProvider
+) async throws -> MLModel {
+    let modelURL = Bundle.main.url(
+        forResource: "UpdatableClassifier",
+        withExtension: "mlmodelc"
+    )!
+
+    // Create the update task
+    let updateTask = try MLUpdateTask(
+        forModelAt: modelURL,
+        trainingData: trainingData,
+        configuration: nil,
+        completionHandler: { context in
+            // Save the updated model
+            let updatedModel = context.model
+            let documentsURL = FileManager.default
+                .urls(for: .documentDirectory,
+                      in: .userDomainMask).first!
+            let savedURL = documentsURL
+                .appendingPathComponent("PersonalModel.mlmodelc")
+            try? context.model.write(to: savedURL)
+        }
+    )
+
+    // Run the update
+    updateTask.resume()
+}</code></pre>
+
+    <div class="warning-box">
+      <h4>Making a Model Updatable</h4>
+      <p>Not every .mlmodel supports on-device updates. The model must be specifically configured with updatable layers during creation &mdash; either in Create ML (check "Updatable" in training options) or via coremltools in Python with <code>coremltools.models.neural_network.make_updatable()</code>. You can't retroactively make a model updatable.</p>
+    </div>
+
+    <h2>Training Performance Benchmarks</h2>
+
+    <p>How fast does Create ML actually train? Here are real numbers for common scenarios:</p>
+
+    <div class="device-benchmark">
+      <h3>Create ML Training Times (M1 MacBook Pro)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Dataset Size</th>
+            <th>Training Time</th>
+            <th>Model Size</th>
+            <th>Accuracy</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Image Classification (5 classes)</td>
+            <td>150 images (30/class)</td>
+            <td>~45 seconds</td>
+            <td>17 KB</td>
+            <td>94%</td>
+          </tr>
+          <tr>
+            <td>Image Classification (20 classes)</td>
+            <td>1,000 images (50/class)</td>
+            <td>~3 minutes</td>
+            <td>56 KB</td>
+            <td>91%</td>
+          </tr>
+          <tr>
+            <td>Object Detection</td>
+            <td>500 annotated images</td>
+            <td>~30 minutes</td>
+            <td>5.2 MB</td>
+            <td>82% mAP</td>
+          </tr>
+          <tr>
+            <td>Sound Classification (4 classes)</td>
+            <td>200 clips (50/class)</td>
+            <td>~2 minutes</td>
+            <td>42 KB</td>
+            <td>92%</td>
+          </tr>
+          <tr>
+            <td>Text Classification (3 classes)</td>
+            <td>600 samples (200/class)</td>
+            <td>~15 seconds</td>
+            <td>85 KB</td>
+            <td>88%</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="benchmark-note">Image classification models are tiny because Create ML outputs just the classification head &mdash; the feature extractor is already on the device as part of the OS.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>Why Are Image Models So Small?</h4>
+      <p>A 17 KB model seems impossibly small. The trick: Create ML's image classifiers use <strong>ImageFeaturePrint</strong>, Apple's built-in feature extractor that ships with every iPhone. Your model only contains the lightweight classification layer on top. At runtime, Core ML automatically chains the built-in feature extractor with your custom classifier. Smaller model, same accuracy.</p>
+    </div>
+
+    <h2>Integrating Your Trained Model</h2>
+
+    <p>The output of Create ML is a standard .mlmodel file. Integration is identical to Chapter 3:</p>
+
+<pre><code>import CoreML
+import Vision
+
+// Load your custom model (Xcode auto-generates the class)
+let model = try DeskObjectClassifier(configuration: .init())
+let vnModel = try VNCoreMLModel(for: model.model)
+
+// Create a classification request
+let request = VNCoreMLRequest(model: vnModel) { request, error in
+    guard let results = request.results
+        as? [VNClassificationObservation],
+          let top = results.first else { return }
+
+    print("\(top.identifier): \(top.confidence * 100)%")
+    // "coffee_mug: 96.3%"
+}
+
+// Run on an image
+let handler = VNImageRequestHandler(cgImage: photo)
+try handler.perform([request])</code></pre>
+
+    <p>That's it. Your custom-trained model works exactly like any other Core ML model &mdash; same VNCoreMLRequest workflow, same performance characteristics, same Neural Engine acceleration.</p>
+
+    <h2>Data Collection Best Practices</h2>
+
+    <p>Your model is only as good as your training data. The golden rule: <strong>train on data that looks like what the model will see in production.</strong></p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Good Training Photos</h4>
+        <ul>
+          <li>Varied lighting (indoor, outdoor, dim)</li>
+          <li>Multiple angles and distances</li>
+          <li>Different backgrounds and contexts</li>
+          <li>Some blur and partial occlusion</li>
+          <li>Balanced classes (±20% in size)</li>
+          <li>Separate validation set (20% held out)</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Bad Training Photos</h4>
+        <ul>
+          <li>Same angle, same background every time</li>
+          <li>Perfect studio lighting in every shot</li>
+          <li>Same distance, same orientation</li>
+          <li>200 dogs but only 20 cats (imbalanced)</li>
+          <li>Same photo in training AND validation</li>
+          <li>Only one color/variant of the object</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>The Minimal Viable Dataset</h2>
+
+    <p>How little data can you get away with? It depends on the task and the visual similarity between your classes:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">30</div>
+        <div class="stat-label">images/class minimum</div>
+        <p>For visually distinct objects (mug vs keyboard vs plant)</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">100</div>
+        <div class="stat-label">images/class recommended</div>
+        <p>For similar-looking objects (types of birds, car models)</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">200+</div>
+        <div class="stat-label">images/class for production</div>
+        <p>For customer-facing features with high accuracy requirements</p>
+      </div>
+    </div>
+
+    <p>Start with 30. Train. Test. If accuracy is below target, add more data for the weakest classes first &mdash; faster than collecting a massive dataset upfront.</p>
+
+    <div class="tip-box">
+      <h4>The #1 Training Pitfall: Background Bias</h4>
+      <p>If all your coffee mug photos are on a white desk, the model learns "white desk = coffee mug." When someone holds a mug against a dark background, it fails. The fix: vary backgrounds aggressively. Add an "other/negative" class for images with no target object. And if you need to know <em>where</em> something is, use object detection, not image classification.</p>
+    </div>
+
+    <h2>From Training to Production: The Full Pipeline</h2>
+
+    <div class="model-pipeline">
+      <h3>Complete Create ML to Production Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Collect &amp; Label</strong>
+            <p>Photos, audio, or text with class labels</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Train in Create ML</strong>
+            <p>Transfer learning + augmentations</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Evaluate</strong>
+            <p>Check confusion matrix, per-class accuracy</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Optimize (Ch. 8)</strong>
+            <p>Quantize / palettize if needed</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>Ship in App</strong>
+            <p>Drag .mlmodel into Xcode</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Exercise: Build a Desk Object Classifier</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: Your First Custom Model</h3>
+      <p>Build a custom image classifier for 5 objects on your desk using Create ML:</p>
+      <ol>
+        <li><strong>Choose 5 objects</strong> &mdash; pick items that are visually distinct (coffee mug, keyboard, phone, headphones, notebook)</li>
+        <li><strong>Collect training data</strong> &mdash; take 30 photos of each object with your iPhone. Vary angles, lighting, backgrounds, and distance. Save in a folder-per-class structure.</li>
+        <li><strong>Hold out validation data</strong> &mdash; set aside 10 additional photos per object that you will NOT use for training</li>
+        <li><strong>Train in Create ML</strong> &mdash; open the Create ML app, create a new Image Classification project, drag in your training folder, enable crop + rotation + flip augmentations, click Train</li>
+        <li><strong>Evaluate</strong> &mdash; review the confusion matrix. Which classes are confused? Why?</li>
+        <li><strong>Test on validation set</strong> &mdash; drag your held-out photos into the Testing area. What's the real-world accuracy?</li>
+        <li><strong>Export and integrate</strong> &mdash; save the .mlmodel, drag into your Xcode project from Chapter 3, replace MobileNet with your custom model, run on your iPhone</li>
+      </ol>
+      <h4>Bonus Challenges:</h4>
+      <ul>
+        <li>Add a 6th class: "nothing" (photos of empty desk, walls, floor) &mdash; does accuracy change?</li>
+        <li>Try the same exercise with Create ML Components in Swift instead of the GUI app</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Create ML covers the Apple-native training story beautifully, but what if you want to run Llama, Mistral, or Gemma on your iPhone? In <strong>Chapter 10: MLX Swift and Open-Source Models</strong>, you'll explore Apple's open-source MLX framework for running large language models on Apple Silicon, along with llama.cpp and ExecuTorch &mdash; choosing between Apple's Foundation Models and the vibrant open-source ecosystem.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-model-optimization.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Model Optimization &mdash; Making Models iPhone-Ready</span>
+      </a>
+      <a href="10-mlx-swift.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">MLX Swift and Open-Source Models</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

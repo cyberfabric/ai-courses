@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: In-App Chat &amp; Conversational AI | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-smart-text.html">&larr; Prev</a>
+      <a href="06-smart-search.html">Next &rarr;</a>
+      <a href="maps/05-chat-conversational-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>In-App Chat &amp; Conversational AI</h1>
+    <p class="subtitle">SwiftUI chat UI, multi-turn sessions, tool calling, streaming responses &mdash; making your chatbot actually useful</p>
+  </header>
+
+  <main>
+
+    <h2>Does Your Feature Need a Chatbot?</h2>
+
+    <p>Before you build a chat interface, ask yourself: does this feature actually benefit from a conversation? A chatbot is a powerful interaction pattern &mdash; but it&rsquo;s also a complex one. Users have to think of what to type, read the response, then decide what to type next. That&rsquo;s a lot of cognitive work compared to tapping a button.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Chat Makes Sense</p>
+        <p class="prompt-text">Customer support, product discovery, guided workflows, learning/tutoring, data exploration, trip planning &mdash; anything where the user&rsquo;s needs unfold over multiple turns and aren&rsquo;t fully known upfront.</p>
+        <p class="prompt-explanation">The user needs to refine their request, the AI needs to ask clarifying questions, or the conversation itself IS the feature.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Chat Doesn&rsquo;t Make Sense</p>
+        <p class="prompt-text">Changing settings, choosing between 3 options, toggling a preference, performing a single action &mdash; anything where a button, picker, or form would be faster.</p>
+        <p class="prompt-explanation">If you can describe the entire interaction in one sentence, it&rsquo;s a button, not a conversation.</p>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>The restaurant test:</strong> If a waiter asked you &ldquo;What would you like to drink?&rdquo; and you had to type your answer instead of picking from the menu, you&rsquo;d be annoyed. Don&rsquo;t make your users type when they could tap.</p>
+    </div>
+
+    <h2>The Anatomy of a Chat UI in SwiftUI</h2>
+
+    <p>A chat interface looks simple &mdash; bubbles going up and down. But a production chat UI has a dozen subtle behaviors: it scrolls to the bottom when new messages arrive, stays put when the user scrolls up to read history, handles the keyboard smoothly, and shows a typing indicator while the AI thinks. Let&rsquo;s build one.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Priya is planning a trip to Kyoto using a travel app. She types &ldquo;What&rsquo;s the best time to visit Kyoto?&rdquo; A gentle typing indicator pulses for a moment, then text streams in bubble-by-bubble: &ldquo;Late March to mid-April for cherry blossoms, or November for autumn foliage&hellip;&rdquo; She follows up: &ldquo;What about restaurants near Fushimi Inari?&rdquo; The AI remembers her context &mdash; she&rsquo;s planning a Kyoto trip &mdash; and gives relevant, specific answers. She never had to repeat herself.</p>
+    </div>
+
+    <h3>The Message Model</h3>
+
+    <p>Start with a clean data model. Every message has a role, content, a timestamp, and a status (for tracking whether AI responses are still streaming):</p>
+
+<pre><code>import SwiftData
+
+enum MessageRole: String, Codable {
+    case user, assistant, system
+}
+
+enum MessageStatus: String, Codable {
+    case sending, streaming, complete, failed
+}
+
+@Model
+class ChatMessage {
+    var id: UUID
+    var role: MessageRole
+    var content: String
+    var timestamp: Date
+    var status: MessageStatus
+
+    init(role: MessageRole, content: String) {
+        self.id = UUID()
+        self.role = role
+        self.content = content
+        self.timestamp = .now
+        self.status = role == .user ? .complete : .sending
+    }
+}</code></pre>
+
+    <p>Using <code>@Model</code> from SwiftData means conversations persist automatically. Close the app, come back tomorrow, and the chat history is right there. Users expect this &mdash; nobody wants to lose a 20-message conversation because they switched to Safari.</p>
+
+    <h3>The Chat View</h3>
+
+    <p>The core layout is a <code>ScrollView</code> with a <code>LazyVStack</code> for message bubbles and a text input bar pinned to the bottom:</p>
+
+<pre><code>struct ChatView: View {
+    @State private var viewModel = ChatViewModel()
+    @State private var inputText = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(viewModel.messages) { message in
+                        MessageBubble(message: message)
+                    }
+                }
+                .padding()
+            }
+            .defaultScrollAnchor(.bottom)
+
+            // Input bar
+            HStack(spacing: 12) {
+                TextField("Ask anything...", text: $inputText)
+                    .textFieldStyle(.roundedBorder)
+                Button { sendMessage() } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .disabled(inputText.isEmpty || viewModel.isGenerating)
+            }
+            .padding()
+        }
+    }
+}</code></pre>
+
+    <p>The key trick is <code>.defaultScrollAnchor(.bottom)</code> &mdash; this tells SwiftUI to anchor the scroll view at the bottom, so new messages appear without you manually calling <code>scrollTo()</code>. It&rsquo;s the difference between a chat that feels native and one that feels like a homework project.</p>
+
+    <div class="tip-box">
+      <p><strong>Keyboard avoidance is free in SwiftUI.</strong> The <code>TextField</code> inside a <code>VStack</code> automatically pushes up when the keyboard appears. Add <code>.scrollDismissesKeyboard(.immediately)</code> on the <code>ScrollView</code> so users can swipe down to dismiss the keyboard while scrolling through chat history.</p>
+    </div>
+
+    <h2>Multi-Turn Sessions with Foundation Models</h2>
+
+    <p>Here&rsquo;s the beautiful part: <code>LanguageModelSession</code> is already built for conversations. It maintains a transcript of all exchanges &mdash; every prompt and every response &mdash; so the model automatically has context from earlier turns. You don&rsquo;t need to resend the entire chat history with each message.</p>
+
+<pre><code>let session = LanguageModelSession(
+    instructions: "You are a helpful travel assistant. Answer travel questions only."
+)
+
+// Turn 1
+let r1 = try await session.respond(to: "Best time to visit Kyoto?")
+// "Late March to mid-April for cherry blossoms..."
+
+// Turn 2 — the model remembers we're talking about Kyoto
+let r2 = try await session.respond(to: "What about restaurants near the shrine?")
+// "Near Fushimi Inari, you'll find great street food stalls..."</code></pre>
+
+    <p>The session remembers &ldquo;Kyoto&rdquo; and &ldquo;the shrine&rdquo; resolves to Fushimi Inari from the earlier context. No prompt engineering tricks needed &mdash; the framework&rsquo;s built-in transcript handles it.</p>
+
+    <div class="warning-box">
+      <p><strong>Context window: ~4,096 tokens.</strong> The on-device model has a limited context window. For short conversations (10&ndash;15 turns), this is fine. For very long conversations, older messages may fall out of context. Design your UX so conversations are focused, not infinite. If you need longer conversations, route to a cloud API with a larger context window.</p>
+    </div>
+
+    <h2>Streaming Responses</h2>
+
+    <p>Nobody wants to stare at a spinner for 3 seconds and then see a wall of text. Streaming makes the AI feel responsive and thoughtful &mdash; like it&rsquo;s composing a reply in real time.</p>
+
+    <div class="product-pattern">
+      <h3>The Streaming Chat Pattern</h3>
+      <ol>
+        <li><strong>User sends message</strong> &mdash; Immediately add the user&rsquo;s bubble to the chat. Don&rsquo;t wait for the AI to respond before showing the user&rsquo;s own message.</li>
+        <li><strong>Show typing indicator</strong> &mdash; A pulsing dot animation in the AI&rsquo;s bubble area. This buys you ~500ms of perceived responsiveness.</li>
+        <li><strong>Start streaming</strong> &mdash; Replace the typing indicator with real text as soon as the first token arrives. Stream word-by-word into the AI bubble.</li>
+        <li><strong>Complete</strong> &mdash; When streaming finishes, update the message status to <code>.complete</code>. Show action buttons (copy, share) if appropriate.</li>
+      </ol>
+      <p>This is how ChatGPT, Apple&rsquo;s Writing Tools, and every polished chat app works. Users trust text they watch being written more than text that appears all at once.</p>
+    </div>
+
+    <div class="api-recipe">
+      <h3>Recipe: Streaming Chat with Foundation Models</h3>
+      <p><strong>Goal:</strong> Stream the AI&rsquo;s response into a chat bubble, token by token.</p>
+      <p><strong>Step 1:</strong> Create the ViewModel with streaming support:</p>
+<pre><code>@Observable
+class ChatViewModel {
+    var messages: [ChatMessage] = []
+    var isGenerating = false
+    private var session = LanguageModelSession(
+        instructions: "You are a helpful assistant. Be concise."
+    )
+
+    func send(_ text: String) async {
+        let userMsg = ChatMessage(role: .user, content: text)
+        messages.append(userMsg)
+
+        let aiMsg = ChatMessage(role: .assistant, content: "")
+        aiMsg.status = .streaming
+        messages.append(aiMsg)
+        isGenerating = true
+
+        do {
+            let stream = session.streamResponse(to: text)
+            for try await partial in stream {
+                aiMsg.content = partial.content
+            }
+            aiMsg.status = .complete
+        } catch {
+            aiMsg.content = "I couldn't process that. Try rephrasing?"
+            aiMsg.status = .failed
+        }
+        isGenerating = false
+    }
+}</code></pre>
+      <p><strong>Step 2:</strong> Wire it up to the view. The <code>MessageBubble</code> view observes the <code>ChatMessage</code> model, so as <code>aiMsg.content</code> updates, the bubble redraws with the new text &mdash; giving you the streaming effect automatically.</p>
+      <p><strong>Step 3:</strong> Add a typing indicator. Show it when <code>isGenerating</code> is true and the AI message content is still empty:</p>
+<pre><code>if viewModel.isGenerating,
+   let last = viewModel.messages.last,
+   last.content.isEmpty {
+    TypingIndicator()  // Pulsing dots animation
+}</code></pre>
+    </div>
+
+    <h2>Tool Calling: When Chat Meets Your App</h2>
+
+    <p>This is where chatbots go from &ldquo;cute demo&rdquo; to &ldquo;genuinely useful.&rdquo; Tool calling lets the model invoke your app&rsquo;s actual functionality mid-conversation. The user says &ldquo;Show me Italian restaurants nearby,&rdquo; and the model calls your search function, gets real results, and weaves them into its response.</p>
+
+    <p>In Foundation Models, tools conform to the <code>Tool</code> protocol. You provide a name, description, and an implementation. The model decides when to call tools based on the conversation context:</p>
+
+<pre><code>import FoundationModels
+
+struct SearchRestaurantsTool: Tool {
+    let name = "search_restaurants"
+    let description = "Search for nearby restaurants by cuisine type"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "The type of cuisine to search for")
+        var cuisine: String
+        @Guide(description: "Maximum number of results")
+        var limit: Int
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        let results = await RestaurantService.search(
+            cuisine: arguments.cuisine, limit: arguments.limit
+        )
+        return results.map { "\($0.name) — \($0.rating)⭐" }
+            .joined(separator: "\n")
+    }
+}</code></pre>
+
+    <p>Notice how the <code>Arguments</code> struct uses <code>@Generable</code> &mdash; the same constrained decoding from Chapter 4. The model can&rsquo;t produce invalid tool arguments because they&rsquo;re typed. Register tools when creating the session:</p>
+
+<pre><code>let session = LanguageModelSession(
+    instructions: "You are a restaurant finder. Use the search tool to find restaurants.",
+    tools: [SearchRestaurantsTool()]
+)</code></pre>
+
+    <p>When the user asks &ldquo;Find Italian places near me,&rdquo; the model autonomously decides to call <code>search_restaurants</code> with <code>cuisine: "Italian"</code>, gets back real restaurant data, and composes a natural response around it. The framework executes the tool call automatically and feeds the result back into the conversation.</p>
+
+    <div class="highlight-box">
+      <h3>Why Tool Calling Matters</h3>
+      <p>Without tools, a chatbot can only generate text based on its training data. With tools, it can check your calendar, search your database, fetch live prices, create reminders, toggle app settings &mdash; anything you can write a function for. The model becomes an <strong>interface</strong> to your app, not just a text generator.</p>
+    </div>
+
+    <h2>System Prompts: Keeping Your Bot on Track</h2>
+
+    <p>The <code>instructions</code> parameter is your chatbot&rsquo;s constitution. It defines personality, boundaries, and response format. Get it right, and the bot stays focused. Get it wrong, and users will quickly find ways to make it say things you don&rsquo;t want.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Good: Focused Instructions</p>
+        <p class="prompt-text">You are a meal planning assistant for the FreshPlate app. Help users plan weekly meals, suggest recipes from our database, and create shopping lists. Only answer questions about food, cooking, and nutrition. If asked about other topics, politely redirect to meal planning.</p>
+        <p class="prompt-explanation">Clear role, clear boundaries, clear behavior for off-topic requests.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Bad: Vague Instructions</p>
+        <p class="prompt-text">You are a helpful assistant. Be nice and answer questions.</p>
+        <p class="prompt-explanation">No boundaries, no personality, no guardrails. The bot will happily answer questions about politics, help write emails, and generally do everything poorly instead of one thing well.</p>
+      </div>
+    </div>
+
+    <h3>Instruction Template</h3>
+    <p>Here&rsquo;s a template that works well for most in-app chatbots:</p>
+
+<pre><code>let instructions = """
+    Role: You are [specific role] for [app name].
+    Scope: Help users with [specific tasks]. Do not answer questions about [out-of-scope topics].
+    Tone: [Friendly/professional/casual]. Keep responses under [N] sentences.
+    Tools: When the user asks about [trigger], use the [tool name] tool.
+    Boundaries: If you don't know something, say so. Never make up [data type].
+    """</code></pre>
+
+    <h2>Rich Messages Beyond Text</h2>
+
+    <p>A great chat interface isn&rsquo;t just text bubbles. The AI can respond with cards, images, action buttons, and interactive elements. Model your messages to support multiple content types:</p>
+
+<pre><code>enum MessageContent {
+    case text(String)
+    case restaurantCard(Restaurant)
+    case actionButtons([ActionButton])
+    case image(URL)
+
+    struct ActionButton: Identifiable {
+        let id = UUID()
+        let title: String
+        let action: () -> Void
+    }
+}</code></pre>
+
+    <p>When the search tool returns restaurants, instead of showing plain text, render each result as a card with the name, rating, photo, and a &ldquo;Get Directions&rdquo; button. The chat becomes an interactive workflow, not just a Q&amp;A.</p>
+
+    <div class="tip-box">
+      <p><strong>Don&rsquo;t overdo rich content.</strong> Cards and buttons are great for structured data (search results, product recommendations). But most conversational responses should still be plain text. A chat where every message is a card feels like a cluttered dashboard, not a conversation.</p>
+    </div>
+
+    <h2>On-Device vs Cloud Chat</h2>
+
+    <p>Foundation Models gives you free, private, offline chat. But the ~3B on-device model has limitations: it handles simple conversations well but struggles with complex multi-step reasoning, long context, or specialized knowledge domains. Here&rsquo;s how to decide:</p>
+
+    <table class="comparison" style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align: left; padding: 0.75rem;">Factor</th>
+          <th style="text-align: left; padding: 0.75rem;">On-Device (Foundation Models)</th>
+          <th style="text-align: left; padding: 0.75rem;">Cloud (OpenAI, Claude, Gemini)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 0.75rem;">Cost</td>
+          <td style="padding: 0.75rem;">$0 forever</td>
+          <td style="padding: 0.75rem;">$0.15&ndash;$15 per 1M tokens</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">Privacy</td>
+          <td style="padding: 0.75rem;">Data never leaves device</td>
+          <td style="padding: 0.75rem;">Data sent to third-party servers</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">Context window</td>
+          <td style="padding: 0.75rem;">~4,096 tokens</td>
+          <td style="padding: 0.75rem;">128K&ndash;1M+ tokens</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">Reasoning</td>
+          <td style="padding: 0.75rem;">Good for simple tasks</td>
+          <td style="padding: 0.75rem;">Excellent for complex reasoning</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">Offline</td>
+          <td style="padding: 0.75rem;">Works anywhere</td>
+          <td style="padding: 0.75rem;">Requires internet</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">Devices</td>
+          <td style="padding: 0.75rem;">A17 Pro+ / M1+</td>
+          <td style="padding: 0.75rem;">Any device with internet</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>The Hybrid Chat Architecture</h3>
+
+    <p>The best approach is a router that sends simple queries on-device and complex ones to the cloud:</p>
+
+<pre><code>func routeMessage(_ text: String) async throws -> AsyncStream&lt;String&gt; {
+    let complexity = estimateComplexity(text)
+
+    if complexity == .simple, SystemLanguageModel.default.isAvailable {
+        // Free, private, instant
+        return streamFromDevice(text)
+    } else if hasCloudQuota() {
+        // Powerful but costs money
+        return streamFromCloud(text)
+    } else {
+        // Fallback: simpler on-device response
+        return streamFromDevice(simplifyPrompt(text))
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Tell users when data leaves the device.</strong> If a message gets routed to a cloud API, show a subtle indicator: a small cloud icon on the message bubble, or a one-time notice: &ldquo;This response uses our cloud AI for a more detailed answer.&rdquo; Transparency builds trust &mdash; secrecy destroys it.</p>
+    </div>
+
+    <h2>Handling Edge Cases</h2>
+
+    <p>Chat interfaces have more edge cases than any other UI pattern. Here&rsquo;s your checklist:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Empty conversation</strong> &mdash; Show a welcome message or suggested starter questions. Never show an empty screen with just a text field. Starter suggestions like &ldquo;Plan a weekend trip,&rdquo; &ldquo;Find dinner ideas,&rdquo; or &ldquo;Help me decide&rdquo; lower the barrier to first message.</li>
+        <li><strong>Very long conversations</strong> &mdash; The ~4,096 token context window means older messages eventually fall out. For most use cases, this is fine &mdash; conversations are naturally focused. If you need longer memory, save key facts from earlier turns and inject them into the instructions.</li>
+        <li><strong>Rapid-fire messages</strong> &mdash; Users sometimes send multiple messages before the AI responds. Queue them and process sequentially, or show a &ldquo;Please wait for the current response&rdquo; indicator.</li>
+        <li><strong>Network errors (cloud mode)</strong> &mdash; If a cloud response fails mid-stream, show the partial response with an &ldquo;AI response interrupted. Tap to retry.&rdquo; badge. Don&rsquo;t throw away what you already streamed.</li>
+        <li><strong>Offensive input</strong> &mdash; Foundation Models has built-in safety filtering. For cloud APIs, implement your own content filter. When triggered, respond with: &ldquo;I can&rsquo;t help with that. Let me know if there&rsquo;s something else I can assist with.&rdquo;</li>
+        <li><strong>Device not supported</strong> &mdash; If Foundation Models isn&rsquo;t available (older iPhone), either disable the chat feature with a clear explanation, or fall back to cloud-only mode.</li>
+      </ul>
+    </div>
+
+    <h2>Persisting Conversations with SwiftData</h2>
+
+    <p>Users expect chat history to survive app restarts. With SwiftData, this is almost free &mdash; our <code>ChatMessage</code> model already has the <code>@Model</code> macro. Group messages into conversations:</p>
+
+<pre><code>@Model
+class Conversation {
+    var id: UUID
+    var title: String  // AI-generated from first message
+    var messages: [ChatMessage]
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(title: String = "New Chat") {
+        self.id = UUID()
+        self.title = title
+        self.messages = []
+        self.createdAt = .now
+        self.updatedAt = .now
+    }
+}</code></pre>
+
+    <p>You can even restore the <code>LanguageModelSession</code> from a saved transcript, so the model remembers the conversation context even after an app restart. Load the previous transcript and pass it when creating a new session.</p>
+
+    <h2>Rate Limiting and Cost Control</h2>
+
+    <p>On-device inference is free, so rate limiting isn&rsquo;t about cost &mdash; it&rsquo;s about battery and responsiveness. But if you use cloud APIs as a fallback, cost matters:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">50</span>
+        <span class="stat-label">Cloud messages/day per user &mdash; a reasonable default limit</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">10</span>
+        <span class="stat-label">Messages/minute rate limit to prevent abuse</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">$0</span>
+        <span class="stat-label">On-device messages cost. No limits needed.</span>
+      </div>
+    </div>
+
+    <p>When a user hits the cloud limit, don&rsquo;t just show an error. Fall back gracefully: &ldquo;Switching to on-device AI for faster responses.&rdquo; Frame the limit as a benefit (faster, more private), not a restriction. For premium apps, offer unlimited cloud access as a subscription tier.</p>
+
+    <h2>Message Bubble UX Details</h2>
+
+    <p>The details matter. Here are the small touches that separate a polished chat from a prototype:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Distinct bubble styles</strong> &mdash; User messages on the right (app accent color), AI messages on the left (neutral gray/system background). This is table stakes &mdash; Messages.app has trained every iPhone user to expect this layout.</li>
+        <li><strong>Timestamps</strong> &mdash; Show timestamps between message groups, not on every message. &ldquo;Today 2:34 PM&rdquo; between a cluster of messages is enough.</li>
+        <li><strong>Copy/share</strong> &mdash; Long-press on an AI response to copy text or share. Use <code>.contextMenu</code> or the iOS 17+ <code>.contentMenuPreview</code>.</li>
+        <li><strong>Haptic feedback</strong> &mdash; A subtle <code>UIImpactFeedbackGenerator(.light)</code> when the AI starts responding. Tiny detail, premium feel.</li>
+        <li><strong>Accessibility</strong> &mdash; Each bubble should be a VoiceOver group. Announce new AI messages: <code>AccessibilityNotification.Announcement("New response from assistant")</code>. Support Dynamic Type in all bubble text.</li>
+      </ul>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>Steal from Messages.app.</strong> Apple&rsquo;s iMessage is the best chat UI on the planet &mdash; it&rsquo;s what your users compare everything to. Match its scroll behavior, bubble sizing, keyboard interaction, and animation timing. Don&rsquo;t try to reinvent chat chrome.</p>
+    </div>
+
+    <h2>Conversation Starters and Onboarding</h2>
+
+    <p>An empty chat screen with just a text field is intimidating. The user thinks: &ldquo;What am I supposed to type?&rdquo; Always provide conversation starters:</p>
+
+<pre><code>struct ConversationStartersView: View {
+    let starters = [
+        "Plan a weekend trip to...",
+        "Suggest dinner recipes for tonight",
+        "Help me write a thank-you note",
+        "What's the weather like this week?"
+    ]
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("How can I help?")
+                .font(.headline)
+            ForEach(starters, id: \.self) { starter in
+                Button(starter) { onTap(starter) }
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+}</code></pre>
+
+    <p>Show these only when the conversation is empty. As soon as the first message is sent, they disappear and the full chat takes over. This pattern is directly from ChatGPT, Gemini, and Claude &mdash; it works because it eliminates the blank page problem.</p>
+
+    <h2>When NOT to Stream</h2>
+
+    <p>Streaming is great for long-form responses. But for short, action-oriented answers, it can feel sluggish. If the AI is responding with &ldquo;Done! Your alarm is set for 7am,&rdquo; don&rsquo;t stream that word by word &mdash; just show it. Use response length as a heuristic:</p>
+
+    <div class="tip-box">
+      <p><strong>Rule of thumb:</strong> If the response is under ~30 words, show it all at once with a brief fade-in animation. If it&rsquo;s over ~30 words, stream it. This keeps short confirmations snappy while long explanations feel thoughtful.</p>
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build a Complete Chat Interface</h3>
+      <p>Build a conversational recipe assistant using Foundation Models:</p>
+      <ol>
+        <li><strong>Data model:</strong> Create <code>ChatMessage</code> and <code>Conversation</code> SwiftData models with role, content, status, and timestamp fields.</li>
+        <li><strong>Chat UI:</strong> Build a <code>ChatView</code> with <code>ScrollView</code> + <code>LazyVStack</code>, message bubbles (user on right, AI on left), a text input bar, and <code>.defaultScrollAnchor(.bottom)</code>.</li>
+        <li><strong>Streaming:</strong> Use <code>LanguageModelSession.streamResponse(to:)</code> to stream AI responses token by token into the assistant&rsquo;s message bubble.</li>
+        <li><strong>Tool calling:</strong> Implement a <code>SearchRecipesTool</code> that the model can call when the user asks to find recipes. The tool should accept cuisine type and dietary restrictions as @Generable arguments.</li>
+        <li><strong>Conversation starters:</strong> Show 4 recipe-related starter prompts when the conversation is empty.</li>
+        <li><strong>Persistence:</strong> Save conversations with SwiftData so history survives app restarts.</li>
+        <li><strong>Edge cases:</strong> Handle empty state, availability check (<code>SystemLanguageModel.default.isAvailable</code>), and errors with friendly messages.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add rich message support &mdash; when the recipe tool returns results, display them as cards with recipe name, cook time, and a &ldquo;View Recipe&rdquo; button instead of plain text.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now know how to build a complete conversational AI interface: chat UI, streaming, multi-turn context, tool calling, and persistence. Your chatbot can talk to users AND take actions inside your app.</p>
+
+    <p>But conversations are just one way to interact with AI. What if users want to <em>find</em> things instead of ask for them? That&rsquo;s <strong>Chapter 6: Smart Search &amp; Content Generation</strong> &mdash; semantic search with NLEmbedding, AI-powered autocomplete, and content drafting that goes beyond keyword matching.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="04-smart-text.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Smart Text with Foundation Models</span>
+        </a>
+        <a href="06-smart-search.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Smart Search &amp; Content Generation</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

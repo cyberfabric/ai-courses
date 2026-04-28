@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map — Chapter 9: Repositories and Domain Services</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../09-repositories-and-services.html">Chapter</a>
+      <a href="08-aggregates-map.html">&#8592; Prev Map</a>
+      <a href="10-ddd-on-android-architecture-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Repositories and Domain Services</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">📚</span>
+      <h3>The Big Idea</h3>
+      <p>A <strong>repository</strong> is an in-memory <code>Set&lt;Aggregate&gt;</code> from the domain's perspective &mdash; not a DAO with extra steps. A <strong>domain service</strong> is stateless logic that doesn't fit on a single entity &mdash; not a god-class called <code>UserManager</code>. Both live in <code>:domain</code>; both hide complexity behind small, domain-shaped contracts.</p>
+    </div>
+
+    <h2>📥 Anatomy of a Repository</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">1️⃣</span>
+        <div class="map-card-title">One per aggregate type</div>
+        <div class="map-card-desc"><code>OrderRepository</code>, not <code>BillingRepository</code>. The repository is the gateway to one consistency boundary.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title">Collection-shaped</div>
+        <div class="map-card-desc">Tiny interface: <code>findById</code>, <code>save</code>, <code>remove</code>, maybe <code>add</code>. Not 30 query methods.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🌫️</span>
+        <div class="map-card-title">Hides persistence</div>
+        <div class="map-card-desc">Domain code never knows whether the data came from Room, Retrofit, RAM, or a CSV.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Returns aggregates</div>
+        <div class="map-card-desc">Whole aggregates with invariants intact &mdash; never DTOs, partial entities, or property bags.</div>
+      </div>
+    </div>
+
+    <h2>⚖️ Repository vs DAO</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Repository ✅</th><th>DAO ❌ (when called Repository)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Scope</td><td>One aggregate type</td><td>One table</td></tr>
+        <tr><td>Method count</td><td>~4 collection-shaped</td><td>15-30 per-shape queries</td></tr>
+        <tr><td>Inputs</td><td>Domain types (<code>OrderId</code>, <code>Order</code>)</td><td>Primitives (<code>Long</code>, <code>String</code>)</td></tr>
+        <tr><td>Outputs</td><td>Aggregates with behavior</td><td>DTOs / property bags</td></tr>
+        <tr><td>Writes</td><td>Whole-aggregate <code>save</code></td><td>Per-column <code>updateStatus</code> etc.</td></tr>
+        <tr><td>Lives in</td><td><code>:domain</code> (interface) + <code>:data</code> (impl)</td><td>Wherever Room types live</td></tr>
+        <tr><td>Vocabulary</td><td>Domain language</td><td>SQL semantics</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🔌 The Module Wiring</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">:domain<br>interface OrderRepo</div>
+      <span class="map-flow-arrow">←</span>
+      <div class="map-flow-step">:data<br>RoomOrderRepo : OrderRepo</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Hilt @Binds</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">:feature-checkout<br>injects OrderRepo</div>
+    </div>
+
+    <p>Dependency arrow points <em>inward</em>: <code>:data</code> depends on <code>:domain</code>, never the reverse. Reversing it is the architectural sin Clean and Hexagonal both exist to prevent.</p>
+
+    <h2>🧮 Domain Service vs Use Case vs Infrastructure Service</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Kind</th><th>What it does</th><th>Where it lives</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Domain service</strong></td>
+          <td>Stateless domain logic that spans entities (<code>ShippingFeeCalculator</code>)</td>
+          <td><code>:domain</code></td>
+        </tr>
+        <tr>
+          <td><strong>Application service</strong> (use case)</td>
+          <td>Orchestrates aggregates + repos + services to fulfill one user intent</td>
+          <td><code>:domain</code> or <code>:feature-*</code></td>
+        </tr>
+        <tr>
+          <td><strong>Infrastructure service</strong></td>
+          <td>Talks to outside world: HTTP, push, sensors. Implements a domain interface.</td>
+          <td><code>:data</code> / <code>:platform</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🧭 The Specification Pattern</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">ByCustomer(id)</div>
+      <div class="map-rel-node">WithStatus(s)</div>
+      <div class="map-rel-center">OrderSpec<br>+ <code>and</code></div>
+      <div class="map-rel-node">PlacedAfter(t)</div>
+      <div class="map-rel-node">repo.find(spec)</div>
+    </div>
+
+    <p>A small composable predicate. Keeps the repository interface tiny while letting callers express any query. Reach for it when a 30-method interface is the alternative.</p>
+
+    <h2>🚨 Anti-Patterns</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🦣</span>
+        <div class="map-card-title">Repository-as-DAO</div>
+        <div class="map-card-desc"><code>getOrdersByStatusAndCustomerAndDate</code> + 14 more. SQL with method calls. Take DTOs, return DTOs.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">👹</span>
+        <div class="map-card-title">God-service</div>
+        <div class="map-card-desc"><code>UserManager</code>, <code>OrderHelper</code>, <code>PaymentService</code>. After 18 months: 90 methods, 11 deps, 1 Mockito test.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📛</span>
+        <div class="map-card-title"><code>FooRepositoryImpl</code> in :domain</div>
+        <div class="map-card-desc">Defeats dependency direction. Move impl to <code>:data</code>; rename <code>RoomFooRepository</code> &mdash; persistence in the name.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Reflexive <code>Result&lt;T&gt;</code> wrap</div>
+        <div class="map-card-desc">"Not found" is just <code>null</code>. <code>Result</code> is for domain-meaningful failures, not generic exception routing.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪞</span>
+        <div class="map-card-title">Use-case-per-method</div>
+        <div class="map-card-desc"><code>FindOrderUseCase</code> that just calls <code>repo.findById</code>. Forwarding stubs earn nothing &mdash; ViewModel can call directly.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧱</span>
+        <div class="map-card-title">Anemic repository</div>
+        <div class="map-card-desc">Returns DTOs, not aggregates. Caller has to validate, map, and reconstitute everywhere.</div>
+      </div>
+    </div>
+
+    <h2>🧪 Fakes Over Mocks</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Define the contract once</h4>
+        <p><code>FakeOrderRepository : OrderRepository</code> &mdash; 20 lines, lives in test fixtures.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Reuse across every test</h4>
+        <p>Same fake, different setups. The contract is in code, not in mock-script ceremony.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Test by state, not call recording</h4>
+        <p><code>assertEquals(saved, fake.findById(id))</code> &mdash; not <code>verify(mock).save(any())</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Survive refactors</h4>
+        <p>Changing one method signature updates the fake once; mock-heavy tests would all break.</p>
+      </li>
+    </ol>
+
+    <h2>🚫 When You Don't Need a Repository</h2>
+
+    <ul>
+      <li>📋 <strong>Small finite reference data</strong> (countries, currencies). Wrap in a typed accessor; no abstraction needed.</li>
+      <li>⏳ <strong>Per-session in-memory aggregates</strong> (a wizard, an in-progress form). Pass through the use case directly.</li>
+      <li>⚙️ <strong>Settings stores</strong> read once at startup. A <code>SettingsHolder</code> with a <code>StateFlow</code> is enough.</li>
+    </ul>
+
+    <p>Reach for the repository when complex persistence needs to be hidden behind a domain-shaped contract. If there's nothing to hide, don't pretend.</p>
+
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Repository</dt>
+      <dd>A collection-like interface for one aggregate type. Hides persistence; speaks domain.</dd>
+
+      <dt>Specification</dt>
+      <dd>A small predicate object that the repository can interpret. Keeps the interface tiny while supporting rich queries.</dd>
+
+      <dt>Domain Service</dt>
+      <dd>Stateless domain logic that doesn't fit on a single entity. Inputs and outputs are domain types.</dd>
+
+      <dt>Application Service (Use Case)</dt>
+      <dd>Orchestrates aggregates, repositories, domain services, and events to fulfill one user intent.</dd>
+
+      <dt>Infrastructure Service</dt>
+      <dd>Talks to the outside world. Lives in <code>:data</code>/<code>:platform</code>. Implementation of a domain interface.</dd>
+
+      <dt>Fake</dt>
+      <dd>A working in-memory implementation of an interface, used in tests. Captures the contract; survives refactors.</dd>
+
+      <dt>Hilt @Binds</dt>
+      <dd>The seam where <code>:data</code>'s implementation is wired to <code>:domain</code>'s interface at the application graph.</dd>
+    </dl>
+
+    <h2>🏗️ Cart Context: One Picture</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">CartRepository<br>(get/save aggregate)</div>
+      <div class="map-rel-node">PriceCalculator<br>(domain service)</div>
+      <div class="map-rel-center">PlaceOrderUseCase<br>(application service)</div>
+      <div class="map-rel-node">DomainEventBus<br>(emit OrderPlaced)</div>
+      <div class="map-rel-node">Cart aggregate<br>(invariants)</div>
+    </div>
+
+    <p>Aggregate + repository + a couple of domain services + a handful of use cases. That's the whole tactical pattern for one bounded context.</p>
+
+    <h2>❓ Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test yourself</h3>
+      <details>
+        <summary>How many methods should a typical repository interface have?</summary>
+        <p class="quiz-answer">Around four: <code>findById</code>, <code>save</code>, <code>remove</code>, and maybe <code>find(spec)</code> or <code>observe</code>. If yours has 17, it's a DAO with a fancy name.</p>
+      </details>
+      <details>
+        <summary>Why do repositories return aggregates instead of DTOs?</summary>
+        <p class="quiz-answer">Because invariants and behavior travel with the aggregate. A DTO is a property bag &mdash; the caller has to revalidate, remap, and reconstitute the aggregate at every call site, which is exactly the work the aggregate was supposed to encapsulate.</p>
+      </details>
+      <details>
+        <summary>What's the difference between a domain service and an application service?</summary>
+        <p class="quiz-answer">A domain service expresses domain logic that doesn't fit on a single entity (e.g., <code>ShippingFeeCalculator</code>). An application service orchestrates aggregates, repositories, and domain services to fulfill one user intent (e.g., <code>PlaceOrderUseCase</code>). Both are stateless; the application service is closer to the UI.</p>
+      </details>
+      <details>
+        <summary>Why fakes over mocks?</summary>
+        <p class="quiz-answer">A fake captures the <em>contract</em> in code. A mock script captures only one test's specific calls. Fakes outlive refactors; mock scripts rot the moment the test changes.</p>
+      </details>
+      <details>
+        <summary>Where does <code>RoomOrderRepository</code> live?</summary>
+        <p class="quiz-answer">In <code>:data</code>, not <code>:domain</code>. The interface lives in <code>:domain</code>; the Room-aware implementation lives in <code>:data</code>. Hilt's <code>@Binds</code> wires them together. Naming the impl after the persistence (<code>RoomOrderRepository</code>) is a hint at its layer.</p>
+      </details>
+      <details>
+        <summary>When should you skip the repository abstraction?</summary>
+        <p class="quiz-answer">Small finite reference data, per-session in-memory aggregates, simple settings stores. The repository's job is to hide complex persistence; if there's nothing to hide, the abstraction earns nothing.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">A repository is a collection-shaped contract for one aggregate type. Four methods, not seventeen.</li>
+        <li class="map-summary-item">Repositories return whole aggregates. DTOs and partial entities defeat the consistency boundary.</li>
+        <li class="map-summary-item">Interface in <code>:domain</code>, implementation in <code>:data</code>. Dependency arrow points inward.</li>
+        <li class="map-summary-item">Use the specification pattern when query growth would force a giant interface. Tiny composable predicates beat 30 methods.</li>
+        <li class="map-summary-item">A domain service is stateless logic that doesn't fit on one entity. <code>PriceCalculator</code> ✅, <code>UserManager</code> ❌.</li>
+        <li class="map-summary-item">Three "services": domain (logic), application (orchestration), infrastructure (outside world). Different layers, different rates of change.</li>
+        <li class="map-summary-item">Prefer hand-written fakes over mocking frameworks. The fake captures the contract; the contract survives refactors.</li>
+        <li class="map-summary-item">Skip repositories for small finite data, in-memory wizards, and trivial settings stores. The abstraction needs something to hide.</li>
+        <li class="map-summary-item">Repository as DAO and god-service are the two anti-patterns to spot in code review. Both have the same fix: rename and shed.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="08-aggregates-map.html">
+        <span class="nav-direction">&#8592; Previous Map</span>
+        <span class="nav-chapter">Aggregates</span>
+      </a>
+      <a href="../09-repositories-and-services.html">
+        <span class="nav-direction">📖 Read</span>
+        <span class="nav-chapter">Chapter 9</span>
+      </a>
+      <a href="10-ddd-on-android-architecture-map.html" class="next">
+        <span class="nav-direction">Next Map &#8594;</span>
+        <span class="nav-chapter">DDD on Android</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

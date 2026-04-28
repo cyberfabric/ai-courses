@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Image Generation &amp; Creative AI | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-image-document.html">&larr; Prev</a>
+      <a href="09-voice-audio.html">Next &rarr;</a>
+      <a href="maps/08-image-generation-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Image Generation &amp; Creative AI</h1>
+    <p class="subtitle">Image Playground, Genmoji, ImageCreator API, and building creative features that let users generate images on-device</p>
+  </header>
+
+  <main>
+
+    <h2>Creating Images with AI</h2>
+
+    <p>Chapter 7 taught your app to <em>see</em> &mdash; reading text and understanding images. This chapter goes the other direction: creating images from nothing but a text description. And unlike cloud image generation services that cost money per image and send data to remote servers, Apple&rsquo;s Image Playground runs entirely on-device, for free, with no privacy concerns.</p>
+
+    <p>The creative AI landscape on iOS gives you three tools:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Image Playground</span>
+        <span class="stat-label">System UI for image creation &mdash; present Apple&rsquo;s familiar interface in your app</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">ImageCreator</span>
+        <span class="stat-label">Programmatic API &mdash; generate images in your own custom workflow, no system UI</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Genmoji</span>
+        <span class="stat-label">Custom emoji &mdash; automatically available in apps with standard text views</span>
+      </div>
+    </div>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Mika is planning a birthday party using an event planning app. She types &ldquo;tropical beach party at sunset&rdquo; as the event theme. The app generates four concept images in different styles &mdash; a playful animation, a bold illustration, and a quick sketch &mdash; all on her phone in seconds. She picks her favorite for the invitation card, tweaks the text, and shares it with friends. No stock photo search. No design skills. No cloud API costs.</p>
+    </div>
+
+    <h2>ImagePlaygroundSheet: The Easy Path</h2>
+
+    <p>The simplest way to add image generation is to present Apple&rsquo;s system Image Playground UI. Users get the same familiar interface they know from Messages and Notes, right inside your app. One SwiftUI modifier is all it takes:</p>
+
+<pre><code>import ImagePlayground
+
+struct EventEditorView: View {
+    @State private var showPlayground = false
+    @State private var generatedImage: Image?
+
+    var body: some View {
+        VStack {
+            if let image = generatedImage {
+                image.resizable().scaledToFit()
+            }
+            Button("Create Event Image") {
+                showPlayground = true
+            }
+        }
+        .imagePlaygroundSheet(
+            isPresented: $showPlayground,
+            concept: .text("tropical beach party at sunset")
+        ) { url in
+            generatedImage = Image(uiImage: UIImage(contentsOfFile: url.path)!)
+        }
+    }
+}</code></pre>
+
+    <p>That&rsquo;s it. The <code>.imagePlaygroundSheet</code> modifier handles the entire generation flow &mdash; the UI, the model, the progress, the style picker. You provide an optional concept (a text description to start with), and you get back a URL to the generated image.</p>
+
+    <div class="tip-box">
+      <p><strong>Pre-fill the concept.</strong> Don&rsquo;t make users start from scratch. If you know the context (an event theme, a note title, a recipe name), pass it as the <code>concept:</code> parameter. The user can always modify it in the Playground UI, but a good starting point saves them time and shows them what&rsquo;s possible.</p>
+    </div>
+
+    <h2>ImageCreator: Full Programmatic Control</h2>
+
+    <p>ImagePlaygroundSheet is great when you want Apple&rsquo;s UI. But what if you need to generate images in the background, as part of an automated workflow, or in your own custom interface? That&rsquo;s <code>ImageCreator</code> &mdash; the headless API introduced in iOS 18.4.</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Generate Images Programmatically</h3>
+      <p><strong>Goal:</strong> Generate concept images from a text description without showing the system UI.</p>
+      <p><strong>Step 1:</strong> Check availability and create the generator:</p>
+<pre><code>import ImagePlayground
+
+// ImageCreator throws if the device doesn't support generation
+guard let creator = try? await ImageCreator() else {
+    // Device doesn't support image generation (pre-A17 Pro)
+    showFallbackUI()
+    return
+}</code></pre>
+      <p><strong>Step 2:</strong> Define concepts and generate:</p>
+<pre><code>let concepts: [ImagePlaygroundConcept] = [
+    .text("a cozy coffee shop on a rainy evening")
+]
+
+// Check available styles before using one
+let style: ImagePlaygroundStyle = ImageCreator.availableStyles.contains(.animation)
+    ? .animation : .illustration
+
+let images = creator.images(for: concepts, style: style, limit: 4)
+
+for try await image in images {
+    // Each image arrives as it's generated
+    displayImage(image)
+}</code></pre>
+      <p><strong>Step 3:</strong> The <code>images(for:style:limit:)</code> method returns an <code>AsyncSequence</code>, so images arrive one at a time as they&rsquo;re generated. Show each one as it appears &mdash; don&rsquo;t wait for all four.</p>
+    </div>
+
+    <h2>Image Styles</h2>
+
+    <p>Image Playground offers three on-device styles, each with a distinct visual personality:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">The Three On-Device Styles</p>
+        <p class="prompt-text"><strong>Animation</strong> &mdash; Whimsical 3D cartoon look. Playful, colorful, great for social and casual contexts. <strong>Illustration</strong> &mdash; Strong outlines, bold colors, simple shapes. Professional yet approachable, good for presentations and cards. <strong>Sketch</strong> &mdash; Hand-drawn feel with lighter detail. Perfect for brainstorming, quick concepts, and informal content.</p>
+        <p class="prompt-explanation">All three run on-device, require no internet, and are free.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">What You Can&rsquo;t Do</p>
+        <p class="prompt-text">Photorealistic images, specific real people or celebrities, brand logos, explicit or violent content. Apple explicitly blocks photorealism to prevent deepfakes and impersonation.</p>
+        <p class="prompt-explanation">These are design decisions, not bugs. If you need photorealistic generation, you&rsquo;ll need a cloud API like DALL-E or Stability AI.</p>
+      </div>
+    </div>
+
+    <p>New in iOS 26: <strong>ChatGPT-powered styles</strong> expand beyond the three on-device options. These use OpenAI&rsquo;s models through Apple&rsquo;s privacy-preserving integration, offering more dynamic and varied art styles. Users opt in to these when selecting a style in Image Playground. Check <code>ImageCreator.availableStyles</code> at runtime to see what&rsquo;s available on the user&rsquo;s device.</p>
+
+    <h2>Genmoji: Custom Emoji</h2>
+
+    <p>Genmoji lets users create custom emoji from text descriptions. It&rsquo;s not just a feature &mdash; it&rsquo;s a new content type that lives alongside standard emoji in the keyboard.</p>
+
+    <div class="highlight-box">
+      <h3>Good News: Genmoji Works for Free</h3>
+      <p>If your app uses <strong>standard text views</strong> (<code>UITextView</code>, <code>TextEditor</code>), Genmoji works automatically. Users can create and insert custom emoji without you writing a single line of code. The emoji render at the correct size, align properly with text, and support accessibility descriptions.</p>
+    </div>
+
+    <h3>Custom Text Engines</h3>
+
+    <p>If your app uses a custom text rendering engine (like a game, a drawing app, or a rich text editor), you need to handle Genmoji manually via <code>NSAdaptiveImageGlyph</code>:</p>
+
+<pre><code>// NSAdaptiveImageGlyph provides:
+// - Multiple resolutions for different display contexts
+// - A unique stable identifier for each Genmoji
+// - Content description for VoiceOver accessibility
+// - Alignment metrics for proper text layout
+
+// Render in your custom text engine:
+if let glyph = attributedString.attribute(.adaptiveImageGlyph, at: index) as? NSAdaptiveImageGlyph {
+    let image = glyph.imageContent  // Get the image data
+    let description = glyph.contentDescription  // "smiling cat with party hat"
+    renderGlyphInline(image, description: description)
+}</code></pre>
+
+    <p>New in iOS 26: <strong>Genmoji Mixes</strong> let users combine existing emoji as input prompts to create mashup Genmoji. Your app gets this for free with standard text views.</p>
+
+    <h2>Building a Creative Feature</h2>
+
+    <div class="product-pattern">
+      <h3>The &ldquo;Generate Cover Image&rdquo; Pattern</h3>
+      <ol>
+        <li><strong>Context</strong> &mdash; The user has created something (a note, an event, a playlist, a recipe collection). You know the theme from the content.</li>
+        <li><strong>Suggest</strong> &mdash; Show a &ldquo;Generate Cover Image&rdquo; button. Pre-fill the concept from the content: note title, event theme, playlist mood.</li>
+        <li><strong>Generate</strong> &mdash; Use <code>ImageCreator</code> to generate 3&ndash;4 options. Show them in a grid as they arrive (AsyncSequence).</li>
+        <li><strong>Choose</strong> &mdash; The user picks their favorite. Offer &ldquo;Regenerate&rdquo; if none fit.</li>
+        <li><strong>Apply</strong> &mdash; Set the chosen image as the cover. Show a subtle &ldquo;Created with Image Playground&rdquo; attribution.</li>
+      </ol>
+      <p>This pattern works for notes, playlists, recipes, albums, projects, events &mdash; anything that benefits from a visual identity.</p>
+    </div>
+
+    <h3>Multi-Model Pipeline: Text + Image</h3>
+
+    <p>For even smarter creative features, chain Foundation Models with Image Playground. Foundation Models generates creative descriptions; ImageCreator turns them into visuals:</p>
+
+<pre><code>// Step 1: Foundation Models creates variations
+let session = LanguageModelSession(
+    instructions: "You create vivid, visual descriptions for Image Playground."
+)
+
+@Generable
+struct ImageConcepts {
+    @Guide(description: "Four vivid visual descriptions, each a different interpretation")
+    var descriptions: [String]
+}
+
+let concepts = try await session.respond(
+    to: "Create 4 visual concept descriptions for: \(userTheme)",
+    generating: ImageConcepts.self
+)
+
+// Step 2: ImageCreator generates an image for each
+let creator = try await ImageCreator()
+for description in concepts.descriptions {
+    let images = creator.images(
+        for: [.text(description)],
+        style: .illustration,
+        limit: 1
+    )
+    for try await image in images {
+        addToGallery(image)
+    }
+}</code></pre>
+
+    <p>The user types &ldquo;birthday party&rdquo; and gets four distinct interpretations: a sunset beach celebration, a garden tea party, a neon-lit dance floor, and a cozy living room surprise. Foundation Models provides creative diversity; ImageCreator provides the visuals.</p>
+
+    <h2>Prompt Design for Image Generation</h2>
+
+    <p>The on-device model responds best to clear, descriptive text. Here are the patterns that work:</p>
+
+    <table class="comparison" style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align: left; padding: 0.75rem;">Do This</th>
+          <th style="text-align: left; padding: 0.75rem;">Not This</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 0.75rem;">&ldquo;A golden retriever wearing a birthday hat in a sunny park&rdquo;</td>
+          <td style="padding: 0.75rem;">&ldquo;Dog party&rdquo;</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">&ldquo;A cozy coffee shop interior with warm lighting and bookshelves&rdquo;</td>
+          <td style="padding: 0.75rem;">&ldquo;Cafe&rdquo;</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">&ldquo;Mountain landscape at sunrise with a winding trail&rdquo;</td>
+          <td style="padding: 0.75rem;">&ldquo;Make it look really cool and epic&rdquo;</td>
+        </tr>
+        <tr>
+          <td style="padding: 0.75rem;">Scene + subject + mood + setting</td>
+          <td style="padding: 0.75rem;">Abstract adjectives, technical jargon, negative prompts</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <p><strong>Let Foundation Models write the prompts.</strong> Users don&rsquo;t know how to write good image descriptions. Have Foundation Models expand &ldquo;beach party&rdquo; into &ldquo;a tropical beach party at sunset with tiki torches, colorful paper lanterns, and friends gathered around a bonfire.&rdquo; Better prompts = better images. The user never sees the expanded prompt.</p>
+    </div>
+
+    <h2>UX Patterns for Generated Images</h2>
+
+    <p>Image generation takes seconds, not milliseconds. Your UX needs to account for this:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Progress communication</strong> &mdash; Show &ldquo;Creating your image&hellip;&rdquo; with a contextual animation. Never just a spinner with no text. Generation typically takes 3&ndash;10 seconds.</li>
+        <li><strong>Show images as they arrive</strong> &mdash; <code>ImageCreator.images()</code> returns an AsyncSequence. Show each image as it&rsquo;s ready, don&rsquo;t wait for all of them. The first image appearing after 4 seconds feels fast. Four images appearing after 15 seconds feels slow, even though total time is the same.</li>
+        <li><strong>Multiple options</strong> &mdash; Always generate 3&ndash;4 options. One image is a take-it-or-leave-it demand. Multiple options are a choice. Users feel more ownership when they pick.</li>
+        <li><strong>Regenerate</strong> &mdash; A clear &ldquo;Try Again&rdquo; or &ldquo;More Options&rdquo; button. The first batch might not hit the mark.</li>
+        <li><strong>Attribution</strong> &mdash; Show &ldquo;Created with Image Playground&rdquo; subtly below generated images. Transparency about AI origin is part of the Apple HIG.</li>
+        <li><strong>Save to Photos</strong> &mdash; Offer a &ldquo;Save to Photos&rdquo; option so users can use the image outside your app. Use <code>UIImageWriteToSavedPhotosAlbum</code> or the Photos framework.</li>
+      </ul>
+    </div>
+
+    <h2>Content Safety</h2>
+
+    <p>Apple&rsquo;s Image Playground has strong built-in safety filters. As a developer, this simplifies your life considerably:</p>
+
+    <div class="highlight-box">
+      <h3>What Apple Blocks Automatically</h3>
+      <ul>
+        <li><strong>No photorealism</strong> &mdash; Prevents deepfakes and impersonation entirely.</li>
+        <li><strong>No real people</strong> &mdash; Can&rsquo;t generate images of specific celebrities, public figures, or identifiable individuals.</li>
+        <li><strong>No explicit content</strong> &mdash; Violence, nudity, and harmful content are filtered automatically.</li>
+        <li><strong>No brand logos</strong> &mdash; Won&rsquo;t reproduce trademarked imagery.</li>
+      </ul>
+      <p>You don&rsquo;t need to build your own content filter for Image Playground. Apple handles it at the model level. Your app cannot produce harmful images through this API &mdash; period.</p>
+    </div>
+
+    <div class="warning-box">
+      <p><strong>This changes your feature design.</strong> If your app needs photorealistic images (e.g., virtual staging for real estate, product mockups), Image Playground isn&rsquo;t the right tool. You&rsquo;ll need a cloud API like DALL-E 3 or Stability AI. Be transparent about the privacy and cost tradeoffs when using cloud generation.</p>
+    </div>
+
+    <h2>When Image Playground Isn&rsquo;t Enough</h2>
+
+    <p>Image Playground is free, private, and on-device &mdash; but it has clear limitations. Here&rsquo;s when you need cloud alternatives:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Image Playground Is Enough</p>
+        <p class="prompt-text">Cover images, decorative illustrations, concept art, greeting cards, social media graphics, event invitations, presentation backgrounds, avatar creation, brainstorming visuals.</p>
+        <p class="prompt-explanation">Stylized, non-photorealistic content where the artistic interpretation IS the point.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">You Need Cloud APIs</p>
+        <p class="prompt-text">Photorealistic product mockups, virtual home staging, fashion try-on, architectural visualization, medical imaging, brand-accurate marketing materials.</p>
+        <p class="prompt-explanation">When accuracy to reality matters more than artistic expression. DALL-E 3, Midjourney API, or Stability AI.</p>
+      </div>
+    </div>
+
+    <h2>Device Requirements and Fallbacks</h2>
+
+    <p>Image generation requires an A17 Pro chip or later (iPhone 15 Pro+, M1+ Macs). That&rsquo;s the same requirement as Foundation Models. For older devices:</p>
+
+<pre><code>func checkImageGenerationSupport() -> ImageGenStrategy {
+    if let _ = try? await ImageCreator() {
+        return .onDevice  // Full image generation
+    } else if hasCloudAPIAccess() {
+        return .cloud  // Fall back to DALL-E / Stability AI
+    } else {
+        return .stockImages  // Pre-curated image library
+    }
+}
+
+enum ImageGenStrategy {
+    case onDevice    // Free, private, instant
+    case cloud       // Costs money, needs internet
+    case stockImages // No generation, pick from library
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Stock images are a valid fallback.</strong> Not every user needs AI-generated images. A curated library of beautiful stock photos, organized by category, is a perfectly good alternative for older devices. Don&rsquo;t make image generation a hard requirement for your feature.</p>
+    </div>
+
+    <h2>Combining Image Generation with App Context</h2>
+
+    <p>The most useful creative features aren&rsquo;t standalone &ldquo;generate an image&rdquo; buttons. They&rsquo;re woven into existing workflows where visual content adds genuine value:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Event invitations</strong> &mdash; User creates an event, app generates a themed invitation image automatically. The event details (date, location, theme) become the concept.</li>
+        <li><strong>Note covers</strong> &mdash; Each note gets a visual identity based on its content. A travel note gets a destination illustration. A recipe note gets a food visual.</li>
+        <li><strong>Contact avatars</strong> &mdash; Generate a stylized avatar for contacts who don&rsquo;t have a photo. Use the contact&rsquo;s name and your app&rsquo;s context to create a personalized illustration.</li>
+        <li><strong>Onboarding illustrations</strong> &mdash; Generate tutorial images that match your app&rsquo;s current theme or the user&rsquo;s content, instead of using generic stock illustrations.</li>
+        <li><strong>Social media cards</strong> &mdash; Turn a blog post, article summary, or product listing into a shareable social image with AI-generated visuals and overlaid text.</li>
+      </ul>
+    </div>
+
+    <p>The key insight: generated images should support the user&rsquo;s goal, not become the goal. Nobody opens your app just to generate images &mdash; they open it to plan events, take notes, or manage content. The images make those experiences better.</p>
+
+    <h2>Real-World Examples</h2>
+
+    <p>Creative AI features are appearing across the iOS ecosystem:</p>
+
+    <ul>
+      <li><strong>Messages</strong> &mdash; Image Playground integration lets users create custom images in conversations. The style options match the playful context of messaging.</li>
+      <li><strong>Notes</strong> &mdash; Image Wand transforms rough sketches into polished illustrations using Image Playground. Circle a sketch, and it becomes a proper image.</li>
+      <li><strong>Keynote</strong> &mdash; Generate slide illustrations that match your presentation theme. Type a description, get a visual.</li>
+      <li><strong>Freeform</strong> &mdash; Create brainstorming visuals directly on the canvas. Quick concept images for mood boards and ideation.</li>
+      <li><strong>Localframe</strong> &mdash; An open-source SwiftUI app demonstrating the ImageCreator API for fully local image generation with a clean SwiftUI interface.</li>
+    </ul>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build an AI Mood Board</h3>
+      <p>Build a feature where users describe a project theme and get AI-generated concept images:</p>
+      <ol>
+        <li><strong>Theme input:</strong> A text field where the user describes their project (e.g., &ldquo;minimalist Japanese garden&rdquo;).</li>
+        <li><strong>Expand with Foundation Models:</strong> Use <code>@Generable</code> to generate 4 visual description variations from the user&rsquo;s theme. Each should be a different interpretation (different setting, mood, or angle).</li>
+        <li><strong>Generate images:</strong> Use <code>ImageCreator</code> to create an image for each description. Show images in a 2&times;2 grid as they arrive via AsyncSequence.</li>
+        <li><strong>Style picker:</strong> Let the user switch between Animation, Illustration, and Sketch styles. Regenerate all images in the new style.</li>
+        <li><strong>Save &amp; share:</strong> Tap an image to save to Photos or share via the system share sheet.</li>
+        <li><strong>Fallback:</strong> If <code>ImageCreator</code> isn&rsquo;t available, show the <code>ImagePlaygroundSheet</code> as a fallback. If neither is available, show a message explaining the device requirement.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add a &ldquo;Surprise Me&rdquo; button that picks a random theme from a curated list (nature, city, space, food, abstract) and generates a mood board automatically.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You can now create images with AI &mdash; both through Apple&rsquo;s system UI and programmatically. Text and images are covered. But what about <em>sound</em>? What if your app needs to transcribe speech, classify audio, or build a voice-controlled interface?</p>
+
+    <p>That&rsquo;s <strong>Chapter 9: Voice &amp; Audio Intelligence</strong> &mdash; SpeechAnalyzer, sound classification, voice-to-action pipelines, and building features that listen as well as they look.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="07-image-document.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Image Understanding &amp; Document Intelligence</span>
+        </a>
+        <a href="09-voice-audio.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Voice &amp; Audio Intelligence</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

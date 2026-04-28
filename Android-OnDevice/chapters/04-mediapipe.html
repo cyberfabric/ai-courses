@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: MediaPipe — Production-Ready AI Features — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-first-model.html">&larr; Prev</a>
+      <a href="05-ml-kit.html">Next &rarr;</a>
+      <a href="maps/04-mediapipe-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>MediaPipe &mdash; Production-Ready AI Features</h1>
+    <p class="subtitle">Face detection, hand tracking, pose estimation, and object detection — all in an afternoon</p>
+  </header>
+
+  <main>
+
+    <h2>From Raw TFLite to Batteries Included</h2>
+
+    <p>In Chapter 3 you built an image classifier from scratch — loading a model, writing preprocessing code, wiring up CameraX, handling threading. It worked, but it was a lot of plumbing for one feature.</p>
+
+    <p><strong>MediaPipe is the shortcut.</strong> It's Google's cross-platform framework that bundles optimized ML models with all the preprocessing, postprocessing, and threading logic built in. What took you an entire chapter with raw TFLite takes about 30 lines with MediaPipe.</p>
+
+    <p>Think of the difference like this: raw TFLite is cooking from scratch (you buy ingredients, chop, season, cook). MediaPipe is a meal kit (pre-portioned, pre-prepped, just assemble and heat). Same quality result, a fraction of the work.</p>
+
+    <h2>What MediaPipe Gives You</h2>
+
+    <p>MediaPipe's Tasks API provides high-level classes for the most common ML features. Each one handles model loading, preprocessing, inference, and postprocessing internally:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">6+</span>
+        <span class="stat-label">Vision tasks (detection, tracking, segmentation)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3</span>
+        <span class="stat-label">Model variants per task (lite, full, heavy)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~30</span>
+        <span class="stat-label">Lines of code for a complete feature</span>
+      </div>
+    </div>
+
+    <p>The key tasks you'll use most:</p>
+
+    <ul>
+      <li><strong><code>ObjectDetector</code></strong> — detects objects with bounding boxes and labels</li>
+      <li><strong><code>FaceLandmarker</code></strong> — tracks 468 face landmarks in real time (eyes, nose, lips, jawline)</li>
+      <li><strong><code>HandLandmarker</code></strong> — tracks 21 landmarks per hand (fingertips, knuckles, wrist)</li>
+      <li><strong><code>PoseLandmarker</code></strong> — tracks 33 body landmarks (shoulders, elbows, knees, ankles)</li>
+      <li><strong><code>ImageClassifier</code></strong> — classifies images (like Chapter 3, but simpler API)</li>
+      <li><strong><code>GestureRecognizer</code></strong> — detects hand gestures (thumbs up, peace, pointing, etc.)</li>
+    </ul>
+
+    <h2>Setting Up MediaPipe</h2>
+
+    <p>Add the MediaPipe Tasks Vision dependency to your <code>build.gradle.kts</code>:</p>
+
+<pre><code>dependencies {
+    implementation("com.google.mediapipe:tasks-vision:0.20250101")
+}</code></pre>
+
+    <p>That single dependency includes all vision tasks. No separate model downloads for setup — but you do need to download the specific <code>.task</code> model bundle file for each feature you use and place it in <code>assets/</code>.</p>
+
+    <h2>Building a Real-Time Object Detector</h2>
+
+    <p>Let's build something more useful than a classifier — an object detector that draws bounding boxes around everything it sees. This is what camera apps use to highlight faces, what warehouse apps use to scan shelves, and what accessibility apps use to describe scenes.</p>
+
+    <div class="model-pipeline">
+      <p><strong>MediaPipe object detection pipeline — what happens under the hood:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Camera Frame</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">MPImage Wrapper</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">ObjectDetector</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Bounding Boxes + Labels</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Canvas Overlay</span>
+      </div>
+      <p style="margin-top: 1rem; color: var(--color-text-light);">
+        MediaPipe handles all the preprocessing (resize, normalize, pad) and postprocessing (NMS, score filtering) internally. You just feed it an image and read the results.
+      </p>
+    </div>
+
+    <h3>Step 1: Create the Detector</h3>
+
+    <p>Download the <code>efficientdet_lite0.task</code> model bundle (~4.4MB) from the MediaPipe website and place it in <code>assets/</code>. Then initialize the detector:</p>
+
+<pre><code>val baseOptions = BaseOptions.builder()
+    .setModelAssetPath("efficientdet_lite0.task")
+    .build()
+
+val options = ObjectDetector.ObjectDetectorOptions.builder()
+    .setBaseOptions(baseOptions)
+    .setRunningMode(RunningMode.LIVE_STREAM)
+    .setMaxResults(5)
+    .setScoreThreshold(0.5f)
+    .setResultListener { result, inputImage ->
+        // Called on every frame with detection results
+        handleDetections(result)
+    }
+    .build()
+
+val detector = ObjectDetector.createFromOptions(context, options)</code></pre>
+
+    <p>That's your entire detector. No <code>Interpreter</code>, no <code>ImageProcessor</code>, no <code>TensorBuffer</code>. MediaPipe handles it all.</p>
+
+    <h3>Step 2: Feed Camera Frames</h3>
+
+<pre><code>analysis.setAnalyzer(Dispatchers.Default.asExecutor()) { proxy ->
+    val mpImage = BitmapImageBuilder(proxy.toBitmap()).build()
+    val timestampMs = proxy.imageInfo.timestamp / 1000
+    detector.detectAsync(mpImage, timestampMs)
+    proxy.close()
+}</code></pre>
+
+    <h3>Step 3: Draw Bounding Boxes on Compose Canvas</h3>
+
+<pre><code>@Composable
+fun DetectionOverlay(
+    detections: List&lt;Detection&gt;,
+    imageWidth: Int,
+    imageHeight: Int
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val scaleX = size.width / imageWidth
+        val scaleY = size.height / imageHeight
+
+        detections.forEach { detection ->
+            val box = detection.boundingBox()
+            val rect = Rect(
+                box.left * scaleX, box.top * scaleY,
+                box.right * scaleX, box.bottom * scaleY
+            )
+            // Draw bounding box
+            drawRect(Color(0xFFFBBF24), rect.topLeft, rect.size,
+                style = Stroke(3.dp.toPx()))
+
+            // Draw label
+            val label = detection.categories().first()
+            val text = "${label.categoryName()} ${(label.score() * 100).toInt()}%"
+            drawContext.canvas.nativeCanvas.drawText(
+                text, rect.left, rect.top - 8f, labelPaint
+            )
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Coordinate scaling is essential.</strong> The model runs on a smaller input image (320&times;320), but your camera preview fills the screen. You must scale the bounding box coordinates from model space to screen space, or your boxes will be in the wrong position.
+    </div>
+
+    <h2>Face Mesh — 468 Landmarks in Real Time</h2>
+
+    <p>MediaPipe's <code>FaceLandmarker</code> tracks 468 points on a face — every contour of the eyes, nose, lips, eyebrows, and jawline. This powers features like AR filters (Snapchat-style lenses), face-controlled UI, driver drowsiness detection, and emoji puppeting.</p>
+
+<pre><code>val faceLandmarker = FaceLandmarker.createFromOptions(context,
+    FaceLandmarker.FaceLandmarkerOptions.builder()
+        .setBaseOptions(BaseOptions.builder()
+            .setModelAssetPath("face_landmarker.task")
+            .build())
+        .setRunningMode(RunningMode.LIVE_STREAM)
+        .setNumFaces(1)
+        .setResultListener { result, _ ->
+            val landmarks = result.faceLandmarks()
+            if (landmarks.isNotEmpty()) {
+                val face = landmarks[0]  // 468 NormalizedLandmark points
+                val noseTip = face[1]    // index 1 = nose tip
+                val leftEye = face[33]   // index 33 = left eye center
+                val rightEye = face[263] // index 263 = right eye center
+                updateFaceOverlay(face)
+            }
+        }
+        .build()
+)</code></pre>
+
+    <p>Each landmark is a <code>NormalizedLandmark</code> with <code>x</code>, <code>y</code>, and <code>z</code> coordinates normalized to [0, 1]. Multiply by your view dimensions to get pixel positions.</p>
+
+    <div class="tip-box">
+      The <code>z</code> coordinate represents depth relative to the face center. Negative z means closer to the camera, positive means farther away. This lets you detect head rotation (turning left/right) and build 3D face effects.
+    </div>
+
+    <h2>Hand Tracking — 21 Landmarks Per Hand</h2>
+
+    <p>The <code>HandLandmarker</code> detects 21 points on each hand: wrist, every knuckle, and every fingertip. This is the foundation for gesture recognition — mapping hand poses to app actions.</p>
+
+<pre><code>val handLandmarker = HandLandmarker.createFromOptions(context,
+    HandLandmarker.HandLandmarkerOptions.builder()
+        .setBaseOptions(BaseOptions.builder()
+            .setModelAssetPath("hand_landmarker.task")
+            .build())
+        .setRunningMode(RunningMode.LIVE_STREAM)
+        .setNumHands(2)
+        .setResultListener { result, _ ->
+            result.landmarks().forEachIndexed { i, hand ->
+                val thumbTip = hand[4]    // thumb tip
+                val indexTip = hand[8]    // index finger tip
+                val middleTip = hand[12]  // middle finger tip
+                val wrist = hand[0]       // wrist
+                detectGesture(hand)
+            }
+        }
+        .build()
+)</code></pre>
+
+    <h3>Simple Gesture Recognition</h3>
+
+    <p>You can recognize gestures by checking finger positions relative to each other. Here's a simple approach that works surprisingly well:</p>
+
+<pre><code>fun detectGesture(landmarks: List&lt;NormalizedLandmark&gt;): String {
+    val thumbTip = landmarks[4]
+    val indexTip = landmarks[8]
+    val middleTip = landmarks[12]
+    val ringTip = landmarks[16]
+    val pinkyTip = landmarks[20]
+    val wrist = landmarks[0]
+
+    // Fingers are "up" if their tip is above their base
+    val indexUp = indexTip.y() &lt; landmarks[6].y()
+    val middleUp = middleTip.y() &lt; landmarks[10].y()
+    val ringUp = ringTip.y() &lt; landmarks[14].y()
+    val pinkyUp = pinkyTip.y() &lt; landmarks[18].y()
+
+    return when {
+        indexUp && middleUp && !ringUp && !pinkyUp -> "peace"
+        !indexUp && !middleUp && !ringUp && !pinkyUp -> "fist"
+        indexUp && middleUp && ringUp && pinkyUp -> "open_palm"
+        else -> "unknown"
+    }
+}</code></pre>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Good gesture-to-action mapping</p>
+        <div class="prompt-text">Open palm → Pause/play video
+Peace sign → Take screenshot
+Thumbs up → Like / approve
+Fist → Dismiss notification</div>
+        <p class="prompt-explanation">Gestures are distinct and hard to trigger accidentally. Each maps to a single clear action.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Risky gesture-to-action mapping</p>
+        <div class="prompt-text">Slight finger curl → Delete file
+Two-finger tap → Send message
+Wrist rotate → Undo purchase
+Any hand visible → Start recording</div>
+        <p class="prompt-explanation">Ambiguous gestures lead to false positives. Destructive actions should never be triggered by gestures alone.</p>
+      </div>
+    </div>
+
+    <h2>Pose Estimation — Full-Body Tracking</h2>
+
+    <p>The <code>PoseLandmarker</code> tracks 33 body landmarks — from head to toes. This powers fitness apps (count reps, check form), physical therapy (measure range of motion), and gesture-controlled games.</p>
+
+<pre><code>val poseLandmarker = PoseLandmarker.createFromOptions(context,
+    PoseLandmarker.PoseLandmarkerOptions.builder()
+        .setBaseOptions(BaseOptions.builder()
+            .setModelAssetPath("pose_landmarker_lite.task")
+            .build())
+        .setRunningMode(RunningMode.LIVE_STREAM)
+        .setResultListener { result, _ ->
+            val pose = result.landmarks().firstOrNull() ?: return@setResultListener
+            val leftShoulder = pose[11]
+            val leftElbow = pose[13]
+            val leftWrist = pose[15]
+            val angle = calculateAngle(leftShoulder, leftElbow, leftWrist)
+            // angle > 160° = arm extended, angle < 90° = arm bent
+        }
+        .build()
+)</code></pre>
+
+    <p>A classic use case — counting bicep curls by tracking the elbow angle:</p>
+
+<pre><code>fun calculateAngle(a: NormalizedLandmark, b: NormalizedLandmark,
+                    c: NormalizedLandmark): Double {
+    val radians = atan2(
+        (c.y() - b.y()).toDouble(), (c.x() - b.x()).toDouble()
+    ) - atan2(
+        (a.y() - b.y()).toDouble(), (a.x() - b.x()).toDouble()
+    )
+    var degrees = Math.toDegrees(abs(radians))
+    if (degrees > 180) degrees = 360 - degrees
+    return degrees
+}</code></pre>
+
+    <h2>MediaPipe Configuration Deep Dive</h2>
+
+    <h3>Running Modes</h3>
+
+    <p>Every MediaPipe task supports three running modes. Pick the right one for your use case:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th>Use When</th>
+          <th>Behavior</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong><code>IMAGE</code></strong></td>
+          <td>Processing a single photo</td>
+          <td>Synchronous. Call <code>detect(image)</code>, get result immediately. Blocks the calling thread.</td>
+        </tr>
+        <tr>
+          <td><strong><code>VIDEO</code></strong></td>
+          <td>Processing recorded video frames</td>
+          <td>Synchronous with timestamps. Call <code>detectForVideo(image, timestampMs)</code>. Frames must be in order.</td>
+        </tr>
+        <tr>
+          <td><strong><code>LIVE_STREAM</code></strong></td>
+          <td>Real-time camera processing</td>
+          <td>Asynchronous. Call <code>detectAsync(image, timestampMs)</code>. Results arrive via callback. Drops frames if busy.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <strong>Always use <code>LIVE_STREAM</code> for camera feeds.</strong> The <code>IMAGE</code> and <code>VIDEO</code> modes are synchronous — they block until inference completes. With a live camera, this creates backpressure, dropped frames, and UI stutter. <code>LIVE_STREAM</code> automatically manages the frame queue and delivers results via a non-blocking callback.
+    </div>
+
+    <h3>Model Variants: Lite vs Full vs Heavy</h3>
+
+    <p>Most MediaPipe tasks offer three model variants. Choose based on your accuracy vs. speed needs:</p>
+
+    <div class="device-benchmark">
+      <p><strong>MediaPipe hand tracking — model variants on a Pixel 8 Pro:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Variant</th>
+            <th>Model Size</th>
+            <th>Inference Time</th>
+            <th>Landmark Accuracy</th>
+            <th>Best For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Lite</strong></td>
+            <td>2.3 MB</td>
+            <td>~5 ms</td>
+            <td>Good</td>
+            <td>Real-time, budget devices</td>
+          </tr>
+          <tr>
+            <td><strong>Full</strong></td>
+            <td>3.8 MB</td>
+            <td>~8 ms</td>
+            <td>Better</td>
+            <td>Balanced — default choice</td>
+          </tr>
+          <tr>
+            <td><strong>Heavy</strong></td>
+            <td>5.6 MB</td>
+            <td>~15 ms</td>
+            <td>Best</td>
+            <td>Precision-critical (AR, medical)</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">Start with <strong>Full</strong> for development. Switch to Lite if you need faster inference on lower-end devices. Use Heavy only when landmark precision is critical (AR overlays that must perfectly align with facial features).</p>
+    </div>
+
+    <h2>Combining Multiple MediaPipe Tasks</h2>
+
+    <p>What if you want face detection <em>and</em> hand tracking running simultaneously? You can create multiple task instances, but be mindful of resource usage:</p>
+
+<pre><code>// Both tasks share the camera feed but run independently
+val faceDetector = FaceLandmarker.createFromOptions(context, faceOptions)
+val handDetector = HandLandmarker.createFromOptions(context, handOptions)
+
+analysis.setAnalyzer(executor) { proxy ->
+    val mpImage = BitmapImageBuilder(proxy.toBitmap()).build()
+    val timestamp = proxy.imageInfo.timestamp / 1000
+
+    // Both run asynchronously — results arrive via their callbacks
+    faceDetector.detectAsync(mpImage, timestamp)
+    handDetector.detectAsync(mpImage, timestamp)
+    proxy.close()
+}</code></pre>
+
+    <div class="hardware-note">
+      <p><strong>Memory impact of running multiple tasks simultaneously:</strong></p>
+      <ul>
+        <li><strong>1 task</strong> — ~30-50 MB additional RAM. Fine on any device with 3GB+ total RAM.</li>
+        <li><strong>2 tasks</strong> — ~60-90 MB. Comfortable on devices with 4GB+ RAM.</li>
+        <li><strong>3+ tasks</strong> — ~100-150 MB. Flagship territory (6GB+). Watch for <code>onTrimMemory</code> callbacks and consider unloading idle tasks.</li>
+      </ul>
+      <p>On budget devices (2-3 GB RAM), run only one task at a time and switch between them based on what the user needs.</p>
+    </div>
+
+    <h2>MediaPipe vs. Raw TFLite</h2>
+
+    <p>When should you use MediaPipe, and when should you drop down to raw TFLite like in Chapter 3?</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Criteria</th>
+          <th>MediaPipe</th>
+          <th>Raw TFLite</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Setup time</strong></td>
+          <td>30 minutes</td>
+          <td>Half a day</td>
+        </tr>
+        <tr>
+          <td><strong>Model choice</strong></td>
+          <td>Pre-selected, optimized</td>
+          <td>Any TFLite model</td>
+        </tr>
+        <tr>
+          <td><strong>Preprocessing</strong></td>
+          <td>Built in</td>
+          <td>You write it</td>
+        </tr>
+        <tr>
+          <td><strong>Threading</strong></td>
+          <td>Managed for you</td>
+          <td>You manage it</td>
+        </tr>
+        <tr>
+          <td><strong>Custom models</strong></td>
+          <td>No — use their models only</td>
+          <td>Yes — any model you want</td>
+        </tr>
+        <tr>
+          <td><strong>Fine-tuning</strong></td>
+          <td>Limited configuration</td>
+          <td>Full control</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The Decision Rule</h3>
+      <p><strong>Start with MediaPipe.</strong> If one of its pre-built tasks does what you need, use it. You'll ship faster and the results will be better than most custom implementations. Drop down to raw TFLite only when you need a custom model that MediaPipe doesn't support — like a model trained on your own data, or a specialized architecture not in MediaPipe's catalog.</p>
+    </div>
+
+    <h2>Performance Tuning Tips</h2>
+
+    <ul>
+      <li><strong>Use GPU delegate</strong> for sustained inference — add <code>.setDelegate(Delegate.GPU)</code> to BaseOptions. Reduces CPU load and heat.</li>
+      <li><strong>Lower <code>setMaxResults</code></strong> — if you only need the top detection, don't ask for 10.</li>
+      <li><strong>Raise <code>setScoreThreshold</code></strong> — filtering low-confidence results early saves postprocessing work.</li>
+      <li><strong>Skip frames</strong> on slow devices — process every 2nd or 3rd camera frame instead of every one.</li>
+      <li><strong>Close tasks when done</strong> — call <code>detector.close()</code> when leaving the screen to free GPU/NPU resources.</li>
+    </ul>
+
+    <h2>Try It: Build a Hand Gesture Controller</h2>
+
+    <div class="exercise-box">
+      <p><strong>Build a hand gesture recognizer that maps 3 gestures to 3 app actions.</strong></p>
+      <ol>
+        <li>Set up MediaPipe <code>HandLandmarker</code> with the <code>hand_landmarker.task</code> model</li>
+        <li>Connect it to CameraX using <code>LIVE_STREAM</code> mode</li>
+        <li>Implement gesture detection for three poses:
+          <ul>
+            <li><strong>Open palm</strong> (all fingers extended) &rarr; show "Pause" on screen</li>
+            <li><strong>Peace sign</strong> (index + middle up) &rarr; show "Screenshot" on screen</li>
+            <li><strong>Fist</strong> (all fingers closed) &rarr; show "Dismiss" on screen</li>
+          </ul>
+        </li>
+        <li>Display the detected gesture name and the 21 hand landmarks drawn on a Compose Canvas overlay</li>
+        <li>Measure detection latency for each gesture — log the time from frame capture to gesture recognized</li>
+      </ol>
+      <p><strong>Bonus:</strong> Try it on two hands simultaneously — does accuracy change? How about in different lighting conditions (bright room vs. dim room)?</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>MediaPipe is fantastic for vision tasks — faces, hands, poses, objects. But what about <em>text</em>? What about reading a receipt, scanning a barcode, or translating a sign in a foreign language?</p>
+
+    <p>In <strong>Chapter 5: ML Kit — Google's Plug-and-Play AI</strong>, we'll explore Google's higher-level ML toolkit for text recognition (OCR), barcode scanning, on-device translation, smart replies, entity extraction, and more. If MediaPipe is the meal kit, ML Kit is the microwave dinner — even simpler, and perfect for common tasks you just want to work.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-first-model.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Your First On-Device Model</span>
+      </a>
+      <a href="05-ml-kit.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">ML Kit — Google's Plug-and-Play AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

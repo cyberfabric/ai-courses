@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Smart Personalization &amp; Recommendations | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-siri-app-intents.html">&larr; Prev</a>
+      <a href="12-shipping-safely.html">Next &rarr;</a>
+      <a href="maps/11-personalization-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Smart Personalization &amp; Recommendations</h1>
+    <p class="subtitle">LoRA adapters, on-device learning, recommendation engines, and proactive features that anticipate what users need</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <p>In the previous chapters, your AI features treated every user identically. The same summary style. The same search ranking. The same suggestions. That&rsquo;s like a barista who makes every coffee exactly the same, regardless of who walks in.</p>
+
+    <p>Great AI features <em>learn</em>. They notice that you prefer short summaries, that you always search for vegetarian recipes, that you open the app at 8 AM for news and 9 PM for relaxation. And they adapt &mdash; quietly, privately, on-device.</p>
+
+    <div class="highlight-box">
+      <h3>The Apple Way: Private Personalization</h3>
+      <p>Apple Intelligence personalizes by processing data <strong>on-device</strong> using information from Calendar, Mail, Photos, and your app. No user data is sent to Apple. No interactions train Apple&rsquo;s models. Users can see exactly what&rsquo;s happening at Settings &gt; Privacy &amp; Security &gt; Apple Intelligence Report. Your app should follow the same philosophy.</p>
+    </div>
+
+    <!-- User Story -->
+    <div class="user-story-box">
+      <h3>User Story: The App That Knows You</h3>
+      <p>Priya uses a recipe app. On day one, she sees generic suggestions: pasta, salad, steak. Over the next two weeks, she taps on Indian food, saves vegetarian recipes, and spends the most time reading quick weeknight meals. By week three, the app&rsquo;s home feed leads with &ldquo;Quick Vegetarian Indian Dinners.&rdquo; There&rsquo;s a small &ldquo;Because you love quick Indian recipes&rdquo; label under the section. She never configured anything &mdash; the app just <em>noticed</em>.</p>
+    </div>
+
+    <!-- Custom LoRA Adapters -->
+    <h2>Custom LoRA Adapters: Teaching the Model Your Language</h2>
+
+    <p>Prompt engineering works for most tasks. But some domains have specialized vocabulary that a general-purpose 3B model doesn&rsquo;t handle well: medical terminology, legal jargon, brand-specific style, niche industry terms. That&rsquo;s where LoRA adapters come in.</p>
+
+    <p><strong>LoRA (Low-Rank Adaptation)</strong> adds small trainable layers into the transformer without changing the base model. Think of it like teaching the model a new dialect without making it forget English.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">~30 MB</div>
+        <div class="stat-label">Adapter size</div>
+        <div class="stat-detail">A rank-16 adapter is tens of megabytes. The 3B base model stays frozen &mdash; you only ship the small adapter.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">100%</div>
+        <div class="stat-label">On-device</div>
+        <div class="stat-detail">Adapters load into Foundation Models at runtime. No cloud. Same privacy as the base model.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Python</div>
+        <div class="stat-label">Training toolkit</div>
+        <div class="stat-detail">Apple provides a Python-based training toolkit with scripts, notebooks, and evaluation tools.</div>
+      </div>
+    </div>
+
+    <h3>When to Use LoRA Adapters</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Good Candidates for LoRA</h4>
+        <ul>
+          <li><strong>Medical apps:</strong> Correct drug names, dosages, medical abbreviations</li>
+          <li><strong>Legal apps:</strong> Contract terminology, legal citation formats</li>
+          <li><strong>Brand voice:</strong> Company-specific tone and terminology</li>
+          <li><strong>Specialized domains:</strong> Cooking techniques, fitness terminology, finance jargon</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Don&rsquo;t Use LoRA For</h4>
+        <ul>
+          <li><strong>General text:</strong> Prompt engineering handles this fine</li>
+          <li><strong>Simple classification:</strong> @Generable with enum is cheaper</li>
+          <li><strong>Personalization:</strong> User preferences change too fast for adapter retraining</li>
+          <li><strong>One-off tasks:</strong> Training cost only makes sense for repeated use</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- API Recipe: Loading a LoRA Adapter -->
+    <div class="api-recipe">
+      <h3>API Recipe: Loading a Custom LoRA Adapter</h3>
+      <p><strong>Goal:</strong> Load a domain-specific adapter into Foundation Models at runtime.</p>
+
+      <h4>Step 1: Train the adapter (Python)</h4>
+      <p>Use Apple&rsquo;s adapter training toolkit (available at <code>developer.apple.com/apple-intelligence/foundation-models-adapter/</code>). Train on your domain data. Export the adapter file.</p>
+
+      <h4>Step 2: Bundle the adapter in your app</h4>
+      <p>Add the exported adapter file (typically <code>.mlpackage</code> or <code>.adapters</code>) to your Xcode project&rsquo;s resources.</p>
+
+      <h4>Step 3: Load and use in Swift</h4>
+<pre><code>import FoundationModels
+
+// Load the adapter from your app bundle
+let adapterURL = Bundle.main.url(
+    forResource: "MedicalTerms",
+    withExtension: "adapters"
+)!
+let adapter = try LanguageModelAdapter(url: adapterURL)
+
+// Create a session with the adapter
+let session = LanguageModelSession(adapter: adapter)
+
+// Generate with domain-specific understanding
+let response = try await session.respond(
+    to: "Summarize this patient note: \(patientNote)"
+)</code></pre>
+
+      <p><strong>Result:</strong> The model now understands medical terminology, drug names, and clinical abbreviations. Same Foundation Models API, but with domain expertise.</p>
+    </div>
+
+    <div class="warning-box">
+      <h4>Warning: Adapter Training Requires Data</h4>
+      <p>You need hundreds to thousands of domain-specific examples to train an effective adapter. Poor training data produces poor results. If you don&rsquo;t have enough domain data, stick with prompt engineering and @Guide constraints &mdash; they&rsquo;re surprisingly effective for most use cases.</p>
+    </div>
+
+    <!-- On-Device Learning -->
+    <h2>On-Device Learning with Create ML</h2>
+
+    <p>LoRA adapters are trained offline and shipped with your app. But what about learning from <em>individual user behavior</em> in real time? That&rsquo;s where <code>MLUpdateTask</code> comes in.</p>
+
+    <p><code>MLUpdateTask</code> lets you retrain a Core ML model directly on the user&rsquo;s device using their interactions. The model gets better for <em>this specific user</em> without any data leaving the phone.</p>
+
+    <h3>How It Works</h3>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>Ship a Base Model</h4>
+          <p>Train a general classification model with Create ML. Ship it in your app bundle.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Collect Interactions</h4>
+          <p>Track user behavior: taps, saves, time spent, dismissals. Store locally.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h4>Update On-Device</h4>
+          <p><code>MLUpdateTask</code> retrains with user data. ~seconds for small models.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <h4>Replace the Model</h4>
+          <p>Swap the updated model into your inference pipeline. Immediately better.</p>
+        </div>
+      </div>
+    </div>
+
+<pre><code>import CoreML
+
+let updatedModel = try MLUpdateTask(
+    forModelAt: modelURL,
+    trainingData: userInteractions,  // MLBatchProvider
+    configuration: updateConfig,
+    completionHandler: { context in
+        // Save the updated model
+        let updatedURL = context.model.write(to: documentsURL)
+        self.currentModel = try MLModel(contentsOf: updatedURL)
+    }
+)
+updatedModel.resume()</code></pre>
+
+    <div class="tip-box">
+      <h4>Tip: Update in Background</h4>
+      <p>Run <code>MLUpdateTask</code> when the app is idle or during background refresh, not during active use. Training takes a few seconds for small models but can spike CPU usage. Schedule it when the user puts the phone down, not when they&rsquo;re scrolling.</p>
+    </div>
+
+    <!-- Recommendation Engine -->
+    <h2>Building a Recommendation Engine</h2>
+
+    <p>Recommendation engines don&rsquo;t have to be Netflix-scale. A simple on-device system that tracks user preferences and ranks content can dramatically improve engagement &mdash; and it costs nothing to run.</p>
+
+    <h3>Three Approaches</h3>
+
+    <table>
+      <thead>
+        <tr><th>Approach</th><th>How It Works</th><th>Best For</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Content-Based</strong></td>
+          <td>Recommend items similar to what the user liked before. Uses item features (category, tags, keywords).</td>
+          <td>Small catalogs, new users with some history</td>
+        </tr>
+        <tr>
+          <td><strong>Collaborative Filtering</strong></td>
+          <td>&ldquo;Users like you also liked X.&rdquo; Uses <code>MLRecommender</code> in Create ML.</td>
+          <td>Large user bases, pre-trained on aggregate data</td>
+        </tr>
+        <tr>
+          <td><strong>Hybrid</strong></td>
+          <td>Combine both: content features + user behavior. Weight each signal.</td>
+          <td>Production systems, best accuracy</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>A Simple On-Device Preference Model</h3>
+
+<pre><code>struct UserPreferences {
+    // Category weights: higher = user likes it more
+    var categoryScores: [String: Double] = [:]
+
+    mutating func recordInteraction(
+        category: String, signal: InteractionSignal
+    ) {
+        let current = categoryScores[category, default: 0.5]
+        switch signal {
+        case .tap:      categoryScores[category] = min(current + 0.05, 1.0)
+        case .save:     categoryScores[category] = min(current + 0.15, 1.0)
+        case .timeSpent(let seconds):
+            if seconds > 30 {
+                categoryScores[category] = min(current + 0.1, 1.0)
+            }
+        case .dismiss:  categoryScores[category] = max(current - 0.1, 0.0)
+        }
+    }
+
+    func score(for item: ContentItem) -> Double {
+        categoryScores[item.category, default: 0.5]
+    }
+}</code></pre>
+
+    <p>Store this in <code>SwiftData</code> or <code>UserDefaults</code>. Sort your feed by <code>score(for:)</code>. That&rsquo;s a working personalization engine in 25 lines of Swift.</p>
+
+    <div class="tip-box">
+      <h4>Tip: Decay Over Time</h4>
+      <p>Preferences change. A user who loved baking content last month might be into salads now. Apply a time-decay factor: multiply scores by 0.95 weekly so old preferences gradually fade and recent behavior dominates.</p>
+    </div>
+
+    <!-- Product Pattern: Proactive Assistant -->
+    <div class="product-pattern">
+      <h3>Product Pattern: The Proactive Assistant</h3>
+      <p><strong>The pattern:</strong> Surface relevant information <em>before</em> the user asks for it, based on time, location, and behavior patterns.</p>
+      <p><strong>Why it works:</strong> The best AI features feel like they read your mind. A travel app showing your boarding pass when you arrive at the airport. A fitness app suggesting your usual workout at your usual time. A recipe app surfacing dinner ideas at 5 PM.</p>
+      <p><strong>Where to use it:</strong> Any app with content the user accesses in patterns &mdash; news at breakfast, recipes before dinner, workout at gym time, music during commute.</p>
+      <p><strong>Implementation:</strong></p>
+      <ul>
+        <li>Track open times in a simple array (last 30 opens)</li>
+        <li>Detect clusters: &ldquo;user opens between 7:45&ndash;8:15 AM on weekdays&rdquo;</li>
+        <li>Schedule proactive content (widget update, notification) 5 minutes before the pattern</li>
+        <li>Label it clearly: &ldquo;Your morning briefing&rdquo; not just random push</li>
+      </ul>
+    </div>
+
+    <!-- Smart Notifications -->
+    <h2>Smart Notification Timing</h2>
+
+    <p>Sending notifications at the wrong time is worse than not sending them at all. A notification at 3 AM gets dismissed; one that arrives exactly when the user was about to open the app feels magical.</p>
+
+    <h3>Building a Timing Model</h3>
+
+<pre><code>struct NotificationScheduler {
+    // Track when the user typically opens the app
+    var openTimes: [Date] = []
+
+    func optimalSendTime() -> DateComponents? {
+        let calendar = Calendar.current
+        // Group opens by hour-of-day on weekdays
+        let weekdayHours = openTimes
+            .filter { calendar.isDateInWeekday($0) }
+            .map { calendar.component(.hour, from: $0) }
+
+        guard !weekdayHours.isEmpty else { return nil }
+
+        // Find the most common hour
+        let frequency = Dictionary(grouping: weekdayHours) { $0 }
+            .mapValues { $0.count }
+        let peakHour = frequency.max(by: { $0.value < $1.value })?.key
+
+        guard let hour = peakHour else { return nil }
+        var components = DateComponents()
+        components.hour = hour - 1  // 1 hour before peak
+        components.minute = 0
+        return components
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <h4>Warning: Notification Fatigue Is Real</h4>
+      <p>Personalized doesn&rsquo;t mean frequent. Even perfectly timed notifications annoy users if they arrive too often. Cap at 1&ndash;2 proactive notifications per day. Track the opt-out rate &mdash; if it climbs above 5%, you&rsquo;re pushing too hard.</p>
+    </div>
+
+    <!-- Notification Content Personalization -->
+    <h2>Personalizing Notification Content</h2>
+
+    <p>Same notification, different users, different copy. Foundation Models can generate personalized notification text that matches the user&rsquo;s style.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Personalized Notifications</h4>
+        <ul>
+          <li>&ldquo;3 new vegetarian Indian recipes this week&rdquo; (matches Priya&rsquo;s preferences)</li>
+          <li>&ldquo;Your morning news: 5 stories about AI&rdquo; (matches Marcus&rsquo;s interests)</li>
+          <li>&ldquo;Quick 20-min workout ready&rdquo; (matches the user&rsquo;s preferred duration)</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Generic Notifications</h4>
+        <ul>
+          <li>&ldquo;New recipes available!&rdquo;</li>
+          <li>&ldquo;Check out today&rsquo;s news&rdquo;</li>
+          <li>&ldquo;Time for a workout!&rdquo;</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Engagement Metrics -->
+    <h2>Measuring Personalization Quality</h2>
+
+    <p>Personalization is only valuable if it actually helps. Measure these metrics to know if your system is working.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">CTR</div>
+        <div class="stat-label">Click-through rate</div>
+        <div class="stat-detail">% of recommended items the user taps. Should increase over time as the model learns.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Dismiss</div>
+        <div class="stat-label">Dismissal rate</div>
+        <div class="stat-detail">% of recommendations dismissed without action. If this is rising, your model is getting <em>worse</em>.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Time</div>
+        <div class="stat-label">Time-to-action</div>
+        <div class="stat-detail">How quickly the user acts on a recommendation. Faster = more relevant.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Opt-out</div>
+        <div class="stat-label">Opt-out rate</div>
+        <div class="stat-detail">% of users who disable personalization. Above 5% = something&rsquo;s wrong.</div>
+      </div>
+    </div>
+
+    <!-- Avoiding the Filter Bubble -->
+    <h2>Avoiding the Filter Bubble</h2>
+
+    <p>A recommendation engine that only shows what users already like creates an echo chamber. Last month&rsquo;s obsession with pasta becomes a permanent pasta prison. Here&rsquo;s how to break the bubble.</p>
+
+    <div class="checklist">
+      <label><input type="checkbox"> <strong>Serendipity injection:</strong> Reserve 10&ndash;20% of your feed for items outside the user&rsquo;s usual preferences. Label them &ldquo;Something New&rdquo; or &ldquo;Discover.&rdquo;</label>
+      <label><input type="checkbox"> <strong>Category diversity:</strong> Never let a single category dominate more than 40% of the visible feed, even if the model says the user loves it.</label>
+      <label><input type="checkbox"> <strong>Time-decay on preferences:</strong> Recent behavior weights more than old behavior. A user who loved baking in December shouldn&rsquo;t see only baking in July.</label>
+      <label><input type="checkbox"> <strong>Explicit controls:</strong> &ldquo;Show me less of this&rdquo; and &ldquo;Show me more of this&rdquo; buttons. Let users override the algorithm.</label>
+      <label><input type="checkbox"> <strong>&ldquo;Why this?&rdquo; explainers:</strong> &ldquo;Recommended because you saved 3 Indian recipes this week.&rdquo; Transparency builds trust <em>and</em> helps users correct the model.</label>
+      <label><input type="checkbox"> <strong>Reset option:</strong> Let users reset their preferences and start fresh. Some people want a clean slate.</label>
+    </div>
+
+    <div class="tip-box">
+      <h4>Tip: The &ldquo;Why This?&rdquo; Label Is Not Optional</h4>
+      <p>Users who understand <em>why</em> they see a recommendation are 30% more likely to engage with it. &ldquo;Because you saved 3 Indian recipes&rdquo; is specific and helpful. &ldquo;Recommended for you&rdquo; is vague and suspicious. Foundation Models can generate these explanations from the preference model&rsquo;s data.</p>
+    </div>
+
+    <!-- Cross-reference -->
+    <div class="highlight-box">
+      <h3>Going Deeper</h3>
+      <p>For detailed adapter training workflows, Create ML model personalization, and MLRecommender implementation, see <strong>iOS-OnDevice Chapters 6 and 9</strong>. This chapter focuses on the product experience; the companion course covers the training infrastructure.</p>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Build a Smart Feed</h3>
+      <p>Build a personalized content feed that learns from user behavior:</p>
+      <ol>
+        <li><strong>Track interactions:</strong> Record taps, saves, time spent, and dismissals for each content item. Store with category and timestamp in SwiftData.</li>
+        <li><strong>Build the preference model:</strong> Implement a <code>UserPreferences</code> struct that maintains category scores (0.0&ndash;1.0) based on interaction signals. Apply weekly time-decay of 0.95.</li>
+        <li><strong>Rank content:</strong> Sort your feed by the preference model&rsquo;s score. Higher-scored categories appear first.</li>
+        <li><strong>Add serendipity:</strong> Reserve 15% of the feed for items outside the user&rsquo;s top 3 categories. Label them &ldquo;Discover Something New.&rdquo;</li>
+        <li><strong>Add explainers:</strong> Show &ldquo;Because you saved 3 items in [category]&rdquo; under personalized sections. Use Foundation Models to generate natural-sounding explanations.</li>
+        <li><strong>Measure:</strong> Log CTR, dismissal rate, and time-to-action. Compare personalized vs non-personalized sections.</li>
+      </ol>
+      <p><strong>Stretch goal:</strong> Add an <code>MLUpdateTask</code>-powered classification model that learns the user&rsquo;s preferred content complexity (beginner vs advanced) and adjusts the feed accordingly.</p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now have a complete toolkit: text intelligence, chat, search, image understanding, image generation, voice, system integration, and personalization. In Chapter 12, we&rsquo;ll ship it all safely. App Store review, content safety, feature flags, A/B testing, cost monitoring, and incident response &mdash; everything you need to go from TestFlight to the App Store with confidence.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-siri-app-intents.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Siri, App Intents &amp; System Integration</span>
+      </a>
+      <a href="12-shipping-safely.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Shipping AI Features on the App Store</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

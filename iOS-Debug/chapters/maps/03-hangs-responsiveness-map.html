@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Hangs &amp; Responsiveness Diagnosis | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../03-hangs-responsiveness.html">Chapter</a>
+      <a href="02-crash-reports-symbolication-map.html">&#8592; Prev Map</a>
+      <a href="04-memory-leaks-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Hangs &amp; Responsiveness Diagnosis</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- Big Idea -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Hangs are worse than crashes &mdash; users abandon frozen apps and never come back. The <code>async</code> keyword doesn't mean non-blocking: a synchronous call inside an <code>async @MainActor</code> method still freezes the UI.</p>
+    </div>
+
+    <!-- Watchdog Timeouts Table -->
+    <h2>⏱️ Watchdog Timeout Thresholds</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>App State</th>
+          <th>Timeout</th>
+          <th>Common Trigger</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>🚀 Launch</td>
+          <td>~20 seconds</td>
+          <td>Sync Core Data migration in <code>didFinishLaunching</code></td>
+        </tr>
+        <tr>
+          <td>📱 Foreground</td>
+          <td>~10 seconds</td>
+          <td>Sync network call on main thread</td>
+        </tr>
+        <tr>
+          <td>🔄 Background task</td>
+          <td>~5-10 seconds</td>
+          <td>Task handler never calls completion</td>
+        </tr>
+        <tr>
+          <td>⏸️ Resume</td>
+          <td>~10 seconds</td>
+          <td><code>willEnterForeground</code> blocks too long</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Hang Diagnosis Flow -->
+    <h2>🔄 Hang Diagnosis Pipeline</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">🥶 UI freezes</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📊 Capture data</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔍 Find blocking call</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🤖 AI analyze</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">⚡ Move to async</div>
+    </div>
+
+    <!-- 6 Common Hang Patterns -->
+    <h2>🎯 The 6 Most Common Hang Patterns</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>🌐 Sync Network on Main Thread</h4>
+        <p><code>Data(contentsOf: url)</code> or semaphore-wrapped URLSession. Use <code>async/await</code> or completion handlers.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>🗄️ Heavy Core Data Fetch</h4>
+        <p>NSFetchRequest with no predicate on 100K+ rows, or sync migration in <code>didFinishLaunching</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>🔐 Sync Keychain Access</h4>
+        <p><code>SecItemCopyMatching</code> can take seconds when device is locked or Keychain is large.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>🖼️ Main Thread Image Decode</h4>
+        <p>Loading large JPEGs with <code>UIImage(named:)</code> &mdash; decode happens lazily on first render.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>📐 Excessive Auto Layout</h4>
+        <p>Hundreds of constraints invalidated repeatedly in one layout pass. Common with dynamic table cells.</p>
+      </li>
+      <li class="map-timeline-item" data-step="6">
+        <h4>🔒 Lock Contention</h4>
+        <p>Main thread waits for a lock held by a background thread doing heavy work.</p>
+      </li>
+    </ol>
+
+    <!-- Swift Concurrency Pitfalls -->
+    <h2>⚠️ Swift Concurrency Hang Traps</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🧊</span>
+        <div class="map-card-title">Sync Inside @MainActor async</div>
+        <div class="map-card-desc"><code>Thread.sleep()</code> or <code>Data(contentsOf:)</code> inside an <code>async</code> method still blocks. <code>async</code> = can suspend, not = every line is non-blocking.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⬇️</span>
+        <div class="map-card-title">Task Priority Inversion</div>
+        <div class="map-card-desc">High-priority MainActor task awaits a <code>.background</code> priority task that keeps getting preempted.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🏴‍☠️</span>
+        <div class="map-card-title">nonisolated Misuse</div>
+        <div class="map-card-desc"><code>nonisolated</code> method accessing <code>@MainActor</code> properties = data race. Swift 6 catches it; Swift 5.x hangs silently.</div>
+      </div>
+    </div>
+
+    <!-- Tools Relationship Map -->
+    <h2>🛠️ Hang Detection Tools</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">📊 Instruments Time Profiler</div>
+      <div class="map-rel-node">🏥 MetricKit MXHangDiagnostic</div>
+      <div class="map-rel-center">🥶 Diagnosing<br>iOS Hangs</div>
+      <div class="map-rel-node">🟣 Thread Checker</div>
+      <div class="map-rel-node">📍 os_signpost</div>
+    </div>
+
+    <!-- Concept Cards -->
+    <h2>🧩 Key Concepts</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">💀</span>
+        <div class="map-card-title">0x8BADF00D</div>
+        <div class="map-card-desc">"Ate bad food" &mdash; watchdog termination code. All thread backtraces captured at the moment of kill = gold for AI.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🏥</span>
+        <div class="map-card-title">MXHangDiagnostic</div>
+        <div class="map-card-desc">MetricKit delivers fully symbolicated hang call stacks from production. Catches hangs as short as 250ms. Delivered daily.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🟣</span>
+        <div class="map-card-title">Thread Checker</div>
+        <div class="map-card-desc">Xcode runtime diagnostic (purple warnings). Catches main-thread violations during development. On by default in Xcode 26.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📍</span>
+        <div class="map-card-title">os_signpost</div>
+        <div class="map-card-desc">Mark begin/end of operations. Appear as labeled intervals in Instruments. Verify hang fixes with precise timing.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚡</span>
+        <div class="map-card-title">/analyze-hang Skill</div>
+        <div class="map-card-desc">Claude Code command: identifies blocked thread, blocking operation, call chain, and suggests async alternative.</div>
+      </div>
+    </div>
+
+    <!-- Key Terms -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Hang</dt>
+      <dd>UI is frozen &mdash; app is alive but unresponsive. Worse than a crash for user experience and retention.</dd>
+
+      <dt>Watchdog (0x8BADF00D)</dt>
+      <dd>iOS system monitor that terminates apps whose main thread is blocked beyond the threshold (~10-20s depending on state).</dd>
+
+      <dt>MXHangDiagnostic</dt>
+      <dd>MetricKit payload with symbolicated call stacks for hangs 250ms+ in production. Delivered once per day.</dd>
+
+      <dt>Thread Checker</dt>
+      <dd>Xcode runtime diagnostic that fires purple warnings when UI APIs are called off the main thread.</dd>
+
+      <dt>os_signpost</dt>
+      <dd>Instruments API to mark begin/end of code intervals. Shows labeled durations in the Instruments timeline.</dd>
+
+      <dt>@MainActor</dt>
+      <dd>Swift actor that runs code on the main thread. Blocking calls inside it freeze the UI even in async methods.</dd>
+
+      <dt>Priority inversion</dt>
+      <dd>High-priority task waits for a low-priority task that keeps getting preempted by other high-priority work.</dd>
+
+      <dt>Task.detached</dt>
+      <dd>Creates a task that doesn't inherit the caller's actor context. Use to move heavy work off @MainActor.</dd>
+    </dl>
+
+    <!-- Quick Quiz -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+      <details>
+        <summary>Why are hangs worse than crashes?</summary>
+        <p class="quiz-answer">Users can't tell if the app is still working. They get frustrated, force-quit, and often don't come back. Hangs also don't show up in crash reports unless you're specifically looking (MetricKit, Xcode Organizer Hangs tab).</p>
+      </details>
+      <details>
+        <summary>Does marking a method <code>async</code> prevent it from blocking the main thread?</summary>
+        <p class="quiz-answer">No. <code>async</code> means the function <em>can</em> suspend at <code>await</code> points, but synchronous calls like <code>Thread.sleep()</code>, <code>Data(contentsOf:)</code>, or <code>SecItemCopyMatching</code> inside it still block whichever thread/actor it's running on.</p>
+      </details>
+      <details>
+        <summary>What's the watchdog timeout for app launch?</summary>
+        <p class="quiz-answer">~20 seconds. If <code>didFinishLaunchingWithOptions</code> doesn't return in time (e.g., sync Core Data migration), iOS kills the app with code <code>0x8BADF00D</code>.</p>
+      </details>
+      <details>
+        <summary>How does MXHangDiagnostic differ from a watchdog crash?</summary>
+        <p class="quiz-answer">MXHangDiagnostic catches shorter hangs (250ms+) that don't trigger the watchdog. Watchdog only kills for multi-second blocks. MetricKit delivers symbolicated call stacks daily &mdash; no dSYM needed.</p>
+      </details>
+      <details>
+        <summary>What's the fix for a sync blocking call inside a @MainActor method?</summary>
+        <p class="quiz-answer">Move the heavy work to <code>Task.detached(priority:)</code> so it runs off the MainActor. Show a loading state on the main thread, await the result, then update UI.</p>
+      </details>
+    </div>
+
+    <!-- Summary Strip -->
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item"><strong>Hangs are worse than crashes.</strong> 53% of users abandon an app after a 3-second freeze.</li>
+        <li class="map-summary-item">Watchdog (<code>0x8BADF00D</code>) timeouts: ~20s launch, ~10s foreground, ~5-10s background.</li>
+        <li class="map-summary-item"><strong>MetricKit MXHangDiagnostic</strong> catches hangs from 250ms+ in production with symbolicated stacks.</li>
+        <li class="map-summary-item"><code>async</code> ≠ non-blocking. Sync calls inside <code>@MainActor async</code> methods still freeze the UI.</li>
+        <li class="map-summary-item">Use <strong>Time Profiler</strong> to capture, <strong>/analyze-hang</strong> to diagnose, <strong>os_signpost</strong> to verify.</li>
+        <li class="map-summary-item">Enable <strong>Thread Checker</strong> &mdash; catch main-thread violations before users do.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="02-crash-reports-symbolication-map.html" class="prev">
+      <span class="nav-direction">Previous Map</span>
+      <span class="nav-chapter">Crash Reports, Logs &amp; Symbolication</span>
+    </a>
+    <a href="../03-hangs-responsiveness.html" class="next">
+      <span class="nav-direction">Back to Chapter</span>
+      <span class="nav-chapter">Hangs &amp; Responsiveness Diagnosis</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

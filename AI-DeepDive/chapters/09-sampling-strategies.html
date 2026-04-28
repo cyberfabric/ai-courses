@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Sampling Strategies — The Numbers Behind Creativity | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-prediction-to-conversation.html">&larr; Prev</a>
+      <a href="10-context-and-kv-cache.html">Next &rarr;</a>
+      <a href="maps/09-sampling-strategies-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Sampling Strategies &mdash; The Numbers Behind Creativity</h1>
+    <p class="chapter-subtitle">Temperature, top-k, top-p with actual probability distributions &mdash; see how each reshapes the output</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/07-temperature-and-friends.html">AI-Intro Ch 7: Temperature &amp; Friends</a>. There you learned what the knobs do conceptually. Now you&rsquo;ll see exactly how each one reshapes the probability distribution with real numbers.
+    </div>
+
+    <p>In Chapter 8, you traced the autoregressive loop: predict &rarr; select &rarr; append &rarr; repeat. But we glossed over the most interesting part: <strong>how does &ldquo;select&rdquo; actually work?</strong></p>
+
+    <p>The model doesn&rsquo;t output probabilities directly. It outputs raw scores called <strong>logits</strong> &mdash; just big and small numbers with no particular range. Everything interesting happens between those raw scores and the final token selection. That&rsquo;s where temperature, top-k, and top-p live.</p>
+
+    <p>By the end of this chapter, you&rsquo;ll be able to take a set of logits, apply any combination of these strategies, and predict exactly which tokens can be selected and with what probability.</p>
+
+    <!-- ============================================== -->
+    <h2>Starting Point: Raw Logits</h2>
+    <!-- ============================================== -->
+
+    <p>After the transformer processes your prompt, the final layer produces one number per vocabulary token. For a vocabulary of 50,257 tokens, that&rsquo;s 50,257 numbers. These are the <strong>logits</strong>.</p>
+
+    <p>Let&rsquo;s work with a tiny vocabulary of 5 tokens to keep things traceable:</p>
+
+    <table>
+      <thead>
+        <tr><th>Token</th><th>Logit</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>the</code></td><td><code>2.0</code></td></tr>
+        <tr><td><code>a</code></td><td><code>1.0</code></td></tr>
+        <tr><td><code>cat</code></td><td><code>0.5</code></td></tr>
+        <tr><td><code>my</code></td><td><code>-1.0</code></td></tr>
+        <tr><td><code>banana</code></td><td><code>-3.0</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>Higher logit = the model thinks this token is more likely. But <code>2.0</code> doesn&rsquo;t mean 2x as likely as <code>1.0</code>. Logits aren&rsquo;t probabilities. To convert them, we need softmax.</p>
+
+    <!-- ============================================== -->
+    <h2>Softmax: Turning Logits into Probabilities</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>The Softmax Function</h4>
+      <p>Softmax takes a list of logits and converts them to <strong>probabilities that sum to 1</strong>. The formula for each token: <code>P(token) = e^logit / sum(e^all_logits)</code>.</p>
+      <p>Two key properties: (1) every output is between 0 and 1, and (2) they all add up to exactly 1.0. Larger logits get exponentially larger probabilities.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Softmax Step by Step</h4>
+
+      <p><strong>Step 1: Exponentiate each logit</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit</th><th>e<sup>logit</sup></th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>2.0</code></td><td><code>7.389</code></td></tr>
+          <tr><td><code>a</code></td><td><code>1.0</code></td><td><code>2.718</code></td></tr>
+          <tr><td><code>cat</code></td><td><code>0.5</code></td><td><code>1.649</code></td></tr>
+          <tr><td><code>my</code></td><td><code>-1.0</code></td><td><code>0.368</code></td></tr>
+          <tr><td><code>banana</code></td><td><code>-3.0</code></td><td><code>0.050</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 2: Sum all exponentials</strong></p>
+      <p><code>7.389 + 2.718 + 1.649 + 0.368 + 0.050 = 12.174</code></p>
+
+      <p><strong>Step 3: Divide each by the sum</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>e<sup>logit</sup></th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>7.389</code></td><td><code>0.607</code> (60.7%)</td></tr>
+          <tr><td><code>a</code></td><td><code>2.718</code></td><td><code>0.223</code> (22.3%)</td></tr>
+          <tr><td><code>cat</code></td><td><code>1.649</code></td><td><code>0.135</code> (13.5%)</td></tr>
+          <tr><td><code>my</code></td><td><code>0.368</code></td><td><code>0.030</code> (3.0%)</td></tr>
+          <tr><td><code>banana</code></td><td><code>0.050</code></td><td><code>0.004</code> (0.4%)</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Check:</strong> <code>0.607 + 0.223 + 0.135 + 0.030 + 0.004 = 0.999</code> &asymp; 1.0 &#10004;</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What Just Happened</h4>
+      <p>The model is 60.7% confident the next token should be &ldquo;the&rdquo;. That&rsquo;s the baseline probability distribution &mdash; before any sampling strategy is applied. Notice how the gap between logits <code>2.0</code> and <code>1.0</code> became a nearly 3:1 ratio in probability (60.7% vs 22.3%). That&rsquo;s the exponential at work &mdash; small logit differences create big probability differences.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Temperature: The Creativity Dial</h2>
+    <!-- ============================================== -->
+
+    <p>Temperature is the simplest and most powerful sampling control. The idea: <strong>divide all logits by T before applying softmax</strong>.</p>
+
+    <p><code>P(token) = e^(logit/T) / sum(e^(all_logits/T))</code></p>
+
+    <p>That&rsquo;s it. One division changes everything.</p>
+
+    <div class="operation-box">
+      <h4>What Temperature Does</h4>
+      <p><strong>T &lt; 1</strong> &mdash; Dividing by a fraction makes logits <em>bigger</em>. The differences between tokens get amplified. The top token dominates even more. Output becomes more <strong>deterministic</strong>.</p>
+      <p><strong>T = 1</strong> &mdash; No change. Standard softmax.</p>
+      <p><strong>T &gt; 1</strong> &mdash; Dividing by a large number makes logits <em>smaller</em>. The differences shrink. Probabilities become more <strong>uniform</strong>. Rare tokens get a real chance.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Temperature in Action: Three Settings</h4>
+
+      <p>Same logits: <code>[2.0, 1.0, 0.5, -1.0, -3.0]</code>. Let&rsquo;s apply T = 0.5, T = 1.0, and T = 2.0.</p>
+
+      <p><strong>T = 0.5 (Sharp / Focused)</strong></p>
+      <p>Divide each logit by 0.5: <code>[4.0, 2.0, 1.0, -2.0, -6.0]</code></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit/T</th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>4.0</code></td><td><code>0.867</code> (86.7%)</td></tr>
+          <tr><td><code>a</code></td><td><code>2.0</code></td><td><code>0.117</code> (11.7%)</td></tr>
+          <tr><td><code>cat</code></td><td><code>1.0</code></td><td><code>0.043</code> (4.3%)</td></tr>
+          <tr><td><code>my</code></td><td><code>-2.0</code></td><td><code>0.002</code> (0.2%)</td></tr>
+          <tr><td><code>banana</code></td><td><code>-6.0</code></td><td><code>0.000</code> (&lt;0.1%)</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>T = 1.0 (Standard)</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit/T</th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>2.0</code></td><td><code>0.607</code> (60.7%)</td></tr>
+          <tr><td><code>a</code></td><td><code>1.0</code></td><td><code>0.223</code> (22.3%)</td></tr>
+          <tr><td><code>cat</code></td><td><code>0.5</code></td><td><code>0.135</code> (13.5%)</td></tr>
+          <tr><td><code>my</code></td><td><code>-1.0</code></td><td><code>0.030</code> (3.0%)</td></tr>
+          <tr><td><code>banana</code></td><td><code>-3.0</code></td><td><code>0.004</code> (0.4%)</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>T = 2.0 (Flat / Creative)</strong></p>
+      <p>Divide each logit by 2.0: <code>[1.0, 0.5, 0.25, -0.5, -1.5]</code></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit/T</th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>1.0</code></td><td><code>0.362</code> (36.2%)</td></tr>
+          <tr><td><code>a</code></td><td><code>0.5</code></td><td><code>0.220</code> (22.0%)</td></tr>
+          <tr><td><code>cat</code></td><td><code>0.25</code></td><td><code>0.171</code> (17.1%)</td></tr>
+          <tr><td><code>my</code></td><td><code>-0.5</code></td><td><code>0.081</code> (8.1%)</td></tr>
+          <tr><td><code>banana</code></td><td><code>-1.5</code></td><td><code>0.030</code> (3.0%)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Reading the Results</h4>
+      <p>Look at &ldquo;the&rdquo; across all three temperatures: <strong>86.7% &rarr; 60.7% &rarr; 36.2%</strong>. Same model, same logits, wildly different confidence.</p>
+      <p>At T=0.5, &ldquo;the&rdquo; is almost certain. At T=2.0, even &ldquo;banana&rdquo; has a 3% chance. This is why high temperature makes models &ldquo;creative&rdquo; &mdash; it&rsquo;s literally giving unlikely tokens a fighting chance.</p>
+    </div>
+
+    <h3>Temperature Near Zero</h3>
+
+    <p>As T approaches 0, the distribution becomes a spike: <strong>100% on the top token, 0% on everything else</strong>. This is equivalent to greedy decoding from Chapter 8.</p>
+
+    <p>Most APIs use T=0 (or a tiny value like 0.001) for &ldquo;deterministic&rdquo; output. Mathematically, dividing by near-zero makes the top logit approach infinity while others become negligible.</p>
+
+    <div class="warning-box">
+      <strong>Watch out:</strong> Temperature 0 doesn&rsquo;t mean the model is &ldquo;more correct.&rdquo; It means the model is more <em>committed</em> &mdash; it always picks its top choice, whether that choice is right or wrong. For factual Q&amp;A, low temperature reduces hallucination by avoiding unlikely completions. For creative tasks, it produces bland, repetitive output.
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If logits are <code>[3.0, 3.0, 3.0]</code> (all equal), what does any temperature setting do?</p>
+      <p><strong>Answer:</strong> Nothing! All three tokens remain equally likely (33.3% each) regardless of temperature. Temperature amplifies or reduces <em>differences</em> between logits. If there&rsquo;s no difference, there&rsquo;s nothing to amplify.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Top-k Sampling: Keep the Best, Drop the Rest</h2>
+    <!-- ============================================== -->
+
+    <p>Temperature reshapes the whole distribution. Top-k takes a more brutal approach: <strong>keep only the top K tokens, set everything else to zero, renormalize</strong>.</p>
+
+    <div class="operation-box">
+      <h4>Top-k Sampling</h4>
+      <ol>
+        <li>Sort tokens by probability (highest first)</li>
+        <li>Keep only the top K tokens</li>
+        <li>Set all other tokens&rsquo; probabilities to 0</li>
+        <li>Renormalize the remaining K tokens so they sum to 1</li>
+        <li>Sample from this filtered distribution</li>
+      </ol>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Top-k with k=3</h4>
+
+      <p>Start with our T=1.0 probabilities:</p>
+      <table>
+        <thead>
+          <tr><th>Rank</th><th>Token</th><th>Probability</th><th>Kept?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code>the</code></td><td><code>0.607</code></td><td>&#10004; Yes</td></tr>
+          <tr><td>2</td><td><code>a</code></td><td><code>0.223</code></td><td>&#10004; Yes</td></tr>
+          <tr><td>3</td><td><code>cat</code></td><td><code>0.135</code></td><td>&#10004; Yes</td></tr>
+          <tr><td>4</td><td><code>my</code></td><td><code>0.030</code></td><td>&#10008; Dropped</td></tr>
+          <tr><td>5</td><td><code>banana</code></td><td><code>0.004</code></td><td>&#10008; Dropped</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Renormalize the survivors:</strong></p>
+      <p>Sum of kept: <code>0.607 + 0.223 + 0.135 = 0.965</code></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Original</th><th>After Top-3</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>0.607</code></td><td><code>0.629</code> (62.9%)</td></tr>
+          <tr><td><code>a</code></td><td><code>0.223</code></td><td><code>0.231</code> (23.1%)</td></tr>
+          <tr><td><code>cat</code></td><td><code>0.135</code></td><td><code>0.140</code> (14.0%)</td></tr>
+          <tr><td><code>my</code></td><td><code>0.030</code></td><td><code>0.000</code></td></tr>
+          <tr><td><code>banana</code></td><td><code>0.004</code></td><td><code>0.000</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Check:</strong> <code>0.629 + 0.231 + 0.140 = 1.000</code> &#10004;</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What Top-k Gives You</h4>
+      <p>Top-k is a hard cutoff: &ldquo;I don&rsquo;t care how unlikely these tokens are &mdash; if they&rsquo;re not in the top K, they&rsquo;re gone.&rdquo; This prevents truly bizarre outputs. With k=3, &ldquo;banana&rdquo; can <em>never</em> be selected, even at high temperature.</p>
+      <p>But here&rsquo;s the problem: K is fixed. When the model is very confident (one token dominates), k=40 keeps 39 irrelevant tokens alive. When the model is uncertain (many tokens are plausible), k=40 might cut off perfectly reasonable options. That&rsquo;s the motivation for top-p.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Top-p (Nucleus) Sampling: Adaptive Filtering</h2>
+    <!-- ============================================== -->
+
+    <p>Top-p solves top-k&rsquo;s fixed-size problem with a simple insight: instead of keeping a fixed number of tokens, <strong>keep tokens until their cumulative probability reaches P</strong>.</p>
+
+    <div class="operation-box">
+      <h4>Top-p (Nucleus) Sampling</h4>
+      <ol>
+        <li>Sort tokens by probability (highest first)</li>
+        <li>Walk down the list, accumulating probabilities</li>
+        <li>Stop when the cumulative sum first exceeds P</li>
+        <li>Drop all remaining tokens</li>
+        <li>Renormalize and sample</li>
+      </ol>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Top-p with p=0.9</h4>
+
+      <p>Start with our T=1.0 probabilities, sorted by probability:</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Probability</th><th>Cumulative</th><th>Kept?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>0.607</code></td><td><code>0.607</code></td><td>&#10004; (0.607 &lt; 0.9)</td></tr>
+          <tr><td><code>a</code></td><td><code>0.223</code></td><td><code>0.830</code></td><td>&#10004; (0.830 &lt; 0.9)</td></tr>
+          <tr><td><code>cat</code></td><td><code>0.135</code></td><td><code>0.965</code></td><td>&#10004; (first to exceed 0.9)</td></tr>
+          <tr><td><code>my</code></td><td><code>0.030</code></td><td>&mdash;</td><td>&#10008; Dropped</td></tr>
+          <tr><td><code>banana</code></td><td><code>0.004</code></td><td>&mdash;</td><td>&#10008; Dropped</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Result:</strong> Same 3 tokens as top-k=3 in this case. But that&rsquo;s a coincidence! Watch what happens with a different distribution.</p>
+    </div>
+
+    <h3>Why Top-p Adapts and Top-k Doesn&rsquo;t</h3>
+
+    <p>Consider two different situations with k=3 and p=0.9:</p>
+
+    <div class="comparison">
+      <div class="comparison-side">
+        <h4>Confident Model</h4>
+        <table>
+          <thead>
+            <tr><th>Token</th><th>Prob</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Paris</code></td><td><code>0.92</code></td></tr>
+            <tr><td><code>Lyon</code></td><td><code>0.04</code></td></tr>
+            <tr><td><code>Berlin</code></td><td><code>0.02</code></td></tr>
+            <tr><td><code>pizza</code></td><td><code>0.01</code></td></tr>
+            <tr><td><code>the</code></td><td><code>0.01</code></td></tr>
+          </tbody>
+        </table>
+        <p>Top-k=3 keeps: Paris, Lyon, Berlin</p>
+        <p>Top-p=0.9 keeps: <strong>Paris only</strong> (0.92 &gt; 0.9)</p>
+      </div>
+      <div class="comparison-side">
+        <h4>Uncertain Model</h4>
+        <table>
+          <thead>
+            <tr><th>Token</th><th>Prob</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>happy</code></td><td><code>0.25</code></td></tr>
+            <tr><td><code>sad</code></td><td><code>0.22</code></td></tr>
+            <tr><td><code>angry</code></td><td><code>0.20</code></td></tr>
+            <tr><td><code>tired</code></td><td><code>0.18</code></td></tr>
+            <tr><td><code>calm</code></td><td><code>0.15</code></td></tr>
+          </tbody>
+        </table>
+        <p>Top-k=3 keeps: happy, sad, angry</p>
+        <p>Top-p=0.9 keeps: <strong>happy, sad, angry, tired</strong> (cumulative: 0.85 &rarr; need one more)</p>
+      </div>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The Adaptive Advantage</h4>
+      <p>Top-p <em>trusts the model&rsquo;s confidence level</em>. When the model is sure, top-p narrows the choices. When the model is uncertain, top-p widens them. Top-k always keeps exactly K tokens regardless of confidence. That&rsquo;s why top-p has largely replaced top-k as the go-to strategy in production systems.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Combining Strategies: The Full Pipeline</h2>
+    <!-- ============================================== -->
+
+    <p>In practice, these strategies are applied in sequence, not in isolation. Here&rsquo;s the typical order:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Raw Logits</strong>
+          <p>Model outputs one score per vocab token</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Temperature</strong>
+          <p>Divide logits by T (reshape the distribution)</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Softmax</strong>
+          <p>Convert to probabilities</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <strong>Top-k Filter</strong>
+          <p>Keep only the top K tokens (if top-k is set)</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+          <strong>Top-p Filter</strong>
+          <p>Keep tokens until cumulative P (if top-p is set)</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">6</div>
+        <div class="step-content">
+          <strong>Renormalize &amp; Sample</strong>
+          <p>Probabilities sum to 1, then randomly pick one token</p>
+        </div>
+      </div>
+    </div>
+
+    <p>Temperature goes first because it changes the <em>shape</em> of the distribution before any filtering. Top-k and top-p then cut the tail. The order matters: temperature before filtering, not after.</p>
+
+    <div class="math-walkthrough">
+      <h4>Full Pipeline: Temperature=0.7 + Top-p=0.9</h4>
+
+      <p>Let&rsquo;s use a larger example &mdash; 8 tokens from the model:</p>
+
+      <p><strong>Step 1: Raw logits</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>walked</code></td><td><code>3.5</code></td></tr>
+          <tr><td><code>ran</code></td><td><code>2.8</code></td></tr>
+          <tr><td><code>went</code></td><td><code>2.1</code></td></tr>
+          <tr><td><code>strolled</code></td><td><code>1.2</code></td></tr>
+          <tr><td><code>drove</code></td><td><code>0.5</code></td></tr>
+          <tr><td><code>flew</code></td><td><code>-0.3</code></td></tr>
+          <tr><td><code>banana</code></td><td><code>-2.0</code></td></tr>
+          <tr><td><code>the</code></td><td><code>-4.0</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 2: Apply temperature (T=0.7)</strong></p>
+      <p>Divide each logit by 0.7:</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit/0.7</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>walked</code></td><td><code>5.00</code></td></tr>
+          <tr><td><code>ran</code></td><td><code>4.00</code></td></tr>
+          <tr><td><code>went</code></td><td><code>3.00</code></td></tr>
+          <tr><td><code>strolled</code></td><td><code>1.71</code></td></tr>
+          <tr><td><code>drove</code></td><td><code>0.71</code></td></tr>
+          <tr><td><code>flew</code></td><td><code>-0.43</code></td></tr>
+          <tr><td><code>banana</code></td><td><code>-2.86</code></td></tr>
+          <tr><td><code>the</code></td><td><code>-5.71</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 3: Softmax</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>walked</code></td><td><code>0.492</code></td></tr>
+          <tr><td><code>ran</code></td><td><code>0.181</code></td></tr>
+          <tr><td><code>went</code></td><td><code>0.067</code></td></tr>
+          <tr><td><code>strolled</code></td><td><code>0.018</code></td></tr>
+          <tr><td><code>drove</code></td><td><code>0.007</code></td></tr>
+          <tr><td><code>flew</code></td><td><code>0.002</code></td></tr>
+          <tr><td><code>banana</code></td><td><code>0.000</code></td></tr>
+          <tr><td><code>the</code></td><td><code>0.000</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 4: Top-p with p=0.9</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Prob</th><th>Cumulative</th><th>Kept?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>walked</code></td><td><code>0.492</code></td><td><code>0.492</code></td><td>&#10004;</td></tr>
+          <tr><td><code>ran</code></td><td><code>0.181</code></td><td><code>0.673</code></td><td>&#10004;</td></tr>
+          <tr><td><code>went</code></td><td><code>0.067</code></td><td><code>0.740</code></td><td>&#10004;</td></tr>
+          <tr><td><code>strolled</code></td><td><code>0.018</code></td><td><code>0.758</code></td><td>&#10004;</td></tr>
+          <tr><td><code>drove</code></td><td><code>0.007</code></td><td><code>0.765</code></td><td>&#10004;</td></tr>
+          <tr><td><code>flew</code></td><td><code>0.002</code></td><td><code>0.767</code></td><td>&#10004;</td></tr>
+        </tbody>
+      </table>
+
+      <p>Wait &mdash; the cumulative only reaches 0.767. That&rsquo;s because the remaining tokens (&ldquo;banana&rdquo;, &ldquo;the&rdquo;) have near-zero probability. When temperature is low and the model is confident, top-p=0.9 might keep most tokens because the distribution is already focused. The real work was done by temperature.</p>
+
+      <p><strong>Step 5: Renormalize and sample</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Final Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>walked</code></td><td><code>0.641</code></td></tr>
+          <tr><td><code>ran</code></td><td><code>0.236</code></td></tr>
+          <tr><td><code>went</code></td><td><code>0.087</code></td></tr>
+          <tr><td><code>strolled</code></td><td><code>0.024</code></td></tr>
+          <tr><td><code>drove</code></td><td><code>0.009</code></td></tr>
+          <tr><td><code>flew</code></td><td><code>0.003</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>Now roll the dice. Most likely &ldquo;walked&rdquo;, but &ldquo;ran&rdquo; and &ldquo;went&rdquo; are plausible. &ldquo;Banana&rdquo; and &ldquo;the&rdquo; are impossible.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Repetition Penalties: Breaking the Loop</h2>
+    <!-- ============================================== -->
+
+    <p>In Chapter 8, we saw greedy decoding get stuck in a repetitive loop. Even with sampling, models can repeat themselves. Two penalty mechanisms fight this:</p>
+
+    <h3>Frequency Penalty</h3>
+
+    <p>Subtract a value <strong>proportional to how many times the token has already appeared</strong>:</p>
+
+    <p><code>adjusted_logit = logit - frequency_penalty &times; count</code></p>
+
+    <div class="math-walkthrough">
+      <h4>Frequency Penalty in Action</h4>
+
+      <p>Suppose the generated text so far is: &ldquo;The cat sat on the mat. The cat...&rdquo;</p>
+
+      <p>Token counts: <code>the</code>=3, <code>cat</code>=2, <code>sat</code>=1, <code>on</code>=1, <code>mat</code>=1</p>
+
+      <p>With <code>frequency_penalty = 0.5</code>:</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Original Logit</th><th>Penalty</th><th>Adjusted Logit</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>the</code></td><td><code>2.0</code></td><td><code>-1.5</code> (0.5 &times; 3)</td><td><code>0.5</code></td></tr>
+          <tr><td><code>cat</code></td><td><code>1.8</code></td><td><code>-1.0</code> (0.5 &times; 2)</td><td><code>0.8</code></td></tr>
+          <tr><td><code>sat</code></td><td><code>1.5</code></td><td><code>-0.5</code> (0.5 &times; 1)</td><td><code>1.0</code></td></tr>
+          <tr><td><code>ran</code></td><td><code>1.2</code></td><td><code>0.0</code> (never used)</td><td><code>1.2</code></td></tr>
+          <tr><td><code>played</code></td><td><code>0.8</code></td><td><code>0.0</code> (never used)</td><td><code>0.8</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Result:</strong> &ldquo;ran&rdquo; now has the highest adjusted logit (<code>1.2</code>) even though &ldquo;the&rdquo; had the highest original logit (<code>2.0</code>). The model is now more likely to say &ldquo;ran&rdquo; than to repeat &ldquo;the&rdquo; for the fourth time.</p>
+    </div>
+
+    <h3>Presence Penalty</h3>
+
+    <p>A simpler version: subtract a fixed value if the token appeared <strong>at all</strong>, regardless of how many times.</p>
+
+    <p><code>adjusted_logit = logit - presence_penalty &times; (1 if token appeared, 0 if not)</code></p>
+
+    <p>The key difference: frequency penalty penalizes more for more repeats. Presence penalty is all-or-nothing. Use frequency penalty to discourage overuse of specific words. Use presence penalty to encourage the model to explore new topics.</p>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If you set <code>frequency_penalty = 2.0</code> and a token has appeared 5 times, how much is subtracted from its logit?</p>
+      <p><strong>Answer:</strong> <code>2.0 &times; 5 = 10.0</code>. That&rsquo;s a massive penalty &mdash; the token is essentially eliminated. High frequency penalties can be too aggressive.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Stereo Equalizer Analogy</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <p>Think of the probability distribution as a stereo equalizer with one slider per token. The height of each slider represents that token&rsquo;s probability.</p>
+      <ul>
+        <li><strong>Temperature</strong> is the volume knob. Turn it down (T&lt;1) and only the loudest frequencies are audible (top tokens dominate). Turn it up (T&gt;1) and you hear the quiet frequencies too (rare tokens get a chance).</li>
+        <li><strong>Top-k</strong> mutes all but the top K sliders. Everything below rank K is silenced.</li>
+        <li><strong>Top-p</strong> mutes the sliders that contribute least to the total volume. If the top few are already loud enough (cumulative &ge; p), the quiet ones get cut.</li>
+        <li><strong>Frequency penalty</strong> gradually turns down the slider each time that frequency plays. The more a note repeats, the quieter it gets.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Practical Settings: What to Use When</h2>
+    <!-- ============================================== -->
+
+    <p>Every AI provider offers these parameters in their API. Here&rsquo;s a guide based on what works in practice:</p>
+
+    <table>
+      <thead>
+        <tr><th>Use Case</th><th>Temperature</th><th>Top-p</th><th>Frequency Pen.</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Code generation</strong></td>
+          <td><code>0.0&ndash;0.2</code></td>
+          <td><code>1.0</code></td>
+          <td><code>0.0</code></td>
+          <td>Code needs precision, not creativity. One correct answer.</td>
+        </tr>
+        <tr>
+          <td><strong>Factual Q&amp;A</strong></td>
+          <td><code>0.0&ndash;0.3</code></td>
+          <td><code>0.9</code></td>
+          <td><code>0.0</code></td>
+          <td>Want the most likely (usually correct) answer.</td>
+        </tr>
+        <tr>
+          <td><strong>Chat / conversation</strong></td>
+          <td><code>0.7</code></td>
+          <td><code>0.9</code></td>
+          <td><code>0.3</code></td>
+          <td>Natural variety without being chaotic.</td>
+        </tr>
+        <tr>
+          <td><strong>Creative writing</strong></td>
+          <td><code>0.9&ndash;1.2</code></td>
+          <td><code>0.95</code></td>
+          <td><code>0.5</code></td>
+          <td>Surprise and variety are features, not bugs.</td>
+        </tr>
+        <tr>
+          <td><strong>Brainstorming</strong></td>
+          <td><code>1.0&ndash;1.5</code></td>
+          <td><code>0.95</code></td>
+          <td><code>0.8</code></td>
+          <td>Maximum diversity. Weird ideas welcome.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Tip:</strong> Notice that top-p is almost always 0.9&ndash;0.95 across all use cases. Temperature does most of the heavy lifting. Top-p is the safety net that catches the really implausible tail tokens. In most applications, you only need to tune temperature.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Min-p: The New Kid on the Block</h2>
+    <!-- ============================================== -->
+
+    <p>There&rsquo;s a newer strategy gaining popularity: <strong>min-p</strong>. The idea is elegantly simple.</p>
+
+    <p>Instead of keeping a fixed number of tokens (top-k) or a cumulative probability mass (top-p), min-p says: <strong>keep any token whose probability is at least P &times; the top token&rsquo;s probability</strong>.</p>
+
+    <p>With <code>min_p = 0.1</code> and a top token probability of <code>0.60</code>, any token with probability &ge; <code>0.06</code> survives.</p>
+
+    <table>
+      <thead>
+        <tr><th>Token</th><th>Prob</th><th>Threshold (0.06)</th><th>Kept?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>the</code></td><td><code>0.607</code></td><td>&mdash;</td><td>&#10004; (top token)</td></tr>
+        <tr><td><code>a</code></td><td><code>0.223</code></td><td>0.223 &ge; 0.06</td><td>&#10004;</td></tr>
+        <tr><td><code>cat</code></td><td><code>0.135</code></td><td>0.135 &ge; 0.06</td><td>&#10004;</td></tr>
+        <tr><td><code>my</code></td><td><code>0.030</code></td><td>0.030 &lt; 0.06</td><td>&#10008;</td></tr>
+        <tr><td><code>banana</code></td><td><code>0.004</code></td><td>0.004 &lt; 0.06</td><td>&#10008;</td></tr>
+      </tbody>
+    </table>
+
+    <p>Like top-p, min-p adapts to the model&rsquo;s confidence. When the model is sure, fewer tokens pass. When uncertain, more tokens pass. The advantage over top-p: it&rsquo;s simpler to reason about and avoids the &ldquo;always include the token that pushes cumulative over P&rdquo; edge case.</p>
+
+    <!-- ============================================== -->
+    <h2>Why the Same Model Can Write Code and Poetry</h2>
+    <!-- ============================================== -->
+
+    <p>This is the key insight of this chapter. The model is always the same &mdash; same weights, same transformer blocks, same training. The &ldquo;creativity&rdquo; comes entirely from how you sample its outputs.</p>
+
+    <div class="highlight-box">
+      <p>The model produces a probability distribution. <strong>The sampling strategy decides how to interpret that distribution.</strong> Low temperature says &ldquo;trust the model&rsquo;s top choice.&rdquo; High temperature says &ldquo;explore beyond the obvious.&rdquo; It&rsquo;s not that the model becomes creative &mdash; it&rsquo;s that you&rsquo;re allowing it to express uncertainty.</p>
+    </div>
+
+    <p>When you ask Claude to write code with T=0:</p>
+    <ul>
+      <li>The model produces a distribution where <code>def</code> has 0.95 probability</li>
+      <li>T=0 picks <code>def</code> every time</li>
+      <li>Result: precise, deterministic, correct</li>
+    </ul>
+
+    <p>When you ask Claude to write a poem with T=1.0:</p>
+    <ul>
+      <li>The model produces a distribution where many words are plausible</li>
+      <li>T=1.0 lets any reasonably likely word be selected</li>
+      <li>Result: varied, surprising, creative</li>
+    </ul>
+
+    <p>Same model. Different sampling strategy. Completely different output character.</p>
+
+    <!-- ============================================== -->
+    <h2>Common Misconceptions</h2>
+    <!-- ============================================== -->
+
+    <div class="warning-box">
+      <strong>&ldquo;Temperature 0 means no randomness.&rdquo;</strong> — Almost true. Most APIs implement T=0 as greedy decoding (always pick the top token). But some implementations use a tiny T like 0.001, which can still occasionally vary. For true determinism, you also need to set a fixed random seed if the API supports it.
+    </div>
+
+    <div class="warning-box">
+      <strong>&ldquo;Higher temperature = smarter.&rdquo;</strong> — No! Higher temperature means more random. Sometimes the random choice is brilliant. Often it&rsquo;s nonsense. The model&rsquo;s quality comes from training, not from sampling settings.
+    </div>
+
+    <div class="warning-box">
+      <strong>&ldquo;I should always set both top-k and top-p.&rdquo;</strong> — Usually redundant. Top-p already adapts to the distribution shape. Adding top-k on top of top-p rarely changes anything unless you set k very low. Most production systems use only top-p.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Exercise: The Full Sampling Pipeline by Hand</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your Turn: Apply Temperature + Top-p + Sample</h4>
+
+      <p>Given these logits for 6 tokens:</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Logit</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>bright</code></td><td><code>4.0</code></td></tr>
+          <tr><td><code>dark</code></td><td><code>2.5</code></td></tr>
+          <tr><td><code>warm</code></td><td><code>1.5</code></td></tr>
+          <tr><td><code>cold</code></td><td><code>0.5</code></td></tr>
+          <tr><td><code>purple</code></td><td><code>-1.0</code></td></tr>
+          <tr><td><code>banana</code></td><td><code>-3.0</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Steps:</strong></p>
+      <ol>
+        <li>Apply temperature T=0.5 (divide each logit by 0.5)</li>
+        <li>Apply softmax to get probabilities</li>
+        <li>Apply top-p with p=0.95</li>
+        <li>Renormalize the remaining tokens</li>
+        <li>Which tokens can be selected? What are their final probabilities?</li>
+      </ol>
+
+      <details>
+        <summary>Show Solution</summary>
+        <p><strong>Step 1 &mdash; Temperature (T=0.5):</strong></p>
+        <p>Divided logits: <code>[8.0, 5.0, 3.0, 1.0, -2.0, -6.0]</code></p>
+
+        <p><strong>Step 2 &mdash; Softmax:</strong></p>
+        <table>
+          <thead>
+            <tr><th>Token</th><th>e<sup>logit/T</sup></th><th>Probability</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>bright</code></td><td><code>2981.0</code></td><td><code>0.952</code></td></tr>
+            <tr><td><code>dark</code></td><td><code>148.4</code></td><td><code>0.047</code></td></tr>
+            <tr><td><code>warm</code></td><td><code>20.1</code></td><td><code>0.006</code></td></tr>
+            <tr><td><code>cold</code></td><td><code>2.7</code></td><td><code>0.001</code></td></tr>
+            <tr><td><code>purple</code></td><td><code>0.14</code></td><td><code>0.000</code></td></tr>
+            <tr><td><code>banana</code></td><td><code>0.002</code></td><td><code>0.000</code></td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>Step 3 &mdash; Top-p (p=0.95):</strong></p>
+        <p>Cumulative: bright (0.952) &mdash; already exceeds 0.95!</p>
+        <p>Keep: <code>bright</code> only.</p>
+
+        <p><strong>Step 4 &mdash; Renormalize:</strong></p>
+        <p><code>bright</code> = 1.000 (100%)</p>
+
+        <p><strong>Result:</strong> With T=0.5 and top-p=0.95, the model is so focused on &ldquo;bright&rdquo; that it&rsquo;s effectively greedy. Only one token survives! Try again with T=1.5 to see a much wider selection.</p>
+      </details>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>You now understand how the model&rsquo;s raw logits get transformed into the final token selection. But there&rsquo;s a performance question we haven&rsquo;t addressed: <strong>why is generation slow, and what&rsquo;s the KV cache?</strong></p>
+
+    <p>In <a href="10-context-and-kv-cache.html">Chapter 10: Context, Memory &amp; the KV Cache</a>, you&rsquo;ll see why each new token requires attending to every previous token, how the KV cache avoids recomputing everything from scratch, and why context windows have hard memory limits. You&rsquo;ll compute the exact memory cost of a context window with real numbers.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="08-prediction-to-conversation.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">From Prediction to Conversation</span>
+    </a>
+    <a href="10-context-and-kv-cache.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Context, Memory &amp; the KV Cache</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

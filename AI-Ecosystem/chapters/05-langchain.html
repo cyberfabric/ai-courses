@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: LangChain — Connecting the Pieces | The AI Developer's Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The AI Developer's Toolkit</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-rag.html">&larr; Previous</a>
+      <a href="06-langgraph.html">Next &rarr;</a>
+      <a href="maps/05-langchain-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>LangChain: Connecting the Pieces</h1>
+    <p class="subtitle">The Swiss Army knife of AI development &mdash; chains, tools, memory, and why everyone has an opinion about it</p>
+  </header>
+
+  <main>
+
+    <h2>The One-Sentence Version</h2>
+
+    <p><strong>LangChain is a framework for building applications powered by LLMs</strong> &mdash; it gives you ready-made components for prompts, chains, memory, tools, and retrieval, so you can connect them like Lego blocks instead of building everything from scratch.</p>
+
+    <p>In the last chapter, you saw a RAG pipeline that used LangChain imports for loading, splitting, and embedding documents. That was a taste. LangChain does <em>much</em> more than RAG &mdash; it's a general-purpose framework for any application that involves an LLM.</p>
+
+    <p>It's also the most controversial tool in this guide. Some developers love it. Others actively avoid it. By the end of this chapter, you'll understand both sides and be able to make your own call.</p>
+
+    <div class="why-care-box">
+      LangChain is the most popular framework for building AI applications, with over 100K GitHub stars and a massive ecosystem of integrations. Even if you decide not to use it, understanding LangChain teaches you the fundamental patterns of AI application development &mdash; chains, tools, memory, retrieval. These patterns appear in every AI framework, not just LangChain. Think of it as learning the design patterns of AI apps.
+    </div>
+
+    <h2>Why LangChain Exists</h2>
+
+    <p>Calling an LLM API is easy. Three lines of Python, done. But building a <em>real</em> AI application involves much more:</p>
+
+    <ul>
+      <li>You need <strong>prompt templates</strong> that accept variables (the user's name, their question, retrieved context)</li>
+      <li>You need to <strong>chain steps together</strong>: retrieve documents, format a prompt, call the LLM, parse the output</li>
+      <li>You need <strong>memory</strong> so the conversation has continuity ("Earlier you mentioned...")</li>
+      <li>You need <strong>tools</strong> so the LLM can do things &mdash; search the web, query a database, call an API</li>
+      <li>You need <strong>output parsing</strong> to extract structured data from the LLM's free-text response</li>
+      <li>You need to swap between <strong>different LLM providers</strong> (OpenAI, Anthropic, Ollama) without rewriting your code</li>
+    </ul>
+
+    <p>You <em>could</em> build all of this yourself. LangChain gives you pre-built components for each piece, with 700+ integrations to databases, APIs, model providers, and tools.</p>
+
+    <p>If you're an Android developer, think of LangChain like Retrofit + Room + Dagger rolled into one, but for AI. You could do HTTP calls, database queries, and dependency injection manually, but frameworks handle the boilerplate.</p>
+
+    <h2>The Core Concepts</h2>
+
+    <p>LangChain has six key concepts. Let's walk through each one.</p>
+
+    <h3>1. Prompt Templates</h3>
+
+    <p>Instead of hardcoding prompts, you create templates with placeholders:</p>
+
+    <pre><code>from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant for {app_name}. Answer based on: {context}"),
+    ("human", "{question}")
+])
+
+# Fill in the variables
+formatted = prompt.invoke({
+    "app_name": "MyApp",
+    "context": "Users can reset passwords via Settings > Account > Reset",
+    "question": "How do I reset my password?"
+})</code></pre>
+
+    <p>This seems trivial, but templates are reusable, testable, and versionable. When you have 20 different prompts in your app, templates keep things organized.</p>
+
+    <h3>2. Chains &mdash; Connecting Steps</h3>
+
+    <p>A chain is a sequence of operations: prompt &rarr; LLM &rarr; output parser. You connect them with the <code>|</code> (pipe) operator:</p>
+
+    <pre><code>from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+
+# Create a chain: prompt → LLM → parse output as string
+chain = prompt | ChatOpenAI(model="gpt-4") | StrOutputParser()
+
+# Run it
+answer = chain.invoke({
+    "app_name": "MyApp",
+    "context": "Users can reset passwords via Settings > Account",
+    "question": "How do I reset my password?"
+})
+print(answer)</code></pre>
+
+    <p>The pipe syntax is called <strong>LCEL</strong> (LangChain Expression Language). It's the modern way to compose chains and it makes the data flow easy to read: data flows left to right through each component.</p>
+
+    <div class="workflow-steps">
+      <span class="step">Input Variables</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Prompt Template</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">LLM</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Output Parser</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Result</span>
+    </div>
+
+    <h3>3. Memory &mdash; Conversation Continuity</h3>
+
+    <p>LLMs are stateless &mdash; each API call is independent. If a user says "my name is Alex" and then asks "what's my name?", the LLM has no idea unless you resend the entire conversation history.</p>
+
+    <p>LangChain's memory components handle this by storing conversation history and automatically including it in each new prompt. Under the hood, it's doing exactly what you'd expect: appending previous messages to the prompt. But it saves you from managing that list yourself.</p>
+
+    <div class="tip-box">
+      Memory in LangChain isn't magic &mdash; it's literally the "append everything to the prompt" trick. The conversation grows longer with each turn. For long conversations, LangChain offers strategies like summarizing old messages or keeping only the last N turns. But it's important to know: there's no real "memory" here, just prompt management.
+    </div>
+
+    <h3>4. Tools &mdash; Letting the LLM Take Actions</h3>
+
+    <p>This is where things get powerful. A "tool" is a function the LLM can choose to call. You define what the tool does, and the LLM decides when to use it based on the user's question.</p>
+
+    <pre><code>from langchain_core.tools import tool
+
+@tool
+def search_database(query: str) -> str:
+    """Search the product database for items matching the query."""
+    # Your actual database search logic here
+    return f"Found 3 products matching '{query}'"
+
+@tool
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"Weather in {city}: 22°C, sunny"
+
+# Give tools to the LLM — it decides when to call them
+llm_with_tools = ChatOpenAI(model="gpt-4").bind_tools([search_database, get_weather])</code></pre>
+
+    <p>When the user asks "What's the weather in Berlin?", the LLM recognizes it needs the <code>get_weather</code> tool, generates the function call, LangChain executes it, and feeds the result back to the LLM to generate the final answer.</p>
+
+    <p>This is how you build AI agents that <em>do</em> things rather than just <em>say</em> things. An LLM with tools can search databases, send emails, create tickets, check inventory &mdash; whatever functions you expose.</p>
+
+    <h3>5. Output Parsers &mdash; Structured Responses</h3>
+
+    <p>LLMs return free-form text. If your app needs structured data (JSON, a list, specific fields), output parsers extract it:</p>
+
+    <pre><code>from langchain_core.output_parsers import JsonOutputParser
+
+# The parser instructs the LLM to output JSON and then parses it
+parser = JsonOutputParser()
+chain = prompt | llm | parser
+
+# You get a Python dict back, not a string
+result = chain.invoke({"question": "List 3 features of Kotlin"})
+# result = {"features": ["Null safety", "Coroutines", "Extension functions"]}</code></pre>
+
+    <p>This is more reliable than hoping the LLM outputs valid JSON on its own. The parser adds formatting instructions to the prompt and validates the response.</p>
+
+    <h3>6. Retrievers &mdash; The RAG Connection</h3>
+
+    <p>Retrievers connect LangChain to vector databases (from Chapter 4). They're the bridge between your stored documents and your chains:</p>
+
+    <pre><code># Create a retriever from a vector store
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# Use it in a chain: question → retrieve docs → format prompt → LLM → answer
+rag_chain = (
+    {"context": retriever, "question": lambda x: x}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("How do I configure push notifications?")</code></pre>
+
+    <p>This is the RAG pipeline from Chapter 4, but now it's a single composable chain. The retriever fetches relevant documents, the prompt template combines them with the question, and the LLM generates the answer.</p>
+
+    <h2>The Love/Hate Relationship</h2>
+
+    <p>Now for the elephant in the room. LangChain is the most popular AI framework <em>and</em> the most criticized. Here's both sides, honestly:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Why People Love It</p>
+        <p class="prompt-text">• Fast prototyping: build a RAG chatbot in an hour
+• 700+ integrations: every DB, API, and model works
+• Huge community: answers to every question on Stack Overflow
+• Battle-tested patterns: don't reinvent common workflows
+• LCEL pipe syntax: clean, readable data flows</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Why People Hate It</p>
+        <p class="prompt-text">• Over-abstracted: 5 layers of indirection for a simple API call
+• Changes frequently: code from 6 months ago often doesn't work
+• Debugging is painful: errors are buried in deep call stacks
+• Opaque magic: hard to understand what's actually happening
+• Heavy dependency: pulls in a lot of packages you may not need</p>
+      </div>
+    </div>
+
+    <p>Both sides are right. LangChain genuinely accelerates prototyping and provides excellent integrations. But it also adds complexity that can make debugging harder and code less transparent.</p>
+
+    <div class="highlight-box">
+      <h3>My Honest Take</h3>
+      <p><strong>Use LangChain for prototyping and when you need lots of integrations.</strong> It's the fastest way to get an AI application working. But if your app is simple (one LLM call, one retriever, one output), consider whether you actually need a framework at all. Sometimes 20 lines of plain Python with the OpenAI SDK is clearer than 10 lines of LangChain that hide what's happening.</p>
+      <p>The sweet spot: use LangChain to learn the patterns, prototype quickly, and leverage integrations. But don't be afraid to drop down to raw API calls when the abstraction gets in your way.</p>
+    </div>
+
+    <h2>LangChain vs Doing It Yourself</h2>
+
+    <p>Let's compare the same task &mdash; a simple RAG query &mdash; with and without LangChain:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">With LangChain</p>
+        <p class="prompt-text">chain = (
+    {"context": retriever, "question": ...}
+    | prompt | llm | parser
+)
+answer = chain.invoke(question)</p>
+        <p class="prompt-explanation">Concise, composable, integrations handled. But what's happening inside <code>retriever</code>?</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Without LangChain (raw Python)</p>
+        <p class="prompt-text">chunks = vector_db.search(question, k=3)
+context = "\n".join(chunks)
+response = openai.chat(messages=[
+    {"role": "system", "content": f"...{context}"},
+    {"role": "user", "content": question}
+])
+answer = response.choices[0].message</p>
+        <p class="prompt-explanation">More explicit, every step visible. But you handle all integrations yourself.</p>
+      </div>
+    </div>
+
+    <p>For simple pipelines, the raw version is perfectly fine. For complex ones (multiple tools, branching logic, memory, multiple retrievers), LangChain starts to pay for itself.</p>
+
+    <h2>LangSmith: Debugging and Observability</h2>
+
+    <p>One of LangChain's strongest features is <strong>LangSmith</strong> &mdash; a platform for tracing, debugging, and evaluating your AI applications. When something goes wrong (and it will), LangSmith shows you exactly what happened at each step of your chain:</p>
+
+    <ul>
+      <li>What prompt was actually sent to the LLM</li>
+      <li>What the LLM responded with</li>
+      <li>Which tools were called and what they returned</li>
+      <li>How long each step took</li>
+      <li>How much each call cost</li>
+    </ul>
+
+    <p>If you've ever used Android's Network Inspector to debug API calls, LangSmith is the same idea for AI chains. It's free for development use and genuinely makes debugging 10x easier.</p>
+
+    <div class="tip-box">
+      Even if you decide not to use LangChain in production, consider using LangSmith for observability. It supports non-LangChain applications too and gives you visibility into what your AI is actually doing.
+    </div>
+
+    <h2>The Ecosystem Around LangChain</h2>
+
+    <p>LangChain isn't just one library. It's a family of packages:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Package</th>
+          <th>What It Does</th>
+          <th>When You'd Use It</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>langchain-core</strong></td>
+          <td>Base abstractions, LCEL, interfaces</td>
+          <td>Always &mdash; the foundation</td>
+        </tr>
+        <tr>
+          <td><strong>langchain</strong></td>
+          <td>Chains, agents, memory, generic components</td>
+          <td>Most applications</td>
+        </tr>
+        <tr>
+          <td><strong>langchain-openai</strong></td>
+          <td>OpenAI integration</td>
+          <td>When using GPT models</td>
+        </tr>
+        <tr>
+          <td><strong>langchain-community</strong></td>
+          <td>700+ third-party integrations</td>
+          <td>When connecting to specific tools/databases</td>
+        </tr>
+        <tr>
+          <td><strong>langgraph</strong></td>
+          <td>Stateful, graph-based workflows</td>
+          <td>Complex agent behaviors (Chapter 6)</td>
+        </tr>
+        <tr>
+          <td><strong>langsmith</strong></td>
+          <td>Tracing, debugging, evaluation</td>
+          <td>Debugging and monitoring</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      LangChain's import paths have changed significantly over time. If you find code examples online, check the date. Code from early 2024 often uses deprecated imports like <code>from langchain.llms import OpenAI</code>. Current code uses provider-specific packages like <code>from langchain_openai import ChatOpenAI</code>. Always check the official docs for current imports.
+    </div>
+
+    <h2>Connection to Android Development</h2>
+
+    <p>LangChain runs on your backend, not in your Android app. The architecture looks like this:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Android App</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Your Backend API</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">LangChain Pipeline</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">LLM (Cloud or Ollama)</span>
+    </div>
+
+    <p>Your Android app makes a simple HTTP request. Your backend (Python, probably FastAPI or Flask) runs the LangChain pipeline and returns the result. From the Android side, it's just another API call &mdash; you don't need to know or care that LangChain exists.</p>
+
+    <p>This is actually the pattern most AI-powered apps use, regardless of the mobile platform. The AI logic lives server-side; the mobile client is a thin UI layer.</p>
+
+    <h2>Learning Curve: Honest Assessment</h2>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Basic chains (1-2 hours):</strong> prompt + LLM + output parser. If you can read Python, you can do this.</li>
+      <li class="checked"><strong>RAG pipelines (half a day):</strong> retrievers, vector stores, document loaders. The concepts from Chapter 4 translate directly.</li>
+      <li><strong>Tools and agents (1-2 days):</strong> defining tools, understanding how the LLM decides when to call them, handling edge cases.</li>
+      <li><strong>LCEL composition (a few days):</strong> complex chains with branching, parallel execution, and custom runnables. The syntax is powerful but takes practice.</li>
+      <li><strong>Production patterns (ongoing):</strong> error handling, streaming, caching, evaluation. This is where LangChain's complexity shows.</li>
+    </ul>
+
+    <div class="use-skip-box">
+      <div class="use-it">
+        <ul>
+          <li>You're building a RAG pipeline and want ready-made document loaders, splitters, and retrievers</li>
+          <li>You need to integrate with many services (vector DBs, APIs, model providers)</li>
+          <li>You're prototyping and want to move fast</li>
+          <li>You want observability with LangSmith</li>
+          <li>Your application needs tools, memory, and complex chains</li>
+        </ul>
+      </div>
+      <div class="skip-it">
+        <ul>
+          <li>Your app makes one or two simple LLM calls &mdash; just use the SDK directly</li>
+          <li>You need maximum control and transparency over every step</li>
+          <li>You're allergic to deep abstraction layers and magic behavior</li>
+          <li>Your team doesn't know Python (LangChain is Python-first; the JS version exists but lags behind)</li>
+          <li>You're building something so custom that a framework would constrain you</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <strong>Read and Trace a LangChain Example</strong>
+      <p>You don't need to run any code for this exercise. Instead, look at this chain and trace what happens at each step:</p>
+      <pre><code>chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt_template
+    | ChatOpenAI(model="gpt-4")
+    | StrOutputParser()
+)
+result = chain.invoke("What's our refund policy?")</code></pre>
+      <ol>
+        <li>What does the <strong>retriever</strong> do with the input?</li>
+        <li>What does <strong>RunnablePassthrough()</strong> do?</li>
+        <li>What does the <strong>prompt_template</strong> receive?</li>
+        <li>What does the <strong>LLM</strong> receive?</li>
+        <li>What does <strong>StrOutputParser</strong> do to the LLM's response?</li>
+      </ol>
+      <p>If you can answer these five questions, you understand the LangChain data flow. <em>Hint: RunnablePassthrough just forwards the input unchanged.</em></p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>LangChain chains flow in one direction: A &rarr; B &rarr; C &rarr; done. But what if your AI application needs to <em>loop</em>? What if the LLM needs to try something, check the result, and go back and try again? What if you need conditional branching &mdash; "if the answer is good, return it; if not, retry with a different approach"?</p>
+
+    <p>That's where <strong>LangGraph</strong> comes in. In <strong>Chapter 6</strong>, we'll explore how graphs with cycles, state, and conditional logic let you build AI applications that are smarter than simple chains. It's the difference between a script and a program.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-rag.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">&larr; RAG: Teaching AI Your Data</span>
+      </a>
+      <a href="06-langgraph.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">LangGraph: Smarter Workflows &rarr;</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

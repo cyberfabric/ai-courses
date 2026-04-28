@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9 Memory Map &mdash; Debug-Build Inspectors</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../09-debug-build-inspectors.html">Chapter</a>
+      <a href="08-leakcanary-map.html">&larr; Prev Map</a>
+      <a href="10-version-catalogs-and-deps-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Debug-Build Inspectors</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🔧</span>
+      <h3>The Big Idea</h3>
+      <p>Turn your debug build into a tool, not a slower release. Chucker for HTTP, a debug menu for state, debug-only feature flags &mdash; all delivered through <code>debugImplementation</code> and <code>src/debug/</code> so the release APK is byte-identical to before.</p>
+    </div>
+
+    <h2>🧰 The Three-Piece Kit</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🌐</span>
+        <div class="map-card-title">Chucker</div>
+        <div class="map-card-desc">OkHttp interceptor that records every request &amp; response. Tap the notification, see the body, share as curl.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📋</span>
+        <div class="map-card-title">Debug Menu</div>
+        <div class="map-card-desc">Hidden screen with build info, force-crash, clear-data, deep-link launcher. Lives in <code>src/debug/</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚩</span>
+        <div class="map-card-title">Flag Overrides</div>
+        <div class="map-card-desc">Local override layer in front of remote config. Flip flags in 3 seconds, no PM coordination.</div>
+      </div>
+    </div>
+
+    <h2>🚪 Three Gradle Configurations You Live On</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Configuration</th><th>Where it ships</th><th>Use for</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>implementation</code></td>
+          <td>Every variant (incl. release)</td>
+          <td>Production code only</td>
+        </tr>
+        <tr>
+          <td><code>debugImplementation</code></td>
+          <td>Debug variant only</td>
+          <td>Chucker, debug-menu code, LeakCanary</td>
+        </tr>
+        <tr>
+          <td><code>releaseImplementation</code></td>
+          <td>Release variant only</td>
+          <td>The matching no-op artifact</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🎯 The No-Op Pattern</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📞 Call site<br><code>chucker.intercept(...)</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔀 Build variant decides</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🐛 Debug: real lib runs</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🚀 Release: no-op silently does nothing</div>
+    </div>
+
+    <p style="text-align:center; margin-top:0.5rem;"><em>Same call site, no <code>if (BuildConfig.DEBUG)</code> wrappers, smaller release APK.</em></p>
+
+    <h2>🌐 Chucker Setup &mdash; 4 Steps</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Add the dependency pair</h4>
+        <p><code>debugImplementation</code> the real library + <code>releaseImplementation</code> the no-op artifact at the same version.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Plug into OkHttpClient</h4>
+        <p><code>OkHttpClient.Builder().addInterceptor(chuckerInterceptor)</code> &mdash; last in the chain so it captures the final outgoing request.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Redact secrets</h4>
+        <p><code>.redactHeaders("Authorization", "Cookie")</code> &mdash; non-negotiable. Set retention to 1 hour, max content 250 KB.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Verify the release APK</h4>
+        <p><code>apkanalyzer dex packages</code> + grep for <code>chuckerteam</code>. Must return nothing.</p>
+      </li>
+    </ol>
+
+    <h2>📋 What Goes In the Debug Menu</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Build Info</div>
+        <div class="map-card-desc">Version name &amp; code, git SHA, build time, build type, server URL.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎚️</span>
+        <div class="map-card-title">Flag Overrides</div>
+        <div class="map-card-desc">Every feature flag with a local toggle that beats remote config.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💥</span>
+        <div class="map-card-title">Force-Crash / ANR</div>
+        <div class="map-card-desc">Test Crashlytics + ANR reporting end-to-end without waiting for a real bug.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧹</span>
+        <div class="map-card-title">Reset Buttons</div>
+        <div class="map-card-desc">Clear app data, OkHttp cache, shared prefs. One-tap state reset.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚪</span>
+        <div class="map-card-title">Deep-Link Launcher</div>
+        <div class="map-card-desc">Jump to any screen by name without flowing through the real UX.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📤</span>
+        <div class="map-card-title">Log Export</div>
+        <div class="map-card-desc">Last N seconds of Logcat to a shareable file for bug reports.</div>
+      </div>
+    </div>
+
+    <h2>🔐 Source-Set Gating Beats Runtime Gating</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">❌ <code>if (BuildConfig.DEBUG)</code></div>
+      <div class="map-rel-node">✅ <code>debugImplementation</code></div>
+      <div class="map-rel-center">Source-Set Gate</div>
+      <div class="map-rel-node">✅ <code>src/debug/java/</code></div>
+      <div class="map-rel-node">✅ no-op <code>releaseImplementation</code></div>
+    </div>
+
+    <p style="text-align:center;"><em>Runtime check still ships the code. Source set guarantees it isn't in the release artifact at all.</em></p>
+
+    <h2>🚩 Debug Feature Flag Override Pattern</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">🔍 Code asks <code>flags.isEnabled("paywall")</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📋 Check local override store</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✅ Override hit? Return that.</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">☁️ Else: fall through to remote config</div>
+    </div>
+
+    <h2>⚙️ <code>buildConfigField</code> Cheat Sheet</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Field</th><th>How</th><th>Use in debug menu</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>GIT_SHA</code></td>
+          <td><code>git rev-parse --short HEAD</code> via <code>providers.exec</code></td>
+          <td>Show commit identity</td>
+        </tr>
+        <tr>
+          <td><code>BUILD_TIME</code></td>
+          <td><code>System.currentTimeMillis()</code></td>
+          <td>"When was this APK built?"</td>
+        </tr>
+        <tr>
+          <td><code>API_BASE_URL</code></td>
+          <td>Per-buildType <code>buildConfigField</code></td>
+          <td>"Am I hitting staging or prod?"</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><em>Don't forget <code>buildFeatures.buildConfig = true</code> &mdash; AGP 8+ default flipped to false.</em></p>
+
+    <h2>🤖 The Reusable Skill: <code>/draft-debug-menu</code></h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📝</span>
+        <div class="map-card-title">Inputs</div>
+        <div class="map-card-desc">Tech stack, list of sections, deep-link routes, source-set placement.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎁</span>
+        <div class="map-card-title">Outputs</div>
+        <div class="map-card-desc">A Compose <code>DebugMenuScreen.kt</code> + nav-graph route + entry-point gesture.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📂</span>
+        <div class="map-card-title">Stored at</div>
+        <div class="map-card-desc"><code>.claude/commands/draft-debug-menu.md</code> &mdash; rerun on every new project.</div>
+      </div>
+    </div>
+
+    <h2>📚 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Source set</dt>
+      <dd>A directory whose contents are compiled only for a specific build variant (e.g. <code>src/debug/java/</code>).</dd>
+
+      <dt>No-op artifact</dt>
+      <dd>A library variant that exposes the same API as the real one but with empty implementations &mdash; ships in release with zero behavior.</dd>
+
+      <dt>OkHttp interceptor</dt>
+      <dd>A function that wraps every HTTP request/response &mdash; where Chucker plugs in.</dd>
+
+      <dt>Debug menu</dt>
+      <dd>A hidden in-app screen exposing build info, flag overrides, and dev shortcuts &mdash; gated by build variant.</dd>
+
+      <dt>Feature-flag override</dt>
+      <dd>A local-only value that takes precedence over remote-config for the current debug build.</dd>
+
+      <dt><code>buildConfigField</code></dt>
+      <dd>Gradle DSL that injects a constant into the generated <code>BuildConfig</code> class at compile time.</dd>
+
+      <dt>apkanalyzer</dt>
+      <dd>Android SDK CLI that lists DEX packages, manifest entries, and resource sizes inside an APK or AAB.</dd>
+    </dl>
+
+    <h2>🚫 Three Things to Never Do</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⛔</span>
+        <div class="map-card-title">Runtime-only gating</div>
+        <div class="map-card-desc">An <code>if (isDebug)</code> still ships the code. Use source sets, not flags.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔓</span>
+        <div class="map-card-title">Unredacted headers</div>
+        <div class="map-card-desc">Bearer tokens visible in a tester's notification shade is a credential leak waiting to happen.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">👻</span>
+        <div class="map-card-title">Unowned debug menu</div>
+        <div class="map-card-desc">Without an owner it rots into broken buttons and obsolete deep links. Assign someone.</div>
+      </div>
+    </div>
+
+    <h2>📊 Before / After</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Scenario</th><th>Before</th><th>After</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>QA reports broken avatar</td>
+          <td>"Which build?" "What flag?" 90 minutes lost</td>
+          <td>Curl + flag state in bug report. 10 min triage</td>
+        </tr>
+        <tr>
+          <td>Test paywall flag</td>
+          <td>Edit remote config, wait for cache TTL</td>
+          <td>Open menu, flip switch. 3 seconds</td>
+        </tr>
+        <tr>
+          <td>Reproduce error state</td>
+          <td>Manually create the data conditions</td>
+          <td>Deep-link launcher → straight to that screen</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🪜 The Adoption Ladder</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📅</span>
+        <div class="map-card-title">Day 1</div>
+        <div class="map-card-desc">Chucker installed (real + no-op). Headers redacted. Verify on a debug build. 30 minutes total.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📆</span>
+        <div class="map-card-title">Week 1</div>
+        <div class="map-card-desc">Minimal <code>DebugMenuScreen</code> in <code>src/debug/</code>. CI grep step on release APK.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📈</span>
+        <div class="map-card-title">Month 1</div>
+        <div class="map-card-desc">Flag overrides + deep-link launcher. Debug-menu contract documented in <code>CONTRIBUTING.md</code>.</div>
+      </div>
+    </div>
+
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Why pair a real library on <code>debugImplementation</code> with a no-op on <code>releaseImplementation</code>?</summary>
+        <p class="quiz-answer">Same API in both variants &mdash; call sites compile and run unchanged in release without <code>if (BuildConfig.DEBUG)</code> wrappers, and the real library never enters the release APK.</p>
+      </details>
+      <details>
+        <summary>Where should <code>DebugMenuScreen.kt</code> live in the project?</summary>
+        <p class="quiz-answer">Under <code>app/src/debug/java/...</code>, never <code>src/main/</code>. The source-set boundary makes it impossible for the file to compile into a release build.</p>
+      </details>
+      <details>
+        <summary>What single CLI check verifies no debug code leaked into release?</summary>
+        <p class="quiz-answer"><code>apkanalyzer dex packages app-release.apk | grep chuckerteam</code> &mdash; should return nothing. Wire it as a CI step.</p>
+      </details>
+      <details>
+        <summary>Why redact <code>Authorization</code> and <code>Cookie</code> headers in Chucker?</summary>
+        <p class="quiz-answer">Anyone with the debug APK on their phone can open Chucker and read every request body. A stolen tester phone with bearer tokens visible is a credential leak.</p>
+      </details>
+      <details>
+        <summary>What does <code>buildFeatures.buildConfig = true</code> do, and when do you need it?</summary>
+        <p class="quiz-answer">Enables <code>BuildConfig</code> generation including <code>buildConfigField</code> entries. Required from AGP 8.0+ &mdash; the default flipped to false.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Three pieces: Chucker (HTTP) + debug menu (state) + flag overrides (behavior).</li>
+        <li class="map-summary-item">Gate via source set (<code>src/debug/</code> + <code>debugImplementation</code>) &mdash; not via runtime <code>if (DEBUG)</code>.</li>
+        <li class="map-summary-item">Real library on <code>debugImplementation</code>, no-op artifact on <code>releaseImplementation</code> &mdash; same API, zero release cost.</li>
+        <li class="map-summary-item">Redact <code>Authorization</code> and <code>Cookie</code> headers in Chucker before the first build.</li>
+        <li class="map-summary-item">Verify with <code>apkanalyzer</code> + grep that no debug packages leaked into release. Wire as CI.</li>
+        <li class="map-summary-item">Debug menu must show: build info, flag overrides, force-crash, clear-data, deep-link launcher.</li>
+        <li class="map-summary-item">Reusable skill: <code>/draft-debug-menu</code> &mdash; scaffolds a Compose debug menu in under a minute.</li>
+        <li class="map-summary-item">Assign an owner to the debug menu, or it rots into broken buttons within a quarter.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="08-leakcanary-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 8</span>
+      </a>
+      <a href="10-version-catalogs-and-deps-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Chapter 10</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

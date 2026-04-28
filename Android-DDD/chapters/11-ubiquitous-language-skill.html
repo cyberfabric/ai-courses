@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: The /ubiquitous-language Skill — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="10-ddd-on-android-architecture.html">← Prev</a>
+      <a href="12-refactoring-toward-ddd-with-ai.html">Next →</a>
+      <a href="maps/11-ubiquitous-language-skill-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>The /ubiquitous-language Skill</h1>
+    <p class="subtitle">A custom Claude Code slash command that emits <code>UBIQUITOUS_LANGUAGE.md</code> &mdash; and turns AI into a teammate that speaks your domain</p>
+  </header>
+
+  <main>
+
+    <p>You have the structural picture from chapter 10: <code>:domain</code>, <code>:data</code>, <code>:feature</code>, <code>:app</code>, dependency arrows pointing inward, bounded contexts mapped to Gradle modules. Now we shift gears. The next two chapters are about <em>how AI fits into a DDD-shaped codebase</em>, and they go in the order I'd recommend you actually do the work: first build the language artifact (this chapter), then use AI to refactor toward DDD on top of it (chapter 12).</p>
+
+    <p>The reason for that order is simple. The single most useful thing you can hand Claude Code &mdash; or any AI tool &mdash; is a file that says <em>"in this codebase, here is what every domain word means."</em> Without it, Claude has to guess from variable names. With it, Claude reads, applies, and reinforces your team's vocabulary on every task. We're going to build that file generator in this chapter as a <strong>Claude Code skill</strong>, then commit it so every teammate gets the same behavior with one slash command.</p>
+
+    <h2>Why a skill (and not just a doc)</h2>
+
+    <p>You could write <code>UBIQUITOUS_LANGUAGE.md</code> by hand. Many teams have. They mostly stop updating it after the second PR. The doc rots, then someone deletes it during a directory cleanup, then the team has another lunch about how "we should write a glossary." We're going to skip that loop entirely by making the doc <em>generated</em> &mdash; runnable by anyone, on any branch, with one command. When the doc is one prompt away, it stays fresh.</p>
+
+    <div class="language-box">
+      <span class="term">Claude Code skill</span> &mdash; a project-level slash command stored at <code>.claude/commands/&lt;name&gt;.md</code>. The filename becomes the command (<code>ubiquitous-language.md</code> &rarr; <code>/ubiquitous-language</code>). The file body is a prompt template Claude follows when you invoke the command. Skills committed to the repo are shared with every teammate automatically &mdash; one git pull and they have the same command.
+      <div class="do-not-say">Do not say "macro," "shortcut," or "agent." A skill is not a macro because it can read files and use tools; it is not a shortcut because it has its own prompt; it is not an agent because it runs in your main session, not in a separate sub-context. Call it a slash command or a skill.</div>
+    </div>
+
+    <h2>Anatomy of a skill file</h2>
+
+    <p>Every Claude Code skill is just a Markdown file. The simplest one is a single line of instructions; a useful one has frontmatter that hints at the command's intent and a prompt body that handles arguments and edge cases.</p>
+
+    <div class="android-box">
+      <div class="android-code"># .claude/commands/ubiquitous-language.md
+---
+description: Generate or update UBIQUITOUS_LANGUAGE.md for this codebase
+argument-hint: "[bounded-context-name]"
+---
+
+You are generating the ubiquitous-language glossary for this Android codebase.
+
+If an argument was passed, scope your work to the bounded context named "$ARGUMENTS".
+Otherwise, scan the whole repository.
+
+# Steps
+1. Read CLAUDE.md, settings.gradle(.kts), and any existing UBIQUITOUS_LANGUAGE.md.
+2. Identify bounded contexts from the Gradle module layout (:domain:*, :feature:*).
+3. For each context, scan domain types: aggregates, value objects, repositories, events.
+4. Cross-reference with PR titles, recent commit messages, and ticket prefixes for
+   terms the team actually uses out loud.
+5. Write or update UBIQUITOUS_LANGUAGE.md at the repo root, grouped by bounded context.
+
+# Output format (per term)
+- Term (exact casing as used in code)
+- Definition: one or two sentences in plain English
+- Code anchor: file path + class name where the term is defined
+- Examples: 1-2 idiomatic phrases used in PRs or chat
+- Do not say: 1-3 alternative names the team has used historically
+- Related: 2-4 related terms in the same context
+
+# Constraints
+- Never invent terms. If you cannot find code or chat support for a term, leave it out.
+- Group strictly by bounded context. Do not merge contexts.
+- Mark cross-context terms with the contexts they appear in.
+- Preserve any "Do not say" entries already in the file unless explicitly contradicted.</div>
+    </div>
+
+    <p>Three things make this work as a real skill: the <strong>frontmatter</strong> (helps Claude Code's command picker show the right tooltip), the <strong>structured steps</strong> (so the run is repeatable), and the <strong>constraints</strong> (so Claude doesn't hallucinate terms that aren't actually in the codebase). The prompt is a contract with the model, not a wish list.</p>
+
+    <h2>Wiring the doc into Claude's context</h2>
+
+    <p>A glossary file Claude doesn't read is a glossary file that doesn't exist. <code>CLAUDE.md</code> is auto-loaded into every Claude Code session; <code>UBIQUITOUS_LANGUAGE.md</code> is not &mdash; <em>unless you tell <code>CLAUDE.md</code> to import it</em>. The mechanism is the <code>@</code>-import.</p>
+
+    <div class="android-box">
+      <div class="android-code"># CLAUDE.md (excerpt at the top of the file)
+
+@UBIQUITOUS_LANGUAGE.md
+
+# Project conventions
+This is the FitTracker Android codebase. We follow DDD: pure-Kotlin
+:domain modules, one bounded context per Gradle module group, value
+objects over primitives. Read UBIQUITOUS_LANGUAGE.md (imported above)
+for the glossary; never invent a synonym for an existing term.
+
+When writing or refactoring code:
+- Match the casing and spelling in UBIQUITOUS_LANGUAGE.md exactly
+- Prefer domain types over primitives (Money, EmailAddress, WorkoutId)
+- Put repository interfaces in :domain and implementations in :data
+- Domain-layer code must not import android.* or androidx.*</div>
+    </div>
+
+    <p>The single line <code>@UBIQUITOUS_LANGUAGE.md</code> is what makes the glossary load. Claude will read it before doing any work. From that moment on, every PR, refactor, or feature implementation gets the team's vocabulary applied automatically &mdash; no per-prompt reminder needed.</p>
+
+    <div class="tip-box">
+      <strong>Treat <code>CLAUDE.md</code> as the entry point and <code>UBIQUITOUS_LANGUAGE.md</code> as the dictionary.</strong> The two files have different rates of change. <code>CLAUDE.md</code> changes when conventions shift (rare); <code>UBIQUITOUS_LANGUAGE.md</code> changes every time the team coins a new domain term (frequent). Splitting them means you regenerate the glossary often and touch <code>CLAUDE.md</code> almost never.
+    </div>
+
+    <h2>The output format you want Claude to produce</h2>
+
+    <p>Claude is good at structured output when you specify the structure. Here's the shape we ask for &mdash; one section per bounded context, one entry per term, with the same five-field schema for every entry.</p>
+
+    <div class="domain-box">
+      <div class="model-text"># UBIQUITOUS_LANGUAGE.md (generated)
+
+## Bounded Context: Workouts
+
+### Workout
+**Definition:** A single training session by one Athlete, with a start time,
+a duration, and a list of Sets.
+**Code anchor:** `:domain:workouts/Workout.kt`
+**Examples:**
+- "log a workout"
+- "the user finished a workout at 7:42"
+**Do not say:** Session, Activity, Training, Log
+**Related:** Set, Athlete, Rpe
+
+### Set
+**Definition:** A grouping of repetitions of one Exercise at one weight,
+recorded inside a Workout.
+**Code anchor:** `:domain:workouts/Set.kt`
+**Examples:**
+- "the third set of squats"
+- "set 4 was to failure"
+**Do not say:** Round, Series, Group
+**Related:** Exercise, Workout, Reps
+
+### Rpe
+**Definition:** Rate of Perceived Exertion. A 1-10 self-reported difficulty
+score the Athlete attaches to a Set or Workout.
+**Code anchor:** `:domain:workouts/Rpe.kt` (value class wrapping Int)
+**Examples:**
+- "RPE 8 means two reps in reserve"
+**Do not say:** difficulty, hardness, intensity (those are different concepts)
+**Related:** Set, Workout
+
+## Bounded Context: Billing
+...</div>
+    </div>
+
+    <p>Notice what makes the format powerful at code-review time: every term has a <strong>code anchor</strong>. When a teammate adds <code>UserManager</code>, you can grep the glossary for <code>UserManager</code>, find no entry, and reject the PR with "this isn't in the language." When a term <em>is</em> in the glossary but the file path no longer exists, you've spotted language drift before the term goes extinct.</p>
+
+    <h2>How Claude uses the file once it exists</h2>
+
+    <p>The behavior change is real and immediate. Without <code>UBIQUITOUS_LANGUAGE.md</code>, prompting Claude with <em>"add a method that finds workouts by athlete"</em> might produce <code>findUserSessions</code>, <code>getActivities</code>, <code>queryTrainingLogs</code>, or any other plausible-sounding name. With the glossary loaded, the same prompt produces <code>findWorkoutsForAthlete</code> &mdash; matching the casing, the noun (<code>Workout</code> not <code>Session</code>), and the role (<code>Athlete</code> not <code>User</code>) the team agreed on.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Without glossary</div>
+        <div class="prompt-text">User: "add a method to find workouts by athlete"
+
+Claude generates:
+fun findUserSessions(userId: Long): List&lt;TrainingLog&gt;
+
+Three different domain words. None match the codebase.
+Reviewer wastes 10 minutes renaming.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">With glossary loaded</div>
+        <div class="prompt-text">User: "add a method to find workouts by athlete"
+
+Claude generates:
+fun findWorkoutsForAthlete(
+  id: AthleteId
+): List&lt;Workout&gt;
+
+Same nouns the rest of the code uses.
+Value object input, aggregate output.
+Reviewer approves.</div>
+      </div>
+    </div>
+
+    <p>Multiply that by every PR Claude touches and the cumulative effect is a codebase that stays linguistically consistent &mdash; the exact thing the ubiquitous-language practice was always supposed to deliver, now without the human enforcement burden.</p>
+
+    <h2>Sharing the skill across the team</h2>
+
+    <p>This is where Claude Code earns its keep over a personal AI chat. The <code>.claude/commands/</code> directory lives <em>in the repo</em>. Commit it. Now every teammate's Claude Code installation sees the same set of commands the moment they pull. No manual setup, no "did you install the skill?" Slack threads.</p>
+
+    <div class="android-box">
+      <div class="android-code">$ git status
+On branch main
+Untracked files:
+  .claude/commands/ubiquitous-language.md
+  .claude/commands/sync-ubiquitous-language.md
+
+$ git add .claude/commands/
+$ git commit -m "Add /ubiquitous-language and /sync-ubiquitous-language skills"
+$ git push
+
+# Teammate pulls; their Claude Code instance now has both commands.
+$ claude
+&gt; /ubiquitous-language
+&gt; /sync-ubiquitous-language</div>
+    </div>
+
+    <p>Two skills, one PR, the whole team is aligned. This is the multiplier effect: a discipline that used to require quarterly glossary reviews and PR templates is now a runnable command anyone can invoke before opening a draft PR.</p>
+
+    <h2>The companion: /sync-ubiquitous-language</h2>
+
+    <p>The first skill <em>generates</em> the glossary. The companion skill <em>reconciles</em> it &mdash; surfaces drift, deletes stale entries, flags new domain terms that have crept in without making it into the doc. You run the first one rarely (after big features); you run this one on every meaningful PR.</p>
+
+    <div class="android-box">
+      <div class="android-code"># .claude/commands/sync-ubiquitous-language.md
+---
+description: Reconcile UBIQUITOUS_LANGUAGE.md with the current codebase
+---
+
+Reconcile the existing UBIQUITOUS_LANGUAGE.md with the current state
+of the code. Do NOT regenerate from scratch.
+
+# Steps
+1. Read UBIQUITOUS_LANGUAGE.md.
+2. For each term, verify the code anchor still exists and the type is unchanged.
+3. Diff the current :domain:* modules against the glossary. Report:
+   - Stale entries (anchor file removed or class renamed)
+   - New domain types not yet in the glossary
+   - Terms that contradict the "Do not say" list
+4. Print a summary diff WITHOUT writing the file.
+5. After the user approves the diff, write the updated UBIQUITOUS_LANGUAGE.md.
+
+# Constraints
+- Preserve all existing "Do not say" entries unless the user explicitly removes them.
+- Never silently delete a term; ask first.
+- Print the section being changed before each modification.</div>
+    </div>
+
+    <p>Notice the discipline this skill encodes: <strong>print before write</strong>. The glossary is too important to silently overwrite, so the skill diffs first. The user approves; only then does the file change. This is the kind of guardrail that turns "AI editing my docs" from a horror movie into a useful tool.</p>
+
+    <h2>A demonstration: running it on a sample app</h2>
+
+    <p>Let's walk through what an actual run looks like on a small fintech app with three contexts. Imagine your codebase has <code>:domain:onboarding</code>, <code>:domain:transactions</code>, and <code>:domain:statements</code>, plus the corresponding <code>:data</code> and <code>:feature</code> modules.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. You invoke the skill</strong><br>
+        <code>/ubiquitous-language</code> in the terminal at the repo root. No argument &mdash; we want the full glossary across all contexts.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>2. Claude reads the structure</strong><br>
+        <code>settings.gradle.kts</code>, <code>CLAUDE.md</code>, all <code>:domain:*</code> sources, recent <code>git log</code> messages.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>3. Claude proposes terms</strong><br>
+        Per context: aggregates (<code>Account</code>, <code>Transaction</code>, <code>Statement</code>), value objects (<code>Iban</code>, <code>Money</code>, <code>StatementPeriod</code>), events (<code>TransactionPosted</code>).
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>4. Claude writes the file</strong><br>
+        <code>UBIQUITOUS_LANGUAGE.md</code> at the repo root, grouped by context. Cross-context terms (<code>Money</code>) are flagged.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>5. You review and commit</strong><br>
+        Read the file. Tighten any definitions that read like Wikipedia. Commit it. Add the <code>@UBIQUITOUS_LANGUAGE.md</code> import to <code>CLAUDE.md</code>.
+      </div>
+    </div>
+
+    <p>From this point forward, every Claude Code task in this repo &mdash; bug fixes, new features, refactors &mdash; speaks the right vocabulary by default. You did not pay for that with discipline; you paid for it with one prompt and one commit.</p>
+
+    <h2>What goes inside the prompt body (and what doesn't)</h2>
+
+    <p>A skill prompt is a balance: too generic and the output is mush; too prescriptive and the skill doesn't generalize across PRs. Two checklists:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Belongs in the prompt</div>
+        <div class="prompt-text">- The exact output format (per-term schema)
+- File paths to read first (CLAUDE.md, gradle files)
+- Bounded-context grouping rule
+- Anti-hallucination constraint
+  ("never invent terms")
+- Preservation rule for "Do not say"
+- Argument handling ($ARGUMENTS)</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Does not belong</div>
+        <div class="prompt-text">- A specific list of terms (those go in
+  the glossary, not the skill)
+- Codebase-specific module paths hard-coded
+- Reviewer names, ticket prefixes, etc.
+- "Be helpful," "be concise" filler
+- Examples of every possible term</div>
+      </div>
+    </div>
+
+    <p>The prompt is the <em>process</em>; the glossary is the <em>output</em>. Don't conflate them. A good skill prompt is mostly verbs and constraints; the nouns come from the codebase Claude is reading.</p>
+
+    <h2>Common mistakes</h2>
+
+    <h3>Skill prompts that are too generic</h3>
+
+    <p>"Generate a glossary for this project" produces a glossary that could belong to any project. The prompt has to specify <em>format</em>, <em>grouping</em>, and <em>constraints</em>. Read your skill back to yourself and ask: "could I delete the project name and would this prompt still tell Claude exactly what to do?" If the answer is "yes, it works for any project," it's too generic. Add the constraints that make this codebase's glossary look unlike any other.</p>
+
+    <h3>Not anchoring on real code</h3>
+
+    <p>If the prompt says "list the important terms," Claude will helpfully invent them. Add the explicit instruction <em>"never invent terms; if you cannot find code or chat support for a term, leave it out"</em>. Then make sure the steps include <em>reading</em> the code: <code>:domain:*</code> sources, sealed-class hierarchies, value classes, sealed interfaces, repository interfaces. Anchoring on real code is the single biggest difference between a hallucinated glossary and a useful one.</p>
+
+    <h3>Not committing the output</h3>
+
+    <p>The output is the <em>point</em>. Some teams generate <code>UBIQUITOUS_LANGUAGE.md</code> and forget to commit it because they're treating it as a throwaway artifact. The skill is the generator; the file is the persistent contract Claude reads on every subsequent task. Commit both. Add a CI check if you want to be loud: <em>"if <code>:domain:*</code> changed but <code>UBIQUITOUS_LANGUAGE.md</code> didn't, fail the build with a hint to run <code>/sync-ubiquitous-language</code>"</em>.</p>
+
+    <div class="warning-box">
+      <strong>The "rename without updating" trap.</strong> A teammate refactors <code>Workout</code> to <code>Session</code> in code. Claude Code happily renames every file because it knows nothing about the glossary's "Do not say: Session" line. Six months later the glossary still says "Workout" but every class is <code>Session</code>. The rename should have been a glossary update first, code update second &mdash; or rejected at PR review. The companion <code>/sync-ubiquitous-language</code> skill catches this drift, but only if you run it. A pre-merge CI hook that runs it automatically is a reasonable hard gate.
+    </div>
+
+    <h2>Beyond glossaries: the same pattern, applied elsewhere</h2>
+
+    <p>Once you have one skill, you have a template. Variations on the pattern that pay off the same way:</p>
+
+    <div class="checklist">
+      <li><strong><code>/context-map</code></strong> &mdash; emits a <code>CONTEXT_MAP.md</code> with bounded contexts and the relationships between them (chapter 4 vocabulary made executable).</li>
+      <li><strong><code>/aggregate-audit</code></strong> &mdash; lists every aggregate, its root, its invariants, and its size in lines of code; flags aggregates over a threshold.</li>
+      <li><strong><code>/anti-corruption-layers</code></strong> &mdash; reports every <code>:data</code> mapper, the DTO it translates from, and the aggregate it builds; surfaces missing or thin ACLs.</li>
+      <li><strong><code>/event-catalog</code></strong> &mdash; emits the list of every domain event in the codebase, with publishers, subscribers, and the contexts they cross.</li>
+    </div>
+
+    <p>Each is a few-dozen-line skill that produces a fresh, never-stale doc on demand. None require a separate tool, separate hosting, or a separate update process. Commit the skill, the doc is one prompt away forever.</p>
+
+    <h2>Iterating on the skill prompt</h2>
+
+    <p>The first version of any skill prompt is wrong in small ways. Claude will pick up a slightly off pattern (lower-casing your acronyms, including class names that aren't really domain terms, ignoring the "do not say" rule on the first pass) and you'll need two or three rounds of tightening to lock the behavior in. Here is the practical loop:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Run on a small slice</strong><br>
+        Start with one bounded context: <code>/ubiquitous-language workouts</code>. A 6-term output is fast to read; a 60-term output is easy to lose track of.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>2. Spot the misfires</strong><br>
+        "It included <code>WorkoutDao</code> as a domain term." "It missed <code>Rpe</code>." "Its definitions sound like Wikipedia."
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>3. Tighten the prompt</strong><br>
+        Add explicit rules: <em>"Exclude <code>*Dao</code>, <code>*Dto</code>, <code>*Row</code>, and <code>*Mapper</code>. They are persistence and ACL classes, not domain terms."</em>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>4. Re-run and diff</strong><br>
+        Run <code>/ubiquitous-language workouts</code> again. Diff the new output against the previous one. Stop when the diff is empty for two consecutive runs on the same code.
+      </div>
+    </div>
+
+    <p>One trick to accelerate the loop: keep a small <code>EXAMPLES.md</code> next to the skill with two or three "this is what a great glossary entry looks like" examples, then have the skill prompt reference it. Few-shot in a file beats few-shot in the prompt body because the file is editable without touching the skill.</p>
+
+    <div class="tip-box">
+      <strong>Version your skill in the commit message, not in the file.</strong> The skill itself is just a Markdown file &mdash; let git history tell the story. Each tightening round is a commit: <em>"skill: exclude Dao/Dto from glossary"</em>, <em>"skill: require code anchor for every term"</em>, <em>"skill: preserve do-not-say across runs"</em>. After a month, <code>git log .claude/commands/ubiquitous-language.md</code> reads like a changelog of how your team learned to talk to Claude.
+    </div>
+
+    <h2>The Workouts context: a complete glossary entry</h2>
+
+    <div class="context-box">
+      Inside the <span class="context-name">Workouts</span> context, the team agreed: a <strong>Workout</strong> is one Athlete's training session; <strong>Set</strong> is a grouping of reps of one Exercise; <strong>Rpe</strong> is the 1-10 perceived-effort score; <strong>Athlete</strong> is the user role inside Workouts (deliberately not "user," because "user" is a Billing-context concept). Cross-context: <strong>Money</strong> appears in Billing too, but the same value class is used in both &mdash; that's the (rare) shared kernel call.
+    </div>
+
+    <p>That paragraph is what a teammate would write the first time they joined the project &mdash; and exactly what the skill would emit on first run, modulo formatting. The skill writes the glossary so the team doesn't have to; the team curates it. The split of labor is what makes the practice survive past month one.</p>
+
+    <h2>Exercise: write your /ubiquitous-language skill today</h2>
+
+    <div class="exercise-box">
+      <p><strong>Ninety minutes. Real codebase. One commit.</strong></p>
+      <ol>
+        <li>From your repo root, create <code>.claude/commands/ubiquitous-language.md</code> using the template earlier in this chapter as your starting point.</li>
+        <li>Tighten the prompt to <em>your</em> codebase: name your bounded contexts (or your module groups, if contexts aren't named yet), reference the file paths a teammate would search first.</li>
+        <li>Open Claude Code at the repo root. Run <code>/ubiquitous-language</code>. Read the resulting <code>UBIQUITOUS_LANGUAGE.md</code> end-to-end. Expect to fix two or three definitions; that's the curation pass.</li>
+        <li>Add <code>@UBIQUITOUS_LANGUAGE.md</code> as the first non-comment line in your <code>CLAUDE.md</code>.</li>
+        <li>Commit both: the skill (<code>.claude/commands/ubiquitous-language.md</code>) and the generated glossary (<code>UBIQUITOUS_LANGUAGE.md</code>) and the <code>CLAUDE.md</code> change &mdash; one PR, three files.</li>
+        <li>Open a tiny follow-up Claude Code task in the same session: ask it to add a method, write a test, or refactor a class. Notice the vocabulary it uses. Notice what it <em>doesn't</em> rename. The behavior change is the proof.</li>
+        <li>Optionally, also create <code>.claude/commands/sync-ubiquitous-language.md</code> using the second template. Commit it; teammates get it for free on next pull.</li>
+      </ol>
+      <p>The first run is the largest investment; subsequent runs are cheap. The compound effect is a codebase that stays in its own language as it grows &mdash; the exact thing the DDD canon promised, now mechanized.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You can now generate, share, and synchronize a ubiquitous-language glossary across your whole team with two slash commands. Chapter 12 takes the next step: an end-to-end, AI-assisted refactor of a legacy Android codebase toward a DDD-shaped architecture, on top of the glossary you just produced. We'll go feature by feature &mdash; identifying aggregates with Claude, extracting value objects via codebase-wide renames, moving logic out of god-ViewModels, and introducing repository interfaces &mdash; with explicit tactics for keeping the refactor reviewable, reversible, and one-context-at-a-time. By the end of chapter 12 you will have walked through the full DDD-on-Android workflow with AI as your collaborator instead of your auto-complete.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-ddd-on-android-architecture.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">DDD on Android Architecture</span>
+      </a>
+      <a href="12-refactoring-toward-ddd-with-ai.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Refactoring Toward DDD with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

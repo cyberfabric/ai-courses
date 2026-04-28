@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Automating Tests with AI | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-code-review.html">&larr; Prev</a>
+      <a href="07-cicd-meets-ai.html">Next &rarr;</a>
+      <a href="maps/06-automating-tests-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Automating Tests with AI</h1>
+    <p class="subtitle">Generate, maintain, and improve your test suite &mdash; without the dread</p>
+  </header>
+
+  <main>
+
+    <h2>Why Nobody Writes Enough Tests</h2>
+
+    <p>Be honest. When was the last time you looked at a class, thought &ldquo;I should write tests for this,&rdquo; and actually did it right then? Not later. Not &ldquo;before the PR.&rdquo; Right then.</p>
+
+    <p>Testing is the broccoli of software development. Everyone knows it&rsquo;s good for you. Nobody&rsquo;s excited about it. And the gap between &ldquo;we should have tests&rdquo; and &ldquo;we have tests&rdquo; is usually measured in sprints.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">40%</span>
+        <span class="stat-label">of developers say they skip tests due to time pressure</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">15 min</span>
+        <span class="stat-label">average time to write a decent unit test by hand</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">30 sec</span>
+        <span class="stat-label">for Claude Code to generate a comprehensive test</span>
+      </div>
+    </div>
+
+    <p>The problem isn&rsquo;t laziness. It&rsquo;s friction. Writing a test means: figure out the testing pattern for this type of code, set up mocks, handle coroutine dispatchers, deal with Hilt test rules, and write assertions for all the edge cases. By the time you&rsquo;ve done the setup, you&rsquo;ve lost your flow.</p>
+
+    <p>AI eliminates the friction. Claude Code reads the source, understands the patterns, generates tests that match your project&rsquo;s conventions, and gets it done in seconds. Let&rsquo;s build this.</p>
+
+    <h2>Quick Test Generation from the CLI</h2>
+
+    <p>The simplest approach &mdash; and a great starting point:</p>
+
+    <pre><code># Generate tests for a specific file
+claude -p "Generate comprehensive unit tests for src/domain/usecase/SyncDataUseCase.kt.
+Use JUnit 5, MockK for mocking, and Turbine for Flow testing.
+Follow the patterns in the existing test files in this project."
+
+# Generate tests for everything that changed
+git diff main --name-only -- '*.kt' | grep -v Test | while read f; do
+  claude -p "Generate unit tests for $f using the project's testing patterns"
+done</code></pre>
+
+    <p>This works, but it&rsquo;s ad-hoc. Let&rsquo;s make it a proper, reusable skill.</p>
+
+    <h2>Building the /generate-tests Skill</h2>
+
+    <div class="recipe-box">
+      <h3>Creating a Comprehensive /generate-tests Skill</h3>
+      <ol>
+        <li>Create the file: <code>.claude/commands/generate-tests.md</code></li>
+        <li>Add this content:</li>
+      </ol>
+      <pre><code># Generate Tests
+
+Generate comprehensive unit tests for: **$ARGUMENTS**
+
+## Steps
+1. Read the source file to understand its behavior
+2. Read CLAUDE.md for testing conventions
+3. Find existing test files in the project to match patterns
+4. Identify the testing framework in use (check build.gradle.kts)
+
+## Test Structure
+- One test class per source class
+- Use descriptive test names: `should do X when Y`
+- Group tests by function using @Nested classes
+- Use the Arrange-Act-Assert pattern
+
+## What to Test
+- **Happy path**: normal inputs produce expected outputs
+- **Edge cases**: null, empty, zero, boundary values
+- **Error paths**: exceptions, error states, network failures
+- **State transitions**: for ViewModels, test each state change
+
+## Android-Specific Patterns
+- **ViewModels**: Use `runTest`, `Turbine` for StateFlow assertions,
+  `StandardTestDispatcher` for coroutine control
+- **Repositories**: Mock the data sources, test mapping logic,
+  verify error wrapping with ApiResult
+- **Use Cases**: Test business logic in isolation, mock repositories
+- **Compose**: Use `createComposeRule()` for UI tests,
+  test state rendering and user interactions
+
+## Rules
+- Match the testing framework already in the project
+- Use MockK for mocking (not Mockito)
+- Use Turbine for Flow/StateFlow testing
+- Don't test private functions — test through public API
+- Don't test simple getters/setters or data classes
+- Add a comment at the top: "Generated by /generate-tests — review before committing"</code></pre>
+      <ol start="3">
+        <li>Test it: <code>/generate-tests src/feature/home/HomeViewModel.kt</code></li>
+      </ol>
+    </div>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Writing Tests Manually</h4>
+        <ol>
+          <li>Open the source file, study the logic</li>
+          <li>Create a test file, set up the class</li>
+          <li>Figure out the MockK syntax for this case</li>
+          <li>Set up coroutine test dispatcher</li>
+          <li>Write the happy path test (5 min)</li>
+          <li>Think about edge cases (3 min each)</li>
+          <li>Handle error cases (3 min each)</li>
+          <li>Run and debug (5 min)</li>
+        </ol>
+        <p><strong>Time: 25&ndash;45 minutes per class. Often skipped.</strong></p>
+      </div>
+      <div class="after">
+        <h4>With /generate-tests</h4>
+        <ol>
+          <li>Run <code>/generate-tests HomeViewModel.kt</code></li>
+          <li>Review the generated tests (2 min)</li>
+          <li>Tweak any edge cases (2 min)</li>
+          <li>Run the suite to verify (1 min)</li>
+        </ol>
+        <p><strong>Time: 5 minutes per class. Never skipped.</strong></p>
+      </div>
+    </div>
+
+    <h2>Android-Specific Test Patterns</h2>
+
+    <p>Android testing has its own quirks. Here&rsquo;s what Claude Code generates for each layer when your skill is well-configured:</p>
+
+    <h3>ViewModel tests</h3>
+
+    <pre><code>@OptIn(ExperimentalCoroutinesApi::class)
+class HomeViewModelTest {
+
+    private val testDispatcher = StandardTestDispatcher()
+    private val repository = mockk&lt;HomeRepository&gt;()
+    private lateinit var viewModel: HomeViewModel
+
+    @BeforeEach
+    fun setup() {
+        Dispatchers.setMain(testDispatcher)
+        viewModel = HomeViewModel(repository)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Nested
+    inner class LoadData {
+        @Test
+        fun `should emit Loading then Success when repository returns data`() = runTest {
+            // Arrange
+            coEvery { repository.fetchItems() } returns ApiResult.Success(testItems)
+
+            // Act &amp; Assert
+            viewModel.uiState.test {
+                assertEquals(HomeUiState.Loading, awaitItem())
+                viewModel.loadData()
+                assertEquals(HomeUiState.Success(testItems), awaitItem())
+            }
+        }
+
+        @Test
+        fun `should emit Error when repository fails`() = runTest {
+            // Arrange
+            coEvery { repository.fetchItems() } returns ApiResult.Error("Network error")
+
+            // Act &amp; Assert
+            viewModel.uiState.test {
+                skipItems(1) // Skip initial Loading
+                viewModel.loadData()
+                val state = awaitItem()
+                assertIs&lt;HomeUiState.Error&gt;(state)
+                assertEquals("Network error", state.message)
+            }
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Show Claude Code your existing tests.</strong> The best way to get tests that match your patterns is to have existing tests in the project. Claude Code reads them and follows the same setup, naming conventions, and assertion style. Even two or three well-written test files set the pattern for the whole project.</p>
+    </div>
+
+    <h2>Finding Coverage Gaps</h2>
+
+    <p>Writing tests for new code is one thing. But what about the existing code that never got tested? Build a coverage gap detector:</p>
+
+    <pre><code># File: .claude/commands/find-coverage-gaps.md
+
+Analyze test coverage gaps in the project.
+
+## Steps
+1. List all Kotlin source files in src/main (excluding generated code)
+2. List all test files in src/test
+3. Match source files to their test files by naming convention
+4. Identify source files with NO corresponding test file
+5. For source files WITH tests, read both and check if major
+   public functions are covered
+
+## Output
+### Untested Files (no test file exists)
+- List each file with a brief description of what it does
+- Prioritize by risk: ViewModels and UseCases first, then Repositories, then UI
+
+### Partially Tested Files (test exists but gaps found)
+- List each file with the specific untested functions
+- Note which functions have complex logic that most needs testing
+
+### Summary
+- Total source files: X
+- Files with tests: Y (Z%)
+- Suggested next 5 files to test (highest impact)</code></pre>
+
+    <div class="automation-box">
+      <p><strong>Run coverage gap detection weekly.</strong> Set up a cron job or scheduled agent (Chapter 7) that runs <code>/find-coverage-gaps</code> every Monday morning and posts the results to your team channel. Visibility creates accountability &mdash; when everyone sees the coverage gaps, they get fixed faster. Pair it with <code>/generate-tests</code> to close gaps in minutes.</p>
+    </div>
+
+    <h2>Maintaining Tests When Code Changes</h2>
+
+    <p>Tests break when code changes. That&rsquo;s normal. But manually updating five test files after a refactor is painful enough that some developers skip the tests and just delete the broken ones. Don&rsquo;t be that developer.</p>
+
+    <pre><code># File: .claude/commands/update-tests.md
+
+Update tests to match recent code changes.
+
+## Steps
+1. Run `git diff main...HEAD -- '*.kt'` to see all changes
+2. For each changed source file, find its corresponding test file
+3. Read both the source and test files
+4. Identify tests that are now broken or outdated because of the changes
+5. Update the tests to match the new code behavior
+
+## Rules
+- Don't delete tests — update them to match new behavior
+- If a function was renamed, rename the test
+- If a function's signature changed, update the test setup
+- If new behavior was added, add new test cases for it
+- If behavior was removed, remove the corresponding tests
+- Keep the same testing patterns and style
+- Run the updated tests and fix any failures</code></pre>
+
+    <p>After a refactor, just run <code>/update-tests</code> and the test suite is current again.</p>
+
+    <h2>Flaky Test Diagnosis</h2>
+
+    <p>Flaky tests &mdash; tests that pass sometimes and fail sometimes &mdash; are one of the most frustrating problems in development. They erode trust in your test suite and waste hours of debugging time.</p>
+
+    <pre><code># File: .claude/commands/diagnose-flaky.md
+
+Diagnose and fix the flaky test: **$ARGUMENTS**
+
+## Steps
+1. Read the test file
+2. Read the source code it tests
+3. Analyze for common flakiness causes:
+
+### Timing Issues
+- Race conditions in coroutine tests (missing advanceUntilIdle?)
+- Hardcoded delays instead of proper synchronization
+- Tests depending on execution speed
+
+### State Issues
+- Shared mutable state between tests (missing @BeforeEach reset?)
+- Tests that depend on execution order
+- Static/singleton state not cleaned up
+
+### External Dependencies
+- Network calls in unit tests (should be mocked)
+- File system access without cleanup
+- Database state leaking between tests
+
+### Android-Specific
+- Missing Dispatchers.setMain/resetMain
+- Compose test rule timing issues
+- LiveData not observed (use InstantTaskExecutorRule)
+
+## Output
+- **Root cause**: What's causing the flakiness
+- **Fix**: Exact code changes to make it stable
+- **Prevention**: Pattern to follow to avoid this in future tests</code></pre>
+
+    <div class="highlight-box">
+      <h3>The Flaky Test Triage Workflow</h3>
+      <p>When CI fails with a flaky test: (1) run <code>/diagnose-flaky TestClassName#testName</code>, (2) apply the fix, (3) run the test 10 times locally to verify stability: <code>for i in {1..10}; do ./gradlew test --tests "*TestName" || break; done</code>. If it passes all 10, it&rsquo;s stable.</p>
+    </div>
+
+    <h2>Mutation Testing: Are Your Tests Actually Good?</h2>
+
+    <p>Having tests isn&rsquo;t enough. Tests that pass no matter what the code does are worse than useless &mdash; they give false confidence. Mutation testing checks if your tests actually catch bugs.</p>
+
+    <p>The concept: <em>change</em> the source code slightly (a &ldquo;mutation&rdquo;), then run the tests. If the tests still pass, they&rsquo;re not catching the kind of bug that mutation represents.</p>
+
+    <pre><code># File: .claude/commands/mutation-check.md
+
+Check test quality for: **$ARGUMENTS** using mutation analysis.
+
+## Steps
+1. Read the source file
+2. Read its test file
+3. Identify 5-8 meaningful mutations:
+   - Change `>` to `>=` in conditionals
+   - Replace `true` with `false` in boolean returns
+   - Remove null checks
+   - Change `+` to `-` in calculations
+   - Remove function calls (especially side effects)
+   - Change `&&` to `||` in compound conditions
+
+For each mutation:
+4. Would the existing tests catch this change?
+5. If not, what test is missing?
+
+## Output
+### Mutations Caught (tests would fail) ✓
+- List each mutation and which test catches it
+
+### Mutations Survived (tests would NOT fail) ✗
+- List each mutation
+- Why it survived (missing test case)
+- Suggest a specific test to add
+
+### Test Quality Score
+X out of Y mutations caught = Z% mutation score</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Don&rsquo;t aim for 100% mutation score.</strong> Some mutations are trivial (logging changes, cosmetic stuff). Focus on mutations in business logic, error handling, and security checks. A 70&ndash;80% mutation score on critical code is excellent.</p>
+    </div>
+
+    <h2>Test Quality Review</h2>
+
+    <p>Just like production code gets reviewed, test code should too. Build a specialized review skill:</p>
+
+    <pre><code># File: .claude/commands/review/tests.md
+
+Review the test code in the current diff.
+
+## Check for
+- **False positives**: Tests that pass regardless of implementation
+  (e.g., assertions on mock return values instead of behavior)
+- **Missing edge cases**: Null inputs, empty collections, boundary values
+- **Brittle tests**: Tests coupled to implementation details that will
+  break on refactor without indicating a real bug
+- **Incomplete mocking**: Mocks that don't verify important interactions
+- **Readability**: Can someone understand what's being tested from the
+  test name and structure alone?
+- **Test isolation**: Each test should pass independently, in any order
+
+## Android-Specific
+- Coroutine tests: using runTest? Proper dispatcher management?
+- Flow tests: using Turbine? Testing emissions in order?
+- Compose tests: using proper finders and assertions?
+
+Report findings with the same severity format as /review.</code></pre>
+
+    <h2>The Testing Automation Pipeline</h2>
+
+    <p>Here&rsquo;s how all the testing pieces chain together into a pipeline:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Code Change</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">/generate-tests</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">/review:tests</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Run Suite</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Coverage Check</div>
+    </div>
+
+    <ul>
+      <li><strong>Code change</strong> &mdash; you write or modify production code</li>
+      <li><strong>/generate-tests</strong> &mdash; generates or updates tests for the changed files</li>
+      <li><strong>/review:tests</strong> &mdash; validates the generated tests are actually good</li>
+      <li><strong>Run suite</strong> &mdash; execute the tests (hook from Chapter 4 can do this automatically)</li>
+      <li><strong>Coverage check</strong> &mdash; CI verifies coverage didn&rsquo;t drop</li>
+    </ul>
+
+    <p>With the hook from Chapter 4 running tests on every edit, and <code>/generate-tests</code> handling test creation, you go from &ldquo;tests are a chore&rdquo; to &ldquo;tests just happen.&rdquo;</p>
+
+    <h2>Exercise: Build Your Testing Toolkit</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Set Up AI-Powered Test Generation</h3>
+      <p>Build these skills and try them on your actual project. About 20 minutes total.</p>
+
+      <h4>Step 1: Create /generate-tests</h4>
+      <ol>
+        <li>Create <code>.claude/commands/generate-tests.md</code> using the template above</li>
+        <li>Customize the Android-specific patterns for your project&rsquo;s test stack</li>
+        <li>Pick a ViewModel or UseCase in your project that has no tests</li>
+        <li>Run <code>/generate-tests path/to/YourClass.kt</code></li>
+        <li>Review the output. Run the generated tests. Do they pass?</li>
+      </ol>
+
+      <h4>Step 2: Create /find-coverage-gaps</h4>
+      <ol>
+        <li>Create the coverage gap skill from this chapter</li>
+        <li>Run it on your project: <code>/find-coverage-gaps</code></li>
+        <li>Pick the top result and run <code>/generate-tests</code> on it</li>
+        <li>You just closed a coverage gap in under 5 minutes</li>
+      </ol>
+
+      <h4>Step 3: Try mutation checking</h4>
+      <ol>
+        <li>Create <code>.claude/commands/mutation-check.md</code></li>
+        <li>Run it on a well-tested file: <code>/mutation-check src/domain/usecase/LoginUseCase.kt</code></li>
+        <li>Add any missing tests it suggests</li>
+        <li>Now your tests actually catch bugs, not just pass green</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Run <code>/generate-tests</code> on three untested files, commit the tests, and use <code>/pr-description</code> from Chapter 3 to generate the PR. Full automation chain in action.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You can now generate tests, find gaps, fix flaky tests, and validate test quality &mdash; all with skills and a few commands. But everything so far runs on <em>your</em> machine, triggered by <em>you</em>.</p>
+
+    <p>In <strong>Chapter 7: CI/CD Meets AI</strong>, we take Claude Code into the cloud. Automated PR reviews that post comments to GitHub. Changelogs that write themselves from commit history. Build failures diagnosed by AI. All running in your pipeline, no human in the loop.</p>
+
+    <p>Let&rsquo;s put AI in your pipeline.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-code-review.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">AI-Powered Code Review</span>
+      </a>
+      <a href="07-cicd-meets-ai.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">CI/CD Meets AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

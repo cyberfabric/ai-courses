@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Aggregates — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="07-entities-and-value-objects.html">← Prev</a>
+      <a href="09-repositories-and-services.html">Next →</a>
+      <a href="maps/08-aggregates-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Aggregates</h1>
+    <p class="subtitle">Consistency boundaries &mdash; the aggregate-root rule, transaction scope, and how to size them right</p>
+  </header>
+
+  <main>
+
+    <p>You now have entities and value objects. Useful, but on their own they don't tell you which objects belong to which transaction, who is allowed to mutate what, or where the consistency seams of your domain run. That's the job of the <strong>aggregate</strong> &mdash; arguably the most important tactical pattern in DDD, and the one most often misunderstood on Android.</p>
+
+    <p>The promise of this chapter: by the end, you can look at any feature in your app and answer three questions crisply. <em>What's the aggregate?</em> <em>Where is its consistency boundary?</em> <em>What's the root?</em> Once you can answer those, repositories, transactions, and event flows follow almost automatically.</p>
+
+    <h2>What an aggregate actually is</h2>
+
+    <div class="language-box">
+      <span class="term">Aggregate</span> &mdash; a cluster of related entities and value objects treated as a single unit for the purpose of data changes. The aggregate has one entity designated as the <strong>aggregate root</strong> (the only entry point from the outside) and a <strong>consistency boundary</strong> (everything inside is kept consistent within a single transaction).
+      <div class="do-not-say">Do not say "model," "graph," or "tree." Those terms describe the shape of the data; "aggregate" describes the <em>contract</em>: who's responsible for keeping these things consistent together. Without the contract, it's just a collection of related rows.</div>
+    </div>
+
+    <p>Three things make an aggregate an aggregate:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">🌳</span>
+        <div class="stat-label"><strong>One root.</strong> Outsiders only hold references to the root entity. Everything inside is reached <em>through</em> the root.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🛡️</span>
+        <div class="stat-label"><strong>One consistency boundary.</strong> The root protects an invariant: a rule that must always be true across the cluster.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">⚛️</span>
+        <div class="stat-label"><strong>One transaction.</strong> Loaded together, mutated together, saved together. No half-states leak out.</div>
+      </div>
+    </div>
+
+    <p>An aggregate is a <em>scope of consistency</em>, not a "natural cluster of related stuff." That distinction is the source of every aggregate-sizing mistake in the wild. The boundary is drawn around an <em>invariant</em> &mdash; a rule that must always be true &mdash; and only as wide as that invariant requires.</p>
+
+    <h2>The Order/LineItem worked example</h2>
+
+    <p>The textbook example: an <code>Order</code> with multiple <code>LineItem</code>s, with the invariant <em>"the order total equals the sum of line-item subtotals."</em> If you let an outside object reach inside the order and add a line item directly, the total is now wrong. The invariant is broken. So <code>LineItem</code> is <em>inside</em> the <code>Order</code> aggregate, and the only way to add one is through <code>Order.addLine(...)</code> &mdash; which knows to recompute the total.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :checkout:domain
+class Order(
+  val id: OrderId,
+  val customerId: CustomerId,
+  private val _lines: MutableList&lt;LineItem&gt; = mutableListOf(),
+  private var _status: OrderStatus = OrderStatus.Draft,
+  private var _total: Money = Money.ZERO_USD
+) {
+  val lines: List&lt;LineItem&gt; get() = _lines.toList()  // defensive copy
+  val status: OrderStatus get() = _status
+  val total: Money get() = _total
+
+  fun addLine(sku: Sku, qty: Quantity, unitPrice: Money): LineAdded {
+    check(_status == OrderStatus.Draft) { "cannot modify a $_status order" }
+    val line = LineItem(sku, qty, unitPrice)
+    _lines += line
+    _total = _lines.fold(Money.ZERO_USD) { acc, l -&gt; acc + l.subtotal }
+    return LineAdded(id, sku, qty)
+  }
+
+  fun place(now: Instant): OrderPlaced {
+    check(_status == OrderStatus.Draft) { "already placed" }
+    check(_lines.isNotEmpty()) { "empty order" }
+    _status = OrderStatus.Placed
+    return OrderPlaced(id, _total, now)
+  }
+
+  override fun equals(other: Any?) = other is Order &amp;&amp; other.id == id
+  override fun hashCode() = id.hashCode()
+}
+
+// LineItem is a value object &mdash; defined entirely by its attributes
+data class LineItem internal constructor(
+  val sku: Sku,
+  val qty: Quantity,
+  val unitPrice: Money
+) {
+  init { require(qty.value &gt; 0) { "qty must be positive" } }
+  val subtotal: Money get() = unitPrice * qty.value
+}</div>
+    </div>
+
+    <p>Notice four things. <code>Order</code> is the root: it's the only thing outsiders touch. <code>LineItem</code> is a value object inside the aggregate &mdash; not its own aggregate, because nobody outside the order has a reason to reference one specific line item independently. The internal collection <code>_lines</code> is private and exposed only through a defensive copy. And every mutation goes through a method that re-establishes the invariant before returning.</p>
+
+    <h2>Why <code>LineItem</code> isn't its own aggregate</h2>
+
+    <p>This is the most common newbie question: "why isn't <code>LineItem</code> its own aggregate?" The test is the same one we used last chapter, but applied to <em>identity</em>:</p>
+
+    <ul>
+      <li>Does anyone outside the order need to reference a specific line item by its own ID? <em>No.</em></li>
+      <li>Can a line item exist without an order? <em>No.</em></li>
+      <li>Is there an invariant that spans multiple line items (the total)? <em>Yes</em> &mdash; and it lives on the order.</li>
+    </ul>
+
+    <p>All three answers point inward: <code>LineItem</code> is internal to the <code>Order</code> aggregate. If you discover later that you do need to reference a specific line independently &mdash; say, returns are tracked per-line and a return links to a specific one &mdash; you'd give <code>LineItem</code> an ID and either keep it as an internal entity (still inside the aggregate) or, if a return-line outranks an order-line for some reason, you might split. But you don't pre-emptively split for hypothetical needs.</p>
+
+    <h2>Sizing aggregates: small is usually right</h2>
+
+    <p>Vaughn Vernon's <em>Effective Aggregate Design</em> (the famous three-paper series) is the canonical guidance. The headline rules:</p>
+
+    <div class="tip-box">
+      <strong>Vernon's rules of thumb:</strong>
+      <ol>
+        <li><strong>Model true invariants in consistency boundaries.</strong> Only put inside the aggregate what you cannot live with being inconsistent for even a moment.</li>
+        <li><strong>Design small aggregates.</strong> Most aggregates should hold one root + a few value objects. Big aggregates with collections-of-children are a smell.</li>
+        <li><strong>Reference other aggregates by ID only.</strong> An <code>Order</code> holds a <code>CustomerId</code>, not a <code>Customer</code>. The customer is a separate aggregate.</li>
+        <li><strong>Use eventual consistency outside the boundary.</strong> Cross-aggregate updates happen via domain events &mdash; never a single transaction.</li>
+      </ol>
+    </div>
+
+    <p>The single most common sizing mistake is treating a <em>graph of related rows</em> as one aggregate. "<code>Customer</code> has <code>Orders</code>, each <code>Order</code> has <code>LineItems</code>, each <code>LineItem</code> has <code>Refunds</code> &mdash; let's make <code>Customer</code> the root." That aggregate spans half your schema. It locks the customer to mutate any line item. It loads megabytes of data to add one row. It cannot scale.</p>
+
+    <p>The smaller version: <code>Customer</code> is its own aggregate. <code>Order</code> is its own aggregate (referencing <code>CustomerId</code>). <code>Refund</code> is its own aggregate (referencing <code>OrderId</code>, <code>LineItemId</code>). Three small consistency boundaries instead of one giant one. Coupling between them happens via events, not foreign-key cascades.</p>
+
+    <h2>Finding aggregates: follow the invariants</h2>
+
+    <p>The technique that works: list the rules that must <em>always</em> be true in your domain, and group entities together <em>only</em> when an invariant connects them.</p>
+
+    <div class="exercise-box">
+      <p><strong>Try this on the back of a napkin (or in a comment in your code):</strong></p>
+      <ol>
+        <li>Pick one feature ("checkout").</li>
+        <li>List the invariants in plain English. "The order total equals the sum of line subtotals." "An order cannot ship before payment is captured." "A coupon can be used at most once per order."</li>
+        <li>For each invariant, ask: <em>which entity is responsible for enforcing this?</em> If two entities share an invariant, they probably belong in the same aggregate.</li>
+        <li>For invariants that span multiple "natural" aggregates, think about whether they truly need to be enforced atomically or whether eventual consistency would be acceptable. (Spoiler: it almost always is.)</li>
+      </ol>
+      <p>Most "we need a giant aggregate" arguments dissolve when you pressure-test the invariant. "Customer credit limit" sounds like it has to be enforced atomically against every order &mdash; until you realize a 200-millisecond stale read is fine, and even banks tolerate a small window of over-extension to catch up later.</p>
+    </div>
+
+    <h2>The transaction rule: one aggregate per transaction</h2>
+
+    <p>The Vernon rule: <em>one aggregate, one transaction, one commit</em>. This is not arbitrary dogma; it's the lever that lets you scale and reason about consistency.</p>
+
+    <div class="warning-box">
+      <strong>Two aggregates in one transaction is the usual bug.</strong> The instant you load <code>Order</code> and <code>Customer</code> into one Room transaction to mutate both, you've doubled the lock surface, prevented the two aggregates from ever living in different storage, and made the invariant "they update together or not at all" implicit in the SQL rather than explicit in the domain. The cost compounds quickly. Resist the urge.
+    </div>
+
+    <p>The "mostly" caveat: Vernon allows that you may, in narrowly-scoped cases, mutate two aggregates in one transaction <em>if and only if</em> you have measured a real consistency requirement that cannot be served by eventual consistency. In a decade of mobile work you will hit this case maybe twice. Default to one aggregate per transaction; treat exceptions as "I have a written justification I'm willing to defend at code review."</p>
+
+    <h2>Cross-aggregate consistency: events, always</h2>
+
+    <p>If you can't update two aggregates in one transaction, how do you keep them in sync? Domain events &mdash; exactly the pattern from chapter 6. The flow is:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Tx 1: Mutate Aggregate A</div>
+      <div class="step-arrow">→</div>
+      <div class="step">A emits event</div>
+      <div class="step-arrow">→</div>
+      <div class="step">Bus delivers</div>
+      <div class="step-arrow">→</div>
+      <div class="step">Tx 2: Handler mutates Aggregate B</div>
+    </div>
+
+    <p>Concretely: in the checkout flow, <code>Cart.checkout()</code> emits <code>OrderPlaced</code> in transaction 1. A handler in the same context creates a fresh <code>Order</code> aggregate in transaction 2. Two aggregates, two transactions, one consistent end state &mdash; reached eventually, not atomically.</p>
+
+    <p>This is also the standard answer for "but what if the second transaction fails?" Persist the event log first; replay on failure; treat the handler as idempotent. None of these techniques are exotic on Android &mdash; a small Room table for unprocessed events plus a worker to drain it covers 95% of cases.</p>
+
+    <h2>The Law of Demeter inside an aggregate</h2>
+
+    <p>The Law of Demeter (don't talk to strangers) and the aggregate rule (talk only to the root) are the same idea wearing different hats. Outsiders never reach <code>order.lines[0].sku</code>. They call <code>order.skuOfLine(0)</code> if they need that, or more typically they don't reach inside at all because the aggregate exposes higher-level operations like <code>order.total</code>, <code>order.canBePlaced()</code>, <code>order.addLine(...)</code>.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad &mdash; reaching inside</div>
+        <div class="prompt-text">val total = order.lines
+  .map { it.unitPrice * it.qty.value }
+  .reduce { a, b -&gt; a + b }
+order.lines.add(LineItem(...))
+// 1) Recomputes the invariant outside.
+// 2) Mutates an internal collection.
+// 3) Anyone reading code has to reverse-
+//    engineer the invariant.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Good &mdash; through the root</div>
+        <div class="prompt-text">val total = order.total
+order.addLine(sku, qty, unitPrice)
+// Invariant lives in one place.
+// Internal collection stays private.
+// New devs can read the public API
+// and understand the contract.</div>
+      </div>
+    </div>
+
+    <h2>Aggregates and Room: the persistence layer</h2>
+
+    <p>Room is the dominant persistence library on Android, and it has opinions that quietly conflict with aggregate design if you're not careful. Two specific things to watch:</p>
+
+    <div class="android-box">
+      <div class="android-code">// :data &mdash; Room sees rows, not aggregates
+@Entity(tableName = "orders")
+data class OrderRow(
+  @PrimaryKey val id: String,
+  val customerId: String,
+  val status: String,
+  val totalCents: Long,
+  val currency: String
+)
+
+@Entity(
+  tableName = "order_lines",
+  foreignKeys = [ForeignKey(
+    entity = OrderRow::class,
+    parentColumns = ["id"],
+    childColumns = ["orderId"],
+    onDelete = ForeignKey.CASCADE
+  )]
+)
+data class OrderLineRow(
+  @PrimaryKey(autoGenerate = true) val pk: Long = 0,
+  val orderId: String,
+  val sku: String,
+  val qty: Int,
+  val unitPriceCents: Long
+)
+
+@Dao
+interface OrderDao {
+  @Transaction
+  @Query("SELECT * FROM orders WHERE id = :id")
+  suspend fun loadWithLines(id: String): OrderWithLines?
+
+  @Transaction
+  suspend fun saveAggregate(order: OrderRow, lines: List&lt;OrderLineRow&gt;) {
+    upsertOrder(order)
+    deleteLines(order.id)
+    upsertLines(lines)
+  }
+}</div>
+    </div>
+
+    <p>The two key disciplines:</p>
+
+    <ul>
+      <li><strong>Always wrap aggregate I/O in <code>@Transaction</code>.</strong> Room's <code>@Transaction</code> is your atomicity primitive. Loading an aggregate and saving an aggregate must each happen inside one of these.</li>
+      <li><strong>Don't lazy-load across the boundary.</strong> Room's <code>@Relation</code> annotation makes it tempting to model an <code>Order</code> with a <code>@Relation</code> to its lines and load both eagerly. That's fine. What's <em>not</em> fine is starting from <code>Customer</code> and <code>@Relation</code>'ing to <code>List&lt;Order&gt;</code>, which violates aggregate-by-ID and quietly couples the two.</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>Room's <code>@Relation</code> across aggregate boundaries is the silent killer.</strong> A <code>Customer</code> with <code>@Relation</code>'d <code>List&lt;Order&gt;</code> looks neat. It silently turns <em>load one customer</em> into <em>load every order ever</em>. It glues two aggregates into one transaction. It makes pagination painful. Use <code>@Relation</code> <em>only</em> for entities and value objects inside the same aggregate &mdash; never to traverse to a different aggregate.
+    </div>
+
+    <h2>Loading aggregates: eager, by ID, complete</h2>
+
+    <p>An aggregate is loaded as a unit. You don't lazy-load its parts. The repository's <code>findById</code> returns either the full aggregate or null &mdash; never a half-hydrated stub.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :data
+class RoomOrderRepository(
+  private val dao: OrderDao
+) : OrderRepository {
+
+  override suspend fun findById(id: OrderId): Order? {
+    val row = dao.loadWithLines(id.value) ?: return null
+    return Order(
+      id = OrderId(row.order.id),
+      customerId = CustomerId(row.order.customerId),
+      _lines = row.lines.map { it.toDomain() }.toMutableList(),
+      _status = OrderStatus.valueOf(row.order.status),
+      _total = Money(Cents(row.order.totalCents), Currency.getInstance(row.order.currency))
+    )
+  }
+
+  override suspend fun save(order: Order) {
+    dao.saveAggregate(
+      order = order.toRow(),
+      lines = order.lines.map { it.toRow(order.id) }
+    )
+  }
+}</div>
+    </div>
+
+    <p>The repository here is one method: <em>"give me the whole aggregate, or nothing."</em> Mappers translate between Room rows and domain types. That keeps Room's relational shape from leaking into your domain entity definitions, and protects the invariant that an <code>Order</code> exists only as a complete object with its lines.</p>
+
+    <h2>Aggregate context boundaries: same name, different shape</h2>
+
+    <div class="context-box">
+      In the <span class="context-name">Checkout</span> context, an <code>Order</code> aggregate has <code>LineItem</code>s, a <code>customerId</code>, a <code>total</code>, and a status machine. In the <span class="context-name">Fulfillment</span> context, the same conceptual order is modeled as a <code>Shipment</code> with a <code>List&lt;Parcel&gt;</code>, a carrier, and a tracking number. Two contexts, two aggregates, one underlying business concept &mdash; connected by events crossing between them, never by sharing a model.
+    </div>
+
+    <p>This is the bounded-contexts lesson from chapter 3 made tactical: two contexts can have an aggregate <em>about</em> the same business concept while keeping completely different shapes. The translation between them happens in events and ACLs at the boundary, never by reaching across.</p>
+
+    <h2>Anti-patterns to spot in code review</h2>
+
+    <h3>The "graph aggregate"</h3>
+
+    <p>An aggregate that owns half the schema. <code>Customer</code> -&gt; <code>Orders</code> -&gt; <code>LineItems</code> -&gt; <code>Refunds</code> as one giant tree. Symptoms: massive joins on every load, every mutation locks the customer row, the test setup for "place an order" requires a full customer + payment-method + address fixture.</p>
+
+    <h3>The "anemic aggregate"</h3>
+
+    <p>An aggregate root that is just a property bag. <code>Order(val total, val status, val lines)</code> with all logic in some <code>OrderManager</code>. By definition, the root must protect invariants &mdash; if it doesn't, it's not a root, it's a record. Push behavior onto the aggregate.</p>
+
+    <h3>The "lazy collection"</h3>
+
+    <p>An aggregate that returns a <code>Flow</code> or lazy <code>Sequence</code> for its internal collection, with the load happening on traversal. This breaks the "loaded as a unit" promise and makes consistency reasoning impossible. Aggregates are loaded fully or not at all.</p>
+
+    <h3>The "two-aggregate transaction"</h3>
+
+    <p>A use case that loads <code>Order</code> + <code>Customer</code> + <code>Inventory</code> in one Room transaction, mutates two of them, saves all three. Symptoms: deadlocks, slow tests, and reasoning failures when you ask "what happens if the third update fails?" Refactor to one mutation per transaction with events bridging.</p>
+
+    <h2>Aggregates and Compose / MVVM / MVI</h2>
+
+    <p>A common confusion: <em>where do aggregates live in a UI architecture?</em> The answer is the same regardless of which UI pattern you use. Aggregates live in <code>:domain</code>. ViewModels (in MVVM) or stores (in MVI) <em>orchestrate</em> them: load the aggregate via the repository, call domain methods on it, save it back, publish events. The aggregate itself never knows about <code>StateFlow</code>, <code>Compose</code>, or <code>SavedStateHandle</code>.</p>
+
+    <div class="android-box">
+      <div class="android-code">// :feature-checkout
+class CheckoutViewModel @Inject constructor(
+  private val orders: OrderRepository,
+  private val bus: DomainEventBus,
+  private val clock: Clock,
+) : ViewModel() {
+
+  private val _state = MutableStateFlow&lt;CheckoutState&gt;(CheckoutState.Idle)
+  val state: StateFlow&lt;CheckoutState&gt; = _state.asStateFlow()
+
+  fun place(orderId: OrderId) = viewModelScope.launch {
+    val order = orders.findById(orderId) ?: run {
+      _state.value = CheckoutState.Error("not found")
+      return@launch
+    }
+    runCatching { order.place(clock.now()) }
+      .onSuccess { event -&gt;
+        orders.save(order)            // single aggregate, single tx
+        bus.publish(event)            // OrderPlaced flows to other contexts
+        _state.value = CheckoutState.Placed(orderId)
+      }
+      .onFailure { e -&gt;
+        _state.value = CheckoutState.Error(e.message ?: "failed")
+      }
+  }
+}</div>
+    </div>
+
+    <p>The ViewModel is thin: load, call, save, publish, project to UI state. The interesting work &mdash; checking <code>_status</code>, validating non-empty lines, computing the total, deciding what event to emit &mdash; happens inside the aggregate. That's the goal.</p>
+
+    <h2>A word on aggregate IDs</h2>
+
+    <p>Generate aggregate IDs on the client, not the server. UUIDs (or ULIDs &mdash; sortable, also unique) let the domain mint an ID at the moment of creation, which means events can carry a real ID immediately, offline-first works naturally, and the persistence layer doesn't need a round-trip to learn what to call the new thing.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain
+@JvmInline value class OrderId(val value: String) {
+  companion object {
+    fun next(): OrderId = OrderId(Ulid.fast().toString())
+  }
+}
+
+// In a use case
+val order = Order(id = OrderId.next(), customerId = ..., ...)</div>
+    </div>
+
+    <h2>Exercise: identify the aggregate root in your app</h2>
+
+    <div class="exercise-box">
+      <p><strong>Forty-five minutes. One feature. A real codebase.</strong></p>
+      <ol>
+        <li>Pick a feature in your app that has at least one cluster of related rows: a cart, an order, a chat thread, a workout session, a ride request, a checklist.</li>
+        <li>Write down the <em>invariants</em> &mdash; what must always be true across the cluster? "Total = sum of subtotals." "Cannot ship before paid." "Empty session is not allowed."</li>
+        <li>Identify the entity that is responsible for those invariants. That's your aggregate root.</li>
+        <li>List everything else: which are value objects inside the aggregate? Which are <em>references</em> to other aggregates (held by ID, not embedded)?</li>
+        <li>Look at the existing code. Does the root currently expose mutation methods that re-establish the invariant? Or is the logic scattered across a use case, a manager, and three ViewModels?</li>
+        <li>Pick the one mutation pathway that's most scattered, and pull it onto the root. Run your tests. The scope of change should feel small &mdash; you're moving code, not rewriting it.</li>
+        <li>Write down whether anywhere in the codebase loads two aggregates into a single Room transaction. If so, sketch how an event-driven version would look. Don't refactor yet; just sketch.</li>
+      </ol>
+      <p>You're not aiming to perfectly DDD-ify the feature today. You're aiming to draw a single boundary, label it, and put one rule inside it. That's the move that compounds &mdash; the next time someone touches the feature, the boundary is visible and they don't accidentally violate it.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You can now identify aggregates and their boundaries. The next chapter answers the obvious follow-up: <em>where does the persistence go, and where does the logic that doesn't fit cleanly inside an entity live?</em> Chapter 9 covers <strong>repositories</strong> (collection-like interfaces for one aggregate type, not per-table DAOs) and <strong>domain services</strong> (stateless operations that span multiple aggregates or don't belong on any single one). We'll write a real <code>OrderRepository</code> interface in <code>:domain</code>, a Room-backed implementation in <code>:data</code>, and contrast it with the DAO-shaped repositories you've probably seen in older codebases. By the end you'll have the full vocabulary to express a feature in DDD terms; chapter 10 will then map the whole vocabulary onto a real Android module graph.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-entities-and-value-objects.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Entities and Value Objects</span>
+      </a>
+      <a href="09-repositories-and-services.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Repositories and Domain Services</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

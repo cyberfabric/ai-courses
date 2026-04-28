@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10 — Self-Hosting Math | AI Economics</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="09-cost-observability.html">← Prev</a>
+      <a href="11-fine-tuning-roi.html">Next →</a>
+      <a href="maps/10-self-hosting-math-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Self-Hosting Math: When OSS + GPUs Beat APIs</h1>
+    <p class="chapter-subtitle">The 2026 break-even analysis for renting GPUs and running open-source models instead of calling an API.</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The siren song of self-hosting</h2>
+
+      <p>Every few months, a developer looks at the API invoice, squints at an open-weights model on Hugging Face, and thinks:</p>
+
+      <blockquote>&ldquo;Wait. The model is <em>free</em>. GPUs are, like, $2/hr. Why am I paying Anthropic $3,000 a month?&rdquo;</blockquote>
+
+      <p>It&rsquo;s a reasonable thought. The numbers look seductive. An H100 at $2.99/hour sounds cheaper than a bill with five figures on it.<sup><a href="#src-1">[1]</a></sup></p>
+
+      <p>Owning a car feels cheaper than Uber until you add up insurance, gas, parking, and the Saturday you spent at the mechanic. Self-hosting LLMs follows the same script.</p>
+
+      <p>This chapter does the math honestly. By the end, you&rsquo;ll know — for your workload — whether self-hosting wins, loses, or ties in 2026.</p>
+
+      <div class="highlight-box">
+        <strong>The 2026 plot twist:</strong> API prices have fallen so fast — DeepSeek V3.2 is now $0.28/M in, $0.42/M out<sup><a href="#src-2">[2]</a></sup> — that self-hosting rarely wins on pure cost anymore. When it wins, it&rsquo;s usually because of <em>non-cost</em> drivers: data residency, latency, guaranteed throughput, or custom fine-tunes.
+      </div>
+    </section>
+
+    <section>
+      <h2>The four drivers of the self-hosting decision</h2>
+
+      <p>Before touching a spreadsheet, figure out which of these four things is actually pushing you toward self-hosting. The answer changes everything downstream.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <strong>🔒 Privacy</strong>
+          <p>PII, medical records, legal docs that can&rsquo;t leave your VPC. Often non-negotiable. Cost isn&rsquo;t the point.</p>
+        </div>
+        <div class="stat-card">
+          <strong>⚡ Latency</strong>
+          <p>On-prem or edge deployment for sub-50ms round trips. APIs add 100–300ms of round trip + queue time.</p>
+        </div>
+        <div class="stat-card">
+          <strong>💰 Cost</strong>
+          <p>The one this chapter focuses on. Winnable only at very high volume in 2026.</p>
+        </div>
+        <div class="stat-card">
+          <strong>🎛️ Control</strong>
+          <p>Custom fine-tunes, guaranteed throughput, specific sampling tricks the APIs don&rsquo;t expose.</p>
+        </div>
+      </div>
+
+      <p>If your driver is <strong>privacy</strong> or <strong>control</strong>, the math almost doesn&rsquo;t matter — you&rsquo;re going to self-host and you&rsquo;re just deciding how. If your driver is <strong>cost</strong>, the rest of this chapter will either convince you or save you a quarter of wasted work.</p>
+    </section>
+
+    <section>
+      <h2>GPU pricing reality check (April 2026)</h2>
+
+      <p>Let&rsquo;s look at what a GPU actually costs to rent right now. Prices are per-GPU-hour, sampled across specialist and hyperscaler clouds in April 2026.</p>
+
+      <!-- source: https://www.thundercompute.com/blog/nvidia-h100-pricing as of 2026-04 -->
+      <!-- source: https://jarvislabs.ai/blog/h200-price as of 2026-04 -->
+      <!-- source: https://www.silicondata.com/blog/b200-rental-price-march-2026-update as of 2026-04 -->
+      <!-- source: https://getdeploying.com/gpus/nvidia-gb200 as of 2026-04 -->
+      <!-- source: https://vast.ai/pricing/gpu/RTX-4090 as of 2026-04 -->
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>GPU</th>
+              <th>VRAM</th>
+              <th>On-demand / hr</th>
+              <th>Spot / Reserved / hr</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>RTX 4090</strong></td>
+              <td>24 GB</td>
+              <td>$0.29–$0.59</td>
+              <td>$0.18 (marketplace floor)</td>
+              <td>Hobbyist / small models only; consumer chip<sup><a href="#src-1">[1]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>H100 SXM5</strong></td>
+              <td>80 GB</td>
+              <td>$1.99–$3.99</td>
+              <td>~$1.49 (spot)</td>
+              <td>Still the workhorse of 2026<sup><a href="#src-1">[1]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>H200</strong></td>
+              <td>141 GB</td>
+              <td>$3.80–$10.60</td>
+              <td>$3.72 (GCP spot)</td>
+              <td>More VRAM per $ than H100 for big models<sup><a href="#src-3">[3]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>B200 SXM6</strong></td>
+              <td>192 GB</td>
+              <td>$3.49–$6.00</td>
+              <td>$2.12 spot / $2.65 reserved 1-yr</td>
+              <td>Blackwell; best perf/$ when in stock<sup><a href="#src-4">[4]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>GB200 Superchip</strong></td>
+              <td>372 GB</td>
+              <td>$9.08–$14.00</td>
+              <td>Usually rack-scale only (NVL72)</td>
+              <td>Huge models, short supply<sup><a href="#src-5">[5]</a></sup></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Note the spread. An H100 costs anywhere from $1.99 to $3.99 depending on provider and commitment. A B200 ranges nearly 5x. This matters a lot for break-even math.</p>
+
+      <div class="tip-box">
+        <strong>Shop around, seriously.</strong> The hyperscalers (AWS, GCP, Azure) are usually 2–3x more expensive than specialist clouds (Lambda, RunPod, CoreWeave, Crusoe, Vast.ai) for identical hardware. If your driver is cost, starting with AWS H100s will make self-hosting look like a bad idea when it&rsquo;s actually the provider that&rsquo;s the problem.
+      </div>
+    </section>
+
+    <section>
+      <h2>The OSS models worth deploying in 2026</h2>
+
+      <p>You don&rsquo;t self-host just any model — you pick one that matches both your task and the GPUs you can afford. Here&rsquo;s the April 2026 shortlist.</p>
+
+      <!-- source: https://apxml.com/posts/llama-4-system-requirements as of 2026-04 -->
+      <!-- source: https://magazine.sebastianraschka.com/p/technical-deepseek as of 2026-04 -->
+      <!-- source: https://serenitiesai.com/articles/mistral-ai-models-2026-complete-guide as of 2026-04 -->
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Total / Active params</th>
+              <th>Hardware floor</th>
+              <th>Best for</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Llama 4 Scout</strong></td>
+              <td>109B / 17B (MoE)</td>
+              <td>~1× H100 (quantized) or 1× H200</td>
+              <td>General-purpose, 10M context<sup><a href="#src-6">[6]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Llama 4 Maverick</strong></td>
+              <td>400B / 17B (MoE)</td>
+              <td>7× H200 (recommended)</td>
+              <td>GPT-4-class quality, chat/tools<sup><a href="#src-6">[6]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Llama 4 Behemoth</strong></td>
+              <td>~2T / 288B (MoE)</td>
+              <td>Not public yet (teacher model)</td>
+              <td>Not deployable — used to train Scout/Maverick<sup><a href="#src-6">[6]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>DeepSeek V3.2</strong></td>
+              <td>685B / 37B (MoE + DSA)</td>
+              <td>8× H200 or 4× B200</td>
+              <td>Strongest OSS reasoning; also ridiculously cheap via their API<sup><a href="#src-7">[7]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Qwen 3.6 Plus</strong></td>
+              <td>Sparse MoE (linear attention)</td>
+              <td>1–4× H100/H200</td>
+              <td>1M context, multilingual<sup><a href="#src-8">[8]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Mistral Large 3</strong></td>
+              <td>675B MoE</td>
+              <td>8× H100 / 4× H200</td>
+              <td>Largest open-weight MoE from a Western lab<sup><a href="#src-8">[8]</a></sup></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Notice a pattern: <strong>every model worth deploying in 2026 is a mixture-of-experts.</strong> That&rsquo;s not a coincidence.</p>
+    </section>
+
+    <section>
+      <h2>MoE is the quiet cost revolution</h2>
+
+      <p>Mixture-of-experts matters because you pay compute for the <em>active</em> parameters, not the total. DeepSeek V3.2 has 685B total params but only activates 37B per token.<sup><a href="#src-7">[7]</a></sup> That&rsquo;s an ~95% compute reduction versus a dense model of the same total size.</p>
+
+      <p>Translation: an MoE model that would embarrass a dense 200B model costs roughly the same to run as a dense 37B model. That&rsquo;s how OSS caught up to frontier APIs in a year.</p>
+
+      <div class="savings-callout banner">
+        MoE architecture → ~85&ndash;95% compute reduction vs a dense model of equal total size. It&rsquo;s the single biggest reason OSS self-hosting is even in the conversation in 2026.
+      </div>
+
+      <p>It also means <strong>VRAM is still the bottleneck</strong>, not compute. You need to fit all 685B params in GPU memory even if you only activate 37B at a time, because which 37B you activate changes token by token.</p>
+    </section>
+
+    <section>
+      <h2>The break-even calculation</h2>
+
+      <p>Here&rsquo;s the honest math. To self-host economically you need:</p>
+
+      <div class="cost-breakdown-box">
+        <div class="breakdown-title">Cost per 1M tokens, self-hosted</div>
+        <div class="breakdown-line"><span class="breakdown-label">Hourly GPU cost</span><span class="breakdown-value">$X/hr × N GPUs</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Tokens per hour</span><span class="breakdown-value">throughput × 3600s × utilization</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Ops multiplier</span><span class="breakdown-value">× 1.3 to 1.6 (engineer time, failover, monitoring)</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Cost / 1M tokens</span><span class="breakdown-value">= (GPU $/hr × ops × 1,000,000) / tokens-per-hour</span></div>
+      </div>
+
+      <p>Then compare that number to the API price per 1M tokens. If your self-hosted cost is lower <em>and</em> you&rsquo;re confident you&rsquo;ll hit the assumed utilization, self-host. Otherwise, don&rsquo;t.</p>
+
+      <h3>Worked example: serving Llama 4 Scout on 1× H200</h3>
+
+      <p>Let&rsquo;s price out a realistic deployment.</p>
+
+      <div class="cost-breakdown-box">
+        <div class="breakdown-title">Llama 4 Scout on a single H200 — monthly</div>
+        <div class="breakdown-line"><span class="breakdown-label">H200 (reserved, Jarvislabs-ish)</span><span class="breakdown-value">$3.80/hr</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Hours / month</span><span class="breakdown-value">× 730</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Base GPU cost</span><span class="breakdown-value">= $2,774</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Ops overhead (engineering, failover, Grafana, on-call)</span><span class="breakdown-value">× 1.4</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Realistic monthly cost</span><span class="breakdown-value">≈ $3,884</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Assumed throughput with vLLM + speculative decoding</span><span class="breakdown-value">~3,000 tokens/sec sustained</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Effective utilization (not peak!)</span><span class="breakdown-value">× 0.5</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Tokens / month at 50% utilization</span><span class="breakdown-value">≈ 3.94B</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Effective cost per 1M tokens</span><span class="breakdown-value">≈ $0.99</span></div>
+      </div>
+
+      <p>Now compare that to API prices for rough-equivalent quality (2026):</p>
+
+      <ul>
+        <li>Claude Haiku 4.5: $1/$5 per 1M (in/out)</li>
+        <li>Gemini 2.5 Flash: ~$0.30/$2.50 per 1M</li>
+        <li>GPT-5.4 Mini: ~$0.40/$1.60 per 1M</li>
+        <li><strong>DeepSeek V3.2 API (higher quality than Scout!): $0.28/$0.42 per 1M</strong><sup><a href="#src-2">[2]</a></sup></li>
+      </ul>
+
+      <p>Yes, you read that right. DeepSeek charges you less to run a <em>bigger</em> model on <em>their</em> hardware than it costs you to rent an H200 and run a smaller model. That&rsquo;s 2026 in a nutshell.</p>
+
+      <div class="warning-box">
+        <strong>The 50% utilization trap.</strong> In production your GPU spends nights, weekends, and the dip between spikes mostly idle. If your traffic isn&rsquo;t 24/7 heavy, your real utilization is 20–40%, not 50%. That inflates cost-per-token by 1.25–2.5x — and usually pushes self-hosting back above API pricing.
+      </div>
+    </section>
+
+    <section>
+      <h2>When self-hosting does win on cost</h2>
+
+      <p>There are still scenarios where self-hosting beats the API bill on pure dollars. Here&rsquo;s the decision chart.</p>
+
+      <div class="roi-box">
+        <div class="roi-scenarios">
+          <div class="scenario scenario-a">
+            <h4>❌ API wins</h4>
+            <ul>
+              <li>&lt; 2B tokens / month total</li>
+              <li>Bursty traffic (GPU idle &gt; 50% of hours)</li>
+              <li>Multiple model sizes needed (Haiku + Sonnet + Opus)</li>
+              <li>No in-house ML platform team</li>
+              <li>Need latest model within weeks of release</li>
+            </ul>
+            <p><strong>Net:</strong> APIs cheaper and simpler. Don&rsquo;t self-host.</p>
+          </div>
+          <div class="scenario scenario-b">
+            <h4>✅ Self-hosting wins</h4>
+            <ul>
+              <li>&gt; 10B tokens / month steady</li>
+              <li>Heavy batch workloads (fill the GPU)</li>
+              <li>Single fine-tuned model serves most traffic</li>
+              <li>Dedicated ML platform team already in place</li>
+              <li>Locked-in reserved GPU capacity at $2–$3/hr</li>
+            </ul>
+            <p><strong>Net:</strong> 50–70% savings vs API at scale, assuming ops go well.</p>
+          </div>
+        </div>
+        <div class="roi-verdict">
+          <strong>Verdict:</strong> The cost break-even in 2026 sits roughly at <em>10 billion tokens per month sustained</em>. Below that, API wins. Above it — and only if utilization stays high — self-hosting can save 50–70%.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Serving frameworks: the 2026 big three</h2>
+
+      <p>Picking a model is only half the job. The serving framework is the other half — and it determines whether your expensive H200 runs at 500 tokens/sec or 3,000 tokens/sec.</p>
+
+      <div class="stats-grid">
+        <div class="tool-card">
+          <span class="tool-icon">⚡</span>
+          <strong>vLLM</strong>
+          <p>The default open-source choice. PagedAttention, continuous batching, P-EAGLE speculative decoding since v0.16.<sup><a href="#src-9">[9]</a></sup> Easiest on-ramp. Run <code>vllm serve</code> and go.</p>
+        </div>
+        <div class="tool-card">
+          <span class="tool-icon">🚀</span>
+          <strong>SGLang</strong>
+          <p>Often faster than vLLM on long-context workloads. Structured-output engine for JSON/regex built in. Speculative decoding supported.<sup><a href="#src-9">[9]</a></sup></p>
+        </div>
+        <div class="tool-card">
+          <span class="tool-icon">🏎️</span>
+          <strong>TensorRT-LLM</strong>
+          <p>NVIDIA&rsquo;s own serving stack. Best raw throughput on NVIDIA hardware. Steepest learning curve. Speculative decoding up to 3.6x speedup.<sup><a href="#src-10">[10]</a></sup></p>
+        </div>
+      </div>
+
+      <p>In 2026 these three are the only serving frameworks serious teams run in production for LLMs. Ollama is great for laptops, not for multi-tenant serving.<sup><a href="#src-9">[9]</a></sup></p>
+
+      <div class="tip-box">
+        <strong>Start with vLLM.</strong> It&rsquo;s the shortest path from &ldquo;I have a GPU&rdquo; to &ldquo;I have an OpenAI-compatible endpoint.&rdquo; Move to SGLang or TensorRT-LLM only after you&rsquo;ve proven the deployment works and you&rsquo;re chasing the last 30% of performance.
+      </div>
+    </section>
+
+    <section>
+      <h2>Two cost multipliers everyone forgets</h2>
+
+      <h3>Speculative decoding</h3>
+
+      <p>A small &ldquo;draft&rdquo; model guesses the next few tokens, and the big model verifies them all in one forward pass instead of one at a time. In 2026 this is a standard feature of vLLM, SGLang, and TensorRT-LLM, delivering 2–3x (occasionally up to 3.6x) faster generation with no quality loss.<sup><a href="#src-10">[10]</a></sup></p>
+
+      <p>More tokens per GPU-hour means lower cost per 1M tokens. If you&rsquo;re not enabling this, you&rsquo;re leaving 50–70% of your GPU on the table.</p>
+
+      <h3>Quantization</h3>
+
+      <p>Run the model in INT8 or 4-bit (GGUF, AWQ, GPTQ). You give up 0.5–2 points of benchmark quality and get ~2x throughput and ~4x VRAM headroom. For most production tasks, that trade is obvious.</p>
+
+      <div class="savings-callout">
+        Stacking speculative decoding + 4-bit quantization can double to triple your effective tokens-per-GPU-hour — cutting self-hosted $/1M-tokens by 40–60% with minimal quality loss.
+      </div>
+    </section>
+
+    <section>
+      <h2>Ops overhead nobody budgets for</h2>
+
+      <p>The thing that kills most self-hosting cost pitches is the stuff that doesn&rsquo;t show up in the per-GPU-hour spreadsheet.</p>
+
+      <div class="warning-box">
+        <strong>What GPU-hour pricing hides:</strong>
+        <ul>
+          <li><strong>Reliability engineering.</strong> GPUs fail. Nodes crash. CUDA versions fight. You need on-call.</li>
+          <li><strong>Model updates.</strong> When Llama 5 drops in August, someone has to re-quantize, re-benchmark, re-deploy, re-eval.</li>
+          <li><strong>Serving infra.</strong> Load balancer, autoscaler, rate limiter, logger, tracing — all the stuff the API provider built for you.</li>
+          <li><strong>Capacity swings.</strong> Scaling down is hard when you&rsquo;re on reserved capacity. API providers absorb that.</li>
+          <li><strong>Safety layers.</strong> Moderation, PII redaction, jailbreak resistance — built-in with APIs, DIY with self-hosting.</li>
+        </ul>
+      </div>
+
+      <p>A rule of thumb: take your raw GPU bill, multiply by 1.3–1.6. That&rsquo;s your realistic monthly cost. If 1.6× your GPU bill still beats the API, self-hosting <em>probably</em> wins. If it doesn&rsquo;t, you&rsquo;re deluding yourself.</p>
+    </section>
+
+    <section>
+      <h2>The hybrid architecture that usually wins</h2>
+
+      <p>The cleanest answer in 2026 is rarely &ldquo;all API&rdquo; or &ldquo;all self-hosted.&rdquo; It&rsquo;s hybrid:</p>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content"><strong>Route cheap traffic to self-hosted.</strong> The 70–80% of requests that are easy — classification, extraction, summarization — go to your own Llama 4 Scout instance.</div>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content"><strong>Route hard traffic to the API.</strong> The 20–30% that need frontier reasoning go to Sonnet, Opus, or GPT-5.4. Pay for quality when it matters.</div>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content"><strong>Spill over to the API.</strong> When your GPUs saturate, overflow traffic automatically spills to the cheap API so users don&rsquo;t see errors.</div>
+        </div>
+      </div>
+
+      <p>This pattern uses the router we built in Chapter 7 and the capacity planning from Chapter 8. You get the cost advantage of self-hosted on steady traffic and the elasticity of the API on spikes.</p>
+    </section>
+
+    <section>
+      <h2>Hidden driver: fine-tuning lock-in</h2>
+
+      <p>If you fine-tuned a model, self-hosting stops being optional. Most providers don&rsquo;t host arbitrary fine-tuned open weights; the ones that do charge dedicated-capacity prices that can exceed plain GPU rental.</p>
+
+      <p>So when you decide whether to fine-tune (Chapter 11, coming up), you&rsquo;re also implicitly deciding whether to self-host. Those two decisions are linked.</p>
+
+      <div class="tip-box">
+        <strong>Don&rsquo;t self-host <em>and</em> fine-tune in the same sprint.</strong> Each is its own ops adventure. Ship the self-hosted base model first, get it stable for a month, <em>then</em> add a fine-tune on top.
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise: price your biggest workload</h2>
+
+      <div class="exercise-box">
+        <h3>🛠️ Do it yourself (45 min)</h3>
+        <ol>
+          <li><strong>Pick your biggest AI workload</strong> — the one eating the most API dollars today.</li>
+          <li><strong>Measure sustained throughput.</strong> Tokens/day, steady-state. Multiply by 30 for monthly tokens.</li>
+          <li><strong>Pick a candidate OSS model</strong> that could plausibly handle the task (Llama 4 Scout for most; DeepSeek V3.2 if you need reasoning).</li>
+          <li><strong>Estimate GPU count.</strong> Rule of thumb: Scout fits on 1× H100 at 4-bit; DeepSeek V3.2 needs 4× B200 or 8× H200.</li>
+          <li><strong>Compute monthly GPU cost.</strong> <code>GPUs × $/hr × 730 × 1.4 (ops multiplier)</code>.</li>
+          <li><strong>Estimate effective throughput.</strong> 3K tokens/sec per H200 at 40% utilization is a reasonable starting point.</li>
+          <li><strong>Divide</strong> monthly cost by monthly tokens. You have your $/1M self-hosted.</li>
+          <li><strong>Compare</strong> to what you&rsquo;re paying the API today for the same task. Write down the winner and by how much.</li>
+        </ol>
+        <p><strong>Bonus:</strong> redo the math at 2× and 10× your current volume. Break-even usually flips at 3–5×.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The checklist before you pull the trigger</h2>
+
+      <div class="checklist">
+        <ul>
+          <li>✅ Usage is &gt; 10B tokens/month steady (not bursty)</li>
+          <li>✅ You have (or are hiring) an ML platform engineer on-call</li>
+          <li>✅ A single OSS model can cover &gt; 70% of your traffic</li>
+          <li>✅ You have reserved GPU capacity at under $3/hr or a plan to get there</li>
+          <li>✅ Your eval suite can tell you if a model update regresses quality</li>
+          <li>✅ You have a hybrid fallback to an API when GPUs saturate</li>
+          <li>✅ You&rsquo;ve priced the ops multiplier (1.3–1.6×) honestly</li>
+          <li>✅ You understand latency tradeoffs for your use case</li>
+        </ul>
+      </div>
+
+      <p>If you can&rsquo;t tick every box, self-hosting is probably a distraction. Stick with APIs, optimize with caching (Ch. 4), batching (Ch. 5), compression (Ch. 6), and routing (Ch. 7). That stack can deliver 80–95% cost reduction without a single GPU procurement meeting.</p>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+
+      <p>Chapter 11 walks through the <strong>fine-tuning ROI</strong> math — LoRA vs QLoRA vs full-tune, how much it actually costs ($20 for a LoRA on a 4090, $510 for a full fine-tune on 8× H100), and the prompt → RAG → fine-tune decision tree. Because the moment you commit to a fine-tune, the self-hosting question in this chapter comes right back to bite.</p>
+
+      <p>See you there.</p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources</h3>
+      <ol>
+        <li id="src-1"><a href="https://www.thundercompute.com/blog/nvidia-h100-pricing" target="_blank" rel="noopener">Thundercompute — NVIDIA H100 Pricing (April 2026)</a>; <a href="https://vast.ai/pricing/gpu/RTX-4090" target="_blank" rel="noopener">Vast.ai — RTX 4090 pricing</a></li>
+        <li id="src-2"><a href="https://www.tldl.io/resources/deepseek-api-pricing" target="_blank" rel="noopener">TLDL — DeepSeek API Pricing 2026: V3.2 at $0.14/M (Cheapest LLM)</a></li>
+        <li id="src-3"><a href="https://jarvislabs.ai/blog/h200-price" target="_blank" rel="noopener">Jarvis Labs — NVIDIA H200 Price Guide 2026</a></li>
+        <li id="src-4"><a href="https://www.silicondata.com/blog/b200-rental-price-march-2026-update" target="_blank" rel="noopener">Silicon Data — B200 Rental Price March 2026 Update</a></li>
+        <li id="src-5"><a href="https://getdeploying.com/gpus/nvidia-gb200" target="_blank" rel="noopener">getdeploying — GB200 Cloud Pricing (2026)</a></li>
+        <li id="src-6"><a href="https://apxml.com/posts/llama-4-system-requirements" target="_blank" rel="noopener">APXML — Llama 4 GPU System Requirements (Scout, Maverick, Behemoth)</a></li>
+        <li id="src-7"><a href="https://magazine.sebastianraschka.com/p/technical-deepseek" target="_blank" rel="noopener">Sebastian Raschka — A Technical Tour of the DeepSeek Models from V3 to V3.2</a></li>
+        <li id="src-8"><a href="https://serenitiesai.com/articles/mistral-ai-models-2026-complete-guide" target="_blank" rel="noopener">SerenitiesAI — Mistral AI Models 2026: Small 4, Large 3</a></li>
+        <li id="src-9"><a href="https://www.yottalabs.ai/post/best-llm-inference-engines-in-2026-vllm-tensorrt-llm-tgi-and-sglang-compared" target="_blank" rel="noopener">Yotta Labs — Best LLM Inference Engines in 2026</a></li>
+        <li id="src-10"><a href="https://blog.premai.io/speculative-decoding-2-3x-faster-llm-inference-2026/" target="_blank" rel="noopener">Prem AI Blog — Speculative Decoding: 2-3x Faster LLM Inference (2026)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-cost-observability.html">← Chapter 9: Cost Observability</a>
+      <a href="index.html">Contents</a>
+      <a href="11-fine-tuning-roi.html">Chapter 11: Fine-Tuning ROI →</a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

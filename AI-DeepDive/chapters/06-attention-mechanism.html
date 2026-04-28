@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Attention Is All You Need | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-tokenization-deep-dive.html">&larr; Prev</a>
+      <a href="07-full-transformer.html">Next &rarr;</a>
+      <a href="maps/06-attention-mechanism-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Attention Is All You Need</h1>
+    <p class="chapter-subtitle">Queries, keys, and values &mdash; computed with real numbers on a 3-token sequence</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/05-transformer.html">AI-Intro Ch 5: The Transformer</a>. There you learned what attention does. Now you&rsquo;ll compute every number yourself.
+    </div>
+
+    <p>In <a href="05-tokenization-deep-dive.html">Chapter 5</a>, you learned how text becomes token IDs. In Chapters 2&ndash;4, you saw how neural networks process numbers through layers. But those networks treated every input equally &mdash; there was no concept of &ldquo;this input is more relevant to me than that one.&rdquo;</p>
+
+    <p>Attention changes everything. It&rsquo;s the mechanism that lets a model decide, for each token, <strong>which other tokens matter most right now</strong>. It&rsquo;s the single most important idea in modern AI, and in this chapter, you&rsquo;ll compute it from scratch.</p>
+
+    <!-- ============================================== -->
+    <h2>The Core Question</h2>
+    <!-- ============================================== -->
+
+    <p>Consider this sentence:</p>
+
+    <blockquote>&ldquo;The cat sat on the mat because <strong>it</strong> was tired.&rdquo;</blockquote>
+
+    <p>When the model processes the word &ldquo;it,&rdquo; it needs to figure out: what does &ldquo;it&rdquo; refer to? The cat? The mat? The sitting? A simple neural network would treat all previous words equally. But attention lets the model compute a <strong>relevance score</strong> between &ldquo;it&rdquo; and every other word, and &ldquo;cat&rdquo; should score highest.</p>
+
+    <p>The question attention answers is: <strong>&ldquo;When processing this token, how much should I pay attention to each other token?&rdquo;</strong></p>
+
+    <!-- ============================================== -->
+    <h2>The Search Engine Analogy</h2>
+    <!-- ============================================== -->
+
+    <p>Attention works like a search engine with three components:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Search Engine</th><th>Attention</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Query (Q)</strong></td>
+            <td>What you type in the search bar</td>
+            <td>What this token is looking for</td>
+          </tr>
+          <tr>
+            <td><strong>Key (K)</strong></td>
+            <td>The title/summary of each web page</td>
+            <td>What each token advertises about itself</td>
+          </tr>
+          <tr>
+            <td><strong>Value (V)</strong></td>
+            <td>The actual content of each web page</td>
+            <td>The actual information each token carries</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>You type a query, the search engine compares it to every page&rsquo;s key (title), ranks them by relevance, and returns the values (content) of the best matches. Attention does the same thing, but for every token in a sequence, simultaneously.</p>
+
+    <div class="operation-box">
+      <h4>Self-Attention in One Sentence</h4>
+      <p>For each token: compute a query (what am I looking for?), compare it to every token&rsquo;s key (what do you offer?), get relevance scores, and blend everyone&rsquo;s values weighted by those scores.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Where Q, K, V Come From</h2>
+    <!-- ============================================== -->
+
+    <p>Every token starts as an <strong>embedding vector</strong> &mdash; a list of numbers representing that token&rsquo;s meaning (we&rsquo;ll cover how embeddings are trained in Chapter 11). To get Q, K, and V, we multiply each embedding by three different <strong>learned weight matrices</strong>:</p>
+
+    <ul>
+      <li>Q = embedding &times; W<sub>Q</sub> &mdash; &ldquo;What am I looking for?&rdquo;</li>
+      <li>K = embedding &times; W<sub>K</sub> &mdash; &ldquo;What do I offer?&rdquo;</li>
+      <li>V = embedding &times; W<sub>V</sub> &mdash; &ldquo;What information do I carry?&rdquo;</li>
+    </ul>
+
+    <p>These weight matrices are learned during training (Chapter 4). The model discovers <em>what</em> to look for and <em>what</em> to advertise &mdash; nobody programs these rules by hand.</p>
+
+    <!-- ============================================== -->
+    <h2>Our Setup: 3 Tokens, Small Numbers</h2>
+    <!-- ============================================== -->
+
+    <p>Let&rsquo;s compute attention for a 3-token sequence. To keep the numbers friendly, we&rsquo;ll use:</p>
+
+    <ul>
+      <li><strong>3 tokens:</strong> &ldquo;The&rdquo;, &ldquo;cat&rdquo;, &ldquo;sat&rdquo;</li>
+      <li><strong>Embedding dimension:</strong> 4 (real models use 768&ndash;4096, but the math is identical)</li>
+      <li><strong>Q/K/V dimension:</strong> 3 (the output dimension of each weight matrix)</li>
+    </ul>
+
+    <p>Here are our token embeddings (imagine these came from the embedding table in Chapter 5):</p>
+
+    <table>
+      <thead>
+        <tr><th>Token</th><th colspan="4">Embedding (4D)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>The</strong></td><td><code>1.0</code></td><td><code>0.5</code></td><td><code>0.2</code></td><td><code>0.8</code></td></tr>
+        <tr><td><strong>cat</strong></td><td><code>0.3</code></td><td><code>0.9</code></td><td><code>0.7</code></td><td><code>0.1</code></td></tr>
+        <tr><td><strong>sat</strong></td><td><code>0.6</code></td><td><code>0.2</code></td><td><code>0.5</code></td><td><code>0.4</code></td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============================================== -->
+    <h2>Step 1: Compute Q, K, V</h2>
+    <!-- ============================================== -->
+
+    <p>We multiply each embedding by the weight matrices. Here are our three weight matrices (4 rows &times; 3 columns each, because 4D input &rarr; 3D output):</p>
+
+    <div class="math-walkthrough">
+      <h4>Weight matrix W<sub>Q</sub></h4>
+      <table>
+        <tbody>
+          <tr><td><code>0.2</code></td><td><code>0.1</code></td><td><code>0.4</code></td></tr>
+          <tr><td><code>0.3</code></td><td><code>0.5</code></td><td><code>0.1</code></td></tr>
+          <tr><td><code>0.1</code></td><td><code>0.3</code></td><td><code>0.6</code></td></tr>
+          <tr><td><code>0.4</code></td><td><code>0.2</code></td><td><code>0.3</code></td></tr>
+        </tbody>
+      </table>
+
+      <h4>Computing Q for &ldquo;The&rdquo; (embedding [1.0, 0.5, 0.2, 0.8]):</h4>
+      <p>Q<sub>1</sub> = (1.0&times;0.2) + (0.5&times;0.3) + (0.2&times;0.1) + (0.8&times;0.4) = 0.20 + 0.15 + 0.02 + 0.32 = <strong>0.69</strong></p>
+      <p>Q<sub>2</sub> = (1.0&times;0.1) + (0.5&times;0.5) + (0.2&times;0.3) + (0.8&times;0.2) = 0.10 + 0.25 + 0.06 + 0.16 = <strong>0.57</strong></p>
+      <p>Q<sub>3</sub> = (1.0&times;0.4) + (0.5&times;0.1) + (0.2&times;0.6) + (0.8&times;0.3) = 0.40 + 0.05 + 0.12 + 0.24 = <strong>0.81</strong></p>
+      <p>Q<sub>The</sub> = <code>[0.69, 0.57, 0.81]</code></p>
+    </div>
+
+    <p>We do the same computation for &ldquo;cat&rdquo; and &ldquo;sat&rdquo;, and repeat with W<sub>K</sub> and W<sub>V</sub>. Here are all the results:</p>
+
+    <div class="math-walkthrough">
+      <h4>All Q, K, V vectors</h4>
+
+      <p><strong>Queries (Q):</strong></p>
+      <table>
+        <thead><tr><th>Token</th><th>Q<sub>1</sub></th><th>Q<sub>2</sub></th><th>Q<sub>3</sub></th></tr></thead>
+        <tbody>
+          <tr><td>The</td><td><code>0.69</code></td><td><code>0.57</code></td><td><code>0.81</code></td></tr>
+          <tr><td>cat</td><td><code>0.40</code></td><td><code>0.51</code></td><td><code>0.56</code></td></tr>
+          <tr><td>sat</td><td><code>0.45</code></td><td><code>0.39</code></td><td><code>0.69</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Keys (K):</strong> (using W<sub>K</sub> = [[0.3, 0.2, 0.1], [0.1, 0.4, 0.3], [0.5, 0.1, 0.2], [0.2, 0.3, 0.5]])</p>
+      <table>
+        <thead><tr><th>Token</th><th>K<sub>1</sub></th><th>K<sub>2</sub></th><th>K<sub>3</sub></th></tr></thead>
+        <tbody>
+          <tr><td>The</td><td><code>0.61</code></td><td><code>0.66</code></td><td><code>0.66</code></td></tr>
+          <tr><td>cat</td><td><code>0.55</code></td><td><code>0.46</code></td><td><code>0.42</code></td></tr>
+          <tr><td>sat</td><td><code>0.53</code></td><td><code>0.39</code></td><td><code>0.46</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Values (V):</strong> (using W<sub>V</sub> = [[0.1, 0.3, 0.5], [0.4, 0.2, 0.1], [0.2, 0.5, 0.3], [0.3, 0.1, 0.4]])</p>
+      <table>
+        <thead><tr><th>Token</th><th>V<sub>1</sub></th><th>V<sub>2</sub></th><th>V<sub>3</sub></th></tr></thead>
+        <tbody>
+          <tr><td>The</td><td><code>0.58</code></td><td><code>0.58</code></td><td><code>0.89</code></td></tr>
+          <tr><td>cat</td><td><code>0.56</code></td><td><code>0.44</code></td><td><code>0.40</code></td></tr>
+          <tr><td>sat</td><td><code>0.26</code></td><td><code>0.57</code></td><td><code>0.63</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What do these vectors mean?</h4>
+      <p>Each token now has three representations:</p>
+      <ul>
+        <li><strong>Q</strong> &mdash; what it&rsquo;s searching for (its &ldquo;question&rdquo; to the other tokens)</li>
+        <li><strong>K</strong> &mdash; what it offers to other tokens searching for relevance</li>
+        <li><strong>V</strong> &mdash; the actual information it will contribute to the output</li>
+      </ul>
+      <p>The same token plays all three roles simultaneously. When processing &ldquo;cat,&rdquo; the model uses cat&rsquo;s Q to search, but also uses cat&rsquo;s K and V when other tokens look at cat.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Step 2: Attention Scores (Q &times; K)</h2>
+    <!-- ============================================== -->
+
+    <p>Now comes the core: compute how relevant each token is to every other token. We do this by taking the <strong>dot product of each Q with every K</strong>:</p>
+
+    <div class="operation-box">
+      <h4>Dot Product = Relevance Score</h4>
+      <p>The dot product of Q<sub>i</sub> and K<sub>j</sub> measures how well token i&rsquo;s &ldquo;question&rdquo; matches token j&rsquo;s &ldquo;advertisement.&rdquo; High dot product = high relevance. Low dot product = not relevant.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Computing the 3&times;3 attention score matrix</h4>
+
+      <p><strong>Score(The, The)</strong> = Q<sub>The</sub> &middot; K<sub>The</sub> = (0.69&times;0.61) + (0.57&times;0.66) + (0.81&times;0.66)</p>
+      <p>= 0.42 + 0.38 + 0.53 = <strong>1.33</strong></p>
+
+      <p><strong>Score(The, cat)</strong> = Q<sub>The</sub> &middot; K<sub>cat</sub> = (0.69&times;0.55) + (0.57&times;0.46) + (0.81&times;0.42)</p>
+      <p>= 0.38 + 0.26 + 0.34 = <strong>0.98</strong></p>
+
+      <p><strong>Score(The, sat)</strong> = Q<sub>The</sub> &middot; K<sub>sat</sub> = (0.69&times;0.53) + (0.57&times;0.39) + (0.81&times;0.46)</p>
+      <p>= 0.37 + 0.22 + 0.37 = <strong>0.96</strong></p>
+
+      <p>Computing all 9 scores the same way:</p>
+
+      <table>
+        <thead>
+          <tr><th>Q &darr; &nbsp; K &rarr;</th><th>The</th><th>cat</th><th>sat</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>The</strong></td><td><code>1.33</code></td><td><code>0.98</code></td><td><code>0.96</code></td></tr>
+          <tr><td><strong>cat</strong></td><td><code>0.98</code></td><td><code>0.76</code></td><td><code>0.72</code></td></tr>
+          <tr><td><strong>sat</strong></td><td><code>1.09</code></td><td><code>0.80</code></td><td><code>0.80</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Each row shows how much that token attends to every token (including itself). &ldquo;The&rdquo; has the highest scores because its K vector aligns well with everyone&rsquo;s queries in this example.</p>
+
+    <!-- ============================================== -->
+    <h2>Step 3: Scale the Scores</h2>
+    <!-- ============================================== -->
+
+    <p>Before softmax, we divide every score by <strong>&radic;d<sub>k</sub></strong>, where d<sub>k</sub> is the dimension of the key vectors. Our keys are 3-dimensional, so we divide by &radic;3 &asymp; <code>1.73</code>.</p>
+
+    <div class="math-walkthrough">
+      <h4>Scaling the scores</h4>
+      <table>
+        <thead>
+          <tr><th>Q &darr; &nbsp; K &rarr;</th><th>The</th><th>cat</th><th>sat</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>The</strong></td><td><code>1.33/1.73 = 0.77</code></td><td><code>0.98/1.73 = 0.57</code></td><td><code>0.96/1.73 = 0.55</code></td></tr>
+          <tr><td><strong>cat</strong></td><td><code>0.98/1.73 = 0.57</code></td><td><code>0.76/1.73 = 0.44</code></td><td><code>0.72/1.73 = 0.42</code></td></tr>
+          <tr><td><strong>sat</strong></td><td><code>1.09/1.73 = 0.63</code></td><td><code>0.80/1.73 = 0.46</code></td><td><code>0.80/1.73 = 0.46</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why scale?</h4>
+      <p>Without scaling, large key dimensions produce huge dot products. Huge numbers going into softmax create extremely &ldquo;peaky&rdquo; distributions where one token gets nearly 100% of the attention and everything else gets ~0%. Dividing by &radic;d<sub>k</sub> keeps the scores in a moderate range so softmax produces a useful distribution &mdash; allowing the model to attend to <em>multiple</em> tokens at once.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Step 4: Softmax &mdash; Scores to Probabilities</h2>
+    <!-- ============================================== -->
+
+    <p>Softmax turns each row of scores into a probability distribution (positive numbers that sum to 1). We apply it row by row &mdash; each token gets its own distribution over all tokens.</p>
+
+    <div class="math-walkthrough">
+      <h4>Softmax for &ldquo;The&rdquo;&rsquo;s row: [0.77, 0.57, 0.55]</h4>
+
+      <p><strong>Step 1:</strong> Exponentiate each score:</p>
+      <p>e<sup>0.77</sup> = <code>2.16</code>, &nbsp; e<sup>0.57</sup> = <code>1.77</code>, &nbsp; e<sup>0.55</sup> = <code>1.73</code></p>
+
+      <p><strong>Step 2:</strong> Sum them: <code>2.16 + 1.77 + 1.73 = 5.66</code></p>
+
+      <p><strong>Step 3:</strong> Divide each by the sum:</p>
+      <p>The: <code>2.16 / 5.66 = 0.38</code></p>
+      <p>cat: <code>1.77 / 5.66 = 0.31</code></p>
+      <p>sat: <code>1.73 / 5.66 = 0.31</code></p>
+
+      <p><strong>Check:</strong> 0.38 + 0.31 + 0.31 = 1.00 &#10003;</p>
+    </div>
+
+    <p>Applying softmax to all three rows:</p>
+
+    <div class="math-walkthrough">
+      <h4>Full attention weight matrix</h4>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>att(The)</th><th>att(cat)</th><th>att(sat)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>The</strong></td><td><code>0.38</code></td><td><code>0.31</code></td><td><code>0.31</code></td></tr>
+          <tr><td><strong>cat</strong></td><td><code>0.37</code></td><td><code>0.32</code></td><td><code>0.31</code></td></tr>
+          <tr><td><strong>sat</strong></td><td><code>0.37</code></td><td><code>0.32</code></td><td><code>0.31</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Reading the attention weights</h4>
+      <p>Each row is a probability distribution. Row &ldquo;The&rdquo; says: when processing &ldquo;The,&rdquo; pay 38% attention to itself, 31% to &ldquo;cat,&rdquo; and 31% to &ldquo;sat.&rdquo; In this toy example the weights are fairly uniform because our random weight matrices haven&rsquo;t been trained. In a real model, after billions of training steps, &ldquo;it&rdquo; in &ldquo;the cat sat because <strong>it</strong> was tired&rdquo; would have an attention weight of, say, 0.72 for &ldquo;cat&rdquo; and small weights for everything else.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Checkpoint</h4>
+      <p>If the scaled attention scores for &ldquo;sat&rdquo; were [0.63, 0.46, 0.46], and you compute softmax, what property must the three resulting weights have?</p>
+      <p><em>Answer: They must all be positive and sum to exactly 1.0. They form a probability distribution over all tokens.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Step 5: Weighted Sum of Values</h2>
+    <!-- ============================================== -->
+
+    <p>The final step: for each token, blend the value vectors using the attention weights. This produces the <strong>attention output</strong> &mdash; a new representation that incorporates information from the most relevant tokens.</p>
+
+    <div class="math-walkthrough">
+      <h4>Attention output for &ldquo;The&rdquo;</h4>
+
+      <p>Weights: The=0.38, cat=0.31, sat=0.31</p>
+      <p>Values: V<sub>The</sub>=[0.58, 0.58, 0.89], V<sub>cat</sub>=[0.56, 0.44, 0.40], V<sub>sat</sub>=[0.26, 0.57, 0.63]</p>
+
+      <p><strong>Output<sub>1</sub></strong> = (0.38&times;0.58) + (0.31&times;0.56) + (0.31&times;0.26) = 0.22 + 0.17 + 0.08 = <strong>0.47</strong></p>
+      <p><strong>Output<sub>2</sub></strong> = (0.38&times;0.58) + (0.31&times;0.44) + (0.31&times;0.57) = 0.22 + 0.14 + 0.18 = <strong>0.54</strong></p>
+      <p><strong>Output<sub>3</sub></strong> = (0.38&times;0.89) + (0.31&times;0.40) + (0.31&times;0.63) = 0.34 + 0.12 + 0.20 = <strong>0.66</strong></p>
+
+      <p>Attention output for &ldquo;The&rdquo; = <code>[0.47, 0.54, 0.66]</code></p>
+    </div>
+
+    <p>Computing all three outputs:</p>
+
+    <table>
+      <thead>
+        <tr><th>Token</th><th>Attention Output</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>The</strong></td><td><code>[0.47, 0.54, 0.66]</code></td></tr>
+        <tr><td><strong>cat</strong></td><td><code>[0.48, 0.53, 0.65]</code></td></tr>
+        <tr><td><strong>sat</strong></td><td><code>[0.48, 0.53, 0.65]</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="intuition-box">
+      <h4>What just happened?</h4>
+      <p>Each token&rsquo;s output is now a <strong>blend of all tokens&rsquo; values</strong>, weighted by relevance. &ldquo;The&rdquo; didn&rsquo;t just look at its own value &mdash; it mixed in information from &ldquo;cat&rdquo; and &ldquo;sat&rdquo; based on how relevant they were. This is the magic: <strong>after attention, every token&rsquo;s representation contains information from every other relevant token.</strong></p>
+      <p>In our toy example the outputs look similar because the weights are untrained. In a real model, &ldquo;it&rdquo;&rsquo;s output would be heavily influenced by &ldquo;cat&rdquo;&rsquo;s value, encoding the knowledge that &ldquo;it&rdquo; refers to &ldquo;cat.&rdquo;</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Complete Formula</h2>
+    <!-- ============================================== -->
+
+    <p>Everything we just did can be written as one formula:</p>
+
+    <div class="highlight-box">
+      <p style="text-align: center; font-size: 1.1em;">
+        <strong>Attention(Q, K, V) = softmax(Q &times; K<sup>T</sup> / &radic;d<sub>k</sub>) &times; V</strong>
+      </p>
+    </div>
+
+    <p>That&rsquo;s it. Five steps collapsed into one line:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>Q &times; K<sup>T</sup></h4>
+        <p>Dot products: how relevant?</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>&divide; &radic;d<sub>k</sub></h4>
+        <p>Scale down to keep softmax stable</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Softmax</h4>
+        <p>Convert to probabilities</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>&times; V</h4>
+        <p>Weighted blend of values</p>
+      </div>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Self-Attention: Q, K, V from the Same Source</h2>
+    <!-- ============================================== -->
+
+    <p>In our example, all three &mdash; Q, K, and V &mdash; came from the <em>same</em> sequence (&ldquo;The cat sat&rdquo;). This is called <strong>self-attention</strong>: the sequence is attending to itself.</p>
+
+    <p>This is what happens inside a transformer. Each token asks &ldquo;who else in this sentence is relevant to me?&rdquo; and the answer comes from the same sentence.</p>
+
+    <div class="tip-box">
+      <strong>Cross-attention</strong> is different: Q comes from one sequence (e.g., the decoder), while K and V come from another (e.g., the encoder). This is used in translation: the decoder &ldquo;queries&rdquo; the input sentence for relevant source words. We&rsquo;ll see this in Chapter 7.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Multi-Head Attention: Parallel Perspectives</h2>
+    <!-- ============================================== -->
+
+    <p>A single attention computation captures one &ldquo;type&rdquo; of relationship. But language has many types: grammar, meaning, coreference, position&hellip; To capture multiple patterns, transformers run attention <strong>multiple times in parallel</strong>, each with different W<sub>Q</sub>, W<sub>K</sub>, W<sub>V</sub> matrices. Each run is called a <strong>head</strong>.</p>
+
+    <div class="math-walkthrough">
+      <h4>Multi-head attention: 4 heads example</h4>
+
+      <p>If our model dimension is 12 and we use 4 heads:</p>
+      <ul>
+        <li>Each head gets dimension 12 &divide; 4 = <strong>3</strong></li>
+        <li>Head 1 might learn to track <strong>grammar</strong> (subject&ndash;verb agreement)</li>
+        <li>Head 2 might learn <strong>coreference</strong> (&ldquo;it&rdquo; &rarr; &ldquo;cat&rdquo;)</li>
+        <li>Head 3 might learn <strong>proximity</strong> (nearby words are relevant)</li>
+        <li>Head 4 might learn <strong>semantic similarity</strong> (related concepts)</li>
+      </ul>
+
+      <p>Each head runs the full Q&times;K<sup>T</sup>&divide;&radic;d<sub>k</sub> + softmax + &times;V pipeline independently.</p>
+
+      <p><strong>After all heads finish:</strong></p>
+      <ol>
+        <li>Concatenate: [head1_output | head2_output | head3_output | head4_output] = 12-dim vector</li>
+        <li>Multiply by a final weight matrix W<sub>O</sub> (12&times;12) to combine the heads</li>
+      </ol>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why multiple heads help</h4>
+      <p>One head can only compute one set of attention weights. &ldquo;It&rdquo; can&rsquo;t simultaneously give high weight to &ldquo;cat&rdquo; (for coreference) AND to &ldquo;was&rdquo; (for grammar) in a single attention distribution. With multiple heads, different heads can focus on different relationships. It&rsquo;s like having multiple people read the same sentence, each looking for something different.</p>
+    </div>
+
+    <p>Real models use many heads: GPT-3 has <strong>96 heads</strong>, GPT-4 likely has more. Each captures a different type of token-to-token relationship.</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Dimensions</th><th>Heads</th><th>Per-Head Dim</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GPT-2 Small</td><td>768</td><td>12</td><td>64</td></tr>
+          <tr><td>GPT-3</td><td>12,288</td><td>96</td><td>128</td></tr>
+          <tr><td>LLaMA 2 (70B)</td><td>8,192</td><td>64</td><td>128</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Party Analogy</h2>
+    <!-- ============================================== -->
+
+    <p>Imagine you&rsquo;re at a party with 100 people. You can only listen to a few people at once. How do you decide who to listen to?</p>
+
+    <ol>
+      <li><strong>You have a question</strong> (Query): &ldquo;Who here knows about machine learning?&rdquo;</li>
+      <li><strong>Each person wears a name tag</strong> (Key): describing what they know &mdash; &ldquo;ML researcher,&rdquo; &ldquo;Chef,&rdquo; &ldquo;Dog trainer&rdquo;</li>
+      <li><strong>You compare your question to each name tag</strong> (Q&times;K): the ML researcher scores high, the chef scores low</li>
+      <li><strong>You listen proportionally</strong> (Softmax): 70% attention to the ML researcher, 20% to the data engineer, 10% split across everyone else</li>
+      <li><strong>You absorb what they say</strong> (weighted V): your understanding is mostly shaped by the ML researcher&rsquo;s words, plus a little from everyone else</li>
+    </ol>
+
+    <p>Multi-head attention is like splitting yourself into 8 copies, each asking a different question: one asks about ML, another about food, another about hobbies. Each copy blends what they hear, and then you merge all 8 perspectives into your final understanding.</p>
+
+    <!-- ============================================== -->
+    <h2>Attention Complexity: The Quadratic Problem</h2>
+    <!-- ============================================== -->
+
+    <p>One critical detail: the Q&times;K<sup>T</sup> step computes a score for <strong>every pair of tokens</strong>. With <em>n</em> tokens, that&rsquo;s an <em>n</em>&times;<em>n</em> matrix.</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Sequence Length</th><th>Attention Matrix Size</th><th>Operations</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>100 tokens</td><td>100 &times; 100</td><td>10,000</td></tr>
+          <tr><td>1,000 tokens</td><td>1,000 &times; 1,000</td><td>1,000,000</td></tr>
+          <tr><td>10,000 tokens</td><td>10,000 &times; 10,000</td><td>100,000,000</td></tr>
+          <tr><td>128,000 tokens</td><td>128K &times; 128K</td><td>16.4 billion</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This is the <strong>quadratic scaling</strong> of attention: double the sequence length and computation goes up 4&times;. This is why long context windows are expensive and why researchers are working on more efficient alternatives (we&rsquo;ll touch on this in Chapter 10).</p>
+
+    <div class="warning-box">
+      <h4>Why context length is limited</h4>
+      <p>A 128K context window requires a 128K&times;128K attention matrix <em>per head, per layer</em>. With 96 heads and 96 layers, that&rsquo;s an enormous amount of memory and compute. This quadratic cost is the fundamental reason context windows can&rsquo;t just be &ldquo;made bigger.&rdquo;</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Compute Attention from Scratch</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your turn: 2-token attention</h4>
+
+      <p>Given two tokens with these Q, K, V vectors (dimension 2):</p>
+
+      <table>
+        <thead><tr><th>Token</th><th>Q</th><th>K</th><th>V</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>[1.0, 0.5]</td><td>[0.8, 0.3]</td><td>[0.2, 0.9]</td></tr>
+          <tr><td>B</td><td>[0.3, 0.7]</td><td>[0.6, 0.9]</td><td>[0.7, 0.1]</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Compute:</strong></p>
+      <ol>
+        <li>The 2&times;2 raw attention scores (Q&times;K<sup>T</sup>)</li>
+        <li>The scaled scores (divide by &radic;2 &asymp; 1.41)</li>
+        <li>Softmax of each row</li>
+        <li>The attention output for token A (weighted sum of values)</li>
+      </ol>
+
+      <p><strong>Solution:</strong></p>
+      <ol>
+        <li>
+          <p>Score(A,A) = (1.0&times;0.8)+(0.5&times;0.3) = 0.95</p>
+          <p>Score(A,B) = (1.0&times;0.6)+(0.5&times;0.9) = 1.05</p>
+          <p>Score(B,A) = (0.3&times;0.8)+(0.7&times;0.3) = 0.45</p>
+          <p>Score(B,B) = (0.3&times;0.6)+(0.7&times;0.9) = 0.81</p>
+        </li>
+        <li>Scaled: [0.67, 0.74; 0.32, 0.57]</li>
+        <li>
+          <p>Softmax row A: e<sup>0.67</sup>=1.95, e<sup>0.74</sup>=2.10, sum=4.05 &rarr; [0.48, 0.52]</p>
+          <p>Softmax row B: e<sup>0.32</sup>=1.38, e<sup>0.57</sup>=1.77, sum=3.15 &rarr; [0.44, 0.56]</p>
+        </li>
+        <li>Output A = 0.48&times;[0.2, 0.9] + 0.52&times;[0.7, 0.1] = [0.10+0.36, 0.43+0.05] = <strong>[0.46, 0.48]</strong></li>
+      </ol>
+
+      <p>Token A pays slightly more attention to B (52%) than to itself (48%). Its output blends both tokens&rsquo; values accordingly.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Key Takeaways</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <ul>
+        <li><strong>Attention</strong> lets each token decide which other tokens are relevant by computing Q&times;K scores.</li>
+        <li><strong>Q, K, V</strong> come from multiplying embeddings by three learned weight matrices.</li>
+        <li><strong>Dot product</strong> of Q and K measures relevance. Higher = more relevant.</li>
+        <li><strong>Scaling by &radic;d<sub>k</sub></strong> prevents softmax from becoming too peaky.</li>
+        <li><strong>Softmax</strong> turns scores into a probability distribution: who gets my attention?</li>
+        <li><strong>Weighted sum of V</strong> produces the output: a blend of all tokens&rsquo; information, weighted by relevance.</li>
+        <li><strong>Self-attention:</strong> Q, K, V all come from the same sequence.</li>
+        <li><strong>Multi-head attention:</strong> run attention N times in parallel, each head capturing a different relationship.</li>
+        <li><strong>Quadratic cost:</strong> attention is O(n&sup2;) in sequence length &mdash; the fundamental bottleneck.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>Attention is the star of the transformer, but it&rsquo;s not the whole show. A transformer block also includes residual connections, layer normalization, and a feed-forward network &mdash; each playing a crucial role.</p>
+
+    <p>In <a href="07-full-transformer.html">Chapter 7: The Full Transformer Architecture</a>, you&rsquo;ll see how attention fits into the complete transformer block, trace layer normalization and residual connections with real numbers, and understand why stacking 96 of these blocks produces something as capable as GPT-4.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="05-tokenization-deep-dive.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Tokenization Deep Dive</span>
+    </a>
+    <a href="07-full-transformer.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">The Full Transformer Architecture</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

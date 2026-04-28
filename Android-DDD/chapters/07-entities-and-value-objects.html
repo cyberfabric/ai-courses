@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Entities and Value Objects — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="06-domain-events.html">← Prev</a>
+      <a href="08-aggregates.html">Next →</a>
+      <a href="maps/07-entities-and-value-objects-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Entities and Value Objects</h1>
+    <p class="subtitle">Identity vs equality &mdash; and why a Kotlin <code>data class</code> is not automatically a value object</p>
+  </header>
+
+  <main>
+
+    <p>Welcome to tactical DDD. The previous six chapters were about <em>where</em> models live: contexts, maps, subdomains, events. Now we zoom into a single bounded context and look at <em>what's inside</em>. The two atoms of tactical DDD are entities and value objects. Get this distinction wrong and every downstream pattern &mdash; aggregates, repositories, domain services &mdash; falls apart. Get it right and the rest of the canon clicks into place.</p>
+
+    <p>The good news: Kotlin gives us tools for both that other languages would kill for &mdash; <code>data class</code>, <code>@JvmInline value class</code>, sealed hierarchies, immutability by default in <code>val</code>. The bad news: those same tools are easy to misuse. Most Android codebases ship "value objects" that aren't, and "entities" that should have been values. Let's draw the line crisply.</p>
+
+    <h2>The central distinction: identity vs equality</h2>
+
+    <p>One question separates an entity from a value object:</p>
+
+    <div class="highlight-box">
+      <h3>The litmus test</h3>
+      <p>If you swapped this object for another with the exact same fields, would the system care? If yes &mdash; it has identity, it's an <strong>entity</strong>. If no &mdash; it's a <strong>value object</strong>.</p>
+    </div>
+
+    <p>Two $20 bills are interchangeable. You don't care which physical bill ends up in your wallet; only that it's $20. That's a value. Two users named "Alex Chen" with the same email are <em>not</em> interchangeable &mdash; they are two different humans, with different orders, different message histories, different two-factor secrets. That's identity. That's an entity.</p>
+
+    <p>This is not a coding distinction. It's a <em>modeling</em> distinction the domain forces on you. Money is value. Address is value. Email address is value. User is entity. Order is entity. Ride is entity.</p>
+
+    <div class="language-box">
+      <span class="term">Entity</span> &mdash; a domain concept whose identity matters and persists across changes. Two entities are equal if and only if their IDs are equal, regardless of any other fields. An entity has a lifecycle: born, mutated through valid transitions, eventually retired.
+      <div class="do-not-say">Do not say "row," "record," or "model." A row is a database concept &mdash; entities exist in the domain whether or not they're stored. "Model" is dangerously vague (Android calls everything a model). The DDD term is <em>entity</em>, and using it forces you to ask "what's its identity?" &mdash; the only question that actually matters here.</div>
+    </div>
+
+    <div class="language-box">
+      <span class="term">Value Object</span> &mdash; a domain concept defined solely by its attributes. Two value objects with identical fields <em>are</em> the same thing. Value objects are immutable, validate themselves on construction, and have no ID.
+      <div class="do-not-say">Do not say "DTO," "POJO," or "data holder." A DTO is a transport shape; a POJO is a Java relic; "data holder" implies dumb storage. A value object is a <em>concept</em> with rules: it validates itself, exposes domain methods, and never lets an invalid instance exist.</div>
+    </div>
+
+    <h2>The Kotlin <code>data class</code> trap</h2>
+
+    <p>Here is the most common refrain when a senior Android dev meets DDD: "Oh, value objects are just Kotlin <code>data class</code>es, right? We've been doing this all along." Almost. Specifically, three-quarters right and one-quarter dangerously wrong.</p>
+
+    <p>What <code>data class</code> gives you for free:</p>
+
+    <ul>
+      <li><code>equals()</code> and <code>hashCode()</code> based on all primary-constructor fields &mdash; structural equality, perfect for value objects.</li>
+      <li><code>toString()</code> that prints all fields &mdash; great for logs.</li>
+      <li><code>componentN()</code> for destructuring.</li>
+    </ul>
+
+    <p>What <code>data class</code> does <em>not</em> give you, and what makes it dangerous as a value object by default:</p>
+
+    <ul>
+      <li><strong>It cannot enforce invariants in the constructor</strong> beyond what an <code>init</code> block does &mdash; and most teams forget the <code>init</code> block entirely.</li>
+      <li><strong><code>copy()</code> bypasses any validation you put on factory methods</strong>, because <code>copy()</code> calls the primary constructor directly.</li>
+      <li><strong><code>val</code> fields can still hold mutable references</strong> (a <code>data class</code> with a <code>val items: MutableList&lt;X&gt;</code> is not immutable).</li>
+      <li><strong>Equality covers all primary-constructor fields</strong>, including ones you may not want compared (like a creation timestamp).</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>"It's a <code>data class</code>, so it's a value object" is the single most common DDD-on-Android lie.</strong> A <code>data class</code> with primitive-typed fields, no validation, a public constructor, and a leaky <code>copy()</code> is a structurally-equal struct &mdash; not a value object. The structural-equality part is one ingredient out of four. Get the other three or stop calling it a value object.
+    </div>
+
+    <h2>What a real value object looks like in Kotlin</h2>
+
+    <p>A proper Kotlin value object satisfies four criteria:</p>
+
+    <ol>
+      <li><strong>Immutable.</strong> All fields <code>val</code>; no mutable collections; deeply frozen.</li>
+      <li><strong>Self-validating.</strong> An invalid instance cannot exist &mdash; the constructor throws (or you expose only a factory that returns <code>Result</code>).</li>
+      <li><strong>Equal by attributes.</strong> Two instances with the same fields <em>are</em> the same.</li>
+      <li><strong>Side-effect-free behavior.</strong> Methods return new instances; they never mutate.</li>
+    </ol>
+
+    <p>Here's the canonical worked example: <code>EmailAddress</code> as a real value object, not a <code>String</code> wearing a label.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain &mdash; pure Kotlin, no Android
+@JvmInline
+value class EmailAddress private constructor(val raw: String) {
+
+  companion object {
+    private val EMAIL_REGEX = Regex(
+      "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+    )
+
+    operator fun invoke(input: String): EmailAddress {
+      val normalized = input.trim().lowercase()
+      require(normalized.isNotEmpty()) { "email is blank" }
+      require(normalized.length &lt;= 254) { "email too long" }
+      require(EMAIL_REGEX.matches(normalized)) { "invalid email: $input" }
+      return EmailAddress(normalized)
+    }
+
+    fun parse(input: String): Result&lt;EmailAddress&gt; =
+      runCatching { invoke(input) }
+  }
+
+  val domain: String get() = raw.substringAfter('@')
+  val localPart: String get() = raw.substringBefore('@')
+}</div>
+    </div>
+
+    <p>What's happening here:</p>
+
+    <ul>
+      <li><strong><code>@JvmInline value class</code></strong> &mdash; on the JVM this compiles down to the underlying <code>String</code> in most contexts, so you pay zero allocation overhead in hot paths. You get the type-safety of a wrapper without the boxing cost.</li>
+      <li><strong><code>private constructor</code></strong> &mdash; you cannot call <code>EmailAddress("garbage")</code> from outside; you must go through <code>invoke</code> or <code>parse</code>, which validate.</li>
+      <li><strong>Normalization in the factory</strong> &mdash; trim, lowercase. Two <code>EmailAddress("Alex@Example.com")</code> and <code>EmailAddress("alex@example.com")</code> compare equal, which is exactly the invariant the domain wants.</li>
+      <li><strong><code>parse</code> for total functions</strong> &mdash; when you're parsing untrusted input (a text field, an API response), you use <code>parse</code> and pattern-match the <code>Result</code>. When you have a literal you trust, the throwing <code>invoke</code> is fine.</li>
+      <li><strong>Domain methods</strong> &mdash; <code>domain</code> and <code>localPart</code> are real domain operations, not utility functions hanging off some <code>EmailUtils</code> singleton.</li>
+    </ul>
+
+    <p>Compare that to the typical Android <code>data class User(val email: String)</code>, where <code>email</code> can be empty, malformed, untrimmed, or in mixed case &mdash; and you have to guess at every call site whether it's been validated yet. Lifting <code>email</code> into <code>EmailAddress</code> moves that question from "everywhere" to "exactly the constructor."</p>
+
+    <h2>Inline value classes: the zero-cost wrapper</h2>
+
+    <div class="tip-box">
+      <strong>Inline value classes (<code>@JvmInline value class</code>) are the Kotlin feature that makes value objects practical at scale.</strong> Without them, wrapping every primitive in a domain type costs an allocation per value &mdash; rough on a list screen with 500 rows. With them, the wrapper exists at compile time and disappears at runtime in most situations. There's almost no performance excuse to keep <code>String</code>s and <code>Long</code>s in your domain types.
+    </div>
+
+    <p>Use inline value classes for any primitive that has domain meaning beyond "a number" or "a string." Some examples that should be in every Android codebase:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// IDs &mdash; never raw Long
+@JvmInline value class UserId(val value: Long)
+@JvmInline value class OrderId(val value: String)
+@JvmInline value class CartId(val value: String)
+
+// Money-like things
+@JvmInline value class Cents(val value: Long) {
+  operator fun plus(other: Cents) = Cents(value + other.value)
+  operator fun minus(other: Cents) = Cents(value - other.value)
+  fun toDisplayString(currency: Currency): String =
+    NumberFormat.getCurrencyInstance().apply {
+      this.currency = currency
+    }.format(value / 100.0)
+}
+
+// Bounded scalars
+@JvmInline value class Percent private constructor(val value: Int) {
+  companion object {
+    operator fun invoke(value: Int): Percent {
+      require(value in 0..100) { "percent out of range: $value" }
+      return Percent(value)
+    }
+  }
+}</div>
+    </div>
+
+    <p>The win here is not just type safety. It's that <code>fun transferFunds(from: UserId, to: UserId, amount: Cents)</code> is impossible to call wrong, while <code>fun transferFunds(from: Long, to: Long, amount: Long)</code> has been quietly silently shipping bugs since 2014.</p>
+
+    <h2>Multi-field value objects: <code>data class</code> done right</h2>
+
+    <p>For value objects with multiple fields &mdash; <code>Money(amount, currency)</code>, <code>Address</code>, <code>DateRange(start, end)</code> &mdash; <code>data class</code> is the right tool, but only with discipline.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain
+data class Money private constructor(
+  val amount: Cents,
+  val currency: Currency
+) {
+  init {
+    require(amount.value &gt;= 0) { "money cannot be negative: $amount" }
+  }
+
+  operator fun plus(other: Money): Money {
+    require(currency == other.currency) {
+      "cannot add $currency and ${other.currency}"
+    }
+    return Money(amount + other.amount, currency)
+  }
+
+  operator fun minus(other: Money): Money {
+    require(currency == other.currency)
+    require(amount.value &gt;= other.amount.value) { "negative result" }
+    return Money(amount - other.amount, currency)
+  }
+
+  companion object {
+    operator fun invoke(amount: Cents, currency: Currency) = Money(amount, currency)
+    val ZERO_USD = Money(Cents(0), Currency.getInstance("USD"))
+  }
+}</div>
+    </div>
+
+    <p>Three things make this safe:</p>
+
+    <ol>
+      <li><strong><code>private constructor</code></strong> forces all instantiation through <code>invoke</code> (which validates).</li>
+      <li><strong><code>init</code> block</strong> validates &mdash; this also catches <code>copy()</code> abuse, because <code>copy()</code> still runs <code>init</code>.</li>
+      <li><strong>Operations return new instances</strong> &mdash; no mutation, no surprise side effects.</li>
+    </ol>
+
+    <div class="tip-box">
+      <strong>The <code>init</code> block is your value-object insurance policy.</strong> It runs whether the constructor was called directly, via <code>copy()</code>, or by a deserializer. Always put your invariants there. <code>require</code> reads naturally and throws <code>IllegalArgumentException</code>, which downstream code can catch or let propagate.
+    </div>
+
+    <h2>Entities: equality by ID, not by content</h2>
+
+    <p>An entity is the opposite. Two entities with identical fields except IDs are <em>different things</em>. Two entities with identical IDs but different fields are <em>the same thing at different points in time</em>. <code>data class</code> for an entity is therefore wrong by default: its generated <code>equals</code> compares all fields, which is exactly the wrong semantics.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain &mdash; an entity, NOT a data class
+class User(
+  val id: UserId,
+  val email: EmailAddress,
+  val name: FullName,
+  val createdAt: Instant,
+  private var _status: UserStatus
+) {
+  val status: UserStatus get() = _status
+
+  fun verifyEmail(at: Instant): UserEmailVerified {
+    check(_status == UserStatus.PendingVerification) {
+      "cannot verify in state $_status"
+    }
+    _status = UserStatus.Active
+    return UserEmailVerified(id, at)
+  }
+
+  fun deactivate(reason: DeactivationReason): UserDeactivated {
+    check(_status != UserStatus.Deactivated) { "already deactivated" }
+    _status = UserStatus.Deactivated
+    return UserDeactivated(id, reason)
+  }
+
+  // Equality by ID only &mdash; same entity at any point in its lifecycle
+  override fun equals(other: Any?): Boolean =
+    other is User &amp;&amp; other.id == id
+  override fun hashCode(): Int = id.hashCode()
+  override fun toString(): String = "User(id=$id, email=$email, status=$_status)"
+}</div>
+    </div>
+
+    <p>Note four things:</p>
+
+    <ul>
+      <li><strong>Not a <code>data class</code></strong> &mdash; we override <code>equals</code> and <code>hashCode</code> ourselves, by ID only.</li>
+      <li><strong>Internal mutability is allowed</strong> &mdash; <code>_status</code> is a <code>private var</code>. The entity has a lifecycle, and pretending it doesn't is a worse trade than tightly scoping the mutability.</li>
+      <li><strong>Methods return events</strong> &mdash; tying back to chapter 6, the entity emits the fact (<code>UserEmailVerified</code>) and the caller publishes it.</li>
+      <li><strong>State transitions are guarded</strong> &mdash; <code>check</code> guards the legal transitions; you cannot deactivate twice or verify a deactivated user.</li>
+    </ul>
+
+    <h2>Mutability: a careful exception</h2>
+
+    <p>Value objects are immutable. Period. Entities are <em>more often</em> mutable internally &mdash; they have a lifecycle. But the trend in modern DDD (and modern Kotlin) is toward immutable entities too: <code>verifyEmail()</code> returns a new <code>User</code> with the new status rather than mutating the existing one. Both styles are legitimate; pick one and be consistent.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Mutable entity (traditional)</div>
+        <div class="prompt-text">class User(...) {
+  private var _status: UserStatus = ...
+  fun verifyEmail(at: Instant) {
+    _status = UserStatus.Active
+  }
+}
+// Mutates in place. Easy to write,
+// straightforward when you have
+// long-running aggregate sessions.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Immutable entity (functional)</div>
+        <div class="prompt-text">data class User(
+  val id: UserId,
+  val status: UserStatus,
+  ...
+) {
+  fun verifyEmail(at: Instant): User =
+    copy(status = UserStatus.Active)
+}
+// Returns new instances. Plays well with
+// Flow, Compose, and time-travel debugging.
+// Override equals/hashCode for ID-only.</div>
+      </div>
+    </div>
+
+    <p>Both work. The immutable version maps elegantly onto Compose state and unidirectional data flow; the mutable version is closer to Evans' original Blue Book examples. We're going to lean toward immutable in the rest of this course because it composes better with the Android stack we already use.</p>
+
+    <h2>Why primitives obscure the model: a worked refactor</h2>
+
+    <p>Let's take a typical Android <code>data class</code> and lift its fields into proper value objects. This is the refactor you can do in your own codebase this afternoon.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Before &mdash; primitives everywhere</div>
+        <div class="prompt-text">data class User(
+  val id: Long,
+  val email: String,
+  val firstName: String,
+  val lastName: String,
+  val phone: String?,
+  val countryCode: String,
+  val createdAt: Long
+)
+// id: which kind of ID? user? account?
+// email: validated? trimmed? normalized?
+// names: empty allowed? max length?
+// phone: format? country?
+// countryCode: ISO-2? ISO-3? "us" or "US"?
+// createdAt: epoch ms? seconds? nanos?</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">After &mdash; domain types</div>
+        <div class="prompt-text">class User(
+  val id: UserId,
+  val email: EmailAddress,
+  val name: FullName,
+  val phone: PhoneNumber?,
+  val country: CountryCode,
+  val createdAt: Instant
+) {
+  // equals/hashCode by id, see above
+}
+// Every type knows its own rules.
+// Misuse caught at the type system.
+// Domain methods land in the right place.</div>
+      </div>
+    </div>
+
+    <p>Spend 30 minutes lifting one anemic record like the one on the left, and the difference is immediate: validation moves from scattered <code>if</code> statements to constructors, formatting moves from <code>StringUtils</code> to <code>toDisplayString()</code> on the value, and the compiler stops you from passing a <code>countryCode</code> where the function wanted a phone-number country prefix.</p>
+
+    <h2>Anchoring on Android: where each lives in your modules</h2>
+
+    <div class="android-box">
+      <div class="android-code">// :feature-checkout/build.gradle.kts
+dependencies {
+  implementation(project(":domain"))    // entities, value objects
+  implementation(project(":data"))      // repository impls
+  implementation(libs.androidx.compose.ui)
+  // No direct Room or Retrofit here
+}
+
+// :domain &mdash; pure Kotlin, no Android, no androidx
+// Contains:
+//   - Entities (User, Order, Cart) as classes
+//   - Value objects (EmailAddress, Money, UserId) as inline value classes
+//     or data classes with private constructors
+//   - Domain events (sealed classes from chapter 6)
+//   - Repository &lt;interface&gt;s (full chapter 9)
+//
+// :data &mdash; Android, Room, Retrofit
+// Contains:
+//   - Room entities (separate from domain entities!)
+//   - Mappers DTO &lt;-&gt; domain
+//   - Repository implementations</div>
+    </div>
+
+    <p>Notice the deliberate separation: a Room <code>@Entity</code> is <em>not</em> a domain entity. It's a persistence-layer concept that maps to a row. The domain entity is what your business logic talks about; the Room entity is what the database stores. Keep them in different modules and write a mapper between them. The mapper is your anti-corruption layer between persistence and domain.</p>
+
+    <div class="context-box">
+      <span class="context-name">Persistence</span> says "User" and means a row with nullable strings, default values, and <code>@PrimaryKey</code>. <span class="context-name">Domain</span> says "User" and means an entity with validated value-object fields and guarded state transitions. Same name, different shape. The mapper between them is the smallest, cleanest ACL you'll ever write &mdash; and it pays for itself the first time you change the database schema without breaking your domain.
+    </div>
+
+    <h2>Common Android-specific mistakes</h2>
+
+    <h3>Putting validation in <code>TextWatcher</code></h3>
+
+    <p>Validation belongs in the value object, not in the UI layer. If your <code>EmailAddress</code> validates itself, the <code>TextWatcher</code> just calls <code>EmailAddress.parse(input)</code> and shows an error on <code>Result.failure</code>. Now your validation rule is one place, used by every screen, every API endpoint, and every test &mdash; not duplicated across three forms.</p>
+
+    <h3>Passing primitives across screens</h3>
+
+    <p>The <code>Bundle</code> says you can pass <code>Long</code>s, so devs pass <code>Long</code>s &mdash; and the compiler will happily let you pass an <code>orderId</code> where the next screen expected a <code>userId</code>. Pass the inline value class instead (it serializes the same way in <code>Parcelable</code>) and the compiler catches the mistake.</p>
+
+    <h3>Treating Room <code>@Entity</code> classes as domain</h3>
+
+    <p>Room <code>@Entity</code> classes have constraints (no-arg constructors, public fields, no inheritance hierarchies, <code>@PrimaryKey</code>) that make them fundamentally bad domain entities. Use them as the persistence shape and map to a real domain entity in your repository implementation.</p>
+
+    <h3>"It's just a label" syndrome</h3>
+
+    <p>"Why wrap <code>orderId</code> in a class? It's just a label." Because in three months, when a junior dev passes <code>userId</code> to <code>refundOrder(orderId)</code>, the compiler will silently accept it and the bug will surface in production. The cost of <code>@JvmInline value class</code> is one line per ID; the savings is one production incident.</p>
+
+    <h2>When primitives are fine</h2>
+
+    <p>Not everything needs to be wrapped. Lift to a value object when:</p>
+
+    <ul class="checklist">
+      <li>The primitive has <strong>domain rules</strong> (validation, normalization, formatting).</li>
+      <li>The primitive has <strong>domain operations</strong> (Money.plus, Percent.of, EmailAddress.domain).</li>
+      <li>The primitive is <strong>passed around enough that mix-ups are likely</strong> (IDs, especially &mdash; you have many ID types).</li>
+      <li>The primitive shows up in <strong>multiple function signatures</strong>, where confusion would be costly.</li>
+    </ul>
+
+    <p>Stay with primitives when:</p>
+
+    <ul>
+      <li>The value is purely scalar with no rules (a counter, an array index).</li>
+      <li>It's an internal implementation detail that never crosses the domain boundary.</li>
+      <li>You'd be the only consumer and you'd just be wrapping for the sake of wrapping.</li>
+    </ul>
+
+    <h2>A bigger worked example: the <code>RidePickupRequest</code> family</h2>
+
+    <p>Pulling chapter 1's "ride request" thread: here's the same concept modeled with proper entities and value objects.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// Value objects
+@JvmInline value class RideId(val value: String)
+@JvmInline value class RiderId(val value: String)
+@JvmInline value class DriverId(val value: String)
+
+data class GeoPoint private constructor(val lat: Double, val lng: Double) {
+  init {
+    require(lat in -90.0..90.0) { "bad lat: $lat" }
+    require(lng in -180.0..180.0) { "bad lng: $lng" }
+  }
+  companion object {
+    operator fun invoke(lat: Double, lng: Double) = GeoPoint(lat, lng)
+  }
+}
+
+data class PickupWindow private constructor(val from: Instant, val to: Instant) {
+  init { require(from &lt; to) { "empty window" } }
+  companion object {
+    operator fun invoke(from: Instant, to: Instant) = PickupWindow(from, to)
+  }
+}
+
+// Entity
+class RidePickupRequest(
+  val id: RideId,
+  val rider: RiderId,
+  val pickup: GeoPoint,
+  val dropoff: GeoPoint,
+  val window: PickupWindow,
+  private var _state: RideState
+) {
+  val state: RideState get() = _state
+
+  fun accept(driver: DriverId, at: Instant): DriverAccepted {
+    check(_state is RideState.Requested) { "not requestable in $_state" }
+    _state = RideState.Accepted(driver, at)
+    return DriverAccepted(id, driver, at)
+  }
+
+  override fun equals(other: Any?) = other is RidePickupRequest &amp;&amp; other.id == id
+  override fun hashCode() = id.hashCode()
+}</div>
+    </div>
+
+    <p>That's the entity-versus-value distinction in concrete code: <code>RidePickupRequest</code> has identity (<code>id</code>) and a lifecycle (state transitions); <code>GeoPoint</code> and <code>PickupWindow</code> are values &mdash; defined entirely by their fields, immutable, self-validating. The <code>RiderId</code> and <code>DriverId</code> wrappers exist for one reason: to make sure you can never pass a rider where a driver was expected, no matter how tired you are during the next on-call rotation.</p>
+
+    <h2>Naming conventions</h2>
+
+    <p>A few quiet conventions that pay off:</p>
+
+    <ul>
+      <li><strong>IDs end in <code>Id</code>:</strong> <code>UserId</code>, <code>OrderId</code>, <code>CartId</code>. Not <code>UserUid</code>, <code>UserKey</code>, <code>UserPk</code>.</li>
+      <li><strong>Entities are nouns:</strong> <code>User</code>, <code>Order</code>, <code>Cart</code>. Never <code>UserModel</code>, <code>UserData</code>, <code>UserDto</code>.</li>
+      <li><strong>Value objects are named after the concept:</strong> <code>EmailAddress</code>, <code>Money</code>, <code>PhoneNumber</code>. Not <code>EmailString</code>, <code>MoneyAmount</code>, <code>PhoneInfo</code>.</li>
+      <li><strong>Verbs go on the entity, not on a service:</strong> <code>order.cancel(reason)</code>, not <code>OrderCanceller.cancel(order, reason)</code>.</li>
+    </ul>
+
+    <h2>Testing entities and value objects</h2>
+
+    <p>One huge upside: both are pure Kotlin (your <code>:domain</code> module has no Android dependency), so tests are JVM unit tests &mdash; instant, no Robolectric, no instrumentation.</p>
+
+    <div class="android-box">
+      <div class="android-code">// src/test/java/.../EmailAddressTest.kt
+class EmailAddressTest {
+
+  @Test fun `lowercases on construction`() {
+    assertEquals("alex@example.com", EmailAddress("Alex@Example.com").raw)
+  }
+
+  @Test fun `rejects malformed input`() {
+    assertTrue(EmailAddress.parse("not an email").isFailure)
+  }
+
+  @Test fun `equal regardless of input casing`() {
+    assertEquals(EmailAddress("a@b.com"), EmailAddress("A@b.com"))
+  }
+}
+
+// src/test/java/.../UserTest.kt
+class UserTest {
+
+  @Test fun `cannot verify a deactivated user`() {
+    val user = User(...).also { it.deactivate(...) }
+    assertFailsWith&lt;IllegalStateException&gt; {
+      user.verifyEmail(Instant.now())
+    }
+  }
+}</div>
+    </div>
+
+    <p>Tests like these run in milliseconds, never flake, and document the domain rules better than any wiki page.</p>
+
+    <h2>Exercise: lift one field today</h2>
+
+    <div class="exercise-box">
+      <p><strong>Thirty minutes. One field. Your real codebase.</strong></p>
+      <ol>
+        <li>Open your largest <code>data class</code> (most teams have a <code>User</code>, <code>Account</code>, or <code>Profile</code>).</li>
+        <li>Pick one primitive field with domain meaning: <code>email</code>, <code>phoneNumber</code>, <code>countryCode</code>, <code>id</code>, <code>amountCents</code>, anything.</li>
+        <li>Create an inline value class (or <code>data class</code> if multi-field) for that field, with a <code>private constructor</code> and a validating factory.</li>
+        <li>Replace the field type in the original <code>data class</code>.</li>
+        <li>Let the compiler walk you through every call site &mdash; and at each one, decide: was this site validating the same thing manually? Probably yes. Delete that validation; the type now does it.</li>
+        <li>Run the tests. Anything red? Either the validation rule was wrong, or you found a bug. Both are good outcomes.</li>
+        <li>Commit the diff and pay attention to its size. You'll see your codebase shrink &mdash; scattered validations and string-handling utilities collapse into one place.</li>
+      </ol>
+      <p>Bonus: pick one field that you <em>thought</em> was identity (an entity-only thing like <code>Long userId</code>), wrap it in <code>UserId</code>, and feel the relief when the compiler stops you from accidentally swapping it with <code>orderId</code>. That single refactor will pay for the rest of this chapter.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>Entities and value objects are the building blocks. Chapter 8 puts them together: <strong>aggregates</strong>. An aggregate is a cluster of related entities and value objects with one <em>aggregate root</em> as its sole entry point and one <em>consistency boundary</em> that defines what must be true together. We'll cover Vernon's "Effective Aggregate Design" rules, sizing aggregates correctly (small is right), the one-aggregate-per-transaction rule, and the Android-specific footguns &mdash; especially how Room's lazy relations conspire to break the consistency boundary if you're not careful. Bring the <code>RidePickupRequest</code> example from this chapter; we'll re-cast it as the root of its own aggregate.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-domain-events.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Domain Events</span>
+      </a>
+      <a href="08-aggregates.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Aggregates</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

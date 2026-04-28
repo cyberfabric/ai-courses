@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Energy &amp; Thermal Optimization | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-xcode-build-performance.html">&larr; Prev</a>
+      <a href="09-ai-assisted-instruments.html">Next &rarr;</a>
+      <a href="maps/08-energy-thermal-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Energy &amp; Thermal Optimization</h1>
+    <p class="subtitle">Use AI to find the silent battery drains, thermal throttling triggers, and background energy hogs hiding in your app</p>
+  </header>
+
+  <main>
+
+    <p>In Chapter 7, we made builds fast. Now we&rsquo;re tackling something users care about even more than launch time: <strong>battery life</strong>. Nobody writes a 1-star review saying &ldquo;your build takes 90 seconds.&rdquo; But &ldquo;this app drains my battery in 2 hours&rdquo;? That review writes itself.</p>
+
+    <p>Energy bugs are uniquely insidious because <strong>they&rsquo;re invisible during development</strong>. Your phone is plugged into your Mac while you test. You never see the battery impact. Then users in the real world &mdash; on cellular, in low-signal areas, with background refresh enabled &mdash; experience a completely different energy profile.</p>
+
+    <!-- Why Energy Matters -->
+    <h2>Why Energy Optimization Matters</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">🔋</div>
+        <div class="stat-label">&ldquo;Battery drain&rdquo; is the #2 reason for 1-star reviews (after crashes)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">🌡️</div>
+        <div class="stat-label">Thermal throttling can drop CPU performance by 50-70%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">📱</div>
+        <div class="stat-label">iOS deprioritizes battery-hungry apps in multitasking</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">📊</div>
+        <div class="stat-label">Users check Settings &gt; Battery and blame the top app by percentage</div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>The thermostat analogy:</strong> Think of your app&rsquo;s energy usage like a household thermostat. The goal isn&rsquo;t to never turn on the heater &mdash; it&rsquo;s to heat efficiently. Burst work (CPU spike then idle) is like quick heating. Constant low-level polling is like leaving the heater on 24/7 at low &mdash; it costs more overall and never lets the system rest.
+    </div>
+
+    <!-- Energy Profiling Tools -->
+    <h2>The Energy Profiling Toolkit</h2>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">📊</span>
+        <h4>Xcode Energy Gauge</h4>
+        <p>The quick-look tool. Debug Navigator &gt; Energy Impact shows a real-time bar chart: CPU, Network, Location, GPU, Background. Red bars = high energy. Look here first during development.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">⚡</span>
+        <h4>Power Profiler (Xcode 26)</h4>
+        <p>The new deep-dive instrument. Shows subsystem-level power attribution: CPU, GPU, Display, Networking, Location. Correlates energy use with code execution and thermal state. Use wireless debugging &mdash; cable charging zeroes out power metrics.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🏥</span>
+        <h4>MetricKit Energy Metrics</h4>
+        <p>Production data. <code>MXMetricPayload</code> includes <code>MXCPUMetric</code>, <code>MXGPUMetric</code>, <code>MXDiskIOMetric</code>, <code>MXNetworkTransferMetric</code>. Delivered daily from opted-in users. The truth about real-world energy use.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">📈</span>
+        <h4>Xcode Organizer &mdash; Energy Tab</h4>
+        <p>Aggregated energy data from App Store users. Shows trends across versions. Catch energy regressions when a new build ships.</p>
+      </div>
+    </div>
+
+    <div class="warning-box">
+      <strong>Critical setup for Power Profiler:</strong> You <em>must</em> use <strong>wireless debugging</strong> when profiling energy. When the device is plugged into your Mac via USB, it&rsquo;s charging &mdash; and power metrics report zero. Connect via WiFi (Window &gt; Devices and Simulators &gt; Connect via network) to get accurate readings.
+    </div>
+
+    <!-- MetricKit Deep Dive -->
+    <h2>MetricKit: Energy Truth from the Field</h2>
+
+    <p>MetricKit delivers daily summaries of your app&rsquo;s resource usage from real users. Here&rsquo;s how to collect energy metrics:</p>
+
+    <pre><code>import MetricKit
+
+class MetricsManager: NSObject, MXMetricManagerSubscriber {
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for payload in payloads {
+            // CPU usage
+            if let cpu = payload.cpuMetrics {
+                logger.info("CPU time: \(cpu.cumulativeCPUTime)")
+                logger.info("CPU instructions: \(cpu.cumulativeCPUInstructions)")
+            }
+            // GPU usage
+            if let gpu = payload.gpuMetrics {
+                logger.info("GPU time: \(gpu.cumulativeGPUTime)")
+            }
+            // Network transfer
+            if let net = payload.networkTransferMetrics {
+                logger.info("Upload: \(net.cumulativeCellularUpload)")
+                logger.info("Download: \(net.cumulativeCellularDownload)")
+            }
+            // Disk I/O
+            if let disk = payload.diskIOMetrics {
+                logger.info("Writes: \(disk.cumulativeLogicalWrites)")
+            }
+        }
+    }
+}</code></pre>
+
+    <p>Feed this data to Claude Code for trend analysis. A sudden spike in <code>cumulativeCPUTime</code> after a release means your new code is working the CPU harder &mdash; and draining battery faster.</p>
+
+    <!-- Debug Trace: Energy Profile -->
+    <h2>Reading an Energy Profile with AI</h2>
+
+    <div class="debug-trace">
+      <h4>Power Profiler Output &mdash; News Feed Browsing Session</h4>
+<pre>Session: 5 minutes of scrolling news feed
+Device: iPhone 15 Pro, iOS 18.4, WiFi, 72% battery
+
+Subsystem Breakdown:
+  CPU:        42% of total energy
+  Networking: 31% of total energy
+  GPU:        15% of total energy
+  Display:    8% of total energy
+  Location:   4% of total energy
+
+CPU Wake Pattern:
+  Average wakes/minute: 847
+  Peak wakes/minute: 2,134 (during background refresh)
+  Idle periods: 0 (CPU never sleeps during session)
+
+Network Pattern:
+  Requests: 312 in 5 minutes (1.04/second)
+  Cellular fallback events: 0
+  Average payload: 4.2 KB per request
+
+Thermal State: .nominal → .fair at 3:42 mark</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>Three energy issues identified:</strong></p>
+      <ul>
+        <li><strong>CPU never idles (847 wakes/min):</strong> The CPU should have idle periods between scroll events. Constant waking suggests a timer or polling mechanism that runs even when the user isn&rsquo;t interacting. Likely culprit: a <code>Timer</code> or <code>CADisplayLink</code> running in the background for animation that should pause when off-screen.</li>
+        <li><strong>312 network requests in 5 minutes:</strong> That&rsquo;s 1 request per second. For a news feed, this suggests individual image requests without batching, or polling for new content instead of using push notifications or server-sent events.</li>
+        <li><strong>Thermal state rose to .fair:</strong> After less than 4 minutes of scrolling, the device is warming up. This correlates with the high CPU wake count. When thermal state reaches <code>.serious</code> or <code>.critical</code>, iOS throttles CPU &mdash; your app gets slower the longer it runs.</li>
+      </ul>
+    </div>
+
+    <!-- The 5 Silent Battery Drains -->
+    <h2>The 5 Silent Battery Drains</h2>
+
+    <h3>Drain 1: Aggressive Location Tracking</h3>
+
+    <div class="root-cause">
+      <h4>Root Cause: <code>desiredAccuracy = kCLLocationAccuracyBest</code></h4>
+      <p><strong>Symptom:</strong> Location Services indicator stays on continuously. Users report battery drain even when app is in background.</p>
+      <p><strong>Cause:</strong> Using <code>kCLLocationAccuracyBest</code> activates GPS hardware continuously. A weather app doesn&rsquo;t need GPS-level accuracy &mdash; city-level is fine.</p>
+      <p><strong>Fix:</strong> Use <code>kCLLocationAccuracyKilometer</code> for city-level, <code>kCLLocationAccuracyHundredMeters</code> for neighborhood-level. Use <code>startMonitoringSignificantLocationChanges()</code> instead of continuous tracking. For background: <code>allowsBackgroundLocationUpdates = false</code> unless absolutely necessary.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Pattern: Location Accuracy by Use Case</h4>
+<pre><code>// BEFORE: GPS-level accuracy for a weather app 🔋💀
+locationManager.desiredAccuracy = kCLLocationAccuracyBest
+locationManager.startUpdatingLocation()
+
+// AFTER: City-level accuracy with significant changes
+locationManager.desiredAccuracy = kCLLocationAccuracyKilometer
+locationManager.distanceFilter = 1000  // Only update every 1km
+locationManager.startMonitoringSignificantLocationChanges()
+
+// For precise navigation needs only:
+locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+locationManager.activityType = .automotiveNavigation
+// And STOP when navigation ends:
+locationManager.stopUpdatingLocation()</code></pre>
+    </div>
+
+    <h3>Drain 2: Timer/Polling That Never Stops</h3>
+
+    <p>A <code>Timer.scheduledTimer(withTimeInterval: 1.0, ...)</code> that polls an API every second is the energy equivalent of checking the mailbox every 60 seconds. Use push notifications or WebSockets instead, and always invalidate timers when the view disappears.</p>
+
+    <h3>Drain 3: Background App Refresh Abuse</h3>
+
+    <p><code>BGAppRefreshTask</code> should fetch only essential data. If your refresh handler downloads 20 MB of content that the user may never see, you&rsquo;re wasting battery. Keep background fetches under 30 seconds and under 1 MB.</p>
+
+    <h3>Drain 4: Unnecessary GPU Work</h3>
+
+    <p>Complex gradients, blur effects (<code>.blur(radius:)</code>), real-time shadows, and continuous animations drain the GPU. If an animation isn&rsquo;t visible (scrolled off-screen), pause it. Use <code>drawingGroup()</code> for complex but static visual compositions.</p>
+
+    <h3>Drain 5: Uncompressed Network Payloads</h3>
+
+    <p>Sending and receiving uncompressed JSON over cellular burns radio energy. Enable gzip compression on your server and use <code>URLSessionConfiguration.default</code> which automatically handles <code>Accept-Encoding: gzip</code>. For images, serve WebP or HEIC instead of PNG.</p>
+
+    <!-- Thermal State Management -->
+    <h2>Thermal State: When Your App Makes the Phone Hot</h2>
+
+    <p>iOS provides <code>ProcessInfo.thermalState</code> with four levels. Your app should respond:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Thermal State</th>
+            <th>What It Means</th>
+            <th>Your App Should</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>.nominal</code></td>
+            <td>Everything is fine</td>
+            <td>Full features, full quality</td>
+          </tr>
+          <tr>
+            <td><code>.fair</code></td>
+            <td>Slightly elevated temperature</td>
+            <td>Reduce background work, lower animation frame rate</td>
+          </tr>
+          <tr>
+            <td><code>.serious</code></td>
+            <td>System is throttling CPU/GPU</td>
+            <td>Disable non-essential features, stop prefetching, reduce image quality</td>
+          </tr>
+          <tr>
+            <td><code>.critical</code></td>
+            <td>System may force-suspend apps</td>
+            <td>Minimal operation only. Save state. Prepare for suspension.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code>// Monitor thermal state changes
+NotificationCenter.default.addObserver(
+    forName: ProcessInfo.thermalStateDidChangeNotification,
+    object: nil, queue: .main
+) { _ in
+    switch ProcessInfo.processInfo.thermalState {
+    case .nominal:
+        enableAllFeatures()
+    case .fair:
+        reduceBackgroundWork()
+    case .serious:
+        disableNonEssentialFeatures()
+        reduceImageQuality()
+    case .critical:
+        enterMinimalMode()
+        saveState()
+    @unknown default:
+        break
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Testing thermal states:</strong> You can simulate thermal pressure in the iOS Simulator (not available for real devices). In Xcode: Debug &gt; Simulate Thermal State &gt; choose a level. Test that your app degrades gracefully at each level.
+    </div>
+
+    <!-- BGTaskScheduler -->
+    <h2>Background Tasks: Energy-Efficient Scheduling</h2>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Task Type</th>
+            <th>Use For</th>
+            <th>Energy Budget</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>BGAppRefreshTask</code></td>
+            <td>Quick data sync (headlines, badges, unread counts)</td>
+            <td>~30 seconds, &lt;1 MB. System schedules at optimal times.</td>
+          </tr>
+          <tr>
+            <td><code>BGProcessingTask</code></td>
+            <td>Heavy work (ML model training, database cleanup, backup)</td>
+            <td>Minutes. Runs when charging + WiFi. Set <code>requiresExternalPower = true</code>.</td>
+          </tr>
+          <tr>
+            <td><code>BGContinuedProcessingTask</code> (iOS 26)</td>
+            <td>User-initiated tasks that continue in background with progress UI</td>
+            <td>Extended. Shows progress indicator to user.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Pattern: Energy-Efficient Background Fetch</h4>
+<pre><code>// Register in application(_:didFinishLaunchingWithOptions:)
+BGTaskScheduler.shared.register(
+    forTaskWithIdentifier: "com.myapp.refresh",
+    using: nil
+) { task in
+    guard let refreshTask = task as? BGAppRefreshTask else { return }
+
+    // Keep it quick — 30 seconds max
+    let fetchTask = Task {
+        do {
+            let unreadCount = try await api.fetchUnreadCount()
+            UNUserNotificationCenter.current()
+                .setBadgeCount(unreadCount)
+        } catch {
+            // Don't retry in background — wait for next scheduled refresh
+        }
+    }
+
+    refreshTask.expirationHandler = {
+        fetchTask.cancel()
+    }
+
+    // Schedule next refresh
+    scheduleAppRefresh()
+
+    await fetchTask.value
+    refreshTask.setTaskCompleted(success: true)
+}
+
+func scheduleAppRefresh() {
+    let request = BGAppRefreshTaskRequest(
+        identifier: "com.myapp.refresh"
+    )
+    request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+    try? BGTaskScheduler.shared.submit(request)
+}</code></pre>
+    </div>
+
+    <!-- Build the /analyze-energy skill -->
+    <h2>Build It: The <code>/analyze-energy</code> Skill</h2>
+
+    <div class="fix-pattern">
+      <h4>/analyze-energy &mdash; Claude Code Skill</h4>
+      <p>Create <code>.claude/commands/analyze-energy.md</code>:</p>
+<pre><code># /analyze-energy
+
+Analyze iOS energy profiling data. The user will provide one or more of:
+Power Profiler output, MetricKit energy metrics, Xcode Energy Gauge
+screenshots, or Swift source code for background tasks and location services.
+
+## Analysis Steps
+
+1. **Identify top energy consumers** — which subsystem (CPU, GPU,
+   Network, Location) uses the most power?
+2. **Check CPU wake patterns** — is the CPU sleeping between user
+   interactions? High wake counts = timer/polling abuse.
+3. **Audit location configuration** — accuracy level appropriate for
+   use case? Background location enabled unnecessarily?
+4. **Review background tasks** — BGTaskScheduler usage, fetch duration,
+   data volume per refresh.
+5. **Check thermal impact** — does the app respond to thermal state
+   changes? Does usage cause thermal escalation?
+
+## Output Format
+
+For each issue found:
+- **Subsystem:** [CPU/GPU/Network/Location]
+- **Issue:** [what's draining energy]
+- **Impact:** [estimated battery drain per hour]
+- **Fix:** [specific code change]
+- **Priority:** [high/medium/low based on user impact]</code></pre>
+    </div>
+
+    <!-- Performance Metrics -->
+    <h2>Measuring Energy Impact</h2>
+
+    <div class="performance-metric">
+      <h4>Before/After: Energy Optimization</h4>
+      <div class="metric-before">
+        <strong>Before (Unoptimized news reader)</strong><br>
+        Location: <code>kCLLocationAccuracyBest</code> always-on<br>
+        Polling: Timer every 1s for new content<br>
+        Background: fetches 20 MB per refresh<br>
+        CPU wakes/minute: <strong>847</strong><br>
+        Battery drain: <strong>~12% per hour</strong> of active use
+      </div>
+      <div class="metric-after">
+        <strong>After (AI-suggested optimizations)</strong><br>
+        Location: <code>significantLocationChanges</code> only<br>
+        Push notifications replace polling<br>
+        Background: lightweight badge count fetch (&lt;1 KB)<br>
+        CPU wakes/minute: <strong>23</strong> (-97%)<br>
+        Battery drain: <strong>~3% per hour</strong> of active use (-75%)
+      </div>
+    </div>
+
+    <!-- Xcode 26 AI vs Claude Code -->
+    <h2>Xcode 26 AI vs Claude Code for Energy</h2>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">🍎</span>
+        <h4>Xcode 26 Swift Assist + Power Profiler</h4>
+        <p><strong>Best for:</strong> Real-time energy analysis during profiling. Select a high-energy section in the Power Profiler timeline, ask Swift Assist &ldquo;What&rsquo;s causing this energy spike?&rdquo; It correlates the spike with the running code and suggests targeted fixes.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🤖</span>
+        <h4>Claude Code /analyze-energy</h4>
+        <p><strong>Best for:</strong> Production energy audits. Feed MetricKit payloads from multiple app versions, compare energy trends, identify which release introduced a regression. Also great for auditing location, timer, and background task configuration across your entire codebase.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🔧</span>
+        <h4>XcodeBuildMCP</h4>
+        <p><strong>Best for:</strong> Automated energy regression testing. Build, launch a scripted user flow on a wirelessly-connected device, capture Power Profiler data, and compare against baseline &mdash; all in one agent workflow. Catch energy regressions in CI before they ship.</p>
+      </div>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Find Your App&rsquo;s Battery Drain</h3>
+      <p><strong>Setup:</strong></p>
+      <ol>
+        <li>Connect your iOS device via WiFi (wireless debugging &mdash; <em>not</em> USB)</li>
+        <li>Open Instruments &gt; Power Profiler template</li>
+        <li>Start recording and use your app normally for 5 minutes (scroll, navigate, load content)</li>
+      </ol>
+      <p><strong>Steps:</strong></p>
+      <ol>
+        <li>Stop recording and examine the subsystem breakdown (CPU, GPU, Network, Location)</li>
+        <li>Look for the highest-energy subsystem and note when spikes occur</li>
+        <li>Check if the CPU has idle periods between interactions (it should!)</li>
+        <li>Export or screenshot the Power Profiler summary</li>
+        <li>Feed the data to Claude Code with <code>/analyze-energy</code></li>
+        <li>Apply the top suggested optimization</li>
+        <li>Re-profile the same 5-minute flow and compare energy usage</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add <code>ProcessInfo.thermalState</code> monitoring and verify your app responds to <code>.serious</code> by disabling non-essential features.</p>
+    </div>
+
+    <!-- Key Takeaways -->
+    <div class="highlight-box">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li><strong>Profile wirelessly</strong> &mdash; USB charging zeroes out Power Profiler metrics</li>
+        <li>The <strong>Power Profiler</strong> in Xcode 26 shows subsystem-level energy attribution correlated with code execution</li>
+        <li><strong>MetricKit</strong> delivers real-world energy data daily &mdash; compare across versions to catch regressions</li>
+        <li>The top 5 drains: aggressive location, timer polling, background refresh abuse, GPU overwork, uncompressed payloads</li>
+        <li>Use <code>significantLocationChanges</code> over <code>startUpdatingLocation</code> unless you&rsquo;re building a navigation app</li>
+        <li>Monitor <code>ProcessInfo.thermalState</code> and <strong>degrade gracefully</strong> at <code>.serious</code> and <code>.critical</code></li>
+        <li><code>BGAppRefreshTask</code> should be quick (&lt;30s) and light (&lt;1 MB). Use <code>BGProcessingTask</code> for heavy work.</li>
+        <li>Build the <strong>/analyze-energy</strong> skill for production energy audits across app versions</li>
+      </ul>
+    </div>
+
+    <!-- Coming Up -->
+    <h2>Coming Up Next</h2>
+
+    <p>You&rsquo;ve now profiled energy in Instruments. But the Power Profiler is just one of many instruments. In <strong>Chapter 9: AI-Assisted Instruments Profiling</strong>, we&rsquo;ll go deep into Time Profiler, Allocations, and System Trace &mdash; learning to extract profiler data and feed it to AI for automated interpretation. You&rsquo;ll build a <code>/profile-cpu</code> skill that turns a wall of call-tree data into actionable optimization recommendations.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-xcode-build-performance.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Xcode Build Performance</span>
+      </a>
+      <a href="09-ai-assisted-instruments.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">AI-Assisted Instruments Profiling</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

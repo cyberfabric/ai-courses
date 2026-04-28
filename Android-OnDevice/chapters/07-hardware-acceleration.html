@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Hardware Acceleration — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-gemini-nano.html">&larr; Prev</a>
+      <a href="08-model-optimization.html">Next &rarr;</a>
+      <a href="maps/07-hardware-acceleration-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Hardware Acceleration &mdash; NPU, GPU, and DSP</h1>
+    <p class="subtitle">Same model, same accuracy, 5-20x faster — unlock your phone's AI hardware</p>
+  </header>
+
+  <main>
+
+    <h2>You've Been Using the Slowest Processor</h2>
+
+    <p>Every model you've run so far — the MobileNet classifier in Chapter 3, the MediaPipe detectors in Chapter 4, the ML Kit features in Chapter 5 — has been running on the <strong>CPU</strong>. The CPU is a general-purpose workhorse, great for most code, but it's the worst choice for ML inference.</p>
+
+    <p>Your phone has at least three other processors that are <em>much</em> better at the matrix multiplications that models rely on. And you've been ignoring all of them.</p>
+
+    <p>Time to fix that.</p>
+
+    <h2>The Hardware Zoo Inside Your Phone</h2>
+
+    <p>A modern Android phone ships with four types of compute hardware, each with different strengths:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">C</div>
+      <div class="tool-info">
+        <div class="tool-name">CPU — General Purpose</div>
+        <div class="tool-desc">Good at everything, great at nothing (for ML). Handles complex branching logic well but processes tensor operations sequentially. 4-8 cores. <strong>Slowest for ML, but always available.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">G</div>
+      <div class="tool-info">
+        <div class="tool-name">GPU — Massively Parallel</div>
+        <div class="tool-desc">Hundreds of small cores designed for parallel math — exactly what matrix multiplication needs. Great for large models with many operations. 2-5x faster than CPU for most models. <strong>Available on every Android device.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">N</div>
+      <div class="tool-info">
+        <div class="tool-name">NPU / TPU — Purpose-Built for AI</div>
+        <div class="tool-desc">Dedicated silicon designed specifically for tensor operations. Runs quantized models at maximum efficiency with minimal power consumption. 5-20x faster than CPU. <strong>Found in 2022+ flagships and mid-range phones.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">D</div>
+      <div class="tool-info">
+        <div class="tool-name">DSP — Digital Signal Processor</div>
+        <div class="tool-desc">Optimized for signal processing: audio, sensor data, always-on tasks. Very power-efficient. Good for audio models (keyword spotting, speech recognition) that need to run continuously. <strong>Found in Qualcomm Snapdragon (Hexagon DSP).</strong></div>
+      </div>
+    </div>
+
+    <p>Think of it like this: the CPU is a Swiss Army knife, the GPU is a chainsaw, and the NPU is a laser cutter. All can cut things — but for precise, repetitive cuts (tensor operations), the laser cutter wins every time.</p>
+
+    <h2>The Performance Gap Is Huge</h2>
+
+    <p>Here's what happens when you move the exact same model from CPU to GPU to NPU — no changes to accuracy, no changes to the model file:</p>
+
+    <div class="device-benchmark">
+      <p><strong>MobileNetV3-Large inference time by hardware delegate (same model, same accuracy):</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Device</th>
+            <th>CPU (4 threads)</th>
+            <th>GPU Delegate</th>
+            <th>NNAPI (NPU/TPU)</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pixel 9 Pro (Tensor G4)</td>
+            <td>15 ms</td>
+            <td>6 ms</td>
+            <td>2.5 ms</td>
+            <td><strong>6x</strong></td>
+          </tr>
+          <tr>
+            <td>Galaxy S24 (Snapdragon 8 Gen 3)</td>
+            <td>13 ms</td>
+            <td>5 ms</td>
+            <td>2.8 ms</td>
+            <td><strong>4.6x</strong></td>
+          </tr>
+          <tr>
+            <td>Pixel 8 (Tensor G3)</td>
+            <td>18 ms</td>
+            <td>7 ms</td>
+            <td>3 ms</td>
+            <td><strong>6x</strong></td>
+          </tr>
+          <tr>
+            <td>Galaxy A54 (Exynos 1380)</td>
+            <td>55 ms</td>
+            <td>18 ms</td>
+            <td>12 ms</td>
+            <td><strong>4.6x</strong></td>
+          </tr>
+          <tr>
+            <td>Redmi Note 13 (Snapdragon 4 Gen 2)</td>
+            <td>70 ms</td>
+            <td>25 ms</td>
+            <td>N/A*</td>
+            <td><strong>2.8x</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">*Budget devices may lack dedicated NPUs accessible via NNAPI. GPU delegate is your best bet on these devices. The speedups are real, measurable, and free — just a few lines of code to switch delegates.</p>
+    </div>
+
+    <h2>TFLite GPU Delegate</h2>
+
+    <p>The GPU delegate is the easiest acceleration to add and works on virtually every Android device. Two lines of code transform your Chapter 3 classifier:</p>
+
+<pre><code>dependencies {
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
+}
+
+// Add GPU delegate to interpreter options
+val gpuDelegate = GpuDelegate()
+val options = Interpreter.Options().apply {
+    addDelegate(gpuDelegate)
+}
+val interpreter = Interpreter(model, options)</code></pre>
+
+    <p>That's it. Same model file, same preprocessing, same postprocessing. The interpreter now runs tensor operations on the GPU instead of the CPU.</p>
+
+    <div class="model-pipeline">
+      <p><strong>How the GPU delegate works under the hood:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">TFLite Model</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">GPU Delegate Analyzes Ops</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Supported Ops &rarr; GPU</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Unsupported Ops &rarr; CPU</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Combined Result</span>
+      </div>
+      <p style="margin-top: 1rem; color: var(--color-text-light);">
+        The delegate inspects every operation in the model. Standard ops (conv2d, depthwise_conv, matmul, relu, softmax) go to the GPU. Uncommon ops that the GPU can't handle fall back to CPU automatically. You don't need to worry about compatibility — it just works.
+      </p>
+    </div>
+
+    <div class="tip-box">
+      <strong>GPU delegate works best with float32 models.</strong> Quantized int8 models are already optimized for CPU/NPU and may actually run <em>slower</em> on the GPU (which prefers float math). Use GPU delegate with your original float32 model, and save int8 quantization for CPU/NPU execution.
+    </div>
+
+    <h2>NNAPI Delegate — The Hardware Abstraction Layer</h2>
+
+    <p>NNAPI (Neural Networks API) is Android's official hardware abstraction for ML. Instead of targeting a specific chip, you tell NNAPI "run this model on the best available hardware" and it figures out the rest:</p>
+
+<pre><code>val nnApiDelegate = NnApiDelegate(
+    NnApiDelegate.Options().apply {
+        // Let NNAPI choose the best accelerator
+        setUseNnapiCpu(false)  // don't fall back to NNAPI's CPU impl
+    }
+)
+val options = Interpreter.Options().apply {
+    addDelegate(nnApiDelegate)
+}
+val interpreter = Interpreter(model, options)</code></pre>
+
+    <p>NNAPI automatically routes operations to the NPU, GPU, or DSP based on what the device supports. On a Pixel phone, it hits the Tensor TPU. On a Galaxy, it targets the Hexagon NPU or Exynos NPU. On a budget phone without an NPU, it falls back to GPU or CPU.</p>
+
+    <div class="warning-box">
+      <strong>NNAPI behavior varies wildly across devices.</strong> The same NNAPI call may route to a world-class NPU on a Pixel 9, a mediocre GPU driver on a mid-range Xiaomi, or fail entirely on an older device. Always benchmark on your target devices and have a fallback plan. Never assume NNAPI = fast.
+    </div>
+
+    <h2>Chipset-Specific Acceleration</h2>
+
+    <h3>Qualcomm QNN — Snapdragon Hexagon NPU</h3>
+
+    <p>For maximum performance on Snapdragon devices (the most widely deployed mobile chipset), Qualcomm's QNN SDK provides direct NPU access bypassing NNAPI overhead:</p>
+
+<pre><code>dependencies {
+    implementation("com.qualcomm.qti:qnn-runtime:2.25.0")
+}
+
+// QNN delegate targets the Hexagon NPU directly
+val qnnDelegate = QnnDelegate(
+    QnnDelegate.Options().apply {
+        setSocModel(QnnDelegate.Options.SocModel.SM8650) // Snapdragon 8 Gen 3
+        setBackendType(QnnDelegate.Options.BackendType.HTP) // Hexagon Tensor Processor
+    }
+)
+val options = Interpreter.Options().apply {
+    addDelegate(qnnDelegate)
+}</code></pre>
+
+    <h3>Google Tensor TPU</h3>
+
+    <p>Pixel phones access their Tensor TPU through NNAPI — no special SDK needed. The NNAPI driver on Pixel devices is highly optimized and routes compatible operations directly to the TPU.</p>
+
+    <h3>Samsung Exynos NPU</h3>
+
+    <p>Galaxy devices with Exynos chips access their NPU through NNAPI. Samsung also offers the ENN SDK for direct NPU access in specific use cases, but NNAPI is sufficient for most applications.</p>
+
+    <div class="hardware-note">
+      <p><strong>Which delegate to use on which chipset:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Chipset</th>
+            <th>Best Delegate</th>
+            <th>Second Choice</th>
+            <th>Devices</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Google Tensor G3/G4</td>
+            <td>NNAPI (TPU)</td>
+            <td>GPU Delegate</td>
+            <td>Pixel 8/9 series</td>
+          </tr>
+          <tr>
+            <td>Snapdragon 8 Gen 2/3</td>
+            <td>QNN (Hexagon)</td>
+            <td>NNAPI</td>
+            <td>Galaxy S23/S24, OnePlus 12</td>
+          </tr>
+          <tr>
+            <td>Exynos 2400</td>
+            <td>NNAPI (NPU)</td>
+            <td>GPU Delegate</td>
+            <td>Galaxy S24 (Exynos variant)</td>
+          </tr>
+          <tr>
+            <td>Dimensity 9300</td>
+            <td>NNAPI (APU)</td>
+            <td>GPU Delegate</td>
+            <td>Oppo Find X7, Vivo X100</td>
+          </tr>
+          <tr>
+            <td>Snapdragon 4/6 Gen</td>
+            <td>GPU Delegate</td>
+            <td>CPU (4 threads)</td>
+            <td>Budget/mid-range devices</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Building a Dynamic Delegate Selector</h2>
+
+    <p>In production, you can't hardcode a delegate — your app runs on thousands of device configurations. Build a delegate selector that benchmarks at first run and caches the best choice:</p>
+
+<pre><code>class DelegateSelector(private val context: Context) {
+
+    private val prefs = context.getSharedPreferences("ml_delegate", MODE_PRIVATE)
+
+    fun getBestInterpreter(modelBuffer: MappedByteBuffer): Interpreter {
+        val cached = prefs.getString("best_delegate", null)
+        if (cached != null) {
+            return createInterpreter(modelBuffer, cached)
+        }
+        // First run: benchmark each delegate
+        val results = benchmarkDelegates(modelBuffer)
+        val best = results.minByOrNull { it.value }!!.key
+        prefs.edit().putString("best_delegate", best).apply()
+        return createInterpreter(modelBuffer, best)
+    }
+
+    private fun benchmarkDelegates(model: MappedByteBuffer): Map&lt;String, Long&gt; {
+        val results = mutableMapOf&lt;String, Long&gt;()
+        val dummy = ByteBuffer.allocateDirect(224 * 224 * 3 * 4)
+
+        // Try NNAPI
+        tryDelegate("nnapi", model, dummy, results) {
+            Interpreter.Options().apply { addDelegate(NnApiDelegate()) }
+        }
+        // Try GPU
+        tryDelegate("gpu", model, dummy, results) {
+            Interpreter.Options().apply { addDelegate(GpuDelegate()) }
+        }
+        // CPU baseline (always works)
+        tryDelegate("cpu", model, dummy, results) {
+            Interpreter.Options().apply { numThreads = 4 }
+        }
+        return results
+    }
+
+    private fun tryDelegate(
+        name: String, model: MappedByteBuffer,
+        input: ByteBuffer, results: MutableMap&lt;String, Long&gt;,
+        optionsBuilder: () -> Interpreter.Options
+    ) {
+        try {
+            val interp = Interpreter(model, optionsBuilder())
+            val output = ByteBuffer.allocateDirect(1000 * 4)
+            // Warm up
+            repeat(3) { interp.run(input, output); input.rewind(); output.rewind() }
+            // Measure
+            val start = System.nanoTime()
+            repeat(10) { interp.run(input, output); input.rewind(); output.rewind() }
+            results[name] = (System.nanoTime() - start) / 10 / 1_000_000
+            interp.close()
+        } catch (e: Exception) {
+            Log.w("DelegateSelector", "$name failed: ${e.message}")
+        }
+    }
+}</code></pre>
+
+    <div class="highlight-box">
+      <h3>The Fallback Chain Pattern</h3>
+      <p>Always implement a fallback chain: <strong>NPU/TPU &rarr; GPU &rarr; CPU</strong>. If the NPU delegate fails (unsupported operations, driver bug), try GPU. If GPU fails, fall back to CPU. CPU is your safety net — it always works, on every device, for every model. Your app should never crash because a delegate failed.</p>
+    </div>
+
+    <h2>Benchmarking Methodology</h2>
+
+    <p>Measuring inference speed correctly is trickier than it looks. Here's how to get reliable numbers:</p>
+
+    <h3>Warm-Up Runs</h3>
+
+    <p>The first 3-5 inferences are always slow — the GPU compiles shaders, the NPU initializes its pipeline, memory is allocated. Always discard warm-up runs before measuring:</p>
+
+<pre><code>// Warm up (discard results)
+repeat(5) { interpreter.run(input, output) }
+
+// Measure (real results)
+val times = mutableListOf&lt;Long&gt;()
+repeat(100) {
+    val start = System.nanoTime()
+    interpreter.run(input, output)
+    times.add((System.nanoTime() - start) / 1_000_000)
+}
+
+// Report percentiles, not averages
+times.sort()
+val p50 = times[times.size / 2]
+val p95 = times[(times.size * 0.95).toInt()]
+val p99 = times[(times.size * 0.99).toInt()]
+Log.d("Benchmark", "p50=${p50}ms, p95=${p95}ms, p99=${p99}ms")</code></pre>
+
+    <h3>Why Percentiles, Not Averages</h3>
+
+    <p>Averages hide the truth. If 99 inferences take 3ms and one takes 200ms (thermal throttle, GC pause), the average says "5ms" but the user saw a 200ms stutter. Report <strong>p50</strong> (typical), <strong>p95</strong> (occasional), and <strong>p99</strong> (worst case).</p>
+
+    <h3>Thermal Throttling</h3>
+
+    <p>Run inference continuously for 60 seconds and watch what happens. Most devices throttle after 10-20 seconds of sustained NPU/GPU usage, and inference times increase 20-50%. Your production benchmarks should measure sustained performance, not just burst speed.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Reliable benchmarking</p>
+        <div class="prompt-text">5 warm-up runs, then 100 measured runs
+Report p50, p95, p99 percentiles
+Test sustained performance (60+ seconds)
+Test on 3+ device tiers (flagship, mid, budget)
+Measure memory consumption alongside latency</div>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Misleading benchmarking</p>
+        <div class="prompt-text">Run once and report the number
+Report only the average
+Test only on your flagship dev phone
+Measure only cold-start (first inference)
+Ignore memory usage</div>
+      </div>
+    </div>
+
+    <h2>Handling Delegate Failures Gracefully</h2>
+
+    <p>Delegates can fail for many reasons: unsupported operations, driver bugs, insufficient memory, or missing hardware. Your app must handle every failure gracefully:</p>
+
+<pre><code>fun createSafeInterpreter(model: MappedByteBuffer): Interpreter {
+    // Try NNAPI first
+    try {
+        val options = Interpreter.Options().apply {
+            addDelegate(NnApiDelegate())
+        }
+        return Interpreter(model, options).also {
+            Log.i("ML", "Using NNAPI delegate")
+        }
+    } catch (e: Exception) {
+        Log.w("ML", "NNAPI failed: ${e.message}")
+    }
+
+    // Try GPU
+    try {
+        val options = Interpreter.Options().apply {
+            addDelegate(GpuDelegate())
+        }
+        return Interpreter(model, options).also {
+            Log.i("ML", "Using GPU delegate")
+        }
+    } catch (e: Exception) {
+        Log.w("ML", "GPU failed: ${e.message}")
+    }
+
+    // CPU fallback (always works)
+    Log.i("ML", "Using CPU fallback")
+    return Interpreter(model, Interpreter.Options().apply {
+        numThreads = 4
+    })
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Never let a delegate failure crash your app.</strong> Wrap every delegate initialization in a try/catch. Log which delegate succeeded — this telemetry is invaluable for understanding your real-world device mix. In production, report the delegate used alongside your performance metrics.
+    </div>
+
+    <h2>Try It: Benchmark Your Image Classifier on Every Delegate</h2>
+
+    <div class="exercise-box">
+      <p><strong>Take the image classifier from Chapter 3 and measure the real performance impact of hardware acceleration.</strong></p>
+      <ol>
+        <li>Add the GPU delegate dependency to your project</li>
+        <li>Create three versions of the interpreter: CPU (4 threads), GPU delegate, NNAPI delegate</li>
+        <li>Run each one with 5 warm-up inferences followed by 50 measured inferences</li>
+        <li>Record for each delegate:
+          <ul>
+            <li>p50 latency (median)</li>
+            <li>p95 latency (occasional spike)</li>
+            <li>Whether initialization succeeded or failed</li>
+          </ul>
+        </li>
+        <li>Build the <code>DelegateSelector</code> class that auto-picks the fastest delegate and caches the choice</li>
+        <li>Display the active delegate name and current inference time in your classifier UI</li>
+      </ol>
+      <p><strong>Expected results:</strong> GPU should be 2-3x faster than CPU. NNAPI should be 3-8x faster on flagship devices, but may fail on budget phones. CPU should always work as the reliable fallback.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Hardware acceleration makes your models run faster on the available hardware. But what if the model itself is too big? A 100MB float32 model is too heavy for mobile no matter how fast your NPU is — it takes too much RAM, too much storage, and too long to load.</p>
+
+    <p>In <strong>Chapter 8: Model Optimization — Making Models Mobile-Ready</strong>, we'll learn to shrink models: quantization (32-bit &rarr; 8-bit, 4x smaller), pruning (remove unnecessary weights), and distillation (train a smaller model to mimic a big one). Combine optimization with hardware acceleration and you get models that are both tiny <em>and</em> blazing fast.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-gemini-nano.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Gemini Nano — On-Device Generative AI</span>
+      </a>
+      <a href="08-model-optimization.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Model Optimization — Making Models Mobile-Ready</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

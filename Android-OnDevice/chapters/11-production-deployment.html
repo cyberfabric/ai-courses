@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Model Management and Production Deployment — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-nlp-audio.html">&larr; Prev</a>
+      <a href="12-ai-toolkit.html">Next &rarr;</a>
+      <a href="maps/11-production-deployment-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Model Management and Production Deployment</h1>
+    <p class="subtitle">Ship on-device AI to millions of devices — with confidence</p>
+  </header>
+
+  <main>
+
+    <h2>The Production Gap</h2>
+
+    <p>"It works on my Pixel" is not a shipping strategy. The feature you built and tested on your flagship dev phone will run on 24,000+ distinct Android device configurations — different chipsets, different RAM amounts, different Android versions, with or without NPUs.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">24,000+</span>
+        <span class="stat-label">Distinct Android device models</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">8+</span>
+        <span class="stat-label">Major chipset families</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">512MB-16GB</span>
+        <span class="stat-label">RAM range across active devices</span>
+      </div>
+    </div>
+
+    <p>This chapter is about bridging the gap between "cool demo" and "shipped feature." We'll cover model packaging, OTA updates, A/B testing, error handling, monitoring, and graceful degradation — everything you need to ship with confidence.</p>
+
+    <h2>Model Packaging Strategies</h2>
+
+    <p>Your first decision: how does the model get onto the user's device?</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>APK Impact</th>
+          <th>First-Use Experience</th>
+          <th>Updates</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Bundled in APK</strong></td>
+          <td>+model size</td>
+          <td>Instant — works immediately</td>
+          <td>Requires app update</td>
+          <td>Small models (&lt; 10MB)</td>
+        </tr>
+        <tr>
+          <td><strong>Download on first use</strong></td>
+          <td>No impact</td>
+          <td>Delayed — download required</td>
+          <td>Download new version</td>
+          <td>Large models (10-100MB)</td>
+        </tr>
+        <tr>
+          <td><strong>Firebase ML hosting</strong></td>
+          <td>No impact</td>
+          <td>Delayed — download required</td>
+          <td>OTA — no app update</td>
+          <td>Models that improve over time</td>
+        </tr>
+        <tr>
+          <td><strong>Play Asset Delivery</strong></td>
+          <td>Separate asset pack</td>
+          <td>Installed with app or on-demand</td>
+          <td>Via Play Store</td>
+          <td>Very large models (100MB+)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Bundle in APK when:</p>
+        <div class="prompt-text">Model is < 10MB
+Feature must work on first launch
+Model rarely changes
+Used by 100% of users</div>
+        <p class="prompt-explanation">MobileNet (5MB), MediaPipe tasks (2-4MB), keyword spotters (&lt;1MB) — these belong in the APK.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Download separately when:</p>
+        <div class="prompt-text">Model is > 10MB
+Feature is optional (not all users need it)
+Model updates frequently (weekly/monthly)
+Multiple model variants for different use cases</div>
+        <p class="prompt-explanation">Translation models (50MB each), speech models (100MB+), custom models that improve — download on demand.</p>
+      </div>
+    </div>
+
+    <h2>APK Size Management</h2>
+
+    <p>A 15MB model added to your APK means a 15MB larger download for every user — including those who never use the AI feature. Strategies to minimize impact:</p>
+
+<pre><code>// build.gradle.kts — use Android App Bundles
+android {
+    bundle {
+        language { enableSplit = true }
+        density { enableSplit = true }
+        abi { enableSplit = true }
+    }
+    // Don't compress model files (enables memory mapping)
+    androidResources {
+        noCompress += listOf("tflite", "task", "onnx")
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>App Bundles deliver only what the device needs.</strong> A user on an arm64 device gets only arm64 native code, not x86. Combined with split APKs, your model adds its full size only to users who actually need it.
+    </div>
+
+    <h2>Firebase ML Model Management</h2>
+
+    <p>Firebase ML lets you host TFLite models on Google's infrastructure and push updates without app releases. This is the gold standard for production ML on Android:</p>
+
+    <div class="model-pipeline">
+      <p><strong>OTA model update workflow — from training to production:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Train Model</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Validate Offline</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Upload to Firebase</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">5% Rollout</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Monitor Metrics</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">100% Rollout</span>
+      </div>
+    </div>
+
+<pre><code>dependencies {
+    implementation("com.google.firebase:firebase-ml-modeldownloader:25.0.1")
+}
+
+// Download model from Firebase
+val conditions = CustomModelDownloadConditions.Builder()
+    .requireWifi()
+    .build()
+
+FirebaseModelDownloader.getInstance()
+    .getModel("my_classifier_v2", DownloadType.LOCAL_MODEL_UPDATE_IN_BACKGROUND,
+        conditions)
+    .addOnSuccessListener { model ->
+        val modelFile = model.file ?: return@addOnSuccessListener
+        val interpreter = Interpreter(modelFile)
+        // Ready to use — and it will auto-update in background
+    }
+    .addOnFailureListener { e ->
+        Log.w("ML", "Download failed, using bundled fallback: ${e.message}")
+        useBundledModel()
+    }</code></pre>
+
+    <h2>Model Versioning and A/B Testing</h2>
+
+    <p>Treat models like code: version them, test them, and roll them out gradually.</p>
+
+    <h3>Versioning Strategy</h3>
+
+<pre><code>// Embed version in SharedPreferences when model loads
+val modelVersion = model.name.substringAfterLast("_v") // "classifier_v2.3"
+prefs.edit().putString("active_model_version", modelVersion).apply()
+analytics.logEvent("model_loaded") {
+    param("model_version", modelVersion)
+    param("model_size", model.file?.length() ?: 0)
+}</code></pre>
+
+    <h3>A/B Testing with Remote Config</h3>
+
+<pre><code>val remoteConfig = Firebase.remoteConfig
+remoteConfig.fetchAndActivate().addOnSuccessListener {
+    val modelVariant = remoteConfig.getString("classifier_model")
+    // "classifier_v2" for 50% of users, "classifier_v3" for 50%
+
+    FirebaseModelDownloader.getInstance()
+        .getModel(modelVariant, DownloadType.LOCAL_MODEL, conditions)
+        .addOnSuccessListener { model ->
+            loadModel(model)
+            // Log which variant this user got
+            analytics.logEvent("ab_model_assigned") {
+                param("variant", modelVariant)
+            }
+        }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Measure what matters in A/B tests:</strong> not just accuracy on test data, but real user engagement. Does the new model lead to more feature usage? Fewer corrections? Higher satisfaction scores? A model that's 2% more accurate but 3x slower might lose the A/B test because users stop using the feature.
+    </div>
+
+    <h2>Device Capability Detection</h2>
+
+    <p>Not every device can run every model. Detect capabilities at runtime and adapt:</p>
+
+<pre><code>class DeviceCapability(context: Context) {
+
+    val totalRamMB: Long
+    val availableRamMB: Long
+    val hasNpu: Boolean
+    val apiLevel: Int = Build.VERSION.SDK_INT
+
+    init {
+        val memInfo = ActivityManager.MemoryInfo()
+        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+            .getMemoryInfo(memInfo)
+        totalRamMB = memInfo.totalMem / (1024 * 1024)
+        availableRamMB = memInfo.availMem / (1024 * 1024)
+
+        // Check for NPU via NNAPI device list
+        hasNpu = if (Build.VERSION.SDK_INT >= 29) {
+            val devices = android.ml.NeuralNetworksDevice.getDevices()
+            devices.any { it.type == NeuralNetworksDevice.DEVICE_TYPE_ACCELERATOR }
+        } else false
+    }
+
+    fun getModelTier(): ModelTier = when {
+        totalRamMB >= 8000 && hasNpu -> ModelTier.FLAGSHIP
+        totalRamMB >= 4000 -> ModelTier.MID_RANGE
+        totalRamMB >= 2000 -> ModelTier.BUDGET
+        else -> ModelTier.UNSUPPORTED
+    }
+}
+
+enum class ModelTier { FLAGSHIP, MID_RANGE, BUDGET, UNSUPPORTED }</code></pre>
+
+    <div class="hardware-note">
+      <p><strong>Recommended model strategy per device tier:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>RAM</th>
+            <th>Model Strategy</th>
+            <th>Delegate</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Flagship</strong></td>
+            <td>8GB+, NPU</td>
+            <td>Full-size models, Gemini Nano, multiple concurrent models</td>
+            <td>NNAPI / QNN</td>
+          </tr>
+          <tr>
+            <td><strong>Mid-range</strong></td>
+            <td>4-8GB</td>
+            <td>Quantized int8 models, one model at a time</td>
+            <td>GPU delegate</td>
+          </tr>
+          <tr>
+            <td><strong>Budget</strong></td>
+            <td>2-4GB</td>
+            <td>Smallest model variants only, aggressive unloading</td>
+            <td>CPU (4 threads)</td>
+          </tr>
+          <tr>
+            <td><strong>Unsupported</strong></td>
+            <td>&lt;2GB</td>
+            <td>Disable AI features, show cloud fallback or static alternative</td>
+            <td>N/A</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Error Handling and Graceful Degradation</h2>
+
+    <p>In production, everything that can fail will fail. Plan for it:</p>
+
+<pre><code>class SafeModelManager(private val context: Context) {
+
+    private var interpreter: Interpreter? = null
+
+    fun loadModel(): Boolean {
+        return try {
+            val model = FileUtil.loadMappedFile(context, "classifier.tflite")
+            interpreter = createSafeInterpreter(model) // Chapter 7 fallback chain
+            true
+        } catch (e: OutOfMemoryError) {
+            logError("model_oom", e)
+            false
+        } catch (e: Exception) {
+            logError("model_load_failed", e)
+            false
+        }
+    }
+
+    fun classify(bitmap: Bitmap): Result&lt;Classification&gt; {
+        val interp = interpreter ?: return Result.failure(
+            IllegalStateException("Model not loaded")
+        )
+        return try {
+            val result = runInference(interp, bitmap)
+            if (result.score < 0.3f) {
+                // Low confidence — don't show unreliable results
+                Result.failure(LowConfidenceException(result))
+            } else {
+                Result.success(result)
+            }
+        } catch (e: Exception) {
+            logError("inference_failed", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun logError(event: String, e: Throwable) {
+        analytics.logEvent(event) {
+            param("error", e.message ?: "unknown")
+            param("device", Build.MODEL)
+            param("ram_mb", getAvailableRam())
+        }
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Never show garbage output to users.</strong> If the model returns low-confidence results (below your threshold), show a graceful fallback: "Unable to identify" is always better than a confident wrong answer. Users lose trust in AI features after one bad experience.
+    </div>
+
+    <h2>Memory Management in Production</h2>
+
+    <p>Models consume significant RAM. Manage their lifecycle carefully:</p>
+
+<pre><code>class ModelLifecycleManager : DefaultLifecycleObserver {
+
+    private var interpreter: Interpreter? = null
+
+    override fun onResume(owner: LifecycleOwner) {
+        // Load model when screen is visible
+        if (interpreter == null) {
+            interpreter = loadModel()
+        }
+    }
+
+    override fun onStop(owner: LifecycleOwner) {
+        // Unload model when screen is not visible
+        interpreter?.close()
+        interpreter = null
+    }
+}
+
+// Also handle system memory pressure
+class MyApp : Application(), ComponentCallbacks2 {
+    override fun onTrimMemory(level: Int) {
+        if (level >= TRIM_MEMORY_MODERATE) {
+            // System is running low — release models
+            ModelRegistry.unloadAll()
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Load lazily, unload eagerly.</strong> Don't preload models at app startup — load them when the feature screen opens. Unload when the user leaves the screen. For models used across multiple screens, use a reference count and unload when the count hits zero.
+    </div>
+
+    <h2>Performance Monitoring</h2>
+
+    <p>You can't improve what you don't measure. Track these metrics in production:</p>
+
+    <div class="device-benchmark">
+      <p><strong>Key production metrics to track via Firebase Analytics:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>What to Track</th>
+            <th>Alert Threshold</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Inference latency</strong></td>
+            <td>p50, p95 per device tier</td>
+            <td>p95 &gt; 100ms (real-time features)</td>
+          </tr>
+          <tr>
+            <td><strong>Model load success rate</strong></td>
+            <td>% of users who loaded model successfully</td>
+            <td>&lt; 95% success rate</td>
+          </tr>
+          <tr>
+            <td><strong>Inference crash rate</strong></td>
+            <td>Crashes per 1K inferences</td>
+            <td>&gt; 0.1% crash rate</td>
+          </tr>
+          <tr>
+            <td><strong>Download completion</strong></td>
+            <td>% of model downloads that finish</td>
+            <td>&lt; 90% completion</td>
+          </tr>
+          <tr>
+            <td><strong>Delegate distribution</strong></td>
+            <td>% users on NPU / GPU / CPU</td>
+            <td>Unexpected shifts after updates</td>
+          </tr>
+          <tr>
+            <td><strong>Low-confidence rate</strong></td>
+            <td>% of inferences below confidence threshold</td>
+            <td>&gt; 30% low-confidence</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+<pre><code>fun logInferenceMetrics(
+    modelVersion: String,
+    delegate: String,
+    latencyMs: Long,
+    confidence: Float,
+    success: Boolean
+) {
+    Firebase.analytics.logEvent("ml_inference") {
+        param("model_version", modelVersion)
+        param("delegate", delegate)
+        param("latency_ms", latencyMs)
+        param("confidence", confidence.toDouble())
+        param("success", if (success) 1L else 0L)
+        param("device_model", Build.MODEL)
+        param("device_tier", DeviceCapability(context).getModelTier().name)
+    }
+}</code></pre>
+
+    <h2>Privacy and Compliance</h2>
+
+    <div class="highlight-box">
+      <h3>On-Device AI Is a Privacy Superpower</h3>
+      <p>Every on-device AI feature in this course processes data <strong>locally</strong>. No images, text, or audio ever leave the device. This gives you genuine privacy advantages:</p>
+      <ul>
+        <li><strong>GDPR / CCPA</strong> — on-device processing typically doesn't constitute "data collection" since nothing is transmitted. Simpler compliance, less legal review.</li>
+        <li><strong>User trust</strong> — you can truthfully say "processed entirely on your device" in your privacy policy and in-app messaging.</li>
+        <li><strong>No consent required</strong> — processing data on the user's own device generally doesn't require explicit consent the way sending data to a server does.</li>
+        <li><strong>No data breach risk</strong> — if data never leaves the device, it can't be leaked from your servers.</li>
+      </ul>
+      <p>Communicate this clearly to users. "Processed on your device — your data stays private" is a feature worth highlighting.</p>
+    </div>
+
+    <h2>The Production Deployment Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Device capability check</strong> — detect RAM, NPU, API level; choose model tier or disable feature</li>
+      <li class="checked"><strong>Model loading with fallback</strong> — try NNAPI &rarr; GPU &rarr; CPU; never crash on delegate failure</li>
+      <li class="checked"><strong>Error handling</strong> — catch OOM, load failures, inference crashes; log to analytics</li>
+      <li class="checked"><strong>Confidence threshold</strong> — don't show results below your quality bar</li>
+      <li class="checked"><strong>Memory lifecycle</strong> — load on screen enter, unload on exit, handle <code>onTrimMemory</code></li>
+      <li class="checked"><strong>Performance telemetry</strong> — log latency, success rate, delegate used, model version</li>
+      <li class="checked"><strong>Model versioning</strong> — track which version runs on which devices</li>
+      <li class="checked"><strong>OTA update path</strong> — Firebase ML or equivalent for updating models without app updates</li>
+      <li class="checked"><strong>Graceful degradation UI</strong> — meaningful fallback when the feature can't run</li>
+      <li class="checked"><strong>Privacy messaging</strong> — tell users their data is processed locally</li>
+    </ul>
+
+    <h2>Try It: Production-Harden a Feature</h2>
+
+    <div class="exercise-box">
+      <p><strong>Take the image classifier from Chapter 3 (or any feature from Chapters 4-10) and add full production hardening.</strong></p>
+      <ol>
+        <li>Add <strong>device capability detection</strong> — check RAM and NPU availability, choose model tier</li>
+        <li>If the model isn't bundled, add a <strong>download flow</strong> with:
+          <ul>
+            <li>Progress indicator</li>
+            <li>Wi-Fi-only option</li>
+            <li>Retry on failure</li>
+            <li>Bundled fallback model if download fails</li>
+          </ul>
+        </li>
+        <li>Wrap all model operations in <strong>error handling</strong> — catch every exception, log to analytics</li>
+        <li>Add a <strong>confidence threshold</strong> — show "Unable to identify" for low-confidence results</li>
+        <li>Add <strong>performance telemetry</strong> — log inference latency, delegate used, model version, success/failure on every run</li>
+        <li>Add <strong>graceful degradation</strong> — if the device is UNSUPPORTED tier, show a message explaining why and offer a cloud alternative (or disable the feature cleanly)</li>
+        <li>Implement <strong>model lifecycle management</strong> — load on screen enter, unload on exit</li>
+      </ol>
+      <p><strong>Test by simulating failures:</strong> Force a delegate failure (pass an invalid delegate), force low memory (allocate large arrays before loading), and force a bad model file. Verify the app never crashes and always shows a meaningful UI.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now know how to build <em>and ship</em> on-device AI features. You've covered every layer: models (Chapters 2-3), frameworks (Chapters 4-6), optimization (Chapters 7-8), feature types (Chapters 9-10), and production deployment (this chapter).</p>
+
+    <p>In <strong>Chapter 12: Building Your On-Device AI Toolkit</strong>, we'll consolidate everything into a reusable decision framework, build a toolkit abstraction you can use for every future AI feature, design a capstone architecture that combines vision + language + audio + generative AI, and chart your 30-day action plan for shipping your first on-device AI feature.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-nlp-audio.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">NLP and Audio On-Device</span>
+      </a>
+      <a href="12-ai-toolkit.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Building Your On-Device AI Toolkit</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

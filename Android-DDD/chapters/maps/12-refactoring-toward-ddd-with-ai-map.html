@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map — Chapter 12: Refactoring Toward DDD with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../12-refactoring-toward-ddd-with-ai.html">Chapter</a>
+      <a href="11-ubiquitous-language-skill-map.html">&#8592; Prev Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Refactoring Toward DDD with AI</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🧭</span>
+      <h3>The Big Idea</h3>
+      <p><strong>DDD gives you the vocabulary; AI gives you the throughput.</strong> Strategy stays human (contexts, subdomains, aggregate boundaries). Mechanics go to Claude (renames, extractions, repository scaffolds, test stubs). Mistake the split and you ship anti-patterns at scale; respect it and you collapse a quarter of work into a week.</p>
+    </div>
+
+    <h2>🛠️ The Six-Step Refactor</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">1. Context map<br>(human-led)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">2. Ubiquitous<br>language</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">3. Aggregate<br>boundaries</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">4. Value objects<br>(AI-led)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">5. Pull logic<br>into <code>:domain</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">6. Repos +<br><code>:data</code></div>
+    </div>
+
+    <p>Steps 1&ndash;3: exploratory, human-led, low file churn. Steps 4&ndash;6: mechanical, AI-led, high file churn. Doing them out of order &mdash; especially mechanizing renames before naming the domain &mdash; is the most common failure mode.</p>
+
+    <h2>📦 The Starting Codebase</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">😴</span>
+        <div class="map-card-title">Anemic data classes</div>
+        <div class="map-card-desc"><code>data class User(id, email: String, tier: String, isActive)</code> &mdash; primitives all the way down.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">God-ViewModels</div>
+        <div class="map-card-desc"><code>CheckoutViewModel</code>: 800 lines, talks to APIs, Room, analytics, and feature flags directly.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗑️</span>
+        <div class="map-card-title">The <code>:common</code> dump</div>
+        <div class="map-card-desc">UserManager + AnalyticsHelper + DateFormatter + AvatarLoader. No coherent context.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎭</span>
+        <div class="map-card-title">Mockito everywhere</div>
+        <div class="map-card-desc">Every test mocks 5 dependencies because logic isn't in any one place to test directly.</div>
+      </div>
+    </div>
+
+    <h2>🤝 Who Does What</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Step</th><th>Human owns</th><th>Claude owns</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1. Context map</td>
+          <td>Boundary calls, naming</td>
+          <td>Initial scan from build graph</td>
+        </tr>
+        <tr>
+          <td>2. Glossary</td>
+          <td>Curation, "do not say"</td>
+          <td>First-pass term extraction</td>
+        </tr>
+        <tr>
+          <td>3. Aggregates</td>
+          <td>Invariant decisions, sizing</td>
+          <td>Proposal + invariant audit</td>
+        </tr>
+        <tr>
+          <td>4. Value objects</td>
+          <td>Pick the type, define rules</td>
+          <td>Codebase-wide rename + boundary wrapping</td>
+        </tr>
+        <tr>
+          <td>5. Logic move</td>
+          <td>Approve every diff</td>
+          <td>Classify methods, draft moves</td>
+        </tr>
+        <tr>
+          <td>6. Repositories</td>
+          <td>Interface shape</td>
+          <td>Scaffold impl + Hilt + fakes</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🚧 The Critical Discipline: "AT THE BOUNDARY ONLY"</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">Retrofit DTOs<br>(raw String)</div>
+      <div class="map-rel-node">Room rows<br>(raw String)</div>
+      <div class="map-rel-center">EmailAddress.of(raw)<br>at the mapper</div>
+      <div class="map-rel-node">User input<br>(raw String)</div>
+      <div class="map-rel-node">:domain<br>(typed only)</div>
+    </div>
+
+    <p>Wrap raw values in mappers (the ACL). Once inside <code>:domain</code>, the type is the contract. Let Claude wrap inside <code>:domain</code> and you've just moved the problem.</p>
+
+    <h2>🧪 The Verification Sandwich</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Run tests before each module</h4>
+        <p>Green baseline. If you start red, no rename will help.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Claude executes one module at a time</h4>
+        <p>Module-scoped, not repo-scoped. Smaller blast radius.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Run tests after each module</h4>
+        <p>Stop on red. Don't proceed to the next module until green.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Claude generates new tests for moved logic</h4>
+        <p>One test class per aggregate method, using fakes (not mocks).</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Commit. Reset on bad runs.</h4>
+        <p><code>git reset --hard HEAD~1</code> is faster than untangling a half-bad refactor.</p>
+      </li>
+    </ol>
+
+    <h2>🚨 Where AI Will Fail You</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🧭</span>
+        <div class="map-card-title">Strategic boundaries</div>
+        <div class="map-card-desc">Bounded contexts, core vs supporting vs generic. Plausible suggestions, often wrong.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤝</span>
+        <div class="map-card-title">Talking to domain experts</div>
+        <div class="map-card-desc">PMs, support, ops know things the codebase doesn't. AI can encode it &mdash; can't elicit it.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚖️</span>
+        <div class="map-card-title">Trade-off calls</div>
+        <div class="map-card-desc">"Aggregate or value object?" depends on team size, deploy cadence, domain stability.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪤</span>
+        <div class="map-card-title">Pattern uniformity</div>
+        <div class="map-card-desc">Will apply repository pattern to a 5-row reference table. Reject mechanically-applied ceremony.</div>
+      </div>
+    </div>
+
+    <h2>📝 ViewModel Before/After</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Before (anemic)</th><th>After (DDD)</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>ViewModel size</td>
+          <td>800 lines, business rules inside</td>
+          <td>~30 lines, calls use case + maps state</td>
+        </tr>
+        <tr>
+          <td>Cart logic</td>
+          <td>Scattered across <code>if</code> blocks</td>
+          <td><code>Cart.submit(user, fee, clock)</code></td>
+        </tr>
+        <tr>
+          <td>Tests</td>
+          <td>Mock 5 dependencies, brittle</td>
+          <td>Test aggregate directly, milliseconds</td>
+        </tr>
+        <tr>
+          <td>What changed</td>
+          <td>Rules tested via UI</td>
+          <td>Rules tested as pure functions</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>⚙️ Workflow Tactics</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">One aggregate per PR</div>
+        <div class="map-card-desc">A 6-file PR is reviewable in 10 min. A 50-file PR is a horror.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚧</span>
+        <div class="map-card-title">Never two contexts in one PR</div>
+        <div class="map-card-desc">Mixing contexts hides cross-context coupling. Single-context PRs surface it as a missing import.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔍</span>
+        <div class="map-card-title">Diff every change</div>
+        <div class="map-card-desc">Read the diff &mdash; not Claude's summary, not the test result. The diff is the truth.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title">Glossary as a guard</div>
+        <div class="map-card-desc">Claude proposes <code>UserManager</code>? Glossary says "Do not say: Manager." Reject.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⏸️</span>
+        <div class="map-card-title">Pause every five PRs</div>
+        <div class="map-card-desc">Converging or making lateral moves? If lateral, re-read the context map before continuing.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⏪</span>
+        <div class="map-card-title">Commit small, reset often</div>
+        <div class="map-card-desc">Each commit is a Claude-rollback checkpoint. <code>git reset --hard HEAD~1</code> is the safety valve.</div>
+      </div>
+    </div>
+
+    <h2>🗓️ The Week-Long Exercise</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1"><h4>Day 1</h4><p>Context map for one feature.</p></li>
+      <li class="map-timeline-item" data-step="2"><h4>Day 2</h4><p>Run <code>/ubiquitous-language</code>. Curate.</p></li>
+      <li class="map-timeline-item" data-step="3"><h4>Day 3</h4><p>Aggregate proposal. Decide boundary. 5-line README note.</p></li>
+      <li class="map-timeline-item" data-step="4"><h4>Day 4</h4><p>Extract one value object. One PR.</p></li>
+      <li class="map-timeline-item" data-step="5"><h4>Day 5</h4><p>Move biggest ViewModel method into <code>:domain</code>. One PR.</p></li>
+      <li class="map-timeline-item" data-step="6"><h4>Day 6</h4><p>Extract one repository interface. One PR.</p></li>
+      <li class="map-timeline-item" data-step="7"><h4>Day 7</h4><p>Read all six diffs back-to-back. Write a one-page retro.</p></li>
+    </ol>
+
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Characterization test</dt>
+      <dd>A test pinning down current (possibly weird) behavior before you refactor &mdash; your safety net for thinly-tested legacy code.</dd>
+
+      <dt>Boundary wrapping</dt>
+      <dd>Wrapping primitives in value objects only at the edge (mappers, user input). Inside <code>:domain</code>, types are the contract.</dd>
+
+      <dt>Latent bug</dt>
+      <dd>An invariant that <em>should</em> be enforced but isn't enforced anywhere. Surfaces during step 3; fix as part of moving logic into the aggregate.</dd>
+
+      <dt>One aggregate per PR</dt>
+      <dd>The reviewability discipline. Keeps refactors small enough that humans can verify each diff in minutes, not hours.</dd>
+
+      <dt>Module-scoped run</dt>
+      <dd>Letting Claude execute changes one Gradle module at a time, with tests run between, so failures fail loud and small.</dd>
+
+      <dt>Glossary-as-guard</dt>
+      <dd>Using <code>UBIQUITOUS_LANGUAGE.md</code>'s "do not say" list as a rejection criterion when reviewing AI-suggested class names.</dd>
+
+      <dt>Persistent artifact</dt>
+      <dd>A doc or skill committed to the repo that outlives any single refactor session: <code>UBIQUITOUS_LANGUAGE.md</code>, <code>CONTEXT_MAP.md</code>, <code>.claude/commands/*</code>.</dd>
+    </dl>
+
+    <h2>❓ Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test yourself</h3>
+      <details>
+        <summary>Why must steps 1&ndash;3 happen before steps 4&ndash;6?</summary>
+        <p class="quiz-answer">Mechanizing renames before naming the domain bakes the wrong vocabulary into thousands of files. Steps 1&ndash;3 produce the strategic decisions (contexts, glossary, aggregate boundaries); steps 4&ndash;6 are mechanical executions of those decisions. Out of order, you scale anti-patterns instead of fixing them.</p>
+      </details>
+      <details>
+        <summary>What does "AT THE BOUNDARY ONLY" mean for value-object extraction?</summary>
+        <p class="quiz-answer">Wrap raw primitives in value objects only at the edges of <code>:domain</code> &mdash; in Retrofit DTO mappers, Room mappers, and user-input handlers. Once inside <code>:domain</code>, the value-object type is the contract. If you let Claude wrap raw strings inside <code>:domain</code>, you've just moved the validation problem.</p>
+      </details>
+      <details>
+        <summary>What three things is AI genuinely bad at during a DDD refactor?</summary>
+        <p class="quiz-answer">(1) Strategic boundary calls &mdash; what is and isn't a bounded context, what's core vs supporting vs generic. (2) Talking to domain experts &mdash; PMs and support know things the codebase doesn't. (3) Trade-off calls that depend on team size, deploy cadence, and domain stability.</p>
+      </details>
+      <details>
+        <summary>What's the by-product of step 3 (aggregate proposal) that doubles as a free audit?</summary>
+        <p class="quiz-answer">A list of invariants that aren't enforced anywhere in the code &mdash; latent bugs. Treat each as a ticket and fix it as you move logic into the aggregate. The refactor pays a bonus dividend in correctness.</p>
+      </details>
+      <details>
+        <summary>Why is "one aggregate per PR / never two contexts per PR" load-bearing?</summary>
+        <p class="quiz-answer">Reviewability and coupling visibility. A small, single-context PR is reviewable in 10 minutes and surfaces cross-context coupling as a missing import. A 50-file PR that touches multiple contexts hides coupling and is too large to verify line-by-line &mdash; so reviewers approve based on Claude's summary, which is the failure mode.</p>
+      </details>
+      <details>
+        <summary>What artifacts persist past the refactor session?</summary>
+        <p class="quiz-answer"><code>UBIQUITOUS_LANGUAGE.md</code>, <code>CONTEXT_MAP.md</code>, and the slash commands in <code>.claude/commands/</code>. You pay to create them once; they pay you back every time anyone (human or AI) opens the repo. They are the highest-leverage outputs of the entire course.</p>
+      </details>
+    </div>
+
+    <h2>🎓 Course Wrap-Up</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🧠</span>
+        <div class="map-card-title">Strategic vocabulary</div>
+        <div class="map-card-desc">Bounded contexts, subdomains, context maps &mdash; the words you use to design before you code.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧱</span>
+        <div class="map-card-title">Tactical patterns</div>
+        <div class="map-card-desc">Entities, value objects, aggregates, repositories, domain services &mdash; the code shapes that make the strategy real.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">Android mapping</div>
+        <div class="map-card-desc">Gradle modules, MVI/MVVM, Room, Retrofit, KMP &mdash; how DDD lands on the stack you actually use.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚡</span>
+        <div class="map-card-title">AI accelerants</div>
+        <div class="map-card-desc">The <code>/ubiquitous-language</code> skill + this six-step refactor &mdash; turning DDD from quarterly project into weekly habit.</div>
+      </div>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">DDD gives you the vocabulary; AI gives you the throughput. Neither alone is enough.</li>
+        <li class="map-summary-item">Six steps in order: context map → glossary → aggregates → value objects → logic move → repositories.</li>
+        <li class="map-summary-item">Steps 1&ndash;3 are human-led (strategic). Steps 4&ndash;6 are AI-led (mechanical). Order matters &mdash; never mechanize before naming.</li>
+        <li class="map-summary-item">Wrap primitives in value objects "AT THE BOUNDARY ONLY." Inside <code>:domain</code>, the type is the contract.</li>
+        <li class="map-summary-item">Run tests <em>between</em> each module-scoped change, not at the end of the day. Stop on red. Reset on bad runs.</li>
+        <li class="map-summary-item">Step 3 produces a free latent-bug audit: invariants currently enforced nowhere are tickets, not commentary.</li>
+        <li class="map-summary-item">One aggregate per PR. Never two contexts per PR. Diff every change &mdash; not Claude's summary.</li>
+        <li class="map-summary-item">AI is bad at strategic boundary calls, talking to domain experts, and trade-off calls. Stay in the seat for those.</li>
+        <li class="map-summary-item">AI is excellent at codebase-wide renames, repository scaffolding, test stubs, and consistency enforcement. Hand off ruthlessly.</li>
+        <li class="map-summary-item">The persistent artifacts (<code>UBIQUITOUS_LANGUAGE.md</code>, <code>CONTEXT_MAP.md</code>, slash commands) outlive any session and pay back forever.</li>
+        <li class="map-summary-item">Walk one feature through the six steps in a week. The next feature is easier; the third is muscle memory.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="11-ubiquitous-language-skill-map.html">
+        <span class="nav-direction">&#8592; Previous Map</span>
+        <span class="nav-chapter">The /ubiquitous-language Skill</span>
+      </a>
+      <a href="../12-refactoring-toward-ddd-with-ai.html">
+        <span class="nav-direction">📖 Read</span>
+        <span class="nav-chapter">Chapter 12</span>
+      </a>
+      <a href="../index.html" class="next">
+        <span class="nav-direction">📚 Done!</span>
+        <span class="nav-chapter">Back to Contents</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

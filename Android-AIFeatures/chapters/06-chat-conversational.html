@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: In-App Chat &amp; Conversational UI | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-summarization.html">&larr; Prev</a>
+      <a href="07-image-understanding.html">Next &rarr;</a>
+      <a href="maps/06-chat-conversational-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>In-App Chat &amp; Conversational UI</h1>
+    <p class="subtitle">Build a chatbot users actually want to talk to &mdash; Compose UI, streaming, memory, and function calling</p>
+  </header>
+
+  <main>
+
+    <h2>When a Chatbot Makes Sense</h2>
+
+    <p>In Chapter 5, you built one-shot AI features &mdash; user asks, AI answers, done. A chatbot is different: it's a <em>conversation</em>. The user asks a follow-up, references something from earlier, changes their mind. This is harder to build, more expensive to run, and more ways to go wrong.</p>
+
+    <p>So before you build a chatbot, ask: does this problem actually need a conversation?</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Chatbot Makes Sense</p>
+        <p class="prompt-text">Customer support: "I can't find my order" → "Which order?" → "The one from last Tuesday" → "Found it, here's the status..."
+
+Product discovery: "I need a gift for my mom" → "What does she like?" → "She's into gardening" → "Here are 5 options..."
+
+Learning/tutoring: "Explain coroutines" → "What about structured concurrency?" → "Show me an example"</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Chatbot Is Overkill</p>
+        <p class="prompt-text">Settings: "Turn on dark mode" → just put a toggle switch
+
+Binary choices: "Should I save this?" → Yes/No buttons are faster
+
+Simple lookup: "What's the weather?" → show a card, don't start a conversation</p>
+        <p class="prompt-explanation">If the user's need can be satisfied in one interaction, a chatbot adds friction instead of removing it.</p>
+      </div>
+    </div>
+
+    <p>The rule of thumb: <strong>use a chatbot when the interaction requires clarification, exploration, or multi-step reasoning.</strong> For everything else, use a button, a form, or a one-shot AI feature from Chapter 5.</p>
+
+    <h2>The Chat Data Model</h2>
+
+    <p>Every chat feature starts with a solid data model. Here's what you need:</p>
+
+<pre><code>enum class MessageRole { USER, ASSISTANT, SYSTEM }
+enum class MessageStatus { SENDING, STREAMING, COMPLETE, ERROR }
+
+@Entity
+data class ChatMessage(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversationId: String,
+    val role: MessageRole,
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val status: MessageStatus = MessageStatus.COMPLETE
+)
+
+@Entity
+data class Conversation(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val title: String = "New Chat",
+    val createdAt: Long = System.currentTimeMillis(),
+    val systemPrompt: String = ""
+)</code></pre>
+
+    <p>Key design decisions: each message has a <code>role</code> (so the AI knows who said what), a <code>status</code> (so the UI can show streaming or error states), and a <code>conversationId</code> (so you can persist multiple conversations).</p>
+
+    <h2>Building the Chat UI in Compose</h2>
+
+    <p>A chat UI has three core pieces: the message list, the input field, and the typing indicator. Let's build each one.</p>
+
+    <h3>The Message List</h3>
+
+<pre><code>@Composable
+fun ChatMessageList(messages: List&lt;ChatMessage&gt;, listState: LazyListState) {
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(messages, key = { it.id }) { message -&gt;
+            ChatBubble(message)
+        }
+    }
+}</code></pre>
+
+    <h3>Message Bubbles</h3>
+
+<pre><code>@Composable
+fun ChatBubble(message: ChatMessage) {
+    val isUser = message.role == MessageRole.USER
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = if (isUser) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.widthIn(max = 280.dp)
+        ) {
+            Text(
+                text = message.content,
+                modifier = Modifier.padding(12.dp),
+                color = if (isUser) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}</code></pre>
+
+    <h3>The Input Field</h3>
+
+<pre><code>@Composable
+fun ChatInput(onSend: (String) -&gt; Unit, enabled: Boolean) {
+    var text by remember { mutableStateOf("") }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("Type a message...") },
+            enabled = enabled,
+            maxLines = 4
+        )
+        Spacer(Modifier.width(8.dp))
+        IconButton(
+            onClick = { if (text.isNotBlank()) { onSend(text); text = "" } },
+            enabled = enabled &amp;&amp; text.isNotBlank()
+        ) {
+            Icon(Icons.AutoMirrored.Default.Send, "Send")
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Auto-scroll to the latest message.</strong> When a new message arrives or the AI is streaming, scroll to the bottom automatically. But if the user has scrolled up to read history, don't yank them back down. Track scroll position and only auto-scroll when the user is already near the bottom.</p>
+    </div>
+
+    <h2>Streaming Chat Responses</h2>
+
+    <p>A chatbot that makes users wait 3 seconds staring at a spinner feels dead. Streaming the response token by token makes it feel alive and responsive. Here's the complete pipeline:</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Streaming Chat with Gemini API</h3>
+      <p><strong>Goal:</strong> Send a message with conversation history, stream the AI's response into the chat bubble in real time.</p>
+      <p><strong>Step 1:</strong> Set up the Gemini chat model:</p>
+<pre><code>val model = GenerativeModel(
+    modelName = "gemini-2.0-flash",
+    apiKey = BuildConfig.GEMINI_API_KEY,
+    systemInstruction = content { text(systemPrompt) }
+)
+// Start a chat session that tracks history automatically
+val chat = model.startChat(history = existingMessages.toGeminiHistory())</code></pre>
+      <p><strong>Step 2:</strong> Send a message and stream the response in your ViewModel:</p>
+<pre><code>fun sendMessage(userText: String) {
+    viewModelScope.launch {
+        // Add user message to the list
+        addMessage(ChatMessage(role = MessageRole.USER, content = userText))
+
+        // Create a placeholder for the AI response
+        val aiMessage = ChatMessage(
+            role = MessageRole.ASSISTANT,
+            content = "",
+            status = MessageStatus.STREAMING
+        )
+        addMessage(aiMessage)
+
+        try {
+            var fullResponse = ""
+            chat.sendMessageStream(userText).collect { chunk -&gt;
+                fullResponse += chunk.text.orEmpty()
+                updateLastMessage(fullResponse, MessageStatus.STREAMING)
+            }
+            updateLastMessage(fullResponse, MessageStatus.COMPLETE)
+        } catch (e: Exception) {
+            updateLastMessage("Sorry, something went wrong.", MessageStatus.ERROR)
+        }
+    }
+}</code></pre>
+      <p><strong>Step 3:</strong> Show the streaming indicator in the bubble:</p>
+<pre><code>@Composable
+fun ChatBubble(message: ChatMessage) {
+    // ... existing bubble code ...
+    if (message.status == MessageStatus.STREAMING) {
+        Spacer(Modifier.height(4.dp))
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().height(2.dp)
+        )
+    }
+}</code></pre>
+      <p>The Gemini SDK's <code>startChat()</code> handles conversation history automatically &mdash; each call to <code>sendMessageStream()</code> includes the full conversation context.</p>
+    </div>
+
+    <h2>Conversation Memory</h2>
+
+    <p>The magic of a chatbot is context. "Show me more like that" only works if the AI remembers what "that" refers to. But every AI model has a context window limit, and sending the entire conversation history gets expensive.</p>
+
+    <h3>The Memory Problem</h3>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1M</span>
+        <span class="stat-label">Gemini Flash context window (tokens) &mdash; roughly 750K words</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">128K</span>
+        <span class="stat-label">GPT-4o context window &mdash; roughly 96K words</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">$$$</span>
+        <span class="stat-label">Cost grows linearly with conversation length</span>
+      </div>
+    </div>
+
+    <p>For most conversations (under 50 messages), just send the full history. But for long conversations, use the <strong>sliding window + summary</strong> approach:</p>
+
+<pre><code>fun buildConversationContext(
+    messages: List&lt;ChatMessage&gt;,
+    maxMessages: Int = 20
+): List&lt;ChatMessage&gt; {
+    if (messages.size &lt;= maxMessages) return messages
+
+    // Keep the system prompt + first message for context
+    val anchor = messages.take(2)
+    // Summarize the middle
+    val middle = messages.drop(2).dropLast(maxMessages - 2)
+    val summary = ChatMessage(
+        role = MessageRole.SYSTEM,
+        content = "Summary of earlier conversation: ${summarize(middle)}"
+    )
+    // Keep the most recent messages
+    val recent = messages.takeLast(maxMessages - 3)
+
+    return anchor + summary + recent
+}</code></pre>
+
+    <p>This gives the AI the full arc of the conversation (via summary) plus recent context (via last N messages), without sending hundreds of messages on every request.</p>
+
+    <h2>System Prompts That Work</h2>
+
+    <p>The system prompt defines your chatbot's personality, knowledge boundaries, and behavior. This is the single most important piece of your chatbot &mdash; get it right, and the chatbot feels helpful and consistent. Get it wrong, and it feels chaotic.</p>
+
+    <div class="product-pattern">
+      <h3>The Scoped Assistant Pattern</h3>
+      <p>The most successful in-app chatbots are <strong>scoped</strong> &mdash; they have a clear domain, a defined personality, and firm boundaries about what they will and won't do.</p>
+      <ol>
+        <li><strong>Define the domain:</strong> "You are a recipe assistant for a cooking app." Not "You are a helpful AI."</li>
+        <li><strong>Set boundaries:</strong> "Only answer questions about cooking, recipes, and ingredients. For anything else, politely say you can only help with cooking."</li>
+        <li><strong>Define the personality:</strong> "Be friendly, encouraging, and concise. Use casual language. Suggest alternatives when possible."</li>
+        <li><strong>Specify output format:</strong> "Keep responses under 3 sentences unless the user asks for detail. Use bullet points for ingredient lists."</li>
+      </ol>
+      <p><strong>Why this works:</strong> A scoped assistant is predictable. Users quickly learn what it can do, how to talk to it, and what to expect. An unscoped chatbot is a roulette wheel &mdash; sometimes helpful, sometimes bizarre, never consistent.</p>
+    </div>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Vague System Prompt</p>
+        <p class="prompt-text">You are a helpful assistant.</p>
+        <p class="prompt-explanation">No personality, no boundaries, no format guidance. The chatbot will do anything — including going off-topic, being verbose, and hallucinating.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Scoped System Prompt</p>
+        <p class="prompt-text">You are a recipe assistant for CookMate, a cooking app.
+Your job: help users find recipes, suggest substitutions, and explain cooking techniques.
+Boundaries: only answer cooking-related questions. If asked about other topics, say "I'm your cooking assistant — I can help with recipes and cooking tips!"
+Style: friendly, concise (under 3 sentences unless asked for detail). Use bullet points for lists.
+Never invent recipes. If unsure, say "I'm not sure about that — try searching the app for more options."</p>
+        <p class="prompt-explanation">Clear domain, firm boundaries, defined personality, format rules, and an honesty instruction. Consistent results every time.</p>
+      </div>
+    </div>
+
+    <h2>Tool Use / Function Calling</h2>
+
+    <p>The most powerful chatbot feature: letting the AI <em>do things</em> in your app, not just talk. When a user says "Show me nearby Italian restaurants," the AI can call a function that queries your database and returns real results.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Lena opens her cooking app and asks the chat assistant: "What can I make with chicken and broccoli?" The AI doesn't just generate a generic answer &mdash; it calls a <code>searchRecipes</code> function that queries the app's actual recipe database. It returns three real recipes from the app with photos, cook times, and a "Start Cooking" button right in the chat.</p>
+      <p>Lena taps "Start Cooking" on the stir-fry recipe. The app navigates to the step-by-step cooking screen. The chatbot bridged conversation and action seamlessly.</p>
+    </div>
+
+    <p>Here's how function calling works with Gemini:</p>
+
+<pre><code>// Define the tools the AI can use
+val tools = listOf(
+    Tool(functionDeclarations = listOf(
+        FunctionDeclaration(
+            name = "searchRecipes",
+            description = "Search for recipes by ingredients or keywords",
+            parameters = mapOf("query" to Schema.string("Search query"))
+        ),
+        FunctionDeclaration(
+            name = "getRecipeDetails",
+            description = "Get full details for a specific recipe",
+            parameters = mapOf("recipeId" to Schema.integer("Recipe ID"))
+        )
+    ))
+)
+
+val model = GenerativeModel(
+    modelName = "gemini-2.0-flash",
+    tools = tools,
+    // ... other config
+)</code></pre>
+
+    <p>When the AI decides to call a function, you execute it locally and return the result:</p>
+
+<pre><code>// In your message handling loop
+val response = chat.sendMessage(userText)
+for (part in response.candidates.first().content.parts) {
+    when (part) {
+        is TextPart -&gt; displayText(part.text)
+        is FunctionCallPart -&gt; {
+            val result = when (part.name) {
+                "searchRecipes" -&gt; recipeRepo.search(part.args["query"]!!)
+                "getRecipeDetails" -&gt; recipeRepo.getById(part.args["recipeId"]!!)
+                else -&gt; "Unknown function"
+            }
+            // Send the function result back to the AI
+            chat.sendMessage(content { functionResponse(part.name, result) })
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Start with 2-3 tools, not 20.</strong> Each tool adds complexity and potential for the AI to make wrong calls. Start with the most useful actions (search, get details, add to favorites) and expand based on user feedback.</p>
+    </div>
+
+    <h2>Rich Messages Beyond Text</h2>
+
+    <p>A chat that only shows plain text is boring and limited. Rich messages make the chatbot feel integrated with your app:</p>
+
+<pre><code>sealed class ChatContent {
+    data class Text(val body: String) : ChatContent()
+    data class RecipeCard(
+        val id: Long, val title: String,
+        val imageUrl: String, val cookTime: String
+    ) : ChatContent()
+    data class ActionChips(val options: List&lt;String&gt;) : ChatContent()
+    data class ImageMessage(val url: String, val caption: String) : ChatContent()
+}
+
+// Render different content types
+@Composable
+fun RichChatBubble(content: ChatContent) {
+    when (content) {
+        is ChatContent.Text -&gt; Text(content.body)
+        is ChatContent.RecipeCard -&gt; RecipeCardBubble(content)
+        is ChatContent.ActionChips -&gt; ChipRow(content.options)
+        is ChatContent.ImageMessage -&gt; ImageBubble(content)
+    }
+}</code></pre>
+
+    <p><strong>Action chips</strong> are especially useful: after the AI responds, show tappable suggestions like "Show me more," "Something easier," "Add to favorites." This guides the conversation and reduces typing.</p>
+
+    <h2>Handling Edge Cases</h2>
+
+    <h3>Empty Conversations</h3>
+    <p>A blank chat screen is intimidating. Show a greeting and suggested prompts:</p>
+
+<pre><code>if (messages.isEmpty()) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("Hi! I'm your cooking assistant.")
+        Text("Try asking me:", style = MaterialTheme.typography.labelMedium)
+        listOf("What can I make with pasta?",
+               "Quick dinner ideas",
+               "How do I poach an egg?"
+        ).forEach { suggestion -&gt;
+            SuggestionChip(onClick = { onSend(suggestion) },
+                label = { Text(suggestion) })
+        }
+    }
+}</code></pre>
+
+    <h3>Very Long Conversations</h3>
+    <p>After 200+ messages, <code>LazyColumn</code> performance can degrade. Paginate: load the latest 50 messages, and load older ones when the user scrolls to the top.</p>
+
+    <h3>Network Errors Mid-Stream</h3>
+    <p>If the connection drops while the AI is streaming, keep the partial response and show a "Connection lost. Tap to retry" button. Don't discard what was already received.</p>
+
+    <div class="warning-box">
+      <p><strong>Content filtering is non-negotiable.</strong> Users will test your chatbot with offensive, harmful, or manipulative input. Use the model's built-in safety settings, add your own keyword filters for your domain, and always have a graceful "I can't help with that" response. Never let the chatbot be weaponized.</p>
+    </div>
+
+    <h2>Rate Limiting and Cost Control</h2>
+
+    <p>A chatbot is the most expensive AI feature to run. Each message sends the entire conversation history, and talkative users can generate hundreds of API calls per session.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Limit Type</th>
+          <th>Recommended Value</th>
+          <th>User Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Per-minute</td>
+          <td>10 messages</td>
+          <td>"Slow down a bit &mdash; I need a moment to think!"</td>
+        </tr>
+        <tr>
+          <td>Per-day (free tier)</td>
+          <td>50 messages</td>
+          <td>"You've used today's messages. Resets at midnight."</td>
+        </tr>
+        <tr>
+          <td>Per-conversation</td>
+          <td>100 messages</td>
+          <td>"This conversation is getting long. Start a new one?"</td>
+        </tr>
+        <tr>
+          <td>Global circuit breaker</td>
+          <td>Cost &gt; $X/hour</td>
+          <td>"Chat is temporarily unavailable." (internal alert)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>Cost Math for Chat</h3>
+      <p>A 20-message conversation with Gemini Flash costs roughly $0.001-0.005 (depending on message length). At 10K DAU with 3 conversations/day, that's $30-150/month. Manageable. But at 100K DAU, it's $300-1,500/month. Budget before you ship, and set the circuit breaker <em>before</em> you need it.</p>
+    </div>
+
+    <h2>Offline Chat</h2>
+
+    <p>For devices with Gemini Nano (Pixel 8+, Samsung S24+), you can offer a limited offline chat experience. The quality is lower and context is shorter, but it works without internet:</p>
+
+<pre><code>suspend fun sendChatMessage(text: String): Flow&lt;String&gt; {
+    return if (isOnline()) {
+        geminiFlashChat.sendMessageStream(text)
+    } else if (isGeminiNanoAvailable()) {
+        geminiNanoChat.sendMessageStream(text)
+    } else {
+        flowOf("I need an internet connection to chat. Try again when you're online.")
+    }
+}</code></pre>
+
+    <p>Show a subtle indicator when in offline mode: "Offline mode &mdash; responses may be shorter." Set expectations before the user notices the quality difference.</p>
+
+    <h2>Your Turn: Build a Chat Interface</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Complete Chat Assistant</h3>
+      <p>Build a fully functional chat interface for a cooking app. Requirements:</p>
+      <ol>
+        <li><strong>Chat UI:</strong> <code>LazyColumn</code> with user/AI message bubbles, input field with send button, typing indicator while AI streams</li>
+        <li><strong>Streaming responses:</strong> Use Gemini API's <code>startChat()</code> with <code>sendMessageStream()</code> to show text arriving in real time</li>
+        <li><strong>System prompt:</strong> Define a scoped cooking assistant with clear boundaries, friendly personality, and concise response format</li>
+        <li><strong>Persistence:</strong> Save conversation history to Room so chats survive app restarts</li>
+        <li><strong>Empty state:</strong> Show a greeting with 3 suggested prompts when the chat is empty</li>
+        <li><strong>Error handling:</strong> Show an error state with retry button if the API call fails</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add one function call &mdash; let the user say "search for pasta recipes" and have the AI call a <code>searchRecipes</code> function that returns mock data, displayed as rich recipe cards in the chat.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've built the most interactive AI feature yet &mdash; a conversational interface with streaming, memory, function calling, and rich messages. The user can <em>talk</em> to your app, and the app can talk back and take actions.</p>
+
+    <p>So far, all our AI features have worked with text. Time to give your app eyes. <strong>Chapter 7: Image Understanding &amp; Visual Search</strong> covers photo categorization, visual search, scene description, and smart OCR &mdash; features that understand what's <em>in</em> an image, not just that an image exists.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="05-summarization.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Summarization &amp; Content Generation</span>
+        </a>
+        <a href="07-image-understanding.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Image Understanding &amp; Visual Search</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

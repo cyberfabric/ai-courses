@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Security Review and QA Engineering | From Zero to App With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏭</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">From Zero to App With AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-code-reviewer.html">&larr; Prev</a>
+      <a href="11-full-pipeline.html">Next &rarr;</a>
+      <a href="maps/10-security-and-qa-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Security Review and QA Engineering</h1>
+    <p class="subtitle">Two final quality gates: vulnerability scanning and comprehensive test generation</p>
+  </header>
+
+  <main>
+
+    <!-- ===== Opening ===== -->
+    <section>
+      <h2>The Last Two Gates</h2>
+
+      <p>
+        The Code Reviewer checked architecture rules. Code compiles, tests pass, naming
+        is consistent. But two questions remain: <strong>Is it secure?</strong>
+        and <strong>Is it thoroughly tested?</strong>
+      </p>
+
+      <p>
+        This chapter builds the final two roles &mdash; the Security Reviewer and the QA
+        Engineer. Together with the Code Reviewer, they form the <strong>quality stack</strong>:
+        rules compliance, security posture, and test coverage. All three must pass before
+        code ships. For deep dives into mobile security, see
+        <a href="../../Security/chapters/index.html">App Security For Dummies</a>.
+      </p>
+    </section>
+
+    <!-- ===== Security Reviewer Role Card ===== -->
+    <section>
+      <h2>The Security Reviewer Role</h2>
+
+      <div class="role-card">
+        <div class="role-name">Security Reviewer</div>
+        <div class="role-input">
+          <strong>Input:</strong> Source code from Developer, dependency list (build.gradle),
+          architecture.md (for data flow), task spec (for context)
+        </div>
+        <div class="role-output">
+          <strong>Output:</strong> Security findings with OWASP category, severity (CRITICAL / HIGH / MEDIUM / LOW),
+          location, explanation, and remediation steps
+        </div>
+        <div class="role-output">
+          <strong>Model:</strong> Opus 4.7 &mdash; security judgment requires understanding
+          intent, not just pattern matching
+        </div>
+      </div>
+
+      <p>
+        The Security Reviewer only runs on <strong>high-risk tasks</strong> (AppDatabase,
+        navigation, Hilt wiring, integration) &mdash; typically 4 of 20 tasks. For an
+        offline-first app like RecipeVault, the attack surface is smaller than a networked
+        app, but data storage, input handling, and export features still need scrutiny.
+      </p>
+    </section>
+
+    <!-- ===== Security Skill File ===== -->
+    <section>
+      <h2>The Security Reviewer Skill</h2>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">Skill File &mdash; Security Reviewer</span>
+<pre><code># Identity
+You are the Security Reviewer for the AI Factory pipeline.
+Check Developer output for security vulnerabilities. Model: Opus.
+
+# Input
+1. Source files from the Developer
+2. build.gradle.kts (dependency versions)
+3. architecture.md (data flow context)
+4. Task spec (what this code does)
+
+# Review Checklist
+For each file, check against these categories:
+
+## 1. Data Storage (OWASP M2)
+- No plaintext secrets, hardcoded keys, or logged PII
+- Sensitive data: EncryptedSharedPreferences or SQLCipher
+- No raw SharedPreferences for tokens/passwords
+
+## 2. Input Validation (OWASP M8)
+- All user input sanitized before DB queries
+- No raw SQL — Room parameterized @Query only
+- File paths validated (no path traversal)
+
+## 3. Data Export (OWASP M1)
+- Content providers require permissions
+- FileProvider paths scoped (not root)
+- Backup rules exclude sensitive data
+
+## 4. Dependencies (OWASP M7)
+- No known CVEs in dependency versions
+- No unnecessary permissions in manifest
+
+## 5. Cryptography
+- No custom crypto — use Android Keystore
+- Minimum TLS 1.2 for network calls
+
+# Severity Levels
+- CRITICAL: Exploitable vulnerability. Data leak, injection,
+  exposed secrets. Must fix before merge.
+- HIGH: Likely exploitable with effort. Missing encryption,
+  overly broad permissions. Must fix.
+- MEDIUM: Defense-in-depth gap. Missing input validation
+  on non-sensitive field, verbose logging. Should fix.
+- LOW: Best practice suggestion. Code is safe but could
+  be hardened. Fix if time allows.
+
+# Output Format
+## Security Review: Task [N] — [Title]
+### Verdict: [SECURE | FIX-REQUIRED | BLOCK]
+### Findings
+- **[SEVERITY]**: [Summary]
+  - Category: OWASP [MN] — [Name]
+  - File: path.kt | Line: N
+  - Issue: [What's exploitable and how]
+  - Remediation: [Specific fix with code example]
+### Summary
+- Files scanned: N
+- CRITICAL: N | HIGH: N | MEDIUM: N | LOW: N</code></pre>
+      </div>
+    </section>
+
+    <!-- ===== Security Review Example ===== -->
+    <section>
+      <h2>Live Security Review: Task 17 (AppDatabase)</h2>
+
+      <p>
+        Task 17 creates the Room database, type converters, and migration strategy. This is
+        a high-risk task because it handles all data persistence.
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">Security Review Output &mdash; Task 17</span>
+<pre><code>## Security Review: Task 17 — AppDatabase &amp; Migrations
+### Verdict: FIX-REQUIRED
+
+### Findings
+- **HIGH**: Database not encrypted — recipe data in plaintext
+  - Category: OWASP M2 | File: data/local/db/RecipeVaultDatabase.kt
+  - Issue: Default SQLite. Rooted device or extracted backup
+    exposes all recipe data.
+  - Remediation: Add SQLCipher + SupportFactory for encrypted Room.
+
+- **MEDIUM**: Type converter logs full recipe content at DEBUG level
+  - Category: OWASP M2 | File: data/local/db/Converters.kt
+  - Issue: Log.d() prints ingredient lists with possible PII.
+  - Remediation: Remove debug logging or use Timber release tree.
+
+- **LOW**: fallbackToDestructiveMigration causes silent data loss
+  - Category: OWASP M2 | File: data/local/db/RecipeVaultDatabase.kt
+  - Issue: Schema change deletes all recipes without warning.
+  - Remediation: Write explicit Migration objects.
+
+### Summary
+- Files scanned: 4
+- CRITICAL: 0 | HIGH: 1 | MEDIUM: 1 | LOW: 1</code></pre>
+      </div>
+
+      <div class="tip-box">
+        <strong>CRITICAL vs. HIGH for offline apps:</strong> For RecipeVault (no network, no auth),
+        most storage findings are HIGH rather than CRITICAL. An unencrypted database on a
+        non-rooted device requires physical access to exploit. For a banking app, the same
+        finding would be CRITICAL.
+      </div>
+    </section>
+
+    <!-- ===== Security Verdict Logic ===== -->
+    <section>
+      <h2>Security Verdicts</h2>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">SECURE</span>
+          <div class="step-content">
+            <strong>0 CRITICAL, 0 HIGH, &le;2 MEDIUM.</strong>
+            Code can advance. LOW findings logged for future hardening.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">FIX-REQUIRED</span>
+          <div class="step-content">
+            <strong>Any HIGH, or 3+ MEDIUM.</strong>
+            Send findings back to Developer for remediation. Same fix loop as Code Reviewer.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">BLOCK</span>
+          <div class="step-content">
+            <strong>Any CRITICAL finding.</strong>
+            Escalate to human immediately. CRITICAL = exploitable vulnerability that
+            must be reviewed by a security-aware human before any fix is attempted.
+          </div>
+        </div>
+      </div>
+
+      <div class="warning-box">
+        <strong>CRITICAL findings always go to a human.</strong> The Developer role shouldn't
+        attempt to fix exploitable vulnerabilities on its own &mdash; the fix itself could
+        introduce new vulnerabilities. Security-critical code needs human judgment.
+      </div>
+    </section>
+
+    <!-- ===== AI-Factory-as-target: OWASP LLM + Agentic ===== -->
+    <section>
+      <h2>The Factory Itself Has an Attack Surface</h2>
+
+      <p>
+        The OWASP Mobile categories above protect the <em>recipes app</em>. They don't
+        protect the <strong>AI Factory pipeline</strong> that built it. The pipeline runs
+        skill files, dispatches sub-agents, reads task specs, and writes code &mdash; all
+        of which are themselves a target. Two newer OWASP frameworks apply specifically:
+      </p>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h3>OWASP Top 10 for LLM Applications (2025 v2.0)</h3>
+          <ul>
+            <li><strong>LLM01 Prompt Injection</strong> &mdash; a poisoned task spec, architecture doc, or imported file can hijack a Developer or Reviewer dispatch</li>
+            <li><strong>LLM02 Sensitive Information Disclosure</strong> &mdash; secrets in CLAUDE.md or skill files leaking into outputs</li>
+            <li><strong>LLM05 Improper Output Handling</strong> &mdash; the orchestrator running un-sanitized AI output through <code>./gradlew</code></li>
+            <li><strong>LLM06 Excessive Agency</strong> &mdash; sub-agents that can run shell commands or write files outside the project</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h3>OWASP Top 10 for Agentic Applications (2026)</h3>
+          <ul>
+            <li><strong>Goal misalignment</strong> between the orchestrator and a sub-agent</li>
+            <li><strong>Tool misuse</strong> &mdash; agent calling a tool outside its mandate</li>
+            <li><strong>Inter-agent communication</strong> &mdash; unauthenticated handoffs between roles</li>
+            <li><strong>Persistent memory poisoning</strong> &mdash; tainted context carried across dispatches</li>
+            <li><strong>Least-Agency principle</strong> &mdash; only grant the minimum autonomy each role needs</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Practical mitigations for the Factory:</strong> scope each role's tool access
+        to what it actually needs (Architect should not be able to run shell commands; QA
+        should not be able to push to git), validate every artifact handoff against its
+        contract before passing to the next role, treat any external input (third-party docs,
+        GitHub issues, fetched URLs) as untrusted, and keep human checkpoints at the Architect
+        and pre-merge stages so no single dispatch can write production code unattended.
+        See <a href="https://genai.owasp.org/llm-top-10/">OWASP LLM Top 10</a> and
+        <a href="https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/">OWASP Agentic Top 10</a>.
+      </div>
+    </section>
+
+    <!-- ===== Part 2: QA Engineer ===== -->
+    <section>
+      <h2>The QA Engineer Role</h2>
+
+      <div class="role-card">
+        <div class="role-name">QA Engineer</div>
+        <div class="role-input">
+          <strong>Input:</strong> Source code + existing tests from Developer,
+          specs.md (acceptance criteria), rules.md (testing rules)
+        </div>
+        <div class="role-output">
+          <strong>Output:</strong> Additional test files (edge cases, integration tests),
+          coverage report, test quality assessment, "ship readiness" verdict
+        </div>
+        <div class="role-output">
+          <strong>Model:</strong> Sonnet 4.6 by default; <strong>Haiku 4.5</strong> for
+          high-volume test generation runs &mdash; test generation is mechanical, following
+          patterns from the Developer's existing tests
+        </div>
+      </div>
+
+      <p>
+        Unlike other quality roles, the QA Engineer doesn't just <em>evaluate</em> &mdash; it
+        <em>generates</em> new tests. The Developer writes one test per public class (the
+        minimum). The QA Engineer adds edge case, integration, and scenario tests.
+      </p>
+    </section>
+
+    <!-- ===== QA Skill File ===== -->
+    <section>
+      <h2>The QA Engineer Skill</h2>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">Skill File &mdash; QA Engineer</span>
+<pre><code># Identity
+You are the QA Engineer for the AI Factory pipeline.
+Generate comprehensive tests beyond the Developer's minimum.
+Model: Sonnet.
+
+# Input
+1. Source files from the Developer
+2. Existing test files from the Developer
+3. specs.md — acceptance criteria and edge cases
+4. rules.md — testing conventions
+
+# Test Generation Strategy
+1. READ existing tests. Identify what's covered.
+2. READ acceptance criteria from specs.md.
+3. GENERATE tests for each gap:
+
+## Edge Cases (priority 1)
+- Empty inputs, null values, max-length strings
+- Boundary values (0 items, 1 item, max items)
+- Special characters in recipe names/ingredients
+- Unicode and emoji in text fields
+
+## State Transitions (priority 2)
+- Loading → Success, Loading → Error
+- Error → Retry → Success
+- Empty → First Item Added → Non-Empty
+
+## Integration Tests (priority 3)
+- ViewModel + Repository (fake) end-to-end
+- Database operations with in-memory Room
+- Navigation actions trigger correct destinations
+
+## Regression Guards (priority 4)
+- One test per bug found by Code Reviewer
+- One test per security finding remediation
+
+# Output Format
+## QA Report: Task [N] — [Title]
+### Tests Generated
+- File: [path/to/NewTest.kt]
+  - [N] edge case tests
+  - [N] state transition tests
+  - [N] integration tests
+
+### Coverage Assessment
+- Public classes with tests: N/N (before → after)
+- Acceptance criteria with tests: N/N
+- Edge cases from specs covered: N/N
+
+### Verdict: [SHIP | MORE-TESTS | BLOCK]
+- SHIP: All acceptance criteria tested, &ge;80% edge cases.
+- MORE-TESTS: Missing critical path coverage. Re-run.
+- BLOCK: Untestable code. Needs Developer refactor.</code></pre>
+      </div>
+    </section>
+
+    <!-- ===== QA Example ===== -->
+    <section>
+      <h2>QA in Action: Task 9 (RecipeList ViewModel)</h2>
+
+      <p>
+        The Developer wrote a happy-path test for <code>RecipeListViewModel</code>. The QA
+        Engineer generates the tests the Developer missed:
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">QA-Generated Tests &mdash; RecipeListViewModel</span>
+<pre><code>// Edge case: empty list
+@Test
+fun `initial state with no recipes shows empty state`() {
+    val vm = RecipeListViewModel(FakeRecipeRepository(emptyList()))
+    assertIs&lt;RecipeListUiState.Empty&gt;(vm.uiState.value)
+}
+
+// Edge case: boundary value
+@Test
+fun `recipe with 500-char name displays without crash`() {
+    repository.emit(listOf(RecipeFixtures.recipe(title = "A".repeat(500))))
+    assertIs&lt;RecipeListUiState.Success&gt;(vm.uiState.value)
+}
+
+// State transition: loading → error
+@Test
+fun `repository error transitions to error state`() {
+    repository.emitError(IOException("DB locked"))
+    assertIs&lt;RecipeListUiState.Error&gt;(vm.uiState.value)
+}
+
+// State transition: error → retry → success
+@Test
+fun `retry after error loads recipes successfully`() {
+    repository.emitError(IOException("timeout"))
+    vm.retry()
+    repository.emit(RecipeFixtures.sampleRecipes())
+    assertIs&lt;RecipeListUiState.Success&gt;(vm.uiState.value)
+}
+
+// Integration: delete refreshes list
+@Test
+fun `deleting recipe removes it from list`() {
+    repository.emit(RecipeFixtures.sampleRecipes()) // 3 recipes
+    vm.deleteRecipe(RecipeFixtures.sampleRecipes().first().id)
+    assertEquals(2, (vm.uiState.value as Success).recipes.size)
+}</code></pre>
+      </div>
+
+      <p>
+        The Developer wrote 1 test. The QA Engineer generated 5 more covering edge cases
+        and state transitions the spec requires but the Developer didn't test.
+      </p>
+    </section>
+
+    <!-- ===== QA Stats ===== -->
+    <section>
+      <h2>RecipeVault: QA Coverage</h2>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">48</div>
+          <div class="stat-label">Developer tests (minimum: 1 per public class)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">+80</div>
+          <div class="stat-label">QA-generated tests (edge cases, states, integration)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">128</div>
+          <div class="stat-label">Total tests in the suite</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">92%</div>
+          <div class="stat-label">Acceptance criteria with test coverage</div>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>QA model selection in 2026.</strong> Sonnet 4.6 is the default
+        (~$0.10/task &times; 20 tasks = ~$2.00 added to the pipeline). Test generation is
+        mechanical and pattern-following, so it's also a strong <strong>Haiku 4.5</strong>
+        candidate at $1/$5 per MTok &mdash; exactly 3&times; cheaper than Sonnet, and 4&ndash;5&times;
+        faster on typical workloads. Routing high-volume QA to Haiku 4.5 drops the QA bill
+        from ~$2.00 to ~$0.60 with no quality loss on the boilerplate test cases that
+        dominate the run. Keep Sonnet 4.6 for tasks that need cross-state-machine reasoning
+        (complex ViewModel test scenarios, integration paths).
+      </div>
+    </section>
+
+    <!-- ===== The Quality Stack ===== -->
+    <section>
+      <h2>The Complete Quality Stack</h2>
+
+      <p>
+        Three quality roles, three different concerns, one pipeline:
+      </p>
+
+      <div class="pipeline-stage">
+        <div class="stage">Developer<br><small>generates code</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage">Code Reviewer<br><small>rules compliance</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage">Security Reviewer<br><small>vulnerabilities</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage">QA Engineer<br><small>test coverage</small></div>
+      </div>
+
+      <table class="comparison" style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Checks</th>
+            <th>Model</th>
+            <th>Runs On</th>
+            <th>Cost/Task</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Code Reviewer</td>
+            <td>Architecture rules, naming, patterns</td>
+            <td>Opus 4.7</td>
+            <td>Medium + High risk</td>
+            <td>~$0.10</td>
+          </tr>
+          <tr>
+            <td>Security Reviewer</td>
+            <td>OWASP, secrets, dependencies, crypto</td>
+            <td>Opus 4.7</td>
+            <td>High risk only</td>
+            <td>~$0.10</td>
+          </tr>
+          <tr>
+            <td>QA Engineer</td>
+            <td>Edge cases, state transitions, integration</td>
+            <td>Sonnet 4.6 / Haiku 4.5</td>
+            <td>All tasks</td>
+            <td>~$0.10 / ~$0.03</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="highlight-box">
+        <h4>Quality Stack Cost (2026 pricing)</h4>
+        <p>
+          Code Review (Opus 4.7): ~$2.90 (16 tasks)<br>
+          Security Review (Opus 4.7): ~$0.40 (4 high-risk tasks &times; $0.10)<br>
+          QA Engineering (Sonnet 4.6, all tasks): ~$2.00 &mdash; or <strong>~$0.60 with Haiku 4.5</strong><br>
+          <strong>Total quality cost: ~$5.30</strong> (or ~$3.90 with QA on Haiku 4.5)
+        </p>
+        <p style="margin-top: 0.5em; font-size: 0.92em; opacity: 0.85;">
+          Recomputed under Opus 4.7's $5/$25 per MTok pricing (down 3&times; from the
+          Opus 4/4.1 era). The old quality-stack total of ~$10.10 was based on the older
+          Opus rate card &mdash; the modern stack is roughly half the cost or less.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===== Ship Readiness ===== -->
+    <section>
+      <h2>The Ship Readiness Assessment</h2>
+
+      <p>
+        After all three quality roles pass, the orchestrator produces a
+        <strong>ship readiness report</strong> &mdash; the final artifact before human review:
+      </p>
+
+      <div class="checklist">
+        <h4>Ship Readiness Criteria</h4>
+        <ul>
+          <li>Code Reviewer: all tasks PASS (0 MUST findings remaining)</li>
+          <li>Security Reviewer: all high-risk tasks SECURE (0 CRITICAL, 0 HIGH remaining)</li>
+          <li>QA Engineer: all tasks SHIP (&ge;80% edge case coverage)</li>
+          <li>All 128 tests pass</li>
+          <li>Code compiles with zero warnings</li>
+          <li>No TODO comments in source code</li>
+        </ul>
+      </div>
+
+      <div class="warning-box">
+        <strong>Ship readiness is not ship decision.</strong> The pipeline produces a
+        readiness report, but a human makes the ship decision. The human reviews
+        the report, spot-checks code, and decides whether to merge. The pipeline
+        reduces human work from "review everything" to "review the report + spot-check."
+      </div>
+    </section>
+
+    <!-- ===== Human Oversight ===== -->
+    <section>
+      <h2>Where Humans Must Decide</h2>
+
+      <p>
+        The quality stack automates most checks, but some findings <strong>require human
+        judgment</strong>:
+      </p>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">1</span>
+          <div class="step-content">
+            <strong>CRITICAL security findings.</strong> Exploitable vulnerabilities need a
+            security-aware human to verify the finding and approve the remediation.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">2</span>
+          <div class="step-content">
+            <strong>REJECT verdicts from Code Reviewer.</strong> Structural failures mean the
+            task spec or architecture may need revision &mdash; that's an Architect-level decision.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">3</span>
+          <div class="step-content">
+            <strong>BLOCK verdicts from QA.</strong> Untestable code means the Developer produced
+            tightly coupled code that needs refactoring, not more tests.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">4</span>
+          <div class="step-content">
+            <strong>Business logic correctness.</strong> No AI role checks whether the recipe
+            search algorithm actually returns useful results. That's a product judgment.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Exercise ===== -->
+    <section>
+      <h2>Exercise: Build Your Security Checklist</h2>
+
+      <div class="exercise-box">
+        <h4>Customize the Quality Stack for Your Domain</h4>
+        <ol>
+          <li>
+            Copy both skill files (<code>security-review.md</code> and <code>qa-engineer.md</code>)
+            into your project's <code>.claude/commands/</code> directory.
+          </li>
+          <li>
+            <strong>Security:</strong> Add domain-specific checks. If your app handles payments,
+            add PCI-DSS checks. If it handles health data, add HIPAA storage requirements.
+            Write each check with an Issue and Remediation example.
+          </li>
+          <li>
+            <strong>QA:</strong> Adjust the test generation priorities. For a real-time app,
+            prioritize concurrency tests. For a data-heavy app, prioritize boundary value tests.
+          </li>
+          <li>
+            Run both skills against a high-risk task in your project. Compare the findings
+            to what a manual security review and manual test planning would produce.
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== What's Next ===== -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>
+        You now have all seven roles, each with a skill file, an input/output contract,
+        and a clear place in the pipeline. In
+        <a href="11-full-pipeline.html">Chapter 11: The Full Pipeline</a>, you'll see all
+        roles execute in concert &mdash; from one-sentence idea to reviewed, secured,
+        tested code &mdash; with the full execution log, timing, cost, and lessons learned.
+      </p>
+    </section>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="09-code-reviewer.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">The AI Code Reviewer: Quality at Machine Speed</span>
+    </a>
+    <a href="11-full-pipeline.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">The Full Pipeline: All Roles in Concert</span>
+    </a>
+  </nav>
+
+  <footer class="site-footer">
+    <p>From Zero to App With AI For Dummies &copy; 2026</p>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

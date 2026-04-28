@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Model Optimization — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-hardware-acceleration.html">&larr; Prev</a>
+      <a href="09-computer-vision.html">Next &rarr;</a>
+      <a href="maps/08-model-optimization-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Model Optimization &mdash; Making Models Mobile-Ready</h1>
+    <p class="subtitle">Quantization, pruning, and distillation — shrink models without losing accuracy</p>
+  </header>
+
+  <main>
+
+    <h2>Why You Can't Just Ship Any Model</h2>
+
+    <p>In Chapter 7 you learned to run models faster using GPU and NPU delegates. But speed isn't your only constraint. A 100MB float32 model is a problem even on the fastest NPU:</p>
+
+    <ul>
+      <li><strong>APK size</strong> — a 100MB model turns your 20MB app into a 120MB download. Users abandon installs over 50MB on mobile data.</li>
+      <li><strong>RAM usage</strong> — the model loads into memory during inference. On a 4GB device with 2GB free, a 100MB model plus its working memory can trigger OOM kills.</li>
+      <li><strong>Load time</strong> — memory-mapping a 100MB file from flash storage takes 200-500ms. Users notice.</li>
+    </ul>
+
+    <p>The goal is to take a model that works but is too big or too slow and <strong>optimize it for mobile without meaningfully hurting accuracy.</strong></p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">&lt; 20 MB</span>
+        <span class="stat-label">Target model size for bundling in APK</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt; 15 ms</span>
+        <span class="stat-label">Target inference time on NPU</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt; 50 MB</span>
+        <span class="stat-label">Target runtime memory usage</span>
+      </div>
+    </div>
+
+    <h2>Quantization — The Single Biggest Win</h2>
+
+    <p>Most ML models store their weights as 32-bit floating point numbers (float32). Each weight takes 4 bytes. <strong>Quantization</strong> reduces that to 16-bit (2 bytes) or 8-bit integers (1 byte).</p>
+
+    <p>Think of it like image compression. A RAW photo and a JPEG photo look almost identical to human eyes, but the JPEG is 10x smaller. Quantization does the same thing for model weights — the model's "knowledge" is almost the same, but the file is 2-4x smaller and inference is 2-4x faster.</p>
+
+    <div class="model-pipeline">
+      <p><strong>What quantization does to a model:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Float32 Model (14 MB)</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Quantize Weights</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Int8 Model (3.5 MB)</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Same Accuracy (&plusmn;1-2%)</span>
+      </div>
+      <p style="margin-top: 1rem; color: var(--color-text-light);">
+        4x smaller file, 2-4x faster inference, fits in cache better, runs efficiently on NPU — all from a single conversion step that takes minutes.
+      </p>
+    </div>
+
+    <h2>Three Types of Post-Training Quantization</h2>
+
+    <p>Post-training quantization (PTQ) is the easiest optimization — you take an existing model and convert it. No retraining needed. TFLite offers three variants:</p>
+
+    <h3>1. Dynamic Range Quantization</h3>
+
+    <p>Quantizes <strong>weights only</strong> from float32 to int8. Activations stay float32 at runtime. The simplest option with zero data required:</p>
+
+<pre><code># Python — run this once to convert your model
+import tensorflow as tf
+
+converter = tf.lite.TFLiteConverter.from_saved_model("saved_model/")
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+
+quantized_model = converter.convert()
+with open("model_dynamic.tflite", "wb") as f:
+    f.write(quantized_model)</code></pre>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Size reduction</td><td><strong>~2x smaller</strong> (weights go from 4 bytes to 1 byte, but activations stay float)</td></tr>
+        <tr><td>Speed improvement</td><td><strong>~1.5-2x faster</strong> on CPU</td></tr>
+        <tr><td>Accuracy impact</td><td><strong>Minimal</strong> (&lt; 1% drop typically)</td></tr>
+        <tr><td>Data required</td><td><strong>None</strong></td></tr>
+        <tr><td>Best for</td><td>Quick wins, first attempt at optimization</td></tr>
+      </tbody>
+    </table>
+
+    <h3>2. Full Integer Quantization (int8)</h3>
+
+    <p>Quantizes <strong>both weights and activations</strong> to int8. This is the production standard — maximum compression and speed. Requires a small representative dataset (100-500 samples) to calibrate activation ranges:</p>
+
+<pre><code># Python — full int8 quantization
+import tensorflow as tf
+import numpy as np
+
+converter = tf.lite.TFLiteConverter.from_saved_model("saved_model/")
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+
+# Representative dataset for calibrating activation ranges
+def representative_dataset():
+    for _ in range(200):
+        # Generate or load sample inputs matching your model's input shape
+        sample = np.random.rand(1, 224, 224, 3).astype(np.float32)
+        yield [sample]
+
+converter.representative_dataset = representative_dataset
+converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+converter.inference_input_type = tf.uint8
+converter.inference_output_type = tf.uint8
+
+quantized_model = converter.convert()
+with open("model_int8.tflite", "wb") as f:
+    f.write(quantized_model)</code></pre>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Size reduction</td><td><strong>~4x smaller</strong></td></tr>
+        <tr><td>Speed improvement</td><td><strong>~2-4x faster</strong> on CPU, <strong>5-10x with NPU</strong></td></tr>
+        <tr><td>Accuracy impact</td><td><strong>Small</strong> (1-2% drop typically)</td></tr>
+        <tr><td>Data required</td><td><strong>100-500 representative samples</strong></td></tr>
+        <tr><td>Best for</td><td>Production models, NPU deployment, maximum performance</td></tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Int8 models are the sweet spot for NPU execution.</strong> NPUs are designed to crunch int8 operations at maximum throughput. A float32 model on NNAPI may actually fall back to CPU for some ops, while an int8 model runs entirely on the NPU. Quantize to int8 before deploying with NNAPI for best results.
+    </div>
+
+    <h3>3. Float16 Quantization</h3>
+
+    <p>Reduces precision from float32 to float16 (half precision). Minimal accuracy loss, and GPUs are optimized for float16 math:</p>
+
+<pre><code># Python — float16 quantization
+converter = tf.lite.TFLiteConverter.from_saved_model("saved_model/")
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+converter.target_spec.supported_types = [tf.float16]
+
+quantized_model = converter.convert()
+with open("model_fp16.tflite", "wb") as f:
+    f.write(quantized_model)</code></pre>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Size reduction</td><td><strong>~2x smaller</strong></td></tr>
+        <tr><td>Speed improvement</td><td><strong>~1.5-2x faster on GPU</strong></td></tr>
+        <tr><td>Accuracy impact</td><td><strong>Negligible</strong> (&lt; 0.5% drop)</td></tr>
+        <tr><td>Data required</td><td><strong>None</strong></td></tr>
+        <tr><td>Best for</td><td>GPU delegate deployment, accuracy-sensitive models</td></tr>
+      </tbody>
+    </table>
+
+    <div class="device-benchmark">
+      <p><strong>MobileNetV2 — quantization impact (Pixel 8 Pro, NNAPI):</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Variant</th>
+            <th>Model Size</th>
+            <th>CPU Inference</th>
+            <th>NPU Inference</th>
+            <th>Top-1 Accuracy</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Float32 (original)</td>
+            <td>14.0 MB</td>
+            <td>25 ms</td>
+            <td>8 ms</td>
+            <td>71.8%</td>
+          </tr>
+          <tr>
+            <td>Float16</td>
+            <td>7.0 MB</td>
+            <td>22 ms</td>
+            <td>6 ms</td>
+            <td>71.7%</td>
+          </tr>
+          <tr>
+            <td>Dynamic range</td>
+            <td>4.3 MB</td>
+            <td>15 ms</td>
+            <td>5 ms</td>
+            <td>71.2%</td>
+          </tr>
+          <tr>
+            <td>Full int8</td>
+            <td>3.5 MB</td>
+            <td>10 ms</td>
+            <td>2.5 ms</td>
+            <td>70.5%</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">Full int8 is 4x smaller, 10x faster on NPU, with only 1.3% accuracy loss. For most mobile use cases, that's a fantastic trade. Float16 is the safest bet when you can't afford any accuracy loss.</p>
+    </div>
+
+    <h2>Quantization-Aware Training (QAT)</h2>
+
+    <p>Sometimes post-training quantization drops accuracy too much — especially on small models where every bit of precision matters. QAT solves this by simulating quantization <em>during</em> training, so the model learns to compensate:</p>
+
+<pre><code># Python — QAT with TensorFlow Model Optimization Toolkit
+import tensorflow_model_optimization as tfmot
+
+# Take your already-trained model
+model = tf.keras.models.load_model("my_model")
+
+# Apply QAT — inserts fake quantization nodes
+quantize_model = tfmot.quantization.keras.quantize_model
+qat_model = quantize_model(model)
+
+# Fine-tune for a few epochs with your training data
+qat_model.compile(optimizer="adam", loss="categorical_crossentropy")
+qat_model.fit(train_dataset, epochs=5)
+
+# Convert to TFLite (already quantization-ready)
+converter = tf.lite.TFLiteConverter.from_keras_model(qat_model)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_model = converter.convert()</code></pre>
+
+    <div class="tip-box">
+      <strong>Only use QAT when post-training quantization fails.</strong> QAT requires the original training pipeline and dataset, which you may not have for pre-trained models. Try PTQ first — if accuracy drops more than 2-3%, then invest in QAT.
+    </div>
+
+    <h2>Pruning — Removing Unnecessary Weights</h2>
+
+    <p>Pruning removes weights that contribute little to the model's output — setting them to zero. A pruned model has many zero weights, which means less computation and smaller file size after compression.</p>
+
+    <p>Think of pruning like removing dead branches from a tree. The tree still grows the same fruit; it's just lighter and more efficient.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Structured Pruning</p>
+        <div class="prompt-text">Removes entire channels or layers.
+Result: physically smaller model, fewer operations.
+Speedup is real — less work to do.
+Works with any hardware.
+Typical: 30-50% of channels removed.</div>
+        <p class="prompt-explanation">Best for production: the model is genuinely smaller and faster because entire computation paths are removed.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Unstructured Pruning</p>
+        <div class="prompt-text">Zeros individual weights scattered throughout.
+Result: sparse model, same shape, many zeros.
+Speedup needs sparse hardware support.
+Most mobile NPUs don't accelerate sparse models.
+Typical: 70-90% of weights zeroed.</div>
+        <p class="prompt-explanation">Looks impressive on paper (90% sparse!), but most mobile hardware can't exploit sparsity. Use structured pruning for mobile instead.</p>
+      </div>
+    </div>
+
+    <h2>Knowledge Distillation — Training a Smaller Model</h2>
+
+    <p>When quantization and pruning aren't enough, you can train a small "student" model to mimic a large "teacher" model. The student learns not just the correct answers, but the teacher's confidence patterns — which makes it smarter than if trained from scratch on the data alone.</p>
+
+    <p>This is how models like MobileNet were created: a huge model was trained on ImageNet, then a tiny model was trained to match the big model's output. The result is a 5MB model that punches far above its weight.</p>
+
+<pre><code># Python — simplified distillation
+# Teacher: big accurate model (EfficientNet-B7, 66MB)
+# Student: small fast model (MobileNetV3-Small, 2MB)
+
+for images, labels in training_data:
+    # Get teacher's soft predictions (probabilities, not just labels)
+    teacher_probs = teacher_model(images, training=False)
+
+    with tf.GradientTape() as tape:
+        student_probs = student_model(images, training=True)
+        # Loss combines: match the teacher + match the labels
+        loss = 0.7 * kl_divergence(teacher_probs, student_probs) + \
+               0.3 * cross_entropy(labels, student_probs)
+
+    gradients = tape.gradient(loss, student_model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, student_model.trainable_variables))</code></pre>
+
+    <div class="warning-box">
+      <strong>Distillation requires the full training pipeline.</strong> You need the training dataset, a GPU for training (free via Google Colab), and Python ML expertise. It's the most powerful optimization technique, but also the most effort. Only reach for distillation when pre-trained mobile models don't meet your accuracy requirements.
+    </div>
+
+    <h2>Model Format Conversion</h2>
+
+    <p>Many models you'll find online are in PyTorch or TensorFlow SavedModel format. To run them on Android, you need to convert to TFLite or ONNX:</p>
+
+    <div class="model-pipeline">
+      <p><strong>Common conversion paths to mobile formats:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">PyTorch</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">ONNX</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">TFLite</span>
+      </div>
+      <br>
+      <div class="workflow-steps">
+        <span class="step">TensorFlow SavedModel</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">TFLite (direct)</span>
+      </div>
+    </div>
+
+<pre><code># PyTorch → ONNX
+import torch
+dummy_input = torch.randn(1, 3, 224, 224)
+torch.onnx.export(model, dummy_input, "model.onnx",
+                   input_names=["input"], output_names=["output"])
+
+# ONNX → TFLite (using onnx2tf tool)
+# pip install onnx2tf
+# onnx2tf -i model.onnx -o saved_model/
+# Then use TFLiteConverter on the saved_model/</code></pre>
+
+    <div class="warning-box">
+      <strong>Conversion pitfalls to watch for:</strong>
+      <ul style="margin-top: 0.5rem;">
+        <li><strong>Unsupported ops</strong> — some PyTorch operations don't have TFLite equivalents. The converter will error with the op name — search for TFLite custom op or restructure the model.</li>
+        <li><strong>Dynamic shapes</strong> — TFLite prefers static input shapes. Models with variable-length inputs may need reshaping.</li>
+        <li><strong>Accuracy drift</strong> — always verify accuracy after conversion. Run the same test images through both the original and converted model.</li>
+      </ul>
+    </div>
+
+    <h2>ONNX Runtime Mobile</h2>
+
+    <p>If your model originates from PyTorch and doesn't convert cleanly to TFLite, consider ONNX Runtime Mobile as an alternative:</p>
+
+<pre><code>dependencies {
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.0")
+}
+
+val session = OrtEnvironment.getEnvironment().use { env ->
+    val options = OrtSession.SessionOptions()
+    options.addNnapi()  // Use NNAPI for hardware acceleration
+    env.createSession(modelBytes, options)
+}
+
+// Run inference
+val inputTensor = OnnxTensor.createTensor(env, inputArray)
+val results = session.run(mapOf("input" to inputTensor))
+val output = results[0].value as Array&lt;FloatArray&gt;</code></pre>
+
+    <div class="hardware-note">
+      <p><strong>TFLite vs. ONNX Runtime Mobile — when to choose which:</strong></p>
+      <ul>
+        <li><strong>Use TFLite when:</strong> the model originates from TensorFlow/Keras, you want the widest hardware acceleration support (NNAPI, GPU, QNN), or you're using Google's ecosystem (ML Kit, MediaPipe).</li>
+        <li><strong>Use ONNX when:</strong> the model originates from PyTorch and doesn't convert to TFLite cleanly, you need cross-platform compatibility with iOS (ONNX works on both), or the model uses ops not supported by TFLite.</li>
+        <li><strong>Both support:</strong> NNAPI hardware acceleration, quantized models, and run on all Android devices back to API 21.</li>
+      </ul>
+    </div>
+
+    <h2>The Optimization Decision Tree</h2>
+
+    <p>When a model is too big or too slow for mobile, follow this decision tree:</p>
+
+    <div class="highlight-box">
+      <h3>Step-by-Step Optimization Strategy</h3>
+      <ol>
+        <li><strong>Start with post-training int8 quantization</strong> — 4x smaller, 2-4x faster, 5 minutes of work. If accuracy is acceptable (&lt; 2% drop), you're done.</li>
+        <li><strong>If accuracy drops too much, try float16</strong> — 2x smaller, almost no accuracy loss. Pair with GPU delegate.</li>
+        <li><strong>If still too large, try structured pruning</strong> — remove 30-50% of channels, then quantize the pruned model.</li>
+        <li><strong>If still not good enough, consider distillation</strong> — train a smaller architecture to match the big model's output.</li>
+        <li><strong>If nothing works, pick a different base model</strong> — switch from EfficientNet to MobileNet, or from a generic model to a domain-specific one.</li>
+      </ol>
+      <p>Most mobile models only need step 1. Seriously — int8 quantization solves 90% of "model too big" problems.</p>
+    </div>
+
+    <h2>Putting It Together — Optimization + Acceleration</h2>
+
+    <p>The real magic happens when you combine Chapter 7 (hardware acceleration) with Chapter 8 (model optimization). Take MobileNetV2 and apply both:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Configuration</th>
+          <th>Size</th>
+          <th>Inference</th>
+          <th>Speedup vs. Baseline</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Float32 + CPU (baseline)</td>
+          <td>14 MB</td>
+          <td>25 ms</td>
+          <td>1x</td>
+        </tr>
+        <tr>
+          <td>Float32 + GPU delegate</td>
+          <td>14 MB</td>
+          <td>8 ms</td>
+          <td>3x</td>
+        </tr>
+        <tr>
+          <td>Int8 + CPU</td>
+          <td>3.5 MB</td>
+          <td>10 ms</td>
+          <td>2.5x</td>
+        </tr>
+        <tr>
+          <td><strong>Int8 + NNAPI (NPU)</strong></td>
+          <td><strong>3.5 MB</strong></td>
+          <td><strong>2.5 ms</strong></td>
+          <td><strong>10x</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>From 14MB / 25ms to 3.5MB / 2.5ms. <strong>4x smaller and 10x faster.</strong> Same model, same accuracy (within 1.3%), same app. That's the power of optimization + acceleration combined.</p>
+
+    <h2>Try It: Quantize and Benchmark MobileNetV2</h2>
+
+    <div class="exercise-box">
+      <p><strong>Take a float32 MobileNetV2 model, quantize it to int8, and measure the real-world impact.</strong></p>
+      <ol>
+        <li>Download <strong>MobileNetV2 float32</strong> from TensorFlow Hub (~14 MB)</li>
+        <li>Run int8 post-training quantization using the Python script above (use Google Colab if you don't have a local Python environment)</li>
+        <li>Load both models in your Android app and run the same 20 test images through each</li>
+        <li>For each model, measure and record:
+          <ul>
+            <li>File size (original vs. quantized)</li>
+            <li>Inference time on CPU (4 threads)</li>
+            <li>Inference time with NNAPI delegate</li>
+            <li>Top-1 prediction match (did both models agree?)</li>
+          </ul>
+        </li>
+        <li>Calculate: size reduction, speedup, and accuracy agreement percentage</li>
+      </ol>
+      <p><strong>Expected results:</strong> ~4x size reduction (14MB &rarr; 3.5MB), ~2.5x CPU speedup, ~3x NPU speedup, and 18-20 out of 20 images should produce the same top prediction.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now have the complete optimization toolkit: quantization to shrink models, hardware acceleration to speed them up, and strategies to handle every device tier. Time to build something real with these skills.</p>
+
+    <p>In <strong>Chapter 9: Computer Vision Features</strong>, we'll go beyond simple classification into production-quality vision features — object detection with bounding boxes, image segmentation for portrait mode, custom model training for your domain, and real-time video processing at 30fps. You'll combine everything from Chapters 3-8 into features that belong in a shipping app.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-hardware-acceleration.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Hardware Acceleration — NPU, GPU, and DSP</span>
+      </a>
+      <a href="09-computer-vision.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Computer Vision Features</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

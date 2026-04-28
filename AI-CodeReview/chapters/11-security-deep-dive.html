@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Security Review for AI Code | Reviewing AI Code For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Reviewing AI Code For Dummies</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-codebase-ownership.html">&larr; Prev</a>
+      <a href="12-personal-playbook.html">Next &rarr;</a>
+      <a href="maps/11-security-deep-dive-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Security Review for AI Code</h1>
+    <p class="subtitle">The vulnerabilities AI introduces most &mdash; and how to catch them before production</p>
+  </header>
+
+  <main>
+
+    <!-- ============================================ -->
+    <h2>The 2026 Security Landscape</h2>
+    <!-- ============================================ -->
+
+    <p>Chapter 10 addressed codebase ownership. Now we focus on the area where AI-generated code poses the <em>highest</em> risk: security. Every other chapter in this course applies to all code. This chapter could save you from a breach.</p>
+
+    <p>Think of AI-generated code as a <strong>beautifully assembled house with unlocked doors</strong>. The structure looks great. The walls are straight, the paint is even, the floor plan makes sense. But the locks on the doors? Missing, or using cheap hardware the builder found convenient. AI produces code that <em>looks</em> secure &mdash; proper function names, reasonable structure, even comments about security &mdash; but the actual security logic has gaps that an attacker will find before your team does.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">25&ndash;45%</span>
+        <span class="stat-label">of AI-generated code contains confirmed vulnerabilities (across six major 2026 studies)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">1.88&times;</span>
+        <span class="stat-label">more likely to introduce vulnerabilities than human-written code (CodeRabbit analysis)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">86%</span>
+        <span class="stat-label">of AI-generated samples failed to defend against XSS (Veracode, 2026)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">33%</span>
+        <span class="stat-label">of all AI code vulnerabilities are injection flaws (AppSec Santa study)</span>
+      </div>
+    </div>
+
+    <p>These numbers are from 2026 &mdash; not hypothetical warnings, but measured results from production code. AppSec Santa&rsquo;s February 2026 study tested 534 AI-generated code samples (89 prompts in Python and JavaScript) across six frontier LLMs &mdash; GPT-5.2, Claude Opus 4.6, Gemini 2.5 Pro, DeepSeek V3, Llama 4 Maverick, and Grok 4 &mdash; then ran the output through five SAST tools and confirmed findings against OWASP Top 10. GPT-5.2 had the lowest vulnerability rate at <strong>19.1%</strong> (17 / 89). Claude Opus 4.6, DeepSeek V3, and Llama 4 Maverick tied for the worst at <strong>29.2%</strong>. Across all models, 25.1% of samples shipped with confirmed vulnerabilities. DryRun Security&rsquo;s March 2026 <em>Agentic Coding Security Report</em> (Claude / Codex / Gemini, 38 scans) found a complementary failure mode: AI agents produce authentication middleware correctly but frequently fail to wire it into subsequent components &mdash; 87% of agent PRs had at least one vulnerability, and WebSocket auth was missing in every final game codebase tested. The vulnerability lives in the integration, not any individual file.</p>
+
+    <div class="highlight-box">
+      <h3>The Security Paradox of AI Code</h3>
+      <p>AI-generated code is syntactically clean but logically flawed. Traditional code scanners were built to catch sloppy code &mdash; missing brackets, obvious injection points. AI code passes those checks and fails on the subtler issues: missing trust boundaries, incomplete authorization checks, and insecure defaults that look intentional.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>OWASP Top 10 Meets AI-Generated Code</h2>
+    <!-- ============================================ -->
+
+    <p>AI doesn&rsquo;t introduce new vulnerability <em>categories</em> &mdash; it amplifies the existing ones. Here are the OWASP Top 10 vulnerabilities most commonly introduced by AI, ranked by frequency in 2026 studies:</p>
+
+    <h3>1. Injection Flaws (33% of AI vulnerabilities)</h3>
+
+    <p>SQL injection, command injection, code injection. AI generates syntactically valid queries without reasoning about trust boundaries. It knows the <em>shape</em> of a query but not the <em>threat model</em> behind parameterization.</p>
+
+    <pre><code>// AI-generated — spot the vulnerability
+app.get('/users', (req, res) =&gt; {
+  const query = `SELECT * FROM users
+    WHERE name = '${req.query.name}'`;
+  db.query(query, (err, results) =&gt; {
+    res.json(results);
+  });
+});</code></pre>
+
+    <p>The AI built a working endpoint. It also built a textbook SQL injection vector. A parameterized query would fix it &mdash; and any experienced developer would use one. But AI generates what it&rsquo;s seen most often in training data, and unfortunately, training data includes millions of insecure examples.</p>
+
+    <h3>2. Server-Side Request Forgery (SSRF)</h3>
+
+    <p>The single highest-count vulnerability in the AppSec Santa study (32 instances). AI generates code that takes user-controlled URLs and fetches them without allowlists or IP blocking. The model doesn&rsquo;t reason about internal network topology.</p>
+
+    <h3>3. Broken Authentication &amp; Authorization</h3>
+
+    <p>This is the most dangerous category for AI code, because the vulnerability often isn&rsquo;t in the auth function itself &mdash; it&rsquo;s in the <em>integration</em>. AI writes a correct auth middleware, then generates a new endpoint without attaching it. The middleware exists. The endpoint is unprotected. Tests pass because they test the middleware in isolation.</p>
+
+    <h3>4. Cross-Site Scripting (XSS)</h3>
+
+    <p>Veracode&rsquo;s 2026 testing found <strong>86% of AI-generated samples failed to defend against XSS</strong>. AI renders user input into HTML without escaping, trusts frontend sanitization, or uses <code>dangerouslySetInnerHTML</code> in React without understanding why the name includes &ldquo;dangerously.&rdquo;</p>
+
+    <pre><code>// AI-generated React component — XSS vulnerability
+function UserProfile({ user }) {
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;{user.name}&lt;/h2&gt;
+      &lt;div dangerouslySetInnerHTML={{ __html: user.bio }} /&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+
+    <p>If <code>user.bio</code> comes from user input without server-side sanitization, this is a stored XSS attack vector. AI uses <code>dangerouslySetInnerHTML</code> because it produces the &ldquo;richest&rdquo; output &mdash; it doesn&rsquo;t consider that untrusted data rendered as HTML is one of the oldest attacks in web security.</p>
+
+    <h3>5. Hardcoded Secrets</h3>
+
+    <p>API keys, database credentials, JWT secrets embedded directly in source code. AI focuses on &ldquo;code that works&rdquo; over secure deployment patterns. It doesn&rsquo;t know about your secrets manager or environment variable conventions. Aikido Security&rsquo;s 2026 data shows AI-generated code now causes 1 in 5 enterprise security breaches, with hardcoded secrets being one of the leading entry points.</p>
+
+    <!-- ============================================ -->
+    <h2>Common Security Patterns AI Gets Wrong</h2>
+    <!-- ============================================ -->
+
+    <p>Beyond the OWASP categories, AI has specific patterns where it consistently fails. Learn to recognize these in review:</p>
+
+    <h3>Authentication: The Integration Gap</h3>
+
+    <pre><code>// AI-generated auth middleware — correct in isolation
+const authMiddleware = (req, res, next) =&gt; {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch (e) {
+    return res.status(403).json({ error: 'Invalid token' });
+  }
+};
+
+// Later in the same session, AI generates a new endpoint...
+app.get('/admin/users', async (req, res) =&gt; {
+  // No authMiddleware applied! The endpoint is unprotected.
+  const users = await User.find({ role: 'admin' });
+  res.json(users);
+});</code></pre>
+
+    <p>The auth middleware is correct. The admin endpoint is completely unprotected. If you review them separately (as AI often generates them), both look fine. The vulnerability is in the <em>gap between them</em>.</p>
+
+    <h3>Input Validation: Partial Sanitization</h3>
+
+    <p>AI sanitizes some inputs but not others. It validates the email field but trusts the display name. It checks the content type but doesn&rsquo;t validate the request body size. Partial sanitization is worse than no sanitization &mdash; it creates a false sense of security.</p>
+
+    <h3>Secret Management: The &ldquo;Works Locally&rdquo; Trap</h3>
+
+    <pre><code>// AI-generated — works in development, leaks in production
+const payments = require('payments-sdk')('&lt;your-test-secret-key-here&gt;');
+
+// Or slightly more subtle:
+const API_KEY = process.env.API_KEY || 'default-api-key-12345';</code></pre>
+
+    <p>The first is obvious. The second is insidious &mdash; if the environment variable isn&rsquo;t set in production, the fallback exposes a default key. AI generates these patterns because they make the code &ldquo;work&rdquo; immediately during development.</p>
+
+    <div class="warning-box">
+      <h4>The &ldquo;Deprecated Crypto&rdquo; Pattern</h4>
+      <p>AI training data includes years of code using MD5, SHA-1, and ECB-mode encryption. AI will generate these without hesitation because they&rsquo;re the most common patterns in its training set. In review, check every cryptographic function: is it using current algorithms (SHA-256+, AES-GCM, bcrypt/argon2 for passwords)? If you see MD5 or SHA-1 in new code, reject it immediately.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Static Analysis Tools: Your Security Safety Net</h2>
+    <!-- ============================================ -->
+
+    <p>A critical 2026 finding from AppSec Santa&rsquo;s study: across five SAST tools tested, the methodology turned <strong>1,173 deduplicated raw findings into 175 confirmed positives</strong> &mdash; and the <em>majority</em> of those confirmed AI-code vulnerabilities were detected by only one of the five tools. No single tool catches everything. The recommendation is to run at least three tools for adequate coverage.</p>
+
+    <div class="tool-card">
+      <span class="tool-icon">🔒</span>
+      <div class="tool-info">
+        <span class="tool-name">Snyk Code</span>
+        <span class="tool-desc">AI-powered SAST with real-time IDE scanning. Uses semantic data flow analysis (from DeepCode acquisition) to catch complex vulnerabilities like second-order SQL injection across multiple files. Gartner Leader for Application Security Testing 2025. Best for: developer-first workflow, supply chain security.</span>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <span class="tool-icon">📊</span>
+      <div class="tool-info">
+        <span class="tool-name">SonarQube</span>
+        <span class="tool-desc">The deepest rule-based static analysis platform. Strong on code quality metrics, technical debt tracking, and compliance requirements. 6,000+ rules across 35+ languages (SonarQube Server 2026.2 added Java 25, FastAPI/Flask/Django web-framework analysis, 20+ new Groovy rules, and a model-agnostic AI CodeFix). Best for: enterprise teams with established DevOps, quality gate enforcement in CI/CD.</span>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <span class="tool-icon">🎯</span>
+      <div class="tool-info">
+        <span class="tool-name">Semgrep</span>
+        <span class="tool-desc">Open-source &ldquo;semantic grep&rdquo; with rules that look like source code. Highly extensible &mdash; write custom rules matching your team&rsquo;s security patterns. Catches SQL injection, XSS, hardcoded credentials, and custom anti-patterns. Best for: security-focused teams, custom rule authoring.</span>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <h4>The Three-Tool Minimum</h4>
+      <p>Run <strong>CodeQL + Semgrep + one language-specific scanner</strong> (e.g., Snyk for JavaScript/Python, SpotBugs for Java, Brakeman for Ruby). Each tool has different detection strengths. AppSec Santa&rsquo;s 2026 study showed that most confirmed AI-code vulnerabilities were caught by only one of the five SAST tools tested &mdash; meaning any single tool will miss the majority of issues the others catch. Three complementary tools get you meaningfully closer to full coverage. These tools are complementary, not competing.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The &ldquo;Security Sandwich&rdquo;</h2>
+    <!-- ============================================ -->
+
+    <p>The most effective security workflow for AI-generated code is a three-layer process:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Human Threat Model</strong><br>
+        Identify what could go wrong<br>
+        <em>before</em> AI writes code
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. AI Implementation</strong><br>
+        Generate the code with<br>
+        security constraints in the prompt
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Human Security Review</strong><br>
+        Verify against threat model +<br>
+        run SAST tools
+      </div>
+    </div>
+
+    <p>The human bookends are non-negotiable. AI doesn&rsquo;t understand your threat model &mdash; it doesn&rsquo;t know which endpoints face the internet, which users are untrusted, or which data is sensitive. You provide that context before generation and verify it after.</p>
+
+    <h3>Lightweight Threat Modeling for AI Changes</h3>
+
+    <p>You don&rsquo;t need a two-day workshop. For each security-relevant AI-generated change, answer four questions:</p>
+
+    <ol>
+      <li><strong>What data does this code touch?</strong> (User input? Credentials? PII? Financial data?)</li>
+      <li><strong>Who are the threat actors?</strong> (Unauthenticated users? Authenticated users with limited access? Internal services?)</li>
+      <li><strong>What&rsquo;s the blast radius?</strong> (One user? All users? The entire database? Financial loss?)</li>
+      <li><strong>What are the trust boundaries?</strong> (Where does trusted data end and untrusted data begin?)</li>
+    </ol>
+
+    <p>Write the answers down <em>before</em> the AI generates the code. Then, after reviewing the AI&rsquo;s output, check: does the implementation respect every trust boundary you identified? If not, that&rsquo;s where the vulnerability is.</p>
+
+    <p>This lightweight threat model takes five minutes. It catches the class of bugs that no SAST tool can find &mdash; the architectural security gaps where individual components are correct but the system as a whole is vulnerable.</p>
+
+    <!-- ============================================ -->
+    <h2>Security Review Automation in CI/CD</h2>
+    <!-- ============================================ -->
+
+    <p>Manual security review doesn&rsquo;t scale when AI generates code at volume. You need automated gates that catch the obvious issues before a human ever sees the PR.</p>
+
+    <pre><code># .github/workflows/security-gate.yml
+name: Security Gate
+on: [pull_request]
+jobs:
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep scan
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/owasp-top-ten p/secrets
+      - name: Snyk Code
+        uses: snyk/actions/node@master
+        with:
+          command: code test
+      - name: Check for hardcoded secrets
+        uses: gitleaks/gitleaks-action@v2</code></pre>
+
+    <p>This workflow runs on every PR. Semgrep checks OWASP Top 10 patterns and secrets. Snyk scans for deeper vulnerabilities. Gitleaks catches hardcoded credentials. If any tool finds a critical issue, the PR fails &mdash; no manual review needed for the obvious stuff.</p>
+
+    <p>The key insight: <strong>automate the checklist, reserve human judgment for the hard problems.</strong> SAST tools catch the SQL injection AI introduced. Humans verify that the auth middleware is actually wired up to the new endpoint. Both are necessary; neither is sufficient alone.</p>
+
+    <!-- ============================================ -->
+    <h2>The &ldquo;High-Speed Intern&rdquo; Standard</h2>
+    <!-- ============================================ -->
+
+    <p>Addy Osmani&rsquo;s framing: if code touches <strong>auth, payments, secrets, or untrusted input</strong>, treat AI as a high-speed intern and require:</p>
+
+    <ul>
+      <li>A human threat model review</li>
+      <li>A SAST tool pass with zero critical findings</li>
+      <li>Line-by-line review of all security-relevant logic</li>
+      <li>Explicit verification that auth/authz middleware is applied to every endpoint</li>
+    </ul>
+
+    <p>This isn&rsquo;t about distrusting AI. It&rsquo;s about recognizing that security is the one area where &ldquo;mostly correct&rdquo; equals &ldquo;completely vulnerable.&rdquo; A function that handles payments correctly 99% of the time and has a race condition the other 1% isn&rsquo;t 99% secure &mdash; it&rsquo;s compromised.</p>
+
+    <div class="tip-box">
+      <h4>Dynamic Testing Matters Too</h4>
+      <p>Static analysis catches patterns in code. Dynamic testing catches vulnerabilities in <em>running</em> code. After AI generates a web endpoint, run a quick DAST scan (OWASP ZAP is free) against the running application. AI-generated APIs frequently have vulnerabilities that only manifest at runtime &mdash; improper CORS headers, missing rate limiting, or response bodies that leak internal data structures. A 5-minute ZAP scan catches what SAST misses.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- Required elements -->
+    <!-- ============================================ -->
+
+    <div class="ai-tell-box">
+      <h4>AI Using Deprecated Cryptographic Functions or Insecure Defaults</h4>
+      <p>When you see these in AI-generated code, reject immediately:</p>
+      <pre><code>// Red flags in AI-generated crypto
+const hash = crypto.createHash('md5').update(password).digest('hex');
+const cipher = crypto.createCipheriv('aes-128-ecb', key, null);
+const token = jwt.sign(payload, 'secret123', { algorithm: 'HS256' });</code></pre>
+      <p>MD5 for password hashing (broken since 2004). ECB mode for encryption (leaks patterns). A hardcoded JWT secret with a weak algorithm. AI generates these because they&rsquo;re the most common patterns in its training data &mdash; millions of tutorials and Stack Overflow answers used these before better alternatives became standard.</p>
+      <p><strong>What to use instead:</strong> bcrypt or argon2 for passwords, AES-256-GCM for encryption, RS256 with key rotation for JWTs, and secrets from environment variables or a secrets manager &mdash; never hardcoded.</p>
+    </div>
+
+    <div class="red-flag-box">
+      <h4>AI-Generated Code Handling Auth or Payment Without Human Security Review</h4>
+      <p><strong>Scenario:</strong> A developer uses Claude Code to build a payment integration. The AI generates a Stripe checkout flow with proper API calls, webhook handling, and receipt generation. Tests pass. The developer opens a PR. Nobody on the team does a security-specific review because &ldquo;it uses the Stripe SDK correctly.&rdquo;</p>
+      <p>Three months later, the team discovers: the webhook endpoint doesn&rsquo;t verify Stripe signatures, so anyone can POST fake payment confirmations. The idempotency key is the user ID (not the payment intent), so replayed requests create duplicate charges. The receipt endpoint leaks the customer&rsquo;s full card details because AI included them in the response object &ldquo;for completeness.&rdquo;</p>
+      <p><strong>The rule:</strong> Any AI-generated code touching auth, payments, PII, or secrets gets a dedicated security review &mdash; not just a code review. Every time. No exceptions. The cost of one security review is trivial compared to the cost of one breach.</p>
+    </div>
+
+    <div class="review-checklist">
+      <h4>Security Review for AI-Generated Code</h4>
+      <ul class="checklist">
+        <li class="checked">Run at least two SAST tools (Semgrep + Snyk or CodeQL) &mdash; zero critical findings required</li>
+        <li class="checked">Check for hardcoded secrets &mdash; API keys, database URLs, JWT secrets, default passwords</li>
+        <li class="checked">Verify every endpoint has auth/authz middleware attached (not just defined)</li>
+        <li class="checked">Check all user inputs are validated and sanitized &mdash; especially in SQL queries, HTML rendering, and URL handling</li>
+        <li class="checked">Verify cryptographic functions use current algorithms (no MD5, SHA-1, ECB, or hardcoded keys)</li>
+        <li class="checked">Check for SSRF &mdash; does the code fetch user-controlled URLs? Are there allowlists?</li>
+        <li class="checked">Review error messages &mdash; do they leak stack traces, internal paths, or sensitive data?</li>
+        <li class="checked">Verify webhook endpoints validate signatures from the sending service</li>
+        <li class="checked">Check that environment variable fallbacks don&rsquo;t expose default secrets</li>
+        <li class="checked">For payment/auth code: complete the 4-question threat model before approving</li>
+      </ul>
+    </div>
+
+    <div class="practice-drill">
+      <h4>Run a SAST Scan on Your Latest AI PR</h4>
+      <p>Do this now &mdash; it takes 10 minutes and will probably surprise you.</p>
+      <ol>
+        <li>Install Semgrep if you don&rsquo;t have it: <code>pip install semgrep</code> (or <code>brew install semgrep</code>)</li>
+        <li>Run it against your project with OWASP rules:
+          <pre><code>semgrep --config p/owasp-top-ten --config p/secrets .</code></pre>
+        </li>
+        <li>Review the findings. For each one:
+          <ul>
+            <li>Is it a real vulnerability or a false positive?</li>
+            <li>Was it in AI-generated code or human-written code?</li>
+            <li>Would your current review process have caught it?</li>
+          </ul>
+        </li>
+        <li>If Semgrep found zero issues &mdash; try adding Snyk Code as a second scanner. Remember: single-tool coverage catches less than 22% of actual vulnerabilities</li>
+      </ol>
+      <p>Most developers running this for the first time find at least one hardcoded secret or one injection risk they didn&rsquo;t know about. That&rsquo;s not a failure &mdash; it&rsquo;s exactly why automated scanning exists.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Build Your Security Gate</h4>
+      <p>Set up automated security scanning for your team&rsquo;s CI/CD pipeline:</p>
+      <ol>
+        <li>Copy the GitHub Actions workflow from this chapter (or adapt it for GitLab CI / Bitbucket Pipelines)</li>
+        <li>Configure Semgrep with the <code>p/owasp-top-ten</code> and <code>p/secrets</code> rulesets</li>
+        <li>Add Gitleaks for secret detection</li>
+        <li>Set the pipeline to <strong>fail on critical findings</strong> but <strong>warn on medium findings</strong> (this prevents alert fatigue while blocking the worst issues)</li>
+        <li>Run the pipeline on your last 5 PRs retroactively:
+          <pre><code>for commit in $(git log --oneline -5 --format=%H); do
+  git checkout $commit &amp;&amp; semgrep --config p/owasp-top-ten .
+done</code></pre>
+        </li>
+        <li>Count how many issues the pipeline would have caught that your review process missed</li>
+      </ol>
+      <p>Present the results to your team: &ldquo;Here are the security issues our current review process missed. Here&rsquo;s the automated gate that would catch them. It adds 2 minutes to CI.&rdquo; Data-driven proposals get adopted faster than opinion-driven ones.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================ -->
+
+    <p>Over eleven chapters, you&rsquo;ve built a complete review toolkit: mindset, checklists, tools, comprehension workflows, team dynamics, codebase ownership, and security. The final chapter ties it all together into something sustainable.</p>
+
+    <p>In <a href="12-personal-playbook.html">Chapter 12: Your Personal Review Playbook</a>, you&rsquo;ll build your own review discipline &mdash; daily, weekly, and monthly habits that keep you sharp without burning out. You&rsquo;ll get customizable templates, metrics for tracking your effectiveness, and a framework for balancing speed with thoroughness.</p>
+
+    <p>Security keeps the code safe. Your playbook keeps <em>you</em> effective. Let&rsquo;s finish strong.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="10-codebase-ownership.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Codebase Ownership at Scale</span>
+    </a>
+    <a href="12-personal-playbook.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Your Personal Review Playbook</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

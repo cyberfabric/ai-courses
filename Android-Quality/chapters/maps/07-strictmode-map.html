@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map &mdash; Chapter 7 | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../07-strictmode.html">Chapter</a>
+      <a href="06-pre-commit-and-local-loop-map.html">&larr; Prev Map</a>
+      <a href="08-leakcanary-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>StrictMode</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🚨</span>
+      <h3>The Big Idea</h3>
+      <p>StrictMode is a 15-year-old Android API that nobody turns on. Ten lines of code, gated on <code>BuildConfig.DEBUG</code>, and your app starts shouting at you about every disk read on the main thread, every leaked Activity, every SQLite query in the wrong place &mdash; on <em>your</em> machine, before users ever see the ANR.</p>
+    </div>
+
+    <h2>🧰 Two policies, two halves</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🧵</span>
+        <div class="map-card-title">ThreadPolicy</div>
+        <div class="map-card-desc">Watches the <em>UI thread</em>. Detects disk reads, disk writes, network calls, custom slow calls, resource mismatches. Anything blocking on the main thread is a violation.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">VmPolicy</div>
+        <div class="map-card-desc">Watches the <em>process</em>. Detects leaked Activities, leaked closables (Cursors, FileInputStreams), unregistered receivers, file-URI exposure, cleartext network.</div>
+      </div>
+    </div>
+
+    <h2>📋 The 10-line install</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Create / open <code>Application</code></h4>
+        <p>Make sure <code>android:name=".MyApp"</code> is in the manifest. Without it, your Application class never runs.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Gate on <code>BuildConfig.DEBUG</code></h4>
+        <p>Non-negotiable. Release builds never see StrictMode &mdash; a third-party SDK violation would crash for real users.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Set ThreadPolicy + VmPolicy</h4>
+        <p>Use the builders. Call all the <code>detect*()</code> methods. End with <code>.penaltyLog()</code> on Day 1.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Run app, capture logcat</h4>
+        <p>5 minutes of normal use. Filter <code>D/StrictMode</code>. Sort by frequency. Triage the top 5.</p>
+      </li>
+    </ol>
+
+    <h2>⚖️ Penalty knob: log vs death</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Penalty</th><th>What it does</th><th>When to use</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>penaltyLog()</code></td><td>Writes to logcat; app continues</td><td>Day 1. You'll be flooded; need to triage without crashing.</td></tr>
+        <tr><td><code>penaltyDeath()</code></td><td>Crashes the process on violation</td><td>Week 2+. Top offenders are fixed; regressions should be loud.</td></tr>
+        <tr><td><code>penaltyDropBox()</code></td><td>Sends to system DropBox manager</td><td>CI integration tests where you want a structured artifact.</td></tr>
+        <tr><td><code>penaltyDialog()</code></td><td>Pops a dialog on every violation</td><td>Amusing for 30 seconds. Not a real choice.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>📖 Reading a violation trace</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Top frames<br>(framework)</div>
+      <span class="map-flow-arrow">&darr;</span>
+      <div class="map-flow-step">Skip past<br>SDK code</div>
+      <span class="map-flow-arrow">&darr;</span>
+      <div class="map-flow-step">First frame in<br><em>your</em> package</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">That's the<br>fix site</div>
+    </div>
+
+    <p style="text-align:center;color:var(--color-text-light);font-size:0.9rem;">The top of the stack is always framework code. The line to fix is the first one in your package &mdash; usually 5&ndash;10 frames down.</p>
+
+    <h2>🐛 The usual suspects</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Violation</th><th>Common cause</th><th>Typical fix</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>DiskReadViolation</td><td><code>SharedPreferences.getString()</code> on UI</td><td>DataStore, or pre-load on background</td></tr>
+        <tr><td>DiskWriteViolation</td><td><code>prefs.edit().commit()</code> in <code>onPause</code></td><td>Use <code>apply()</code> instead</td></tr>
+        <tr><td>NetworkOnMainThread</td><td>Lazy Retrofit init triggering DNS</td><td>Initialize off-main; <code>Dispatchers.IO</code></td></tr>
+        <tr><td>LeakedClosable</td><td><code>FileInputStream</code> opened, never closed</td><td><code>file.inputStream().use { }</code></td></tr>
+        <tr><td>LeakedRegistration</td><td><code>registerReceiver</code> with no unregister</td><td>Pair every register with unregister</td></tr>
+        <tr><td>ActivityLeaks</td><td>Static field holding Activity context</td><td>Use Application context; weak refs</td></tr>
+        <tr><td>FileUriExposure</td><td><code>file://</code> Uri shared on N+</td><td><code>FileProvider</code> + <code>content://</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>🔓 Legitimate suppression</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">✅</span>
+        <div class="map-card-title">Right way</div>
+        <div class="map-card-desc">Wrap <em>the specific call</em>: <code>StrictMode.allowThreadDiskReads().use { sharedPrefs.getString(...) }</code>. Restored on block exit.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">Wrong way</div>
+        <div class="map-card-desc">Wrapping a whole <code>onCreate</code> or <code>setupApp()</code> in suppression. Kills StrictMode wholesale; tape over the smoke alarm.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📊</span>
+        <div class="map-card-title">The 5-spot rule</div>
+        <div class="map-card-desc">More than 5 suppressions in your codebase = real architectural problem (synchronous I/O in the wrong place) that suppression is hiding.</div>
+      </div>
+    </div>
+
+    <h2>🧪 StrictMode in instrumented tests</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">@Rule</div>
+      <div class="map-rel-node">detectAll()</div>
+      <div class="map-rel-center">StrictModeRule</div>
+      <div class="map-rel-node">penaltyDeath()</div>
+      <div class="map-rel-node">save / restore</div>
+      <div class="map-rel-node">CI gate</div>
+    </div>
+
+    <p style="text-align:center;color:var(--color-text-light);font-size:0.9rem;">A JUnit <code>TestRule</code> sets the strictest policy per test, runs the test, restores on finish. Any new violation crashes the test &mdash; regression protection forever.</p>
+
+    <h2>🪜 Adoption ladder</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">1️⃣</span>
+        <div class="map-card-title">Day 1</div>
+        <div class="map-card-desc">Add the 10-line setup. <code>penaltyLog()</code> on both policies. Run app for 5 min. Triage top 5 by frequency.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">2️⃣</span>
+        <div class="map-card-title">Week 1</div>
+        <div class="map-card-desc">Fix top 5: SharedPrefs &rarr; DataStore, <code>commit()</code> &rarr; <code>apply()</code>, scoped suppressions for legit cases. Promote ThreadPolicy to <code>penaltyDeath</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">3️⃣</span>
+        <div class="map-card-title">Month 1</div>
+        <div class="map-card-desc">VmPolicy to death. <code>StrictModeRule</code> on top 3 user flows. Document remaining suppressions in <code>STRICTMODE_SUPPRESSIONS.md</code>.</div>
+      </div>
+    </div>
+
+    <h2>🎨 Compose-specific gotchas</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🖼️</span>
+        <div class="map-card-title">painterResource</div>
+        <div class="map-card-desc">First load can trigger <code>DiskReadViolation</code>. Lift to a ViewModel + StateFlow.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📁</span>
+        <div class="map-card-title">remember { File(...).readText() }</div>
+        <div class="map-card-desc">Guaranteed violation &mdash; reads happen on the composition thread. Never do I/O in a Composable.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔁</span>
+        <div class="map-card-title">Composables run often</div>
+        <div class="map-card-desc">Compose makes violations more concentrated, not different. Move I/O to ViewModel + state flow.</div>
+      </div>
+    </div>
+
+    <h2>🤖 Reusable Claude Code skills</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔍</span>
+        <div class="map-card-title">/explain-strictmode-violation</div>
+        <div class="map-card-desc">Paste the full violation log. Get violation type, the call site (first frame in your package), one-paragraph diagnosis, smallest fix.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔒</span>
+        <div class="map-card-title">/draft-strictmode-suppression</div>
+        <div class="map-card-desc">Wraps a legitimate call in <code>allowThreadDiskReads { }</code> with a one-line comment explaining why &mdash; forces articulation as the gate against suppression sprawl.</div>
+      </div>
+    </div>
+
+    <h2>📖 Key terms</h2>
+
+    <dl class="map-terms">
+      <dt>ThreadPolicy</dt>
+      <dd>Per-thread (mostly UI) detector for blocking work: disk, network, slow calls, resource mismatches.</dd>
+      <dt>VmPolicy</dt>
+      <dd>Process-wide detector for leaks: Activities, Closeables, registrations, file URIs, cleartext network.</dd>
+      <dt>BuildConfig.DEBUG</dt>
+      <dd>The build-type flag your StrictMode setup must be gated on. Release builds must never enable it.</dd>
+      <dt>penaltyLog vs penaltyDeath</dt>
+      <dd>Log writes to logcat; death crashes the process. Day-1 use log; promote to death once top offenders are fixed.</dd>
+      <dt>allowThreadDiskReads</dt>
+      <dd>Scoped suppression block. Disables the policy for the lifetime of one specific call, then restores it.</dd>
+      <dt>StrictModeRule</dt>
+      <dd>JUnit <code>TestRule</code> that activates the strictest policy for one test, with save/restore around it. CI regression protection.</dd>
+      <dt>Untrip-and-restore anti-pattern</dt>
+      <dd>The team-quietly-kills-StrictMode trap: bulk-wrapping <code>onCreate</code> in suppression because <code>penaltyDeath</code> was too noisy on Day 1. Start with log instead.</dd>
+    </dl>
+
+    <h2>⚠️ Pitfalls</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📜</span>
+        <div class="map-card-title">Forgot manifest <code>android:name</code></div>
+        <div class="map-card-desc">Code is in <code>onCreate</code> but the Application never runs. Verify with a logcat statement.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚀</span>
+        <div class="map-card-title">Enabled in release</div>
+        <div class="map-card-desc">A third-party SDK violation crashes for real users. Always gate on <code>BuildConfig.DEBUG</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">☠️</span>
+        <div class="map-card-title">Death on Day 1</div>
+        <div class="map-card-desc">Launcher Activity won't survive. Start with log; promote when triaged.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title">Reading the top of the trace</div>
+        <div class="map-card-desc">The top is always framework. Find the first frame in <em>your</em> package &mdash; that's the fix site.</div>
+      </div>
+    </div>
+
+    <div class="map-quiz">
+      <h3>Quick Quiz</h3>
+      <details>
+        <summary>Why is <code>BuildConfig.DEBUG</code> the non-negotiable guard?</summary>
+        <p class="quiz-answer">Because in release builds, a violation in third-party SDK code (which you can't fix) would crash for real users. StrictMode is a developer-feedback tool, not a production safety net. Always wrap the setup block in <code>if (BuildConfig.DEBUG) { ... }</code>.</p>
+      </details>
+      <details>
+        <summary>Where is the actual bug in a StrictMode trace?</summary>
+        <p class="quiz-answer">Not at the top &mdash; that's framework code (<code>StrictMode$AndroidBlockGuardPolicy</code>, <code>SharedPreferencesImpl</code>). Scroll down past framework frames until you hit the first one in your package; that's the call site you need to fix.</p>
+      </details>
+      <details>
+        <summary>Why start with <code>penaltyLog</code> instead of <code>penaltyDeath</code>?</summary>
+        <p class="quiz-answer">A typical first run produces 6&ndash;15 violations before the home screen even loads &mdash; <code>penaltyDeath</code> would crash the launcher. Use <code>penaltyLog</code> to triage; promote to death once the top offenders are fixed and the count is manageable.</p>
+      </details>
+      <details>
+        <summary>What does <code>StrictMode.allowThreadDiskReads().use { }</code> do?</summary>
+        <p class="quiz-answer">Disables the disk-read policy for the lifetime of the block (one specific call), then restores it. The right tool for genuinely-must-be-on-main-thread cases &mdash; like cold app-startup config. Wrap one call, not a whole function.</p>
+      </details>
+      <details>
+        <summary>Why is wrapping <code>setupApp()</code> in <code>allowThreadDiskReads</code> an anti-pattern?</summary>
+        <p class="quiz-answer">Because it kills StrictMode wholesale &mdash; the function spans many calls, only some of which are legitimately on-main, but the suppression covers them all. Six months later nobody remembers why, and StrictMode is effectively off. Suppress per-call, not per-function.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">StrictMode is a runtime watchdog Android shipped in 2010 &mdash; 10 lines of code in your Application class, gated on <code>BuildConfig.DEBUG</code>.</li>
+        <li class="map-summary-item">Two policies: <strong>ThreadPolicy</strong> (UI-thread blocking work) and <strong>VmPolicy</strong> (process-wide leaks). Set both.</li>
+        <li class="map-summary-item">Progress: <code>penaltyLog</code> &rarr; fix top 5 offenders &rarr; <code>penaltyDeath</code>. Never <code>penaltyDeath</code> on Day 1.</li>
+        <li class="map-summary-item">Reading a trace: skip the framework frames at the top, find the first frame in <em>your</em> package &mdash; that's the call site.</li>
+        <li class="map-summary-item">Suppress <em>specific calls</em> with <code>allowThreadDiskReads().use { }</code>, never whole functions. More than 5 suppressions = real architectural problem.</li>
+        <li class="map-summary-item">A <code>StrictModeRule</code> in instrumented tests with <code>detectAll() + penaltyDeath()</code> is regression protection forever.</li>
+        <li class="map-summary-item">Same bug, two timelines: 6 weeks and a 1-star review (without StrictMode), or 5 minutes and a coroutine dispatch (with).</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="06-pre-commit-and-local-loop-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 6</span>
+      </a>
+      <a href="08-leakcanary-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Chapter 8</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

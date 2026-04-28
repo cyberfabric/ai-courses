@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Error Handling &amp; Recovery | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-multi-agent.html">&larr; Prev</a>
+      <a href="09-evaluation.html">Next &rarr;</a>
+      <a href="maps/08-error-recovery-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Error Handling &amp; Recovery</h1>
+    <p class="subtitle">Making agents robust &mdash; because in production, everything that can fail will fail</p>
+  </header>
+
+  <main>
+
+    <h2>Why Agent Errors Are Different</h2>
+
+    <p>Traditional software bugs are deterministic: the same input produces the same error every time. Agent failures are a different beast entirely. The same input can produce different results on different runs. An agent might succeed 9 times and fail on the 10th because the LLM chose a slightly different reasoning path, or a web page loaded differently, or the context window was arranged just differently enough to cause a hallucination.</p>
+
+    <p>Here&rsquo;s the math that makes this urgent: if each step of your agent has an 85% success rate (quite good for an LLM), then a 10-step task has a success rate of 0.85<sup>10</sup> = <strong>20%</strong>. That&rsquo;s right &mdash; a &ldquo;good&rdquo; agent fails 80% of the time on complex tasks without error handling. Robust recovery isn&rsquo;t a nice-to-have &mdash; it&rsquo;s the difference between a demo and a product.</p>
+
+    <div class="highlight-box">
+      <h3>Error handling in agents is like error handling in distributed systems</h3>
+      <p>You need retries, circuit breakers, fallbacks, and monitoring &mdash; because no single step is guaranteed to succeed. If you&rsquo;ve built microservices, you already know these patterns. The difference is that your &ldquo;service&rdquo; makes non-deterministic decisions.</p>
+    </div>
+
+    <h2>Categories of Agent Failure</h2>
+
+    <p>Every agent failure falls into one of these categories:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Example</th>
+          <th>Recovery Strategy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Tool error</strong></td>
+          <td>API timeout, rate limit, invalid URL</td>
+          <td>Retry with backoff, try alternative tool</td>
+        </tr>
+        <tr>
+          <td><strong>LLM hallucination</strong></td>
+          <td>Invents a function that doesn&rsquo;t exist, fabricates data</td>
+          <td>Output validation, self-correction prompt</td>
+        </tr>
+        <tr>
+          <td><strong>Format violation</strong></td>
+          <td>Returns text instead of JSON, malformed tool calls</td>
+          <td>Retry with format reminder, parse defensively</td>
+        </tr>
+        <tr>
+          <td><strong>Infinite loop</strong></td>
+          <td>Agent repeats the same action endlessly</td>
+          <td>Step limit, loop detection, circuit breaker</td>
+        </tr>
+        <tr>
+          <td><strong>Cost overrun</strong></td>
+          <td>Token budget exhausted, API credits drained</td>
+          <td>Budget controller (Ch. 6), tiered model routing</td>
+        </tr>
+        <tr>
+          <td><strong>Refusal</strong></td>
+          <td>Model declines to perform a legitimate action</td>
+          <td>Rephrase the request, provide more context</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Retry Strategies</h2>
+
+    <h3>Simple Retry with Backoff</h3>
+
+    <p>The most common recovery: try again, with increasing delays between attempts. This handles transient errors like API timeouts and rate limits.</p>
+
+<pre><code>import time
+import random
+
+def retry_with_backoff(fn, max_retries=3, base_delay=1.0):
+    """Retry a function with exponential backoff and jitter."""
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise  # Last attempt — give up
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            print(f"  [Retry {attempt + 1}/{max_retries}] "
+                  f"Error: {e}. Waiting {delay:.1f}s...")
+            time.sleep(delay)
+
+# Usage in agent loop:
+# result = retry_with_backoff(lambda: execute_tool(name, inputs))</code></pre>
+
+    <h3>Retry with Modified Prompt</h3>
+
+    <p>When the error is from the LLM (bad format, hallucination), retrying with the same input often produces the same error. Instead, <strong>modify the prompt</strong> to include the error:</p>
+
+<pre><code>def retry_with_feedback(client, messages, tools, error_msg, max_retries=2):
+    """Retry an LLM call with error feedback injected."""
+    for attempt in range(max_retries):
+        if attempt > 0:
+            # Add the error as context for the next attempt
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"Your previous attempt had an error: {error_msg}\n"
+                    f"Please try again, avoiding this issue."
+                )
+            })
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6-20250514",
+            max_tokens=4096,
+            tools=tools,
+            messages=messages,
+        )
+
+        # Validate the response
+        error_msg = validate_response(response)
+        if error_msg is None:
+            return response  # Valid response
+
+    return None  # All retries failed</code></pre>
+
+    <div class="tip-box">
+      LLMs tend to repeat the same mistake if you just retry. The key is feeding the error back so the model can reason about what went wrong. This is a lightweight form of the Reflexion pattern from Chapter 2.
+    </div>
+
+    <h2>Fallback Patterns</h2>
+
+    <p>When one approach fails completely, try an alternative:</p>
+
+    <div class="pattern-box">
+      <h3>The Fallback Chain</h3>
+      <p><strong>Problem:</strong> A tool or approach fails and retrying won&rsquo;t help (e.g., an API is down, a page is blocked).</p>
+      <p><strong>Solution:</strong> Define a chain of alternatives. Try tool A, then tool B, then escalate to a human.</p>
+      <p><strong>Implementation:</strong></p>
+<pre><code>def search_with_fallback(query: str) -> str:
+    """Try multiple search approaches before giving up."""
+    strategies = [
+        ("primary_search", lambda: search_api.search(query)),
+        ("backup_search", lambda: duckduckgo_search(query)),
+        ("cached_search", lambda: check_cache(query)),
+    ]
+
+    for name, strategy in strategies:
+        try:
+            result = strategy()
+            if result and result.get("status") == "success":
+                return result
+            print(f"  [{name}] No results, trying next...")
+        except Exception as e:
+            print(f"  [{name}] Failed: {e}, trying next...")
+
+    # All strategies failed — escalate
+    return {
+        "status": "all_failed",
+        "message": "All search methods failed.",
+        "suggestion": "Ask the human for the information directly."
+    }</code></pre>
+      <p><strong>When to use:</strong> Any tool that depends on external services (APIs, web scraping, databases). Always have at least one fallback for critical tools.</p>
+    </div>
+
+    <h2>Self-Correction</h2>
+
+    <p>The most powerful error recovery pattern: <strong>the agent detects and fixes its own mistakes</strong>. This is the Reflexion architecture from Chapter 2, applied specifically to error handling.</p>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>write_file({"path": "calc.py", "content": "def avg(nums):\n  return sum(nums) / len(nums)"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>run_tests({"file": "test_calc.py"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span><code>FAILED: test_avg_empty_list — ZeroDivisionError: division by zero</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>The test failed because I didn&rsquo;t handle the empty list case. I need to add a guard clause for when <code>len(nums) == 0</code>.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>write_file({"path": "calc.py", "content": "def avg(nums):\n  if not nums:\n    return 0\n  return sum(nums) / len(nums)"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>run_tests({"file": "test_calc.py"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span><code>All 5 tests passed.</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Respond</span>
+        <span>Fixed the empty list bug and all tests pass now.</span>
+      </div>
+    </div>
+
+    <p>This &ldquo;write, test, fix&rdquo; cycle is <strong>emergent self-correction</strong> &mdash; modern LLMs do it naturally when they can see test output. But you can also make it explicit with a validation step:</p>
+
+<pre><code>def self_correcting_action(agent, action, validator, max_attempts=3):
+    """Execute an action with self-correction on failure."""
+    for attempt in range(1, max_attempts + 1):
+        result = agent.execute(action)
+
+        # Validate the result
+        validation = validator(result)
+        if validation["valid"]:
+            return result
+
+        print(f"  [Attempt {attempt}] Validation failed: {validation['error']}")
+
+        # Ask the agent to fix its output
+        action = (
+            f"Your previous output had this error: {validation['error']}\n"
+            f"Previous output: {result}\n"
+            f"Please fix the issue and try again."
+        )
+
+    # All attempts failed
+    return {"status": "failed", "last_error": validation["error"]}</code></pre>
+
+    <div class="pitfall-box">
+      <strong>LLMs tend to repeat the same flawed reasoning across attempts.</strong> If the agent makes the same mistake three times in a row, a fourth retry won&rsquo;t help. Instead, try a different perspective: use a different model, change the system prompt, or simplify the task. Multi-Agent Reflexion &mdash; having a <em>different</em> agent review the work &mdash; outperforms single-agent self-correction significantly.
+    </div>
+
+    <h2>Guardrails: Validate Before Acting</h2>
+
+    <p>Don&rsquo;t wait for errors &mdash; prevent them. <strong>Guardrails</strong> validate agent outputs before they reach the real world.</p>
+
+    <div class="architecture-box">
+      <h3>The Three Guardrail Layers</h3>
+      <ol>
+        <li><strong>Input guardrails</strong> &mdash; validate the user&rsquo;s request before the agent starts. Catch prompt injection, off-topic requests, or requests for blocked actions.</li>
+        <li><strong>Execution guardrails</strong> &mdash; validate tool calls before executing them. Check parameters, verify permissions, enforce rate limits.</li>
+        <li><strong>Output guardrails</strong> &mdash; validate the agent&rsquo;s final response before returning it. Check for PII, hallucinated URLs, format compliance.</li>
+      </ol>
+      <p>These layers run in parallel with agent execution for minimal latency impact. OpenAI Agents SDK implements this natively &mdash; guardrails fail fast and immediately stop the agent if triggered. Production systems typically add 50&ndash;200ms of latency for guardrail checks.</p>
+    </div>
+
+<pre><code>def validate_tool_call(tool_name: str, tool_input: dict) -> dict:
+    """Pre-execution guardrail: validate before running the tool."""
+    errors = []
+
+    # Check for obviously wrong parameters
+    if tool_name == "write_file":
+        path = tool_input.get("path", "")
+        if ".." in path or path.startswith("/"):
+            errors.append("Path traversal detected — blocked for security")
+        if path.endswith((".env", ".pem", ".key")):
+            errors.append("Writing to sensitive file type — blocked")
+
+    if tool_name == "search_web":
+        query = tool_input.get("query", "")
+        if len(query) < 3:
+            errors.append("Search query too short — provide more detail")
+
+    if tool_name == "run_command":
+        cmd = tool_input.get("command", "")
+        dangerous = ["rm -rf", "drop table", "format", "mkfs"]
+        if any(d in cmd.lower() for d in dangerous):
+            errors.append(f"Dangerous command blocked: {cmd}")
+
+    if errors:
+        return {"valid": False, "errors": errors}
+    return {"valid": True}
+
+
+# In the agent loop, before executing:
+validation = validate_tool_call(block.name, block.input)
+if not validation["valid"]:
+    tool_results.append({
+        "type": "tool_result",
+        "tool_use_id": block.id,
+        "content": json.dumps({
+            "status": "blocked",
+            "errors": validation["errors"],
+            "suggestion": "Adjust your approach to avoid this issue."
+        }),
+        "is_error": True,
+    })</code></pre>
+
+    <h2>The Pre-Flight Check Pattern</h2>
+
+    <p>Before executing a plan, verify that the conditions for success are met:</p>
+
+<pre><code>def preflight_check(plan: list, available_tools: list) -> dict:
+    """Verify a plan is executable before starting."""
+    issues = []
+
+    for step in plan:
+        # Check that required tools exist
+        if step.get("tool") and step["tool"] not in available_tools:
+            issues.append(f"Step '{step['description']}' needs "
+                          f"tool '{step['tool']}' which is not available")
+
+        # Check for dependencies
+        if step.get("depends_on"):
+            dep = step["depends_on"]
+            if dep not in [s["id"] for s in plan]:
+                issues.append(f"Step '{step['description']}' depends on "
+                              f"'{dep}' which doesn't exist in the plan")
+
+    if issues:
+        return {"ready": False, "issues": issues}
+    return {"ready": True}</code></pre>
+
+    <h2>Circuit Breakers</h2>
+
+    <p>A circuit breaker stops the agent when the error rate gets too high, preventing catastrophic damage from runaway failures:</p>
+
+<pre><code>class CircuitBreaker:
+    """Stop the agent when too many errors occur."""
+
+    def __init__(self, max_errors=5, window_size=10, cooldown=60):
+        self.max_errors = max_errors
+        self.window_size = window_size
+        self.cooldown = cooldown
+        self.results = []       # Recent results: True=success, False=failure
+        self.tripped_at = None
+
+    def record(self, success: bool):
+        self.results.append(success)
+        if len(self.results) > self.window_size:
+            self.results.pop(0)
+
+    def is_open(self) -> bool:
+        """Check if the circuit breaker has tripped."""
+        if self.tripped_at:
+            if time.time() - self.tripped_at < self.cooldown:
+                return True  # Still in cooldown
+            self.tripped_at = None  # Reset after cooldown
+
+        recent_errors = self.results.count(False)
+        if recent_errors >= self.max_errors:
+            self.tripped_at = time.time()
+            return True
+        return False
+
+    def check_or_raise(self):
+        if self.is_open():
+            raise RuntimeError(
+                f"Circuit breaker tripped: {self.results.count(False)} "
+                f"errors in last {self.window_size} operations. "
+                f"Agent halted for {self.cooldown}s."
+            )
+
+
+breaker = CircuitBreaker(max_errors=3, window_size=5)
+
+# In agent loop:
+# breaker.check_or_raise()  # Raises if too many errors
+# result = execute_tool(name, inputs)
+# breaker.record(success=result.get("status") != "error")</code></pre>
+
+    <div class="warning-box">
+      <strong>Real cost of missing circuit breakers:</strong> a reported production incident saw an inter-agent loop escalate costs from $127/week to $47,000 over four weeks. Circuit breakers would have caught this in the first hour. Always set hard limits on both error rates and spending.
+    </div>
+
+    <h2>Timeout Management</h2>
+
+    <p>Three levels of timeout to control:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Per-Tool</span>
+        <span class="stat-label">Each tool call has a timeout (10-30s for APIs, 60s for heavy operations)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Per-Task</span>
+        <span class="stat-label">Total time for one agent task (5-15 minutes typical)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Per-Session</span>
+        <span class="stat-label">Total budget for a user session (30-60 minutes, then checkpoint and pause)</span>
+      </div>
+    </div>
+
+    <h2>Logging and Observability</h2>
+
+    <p>You can&rsquo;t fix what you can&rsquo;t see. Every production agent needs structured logging that captures the <strong>reasoning chain</strong>, not just the inputs and outputs:</p>
+
+    <ul class="checklist">
+      <li class="checked">Every LLM call: model, input tokens, output tokens, latency, cost</li>
+      <li class="checked">Every tool call: name, parameters, result status, duration</li>
+      <li class="checked">Every decision point: why the agent chose this tool, what alternatives were considered</li>
+      <li class="checked">Every error: type, message, recovery action taken</li>
+      <li class="checked">Session totals: steps, tokens, cost, success/failure</li>
+    </ul>
+
+    <p>The observability landscape in 2026 has converged around <strong>OpenTelemetry</strong> as the collection standard, with specialized platforms for analysis:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">LS</div>
+      <div class="tool-info">
+        <div class="tool-name">LangSmith</div>
+        <div class="tool-desc">Deep LangGraph integration with near-zero overhead. Best if you&rsquo;re using LangChain/LangGraph. Traces reasoning chains, tool calls, and agent state transitions.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">LF</div>
+      <div class="tool-info">
+        <div class="tool-name">Langfuse</div>
+        <div class="tool-desc">Open-source (MIT, 19K+ GitHub stars), self-hostable, with OpenTelemetry support. Framework-agnostic. Best for teams that want full control of their observability data.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">BT</div>
+      <div class="tool-info">
+        <div class="tool-name">Braintrust</div>
+        <div class="tool-desc">Framework-agnostic with strong CI/CD integration. Focus on evaluation + observability in one platform. Best for teams running agent evals in CI pipelines.</div>
+      </div>
+    </div>
+
+    <h2>Dead Letter Queues</h2>
+
+    <p>What happens to tasks that repeatedly fail? Don&rsquo;t just drop them &mdash; save them for later analysis:</p>
+
+<pre><code>class DeadLetterQueue:
+    """Store tasks that repeatedly fail for later review."""
+
+    def __init__(self, file="dead_letters.jsonl"):
+        self.file = file
+
+    def add(self, task, error, attempts, context=None):
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "task": task,
+            "error": str(error),
+            "attempts": attempts,
+            "context": context,
+        }
+        with open(self.file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        print(f"  [DLQ] Task moved to dead letter queue after "
+              f"{attempts} failed attempts")
+
+dlq = DeadLetterQueue()
+
+# In agent loop, after all retries fail:
+# dlq.add(task=question, error=last_error, attempts=3,
+#          context={"last_tool": tool_name, "step": step})</code></pre>
+
+    <p>Review the dead letter queue periodically. Patterns in failed tasks reveal systemic issues &mdash; a tool that consistently fails, a type of question that confuses the agent, or an edge case in your guardrails.</p>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Add Comprehensive Error Handling to Your Agent</h3>
+      <p>Take your Chapter 4 research agent and make it production-robust:</p>
+      <ol>
+        <li><strong>Add retry with backoff</strong> for all tool calls &mdash; 3 retries with exponential backoff for transient errors</li>
+        <li><strong>Add a fallback chain</strong> for web search &mdash; if the primary search fails, try an alternative, then return a helpful error</li>
+        <li><strong>Add output guardrails</strong> &mdash; validate that search results contain actual URLs, that read_page returns meaningful content (not just error pages)</li>
+        <li><strong>Add a circuit breaker</strong> &mdash; trip after 3 errors in 5 operations, with a 30-second cooldown</li>
+        <li><strong>Add self-correction</strong> &mdash; when a tool returns an error, feed the error back to the LLM and let it adjust its approach</li>
+        <li><strong>Add a dead letter queue</strong> &mdash; save failed tasks for review</li>
+      </ol>
+      <p>Test by intentionally breaking things: disconnect your internet mid-task, feed the agent a URL that returns 404, give it a question that requires a tool you haven&rsquo;t defined. Does it recover gracefully?</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your agent can now handle errors gracefully. But how do you know if it&rsquo;s actually <em>good</em>? A 95% success rate might sound fine until you realize you&rsquo;re measuring the wrong thing. Is the agent fast enough? Cost-efficient? Does it pick the right tools?</p>
+
+    <p>In <a href="09-evaluation.html">Chapter 9: Agent Evaluation &amp; Testing</a>, we&rsquo;ll tackle the hardest question in agent development: how to measure agent quality. You&rsquo;ll learn about benchmarks, eval suites, golden trajectories, and evaluation-driven development.</p>
+
+    <nav class="chapter-nav">
+      <a href="07-multi-agent.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Multi-Agent Orchestration</span>
+      </a>
+      <a href="09-evaluation.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Agent Evaluation &amp; Testing</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

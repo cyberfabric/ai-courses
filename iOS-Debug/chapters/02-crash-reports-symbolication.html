@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Crash Reports, Logs &amp; Symbolication | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-ai-debugger-mindset.html">&larr; Prev</a>
+      <a href="03-hangs-responsiveness.html">Next &rarr;</a>
+      <a href="maps/02-crash-reports-symbolication-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Crash Reports, Logs &amp; Symbolication</h1>
+    <p class="subtitle">Master iOS crash report analysis, dSYM symbolication, and structured logging with AI assistance</p>
+  </header>
+
+  <main>
+
+    <h2>The Crash Report Is Your Crime Scene</h2>
+
+    <p>In Chapter 1, you learned to feed crash data to AI and get hypotheses back. But here's the thing &mdash; if the data you feed is garbage, the hypotheses will be garbage too.</p>
+
+    <p>An unsymbolicated crash report is like a crime scene where all the evidence labels are in hex. <code>0x104a23def</code> means nothing to you <em>or</em> to AI. But <code>ProfileViewController.viewDidAppear(_:) + 148</code>? Now we're talking.</p>
+
+    <p>This chapter teaches you to produce the cleanest, most informative crash data possible &mdash; because that's what makes AI analysis actually useful.</p>
+
+    <h2>Anatomy of an iOS Crash Report (.ips)</h2>
+
+    <p>Every iOS crash generates a <code>.ips</code> file (JSON format since iOS 15). These files live on the device at <strong>Settings &rarr; Privacy &amp; Security &rarr; Analytics &amp; Improvements &rarr; Analytics Data</strong>, or you can pull them from Xcode Organizer.</p>
+
+    <p>Here are the sections that matter, in the order AI needs them:</p>
+
+    <div class="debug-trace">
+      <h4>Crash Report Structure &mdash; .ips File (Annotated)</h4>
+<pre>{
+  "app_name": "MyApp",
+  "app_version": "2.4.1",
+  "os_version": "iPhone OS 18.3 (22D60)",
+  "incident_id": "A1B2C3D4-E5F6-...",
+
+  // === SECTION 1: What happened ===
+  "exception": {
+    "type": "EXC_CRASH",
+    "signal": "SIGABRT",
+    "subtype": "KERN_INVALID_ADDRESS at 0x0000000000000000"
+  },
+  "termination": {
+    "namespace": "SIGNAL",
+    "code": 6,
+    "reason": "Abort trap: 6"
+  },
+
+  // === SECTION 2: Where it happened ===
+  "faultingThread": 0,
+  "threads": [
+    {
+      "id": 0,
+      "name": "main",
+      "frames": [
+        { "imageIndex": 0, "symbol": "specialized UserManager.fetchProfile()", "imageOffset": 2340 },
+        { "imageIndex": 0, "symbol": "ProfileViewController.viewDidLoad()", "imageOffset": 892 },
+        { "imageIndex": 1, "symbol": "-[UIViewController loadViewIfNeeded]", "imageOffset": 120 },
+        { "imageIndex": 1, "symbol": "-[UINavigationController _startTransition:...]", "imageOffset": 456 }
+      ]
+    }
+  ],
+
+  // === SECTION 3: What was loaded ===
+  "usedImages": [
+    { "name": "MyApp", "uuid": "ABC123...", "base": 4398046511104 },
+    { "name": "UIKitCore", "uuid": "DEF456...", "base": 7140073472 }
+  ]
+}</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>Exception:</strong> <code>EXC_CRASH (SIGABRT)</code> &mdash; the app called <code>abort()</code> deliberately. In Swift, this typically means a <strong>forced unwrap of nil</strong>, <strong>fatalError()</strong>, or a <strong>precondition failure</strong>.</p>
+      <p><strong>Faulting thread:</strong> Thread 0 (main). The crash is in <code>UserManager.fetchProfile()</code> called from <code>viewDidLoad()</code>.</p>
+      <p><strong>Key insight:</strong> SIGABRT + the call chain from <code>viewDidLoad</code> into a data fetch method strongly suggests a force-unwrapped optional that was nil at load time &mdash; likely a user property that wasn't set before the profile screen was pushed.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>What AI Needs from a Crash Report</h4>
+      <p>When pasting crash reports into Claude Code or Xcode AI, always include:</p>
+      <ul>
+        <li><strong>Exception type + signal</strong> &mdash; this tells AI the crash <em>category</em></li>
+        <li><strong>Faulting thread's full backtrace</strong> &mdash; not just the top frame, the whole chain</li>
+        <li><strong>Your app's frames specifically</strong> &mdash; highlight which frames are yours vs. system frameworks</li>
+        <li><strong>OS version + device</strong> &mdash; some crashes are iOS-version-specific</li>
+      </ul>
+      <p>The binary images section is only needed if the report is unsymbolicated.</p>
+    </div>
+
+    <h2>dSYM Symbolication: Making Crash Reports Readable</h2>
+
+    <p>An unsymbolicated crash report shows memory addresses instead of function names. It's like reading a recipe that says "combine ingredient at address 0x7F with ingredient at address 0xA3." Technically correct, completely useless.</p>
+
+    <p><strong>dSYM files</strong> (debug symbol files) are the Rosetta Stone. Xcode generates them during every build. They map memory addresses back to file names, function names, and line numbers.</p>
+
+    <h3>Finding Your dSYMs</h3>
+
+    <div class="checklist">
+      <h4>Where dSYMs Live</h4>
+      <ul>
+        <li><strong>Xcode Archives:</strong> Window &rarr; Organizer &rarr; right-click your archive &rarr; Show in Finder &rarr; <code>dSYMs/</code> folder</li>
+        <li><strong>Derived Data:</strong> <code>~/Library/Developer/Xcode/DerivedData/MyApp-xxx/Build/Products/Debug-iphonesimulator/MyApp.app.dSYM</code></li>
+        <li><strong>App Store Connect:</strong> If you uploaded with bitcode, download dSYMs from App Store Connect &rarr; TestFlight or the app's Activity tab</li>
+        <li><strong>Xcode automatic download:</strong> Xcode &rarr; Settings &rarr; Accounts &rarr; Download Debug Symbols (happens automatically when viewing Organizer crashes)</li>
+      </ul>
+    </div>
+
+    <h3>Manual Symbolication with <code>atos</code></h3>
+
+    <p>The <code>atos</code> command-line tool converts addresses to symbols. Here's the real syntax:</p>
+
+<pre><code># Syntax:
+atos -arch arm64 -o MyApp.app.dSYM/Contents/Resources/DWARF/MyApp \
+     -l 0x104000000 0x104a23def
+
+# Example output:
+ProfileViewController.viewDidAppear(_:) (in MyApp) (ProfileViewController.swift:47)</code></pre>
+
+    <p>The <code>-l</code> flag is the <strong>load address</strong> (from the binary images section of the crash report), and the final argument is the <strong>address to symbolicate</strong>.</p>
+
+    <div class="warning-box">
+      <h4>UUID Mismatch = Wrong Symbols</h4>
+      <p>Every dSYM has a UUID that must match the binary that crashed. If you symbolicate with the wrong dSYM (different build), you'll get <em>wrong function names</em> &mdash; which is worse than no names at all, because you'll debug the wrong code.</p>
+      <p>Check UUIDs with: <code>dwarfdump --uuid MyApp.app.dSYM</code></p>
+      <p>Compare against the crash report's <code>usedImages</code> &rarr; <code>uuid</code> field.</p>
+    </div>
+
+    <h3>The <code>symbolicatecrash</code> Script</h3>
+
+    <p>For bulk symbolication, Apple ships a hidden gem:</p>
+
+<pre><code># Find the script:
+find /Applications/Xcode.app -name symbolicatecrash -type f
+
+# Run it (set DEVELOPER_DIR first):
+export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+/Applications/Xcode.app/Contents/SharedFrameworks/DVTFoundation.framework/\
+Versions/A/Resources/symbolicatecrash crash.ips MyApp.app.dSYM > symbolicated.crash</code></pre>
+
+    <p>This symbolicates the entire report in one shot. Feed the <em>symbolicated</em> output to AI &mdash; the quality of analysis jumps dramatically.</p>
+
+    <h2>Structured Logging with <code>os_log</code></h2>
+
+    <p>Crash reports tell you <em>what</em> happened. Logs tell you <em>why</em> it happened &mdash; the sequence of events leading up to the crash. But <code>print()</code> statements are invisible outside the debugger. Enter <code>os_log</code>.</p>
+
+    <p>Apple's <code>Logger</code> API (iOS 14+) gives you structured, categorized, filterable logs that survive app termination and can be queried programmatically:</p>
+
+<pre><code>import OSLog
+
+// Create loggers per subsystem
+private let logger = Logger(subsystem: "com.myapp", category: "networking")
+private let authLogger = Logger(subsystem: "com.myapp", category: "auth")
+
+// Log with levels
+logger.debug("Starting request to \(url, privacy: .public)")
+logger.info("Response received: \(statusCode) in \(duration, format: .fixed(precision: 2))ms")
+logger.error("Request failed: \(error.localizedDescription, privacy: .public)")
+authLogger.critical("Token refresh failed — user will be logged out")</code></pre>
+
+    <div class="tip-box">
+      <h4>Privacy Matters in Logs</h4>
+      <p>By default, <code>os_log</code> redacts dynamic values in production for privacy. Only mark values as <code>.public</code> when they contain no user data. Use <code>.private(mask: .hash)</code> when you need to correlate entries without exposing values:</p>
+<pre><code>logger.info("Fetching profile for user \(userId, privacy: .private(mask: .hash))")
+// Output: "Fetching profile for user &lt;hash: 8A3F2B&gt;"</code></pre>
+      <p>This lets you track <em>which</em> user requests are failing without logging their actual ID.</p>
+    </div>
+
+    <h3>Querying Logs with OSLogStore</h3>
+
+    <p>The killer feature for AI debugging: you can programmatically fetch logs and feed them directly to AI for analysis.</p>
+
+<pre><code>import OSLog
+
+func fetchRecentLogs() throws -> [OSLogEntryLog] {
+    let store = try OSLogStore(scope: .currentProcessIdentifier)
+    let position = store.position(date: Date().addingTimeInterval(-300)) // Last 5 min
+
+    let entries = try store.getEntries(at: position)
+        .compactMap { $0 as? OSLogEntryLog }
+        .filter { $0.subsystem == "com.myapp" }
+
+    return entries
+}
+
+// Format for AI consumption:
+for entry in try fetchRecentLogs() {
+    print("[\(entry.date)] [\(entry.category)] [\(entry.level.rawValue)] \(entry.composedMessage)")
+}</code></pre>
+
+    <p>Build this into a debug menu or a diagnostic export feature, and you can paste the structured output straight into Claude Code.</p>
+
+    <h2>Console.app: Filtering the Firehose</h2>
+
+    <p>Console.app shows <em>every</em> log from <em>every</em> process on the device. It's a firehose. Here's how to find your app's messages:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Select your device</strong>
+          <p>Left sidebar &rarr; pick your iPhone or simulator</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Filter by subsystem</strong>
+          <p>Search bar: <code>subsystem:com.myapp</code></p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Filter by category</strong>
+          <p>Add: <code>category:networking</code> to narrow further</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <strong>Show debug level</strong>
+          <p>Action &rarr; Include Debug Messages (off by default!)</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <h4>Console.app + Xcode 26 AI</h4>
+      <p>Xcode 26's AI can access your structured logs directly from the Debug Console. When your app hits an error, Swift Assist can cross-reference the log trail with the crash point to give contextual explanations. No need to manually copy logs &mdash; just ask Xcode AI "What happened before this crash?"</p>
+    </div>
+
+    <h2>Exception Types: The AI Cheat Sheet</h2>
+
+    <p>The exception type is the single most important field in a crash report. It tells AI (and you) the <em>category</em> of crash before reading a single frame. Here's the reference:</p>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>Exception</th>
+          <th>Signal</th>
+          <th>What It Means</th>
+          <th>Common Swift Causes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>EXC_BAD_ACCESS</code></td>
+          <td><code>SIGSEGV</code></td>
+          <td>Invalid memory read/write</td>
+          <td>Use-after-free, dangling <code>unowned</code>, bad pointer from C interop</td>
+        </tr>
+        <tr>
+          <td><code>EXC_BAD_ACCESS</code></td>
+          <td><code>SIGBUS</code></td>
+          <td>Misaligned memory access</td>
+          <td>Corrupted data, bad <code>UnsafePointer</code> arithmetic</td>
+        </tr>
+        <tr>
+          <td><code>EXC_CRASH</code></td>
+          <td><code>SIGABRT</code></td>
+          <td>Deliberate abort</td>
+          <td>Force-unwrap nil (<code>!</code>), <code>fatalError()</code>, <code>preconditionFailure()</code>, failed <code>as!</code> cast</td>
+        </tr>
+        <tr>
+          <td><code>EXC_BREAKPOINT</code></td>
+          <td><code>SIGTRAP</code></td>
+          <td>Trace/breakpoint trap</td>
+          <td>Swift runtime trap: array out-of-bounds, implicit unwrap nil, concurrency precondition</td>
+        </tr>
+        <tr>
+          <td><code>EXC_BAD_INSTRUCTION</code></td>
+          <td><code>SIGILL</code></td>
+          <td>Illegal instruction</td>
+          <td>Rare: compiler bug, corrupted binary, Swift runtime internal error</td>
+        </tr>
+        <tr>
+          <td><code>00000020</code></td>
+          <td><code>SIGKILL</code></td>
+          <td>Killed by system</td>
+          <td>Watchdog timeout (<code>0x8BADF00D</code>), memory pressure (jetsam), background task exceeded time</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>When you paste a crash report into AI, the exception type is the first thing it reads. <code>SIGABRT</code> immediately suggests force-unwrap or assertion failure. <code>SIGSEGV</code> with a near-zero address suggests a nil/dangling pointer. This classification drives the entire analysis.</p>
+
+    <h2>Building an <code>/analyze-crash</code> Skill</h2>
+
+    <p>Time to build this chapter's reusable skill. The <code>/analyze-crash</code> command takes a raw .ips crash report and returns structured analysis.</p>
+
+    <div class="fix-pattern">
+      <h4>The <code>/analyze-crash</code> Skill</h4>
+      <p>Create <code>.claude/commands/analyze-crash.md</code>:</p>
+<pre>Analyze this iOS crash report (.ips format or symbolicated crash log).
+
+## Analysis Steps:
+1. Read the exception type and signal — classify the crash category
+2. Identify the faulting thread and read its full backtrace
+3. Separate OUR frames (app binary) from system framework frames
+4. If unsymbolicated, note that symbolication is needed and identify
+   the binary UUIDs and load addresses for atos
+5. Look for known crash patterns:
+   - SIGABRT → force-unwrap, fatalError, precondition
+   - SIGSEGV near 0x0 → nil/dangling pointer
+   - SIGTRAP → Swift runtime trap (array bounds, concurrency)
+   - 0x8BADF00D → watchdog timeout (hang)
+6. Read the source file at the faulting frame for context
+7. Check for similar patterns elsewhere in the codebase
+
+## Output Format:
+- **Crash type:** [exception type + signal + human explanation]
+- **Faulting thread:** [thread number + name]
+- **Faulting frame:** [our code, file:line if available]
+- **Root cause:** [1-2 sentence explanation]
+- **Affected component:** [module/feature area]
+- **Confidence:** [high/medium/low based on available information]
+- **Suggested fix:** [specific code change]
+- **Prevention:** [how to prevent this class of crash]
+
+## Input:
+$ARGUMENTS</pre>
+    </div>
+
+    <p>This skill is more specialized than the <code>/debug</code> skill from Chapter 1. It's tailored specifically for .ips crash reports and uses the exception type classification table above.</p>
+
+    <h2>Common Crash Patterns AI Recognizes Instantly</h2>
+
+    <p>After training on millions of crash reports, AI is remarkably good at recognizing these iOS patterns. Here's what it looks for:</p>
+
+    <div class="root-cause">
+      <h4>Top 5 Swift Crash Patterns</h4>
+      <p><strong>1. Force-unwrap nil (<code>!</code>):</strong> <code>SIGABRT</code> with <code>unexpectedly found nil while unwrapping an Optional value</code> in the crash reason. The fix is always: replace <code>!</code> with <code>guard let</code> or <code>if let</code>.</p>
+      <p><strong>2. Array out-of-bounds:</strong> <code>SIGTRAP</code> with <code>Index out of range</code>. AI checks the array source (API response, Core Data fetch) and the index source (hardcoded, user-driven, off-by-one).</p>
+      <p><strong>3. Unrecognized selector:</strong> <code>SIGABRT</code> with <code>-[ClassName selectorName]: unrecognized selector sent to instance</code>. Usually a stale Storyboard/XIB outlet or an <code>@objc</code> method that was renamed.</p>
+      <p><strong>4. Swift concurrency precondition failure:</strong> <code>SIGTRAP</code> with <code>Precondition failed: sending value of non-Sendable type</code> or <code>Data race detected</code>. Swift 6 strict concurrency catches these at runtime.</p>
+      <p><strong>5. KeyPath crash:</strong> <code>SIGABRT</code> during KVO observation with a keypath that no longer exists. Common after refactoring a model property that was observed via <code>#keyPath</code> or string-based KVO.</p>
+    </div>
+
+    <h2>Multi-Device Crash Comparison</h2>
+
+    <p>The same code can crash differently on different devices. An iPhone 15 with 6GB RAM might never OOM-jetsam, but an iPhone SE with 3GB will. iOS 17 might not enforce a concurrency check that iOS 18 does.</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt for Multi-Device Analysis</h4>
+      <p>"Here are 3 crash reports for the same crash — one from iPhone SE (iOS 17.4), one from iPhone 15 Pro (iOS 18.2), and one from iPad Air (iOS 18.0). Compare the stacktraces and identify whether this is the same root cause or different bugs triggered by the same user flow."</p>
+    </div>
+
+    <p>Claude Code excels here because it can hold all three reports in context simultaneously, compare frame-by-frame, and identify the common thread. Xcode AI is limited to the single report open in the editor.</p>
+
+    <h2>Third-Party Framework Crashes</h2>
+
+    <p>Sometimes the stacktrace points entirely into UIKit, SwiftUI, or Core Data &mdash; none of your code appears in the faulting thread. This doesn't mean it's Apple's bug (usually).</p>
+
+    <div class="tip-box">
+      <h4>Reading System Framework Crashes</h4>
+      <p>When the crash is in system code, look for <strong>your code on other threads</strong> or <strong>your code earlier in the faulting thread's history</strong>. Common patterns:</p>
+      <ul>
+        <li><strong>UIKit crash:</strong> Your code modified UI off the main thread. The crash shows in UIKit, but the <em>cause</em> is your background thread updating a UILabel.</li>
+        <li><strong>Core Data crash:</strong> Your code accessed a managed object across contexts. The crash is in <code>NSManagedObjectContext</code>, but the cause is missing <code>perform {}</code> blocks.</li>
+        <li><strong>SwiftUI crash:</strong> Your <code>@Observable</code> model mutated state during a view update. The crash is in <code>AttributeGraph</code>, but the cause is a computed property with side effects.</li>
+      </ul>
+      <p>Tell Claude Code: <em>"The crash is in UIKit but look at Thread 3 and Thread 5 for my app's code that might have triggered it."</em></p>
+    </div>
+
+    <h2>Xcode 26 AI + Crash Reports</h2>
+
+    <p>Xcode 26's AI integration brings crash report analysis directly into the IDE. When you open a crash report in the Organizer:</p>
+
+    <ul>
+      <li><strong>Inline explanations:</strong> Swift Assist annotates the crashing frame with a plain-English explanation</li>
+      <li><strong>Jump to code:</strong> Click any symbolicated frame to navigate to the source, where Xcode AI can explain the context</li>
+      <li><strong>Fix suggestions:</strong> For common patterns (force unwrap, bounds check), Xcode offers one-click fix suggestions</li>
+    </ul>
+
+    <p>For straightforward crashes, this is faster than copying to Claude Code. For complex multi-file bugs, use Claude Code with the <code>/analyze-crash</code> skill.</p>
+
+    <h2>Using XcodeBuildMCP for Automated Crash Reproduction</h2>
+
+    <p>With XcodeBuildMCP, you can ask Claude Code to reproduce a crash automatically:</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt</h4>
+      <p>"Based on this crash report showing a nil force-unwrap in ProfileViewController.viewDidLoad(), write a unit test that reproduces this crash by constructing ProfileViewController without setting the userId property. Build and run it via XcodeBuildMCP to confirm it crashes with the same exception."</p>
+    </div>
+
+    <p>The AI writes the test, builds via MCP, runs it, and confirms whether the reproduction matches the original crash. That's a crash-to-test pipeline with zero manual Xcode interaction.</p>
+
+    <div class="performance-metric">
+      <h4>Crash Analysis Time: Raw vs. Symbolicated vs. AI-Assisted</h4>
+      <div class="metric-before">
+        <h5>Without AI (Manual Analysis)</h5>
+        <ul>
+          <li>Unsymbolicated report: <strong>2-4 hours</strong> (find dSYMs, symbolicate, read frames)</li>
+          <li>Symbolicated report: <strong>30-60 minutes</strong> (read frames, understand context)</li>
+          <li>Third-party framework crash: <strong>1-3 hours</strong> (cross-thread analysis, framework docs)</li>
+        </ul>
+      </div>
+      <div class="metric-after">
+        <h5>With AI-Assisted Analysis</h5>
+        <ul>
+          <li>Unsymbolicated report: <strong>30-45 min</strong> (AI identifies pattern even without symbols, guides symbolication)</li>
+          <li>Symbolicated report: <strong>2-10 minutes</strong> (paste into <code>/analyze-crash</code>, get structured output)</li>
+          <li>Third-party framework crash: <strong>10-20 minutes</strong> (AI cross-references threads automatically)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Hands-On Exercise</h2>
+
+    <div class="exercise-box">
+      <h4>Exercise: Analyze a Real Crash Report with AI</h4>
+      <p>Let's walk through a complete crash analysis using both Xcode AI and Claude Code.</p>
+      <ol>
+        <li>
+          <strong>Create a crashable scenario.</strong> Add this to a view controller:
+<pre><code>class UserProfileVC: UIViewController {
+    var userName: String!  // Implicitly unwrapped optional
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // userName is nil — never set before presenting!
+        let greeting = "Hello, \(userName!)"
+        title = greeting
+    }
+}</code></pre>
+          <p>Present this VC without setting <code>userName</code>.</p>
+        </li>
+        <li><strong>Capture the crash.</strong> Run in the simulator. When it crashes, go to the Debug Navigator and copy the full thread backtrace.</li>
+        <li><strong>Try Xcode AI.</strong> Click the crashing line &mdash; see Swift Assist's inline explanation. Does it identify the nil implicitly-unwrapped optional?</li>
+        <li>
+          <strong>Use <code>/analyze-crash</code>.</strong> If you built the skill from this chapter, run:
+<pre><code>claude
+> /analyze-crash [paste the full crash report or backtrace]</code></pre>
+          <p>Compare Claude Code's structured output (crash type, root cause, fix, prevention) with Xcode AI's inline suggestion.</p>
+        </li>
+        <li>
+          <strong>Practice symbolication.</strong> If you have access to a real production crash (from Xcode Organizer or Crashlytics), try manually symbolicating one frame with <code>atos</code>:
+<pre><code>atos -arch arm64 \
+  -o /path/to/MyApp.app.dSYM/Contents/Resources/DWARF/MyApp \
+  -l 0x104000000 \
+  0x10400ABCD</code></pre>
+        </li>
+        <li><strong>Set up structured logging.</strong> Replace one <code>print()</code> in your project with a <code>Logger</code> call using subsystem and category. Open Console.app and filter for your subsystem.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Export 5 minutes of <code>os_log</code> output using <code>OSLogStore</code>, paste into Claude Code, and ask it to identify any warning or error patterns.</p>
+    </div>
+
+    <div class="highlight-box">
+      <h4>Key Takeaways</h4>
+      <ul>
+        <li><strong>Symbolicate first, analyze second.</strong> Unsymbolicated crash reports waste everyone's time &mdash; including AI's.</li>
+        <li>The <strong>exception type + signal</strong> is the most important field. It classifies the crash before you read a single frame.</li>
+        <li><strong><code>os_log</code> with Logger</strong> is the production-grade replacement for <code>print()</code>. It survives app termination, supports privacy controls, and is queryable via <code>OSLogStore</code>.</li>
+        <li>Use <strong>Xcode AI</strong> for quick inline crash explanations. Use <strong>Claude Code's <code>/analyze-crash</code></strong> for deep analysis, multi-device comparison, and third-party framework crashes.</li>
+        <li>Build a <strong>crash-to-test pipeline</strong> with XcodeBuildMCP: AI reads the crash, writes a reproduction test, builds and runs it automatically.</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Crashes are dramatic &mdash; the app dies and you get a report. But there's a worse bug category: <strong>hangs</strong>. Your app stays alive but becomes completely unresponsive. Users can't scroll, can't tap, can't do anything. The watchdog kills it with the infamous <code>0x8BADF00D</code> code, and all you get is a call tree. In <strong>Chapter 3: Hangs &amp; Responsiveness Diagnosis</strong>, you'll learn to use MetricKit hang diagnostics, Instruments Time Profiler, and AI to find and fix the blocking operations that freeze your UI.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="01-ai-debugger-mindset.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">The AI-Powered iOS Debugger Mindset</span>
+      </a>
+      <a href="03-hangs-responsiveness.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Hangs &amp; Responsiveness Diagnosis</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

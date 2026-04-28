@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Testing the Rewrite | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="09-navigation-errors.html">&larr; Prev</a>
+      <a href="11-integration-sprint.html">Next &rarr;</a>
+      <a href="maps/10-testing-rewrite-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Testing the Rewrite</h1>
+    <p class="subtitle">AI-generated test suites, ViewModel contract tests, fakes, and the 128+ test target</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The Building Inspector</h2>
+
+      <p>Before anyone moves in, the building inspector arrives. Every beam, pipe, and circuit &mdash; tested against code. The monolith had zero tests. The rewritten app will have 128+. AI generates the suite, but you set the rules. A test that checks implementation details locks you into current code while catching nothing.</p>
+
+      <p>The order: domain first (pure functions), then data (fakes), then presentation (ViewModel contracts), then integration. For TDD with AI, see <em>AI-Advanced</em> Chapter 8.</p>
+    </section>
+
+    <!-- Testing Rules -->
+    <section>
+      <h2>The Testing Rules</h2>
+
+      <div class="rule-callout">
+        <h4>Rule TEST-001: Unit Tests Dominate</h4>
+        <p>80% unit tests, 15% integration tests, 5% UI tests. Unit tests run in milliseconds, catch logic errors, and provide fast feedback. Don't invert the pyramid &mdash; AI loves generating Espresso tests because they look impressive, but they're slow, flaky, and test the wrong thing.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule TEST-002: Fakes Over Mocks</h4>
+        <p>Use hand-written fakes (in <code>:core:testing</code>) instead of Mockito/MockK. Fakes implement the same interface as the real class and maintain in-memory state. Mocks verify calls were made &mdash; fakes verify behavior is correct. AI generates mocks by default; override this.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule TEST-003: JUnit 5 + Turbine + Truth</h4>
+        <p>JUnit 5 for lifecycle and parameterized tests. Turbine for testing Flows and Channels. Truth for assertions (readable, expressive). No JUnit 4 <code>@Rule</code> leftovers. No <code>assertEquals</code> &mdash; use <code>assertThat().isEqualTo()</code>.</p>
+      </div>
+    </section>
+
+    <!-- Test Strategy -->
+    <section>
+      <h2>The Test Generation Order</h2>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">1</span>
+          <div class="step-content">
+            <h4>Domain Layer</h4>
+            <p>Use cases and domain logic. Pure Kotlin functions &mdash; no Android, no coroutines for most tests. Input → output. The easiest layer to test.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">2</span>
+          <div class="step-content">
+            <h4>Data Layer (Fakes)</h4>
+            <p>Generate fake repository implementations in <code>:core:testing</code>. These are used by presentation tests. Also test real repositories with in-memory Room databases.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">3</span>
+          <div class="step-content">
+            <h4>Presentation Layer</h4>
+            <p>ViewModel contract tests: given initial state + event → assert new state + effects. Uses fakes from step 2. Turbine for Flow/Channel assertions.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">4</span>
+          <div class="step-content">
+            <h4>Integration Tests</h4>
+            <p>Full stack: real ViewModel + real use case + fake repository. Verify that layers connect correctly. Fewer tests, higher confidence.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Domain Testing -->
+    <section>
+      <h2>Testing the Domain Layer</h2>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate Domain Tests</h5>
+        <pre><code>Context: :core:domain module, pure Kotlin, JUnit 5 + Truth.
+Rules: TEST-001 (unit only, no Android), TEST-002 (FakeRecipeRepository),
+TEST-003 (JUnit 5 + Truth assertThat(), no JUnit 4)
+
+Classes: GetRecipesUseCase, GetRecipeByIdUseCase, SaveRecipeUseCase,
+ValidateRecipeUseCase (title non-empty, servings &gt; 0)
+
+Per use case test: success path, error path (repo returns Result.Error),
+edge cases (empty list, not found, validation failures).
+Pattern: arrange (set up fake) → act (invoke) → assert.</code></pre>
+      </div>
+
+      <div class="migration-step">
+        <h4>Migration: Untested Monolith &rarr; Tested Domain</h4>
+        <div class="before-code">
+          <h5>Before: Monolith (zero tests)</h5>
+          <pre><code>// RecipeListActivity.kt — business logic buried in UI
+fun loadRecipes() {
+    val cursor = db.rawQuery("SELECT * FROM recipes WHERE deleted = 0", null)
+    val recipes = mutableListOf&lt;Recipe&gt;()
+    while (cursor.moveToNext()) {
+        recipes.add(Recipe(cursor.getLong(0), cursor.getString(1),
+            cursor.getInt(2), cursor.getString(3) == "1"))
+    }
+    cursor.close()
+    adapter.submitList(recipes.sortedBy { it.title })
+}
+// Untestable: requires Activity, database, and adapter.</code></pre>
+        </div>
+        <div class="after-code">
+          <h5>After: Domain Tests (pure Kotlin)</h5>
+          <pre><code>class GetRecipesUseCaseTest {
+    private val fakeRepo = FakeRecipeRepository()
+    private val useCase = GetRecipesUseCase(fakeRepo)
+
+    @Test fun `returns recipes sorted by title`() = runTest {
+        fakeRepo.addRecipes(
+            recipe(1, "Zucchini Bread"), recipe(2, "Apple Pie"), recipe(3, "Banana Pudding"))
+        val recipes = (useCase() as Result.Success).data
+        assertThat(recipes.map { it.title })
+            .containsExactly("Apple Pie", "Banana Pudding", "Zucchini Bread").inOrder()
+    }
+
+    @Test fun `returns empty list when no recipes`() = runTest {
+        assertThat((useCase() as Result.Success).data).isEmpty()
+    }
+
+    @Test fun `propagates repository error`() = runTest {
+        fakeRepo.setShouldError(true)
+        assertThat(useCase()).isInstanceOf(Result.Error::class.java)
+    }
+}</code></pre>
+        </div>
+      </div>
+
+      <p>Three tests, three behaviors. No mocking framework. No Android dependency. Runs in milliseconds.</p>
+    </section>
+
+    <!-- Fake Repository -->
+    <section>
+      <h2>The Fake Repository Pattern</h2>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate Fake Repository</h5>
+        <pre><code>Context: :core:testing, implements RecipeRepository from :core:domain.
+Rules: TEST-002 (fake, not mock). MutableList storage + MutableSharedFlow.
+Supports: addRecipes(), setShouldError(), clear().
+When shouldError=true, all methods return Result.Error.
+Under 50 lines. No Mockito, no MockK.</code></pre>
+      </div>
+
+      <div class="highlight-box">
+        <h4>:core:testing — FakeRecipeRepository.kt</h4>
+        <pre><code>class FakeRecipeRepository : RecipeRepository {
+    private val recipes = mutableListOf&lt;Recipe&gt;()
+    private val recipesFlow = MutableSharedFlow&lt;List&lt;Recipe&gt;&gt;(replay = 1)
+    private var shouldError = false
+
+    fun addRecipes(vararg items: Recipe) { recipes.addAll(items); emit() }
+    fun setShouldError(value: Boolean) { shouldError = value }
+    fun clear() { recipes.clear(); emit() }
+    private fun emit() { recipesFlow.tryEmit(recipes.toList()) }
+
+    override fun observeRecipes(): Flow&lt;List&lt;Recipe&gt;&gt; = recipesFlow
+    override suspend fun getRecipes(): Result&lt;List&lt;Recipe&gt;&gt; =
+        if (shouldError) err() else Result.Success(recipes.toList())
+    override suspend fun getRecipeById(id: Long): Result&lt;Recipe&gt; =
+        if (shouldError) Result.Error(AppException.NotFound("Recipe"))
+        else recipes.find { it.id == id }?.let { Result.Success(it) }
+            ?: Result.Error(AppException.NotFound("Recipe"))
+    override suspend fun saveRecipe(recipe: Recipe): Result&lt;Unit&gt; =
+        if (shouldError) err() else { recipes.removeAll { it.id == recipe.id }
+            recipes.add(recipe); emit(); Result.Success(Unit) }
+    override suspend fun deleteRecipe(id: Long): Result&lt;Unit&gt; =
+        if (shouldError) err() else { recipes.removeAll { it.id == id }
+            emit(); Result.Success(Unit) }
+    private fun err() = Result.Error(AppException.Database(RuntimeException("Fake")))
+}</code></pre>
+      </div>
+
+      <div class="tip-box">
+        <h4>Tip: Fakes in :core:testing, Not in Each Module</h4>
+        <p>All fakes live in <code>:core:testing</code>, which depends on <code>:core:domain</code>. Any module that needs fakes depends on <code>:core:testing</code> as a <code>testImplementation</code>. This avoids duplicating fakes across <code>:feature:recipe</code>, <code>:feature:books</code>, etc.</p>
+      </div>
+    </section>
+
+    <!-- Fakes vs Mocks -->
+    <section>
+      <h2>Why Fakes Beat Mocks</h2>
+
+      <div class="comparison">
+        <div>
+          <h5>Mock (Fragile)</h5>
+          <pre><code>@Test fun `loads recipes`() = runTest {
+    whenever(mockRepo.getRecipes())
+        .thenReturn(Result.Success(testRecipes))
+    viewModel.onEvent(LoadRecipes)
+    verify(mockRepo).getRecipes()  // tests HOW
+    verify(mockRepo, never()).deleteRecipe(any())
+}</code></pre>
+        </div>
+        <div>
+          <h5>Fake (Resilient)</h5>
+          <pre><code>@Test fun `loads recipes into state`() = runTest {
+    fakeRepo.addRecipes(apple, banana, cherry)
+    viewModel.onEvent(LoadRecipes)
+    assertThat(viewModel.state.value.recipes)
+        .containsExactly(apple, banana, cherry)
+    assertThat(viewModel.state.value.isLoading).isFalse()
+}</code></pre>
+        </div>
+      </div>
+
+      <p>Mock tests break on refactoring. Fake tests break only on behavior change. Always specify <code>TEST-002: fakes over mocks</code>.</p>
+
+      <div class="warning-box">
+        <h4>Warning: AI's Mock Addiction</h4>
+        <p>Even with TEST-002, AI generates <code>@Mock</code> and <code>verify()</code>. Scan for <code>import org.mockito</code> or <code>import io.mockk</code>. If found, reject and regenerate.</p>
+      </div>
+    </section>
+
+    <!-- ViewModel Contract Tests -->
+    <section>
+      <h2>ViewModel Contract Tests</h2>
+
+      <p>ViewModel tests verify the <strong>contract</strong>: given a state and an event, assert the resulting state and effects. This is MVI's killer testing advantage &mdash; every interaction is a pure state transition.</p>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate ViewModel Tests</h5>
+        <pre><code>Context: :feature:recipe tests, JUnit 5 + Turbine + Truth.
+Rules: TEST-001/002/003. ViewModel: RecipeListViewModel.
+Contract: RecipeListContract (State, Event, Effect).
+Uses FakeRecipeRepository from :core:testing.
+
+Scenarios: initial state (loading), LoadRecipes success/error,
+SearchQueryChanged, RecipeClicked (→ Effect.NavigateToDetail),
+DeleteRecipe success/error.
+
+Pattern: arrange (fake) → act (onEvent) → assert state via
+viewModel.state.value, assert effects via Turbine awaitItem().</code></pre>
+      </div>
+
+      <div class="highlight-box">
+        <h4>ViewModel Contract Test Example</h4>
+        <pre><code>class RecipeListViewModelTest {
+    private val fakeRepo = FakeRecipeRepository()
+    private val getRecipes = GetRecipesUseCase(fakeRepo)
+    private val deleteRecipe = DeleteRecipeUseCase(fakeRepo)
+    private lateinit var viewModel: RecipeListViewModel
+
+    @BeforeEach fun setup() {
+        fakeRepo.addRecipes(recipe(1, "Apple Pie"), recipe(2, "Banana Bread"))
+        viewModel = RecipeListViewModel(getRecipes, deleteRecipe)
+    }
+
+    @Test fun `load recipes populates state`() = runTest {
+        viewModel.onEvent(RecipeListEvent.LoadRecipes)
+        assertThat(viewModel.state.value.isLoading).isFalse()
+        assertThat(viewModel.state.value.recipes).hasSize(2)
+    }
+
+    @Test fun `recipe click emits navigation effect`() = runTest {
+        viewModel.effects.test {
+            viewModel.onEvent(RecipeListEvent.RecipeClicked(1L))
+            assertThat(awaitItem()).isEqualTo(RecipeListEffect.NavigateToDetail(1L))
+        }
+    }
+
+    @Test fun `load error shows ui error`() = runTest {
+        fakeRepo.setShouldError(true)
+        viewModel = RecipeListViewModel(getRecipes, deleteRecipe)
+        viewModel.onEvent(RecipeListEvent.LoadRecipes)
+        assertThat(viewModel.state.value.error).isNotNull()
+    }
+
+    @Test fun `delete recipe removes from state`() = runTest {
+        viewModel.onEvent(RecipeListEvent.LoadRecipes)
+        viewModel.onEvent(RecipeListEvent.DeleteRecipe(1L))
+        assertThat(viewModel.state.value.recipes).hasSize(1)
+    }
+}</code></pre>
+      </div>
+
+      <p>Four tests, four behaviors. Turbine's <code>awaitItem()</code> makes Channel testing trivial.</p>
+    </section>
+
+    <!-- Repository Tests with Room -->
+    <section>
+      <h2>Repository Tests With In-Memory Room</h2>
+
+      <div class="highlight-box">
+        <h4>Testing Real Repositories Against Room</h4>
+        <pre><code>class RecipeRepositoryImplTest {
+    private lateinit var db: RecipesDatabase
+    private lateinit var repo: RecipeRepositoryImpl
+
+    @BeforeEach fun setup() {
+        db = Room.inMemoryDatabaseBuilder(context, RecipesDatabase::class.java)
+            .allowMainThreadQueries().build()
+        repo = RecipeRepositoryImpl(db.recipeDao(), RecipeMapper())
+    }
+    @AfterEach fun tearDown() { db.close() }
+
+    @Test fun `save and retrieve recipe`() = runTest {
+        val saveResult = repo.saveRecipe(recipe(id = 0, title = "Test Recipe"))
+        assertThat(saveResult).isInstanceOf(Result.Success::class.java)
+        val getResult = repo.getRecipes() as Result.Success
+        assertThat(getResult.data).hasSize(1)
+        assertThat(getResult.data.first().title).isEqualTo("Test Recipe")
+    }
+
+    @Test fun `get non-existent recipe returns not found`() = runTest {
+        val result = repo.getRecipeById(999L) as Result.Error
+        assertThat(result.exception).isInstanceOf(AppException.NotFound::class.java)
+    }
+}</code></pre>
+      </div>
+
+      <p>Repository tests use in-memory Room &mdash; real SQLite, real DAOs, real mappers. Domain and presentation tests use fakes (fast, no Android). If a ViewModel test needs Room, you're testing the wrong thing.</p>
+    </section>
+
+    <!-- Test Quality Review -->
+    <section>
+      <h2>Reviewing AI-Generated Tests</h2>
+
+      <p>AI generates tests that look right but test the wrong thing. Here's the review checklist:</p>
+
+      <div class="ai-review-box">
+        <h4>AI Test Quality Review</h4>
+        <table>
+          <thead><tr><th>Check</th><th>Pass</th><th>Fail</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Tests behavior, not implementation?</td>
+              <td>Asserts state/output</td>
+              <td>Uses <code>verify()</code> to check method calls</td>
+            </tr>
+            <tr>
+              <td>Uses fakes, not mocks?</td>
+              <td>FakeRecipeRepository</td>
+              <td><code>@Mock</code> or <code>mockk()</code></td>
+            </tr>
+            <tr>
+              <td>Tests edge cases?</td>
+              <td>Empty list, error, not found</td>
+              <td>Only happy path</td>
+            </tr>
+            <tr>
+              <td>Readable test names?</td>
+              <td><code>`delete recipe removes from state`</code></td>
+              <td><code>test1()</code>, <code>testDelete()</code></td>
+            </tr>
+            <tr>
+              <td>Independent tests?</td>
+              <td>Each test sets up its own state</td>
+              <td>Tests depend on execution order</td>
+            </tr>
+            <tr>
+              <td>No sleeping?</td>
+              <td>Uses <code>runTest</code> + Turbine</td>
+              <td><code>Thread.sleep(1000)</code> / <code>delay(1000)</code></td>
+            </tr>
+            <tr>
+              <td>Correct assertion library?</td>
+              <td>Truth: <code>assertThat(x).isEqualTo(y)</code></td>
+              <td>JUnit 4: <code>assertEquals(x, y)</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="prompt-example bad">
+        <h5>Bad: AI-Generated Test (Common Output)</h5>
+        <pre><code>// REJECT — violates TEST-001/002/003
+@Test fun testGetRecipes() {
+    val mockRepo = mockk&lt;RecipeRepository&gt;()                    // mock, not fake
+    coEvery { mockRepo.getRecipes() } returns Result.Success(listOf())
+    runBlocking {                                                // not runTest
+        assertEquals(Result.Success(listOf&lt;Recipe&gt;()), useCase()) // not Truth
+    }
+    coVerify { mockRepo.getRecipes() }                           // tests HOW
+}</code></pre>
+      </div>
+
+      <p>MockK, runBlocking, assertEquals, verify &mdash; every rule violated. For more on reviewing AI-generated tests, see <em>AI-CodeReview</em> Chapter 3.</p>
+    </section>
+
+    <!-- The 128+ Test Target -->
+    <section>
+      <h2>The 128+ Test Target</h2>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Tests in the monolith</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">128+</div>
+          <div class="stat-label">Tests in the rewrite</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~85%</div>
+          <div class="stat-label">AI-generated on first pass</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">&lt;2s</div>
+          <div class="stat-label">Full suite runtime</div>
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Test Distribution by Layer</h4>
+        <table>
+          <thead><tr><th>Module</th><th>Tests</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td>:core:domain</td><td>35-40</td><td>Use case + validation</td></tr>
+            <tr><td>:data:*</td><td>35-45</td><td>Repository + mapper + DAO + migration</td></tr>
+            <tr><td>:feature:*</td><td>50-65</td><td>ViewModel contract tests (6 screens)</td></tr>
+            <tr><td>Integration</td><td>8-10</td><td>Full-stack flow tests</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>80% unit tests, no Android dependency. Full suite under 2 seconds.</p>
+    </section>
+
+    <!-- Compose UI Tests -->
+    <section>
+      <h2>Compose UI Tests (The 5%)</h2>
+
+      <p>UI tests are the smallest slice of the pyramid. They verify that the Composable renders correctly for a given state &mdash; not that business logic works (that's what ViewModel tests are for).</p>
+
+      <div class="highlight-box">
+        <h4>Compose UI Test: RecipeListScreen</h4>
+        <pre><code>class RecipeListScreenTest {
+    @get:Rule val composeRule = createComposeRule()
+
+    @Test fun `recipe list with items`() {
+        composeRule.setContent {
+            RecipeListScreen(
+                state = RecipeListState(
+                    recipes = listOf(recipe(1, "Apple Pie"), recipe(2, "Banana Bread")),
+                    isLoading = false),
+                onEvent = {})
+        }
+        composeRule.onNodeWithText("Apple Pie").assertIsDisplayed()
+        composeRule.onNodeWithText("Banana Bread").assertIsDisplayed()
+    }
+
+    @Test fun `loading state shows indicator`() {
+        composeRule.setContent {
+            RecipeListScreen(state = RecipeListState(isLoading = true), onEvent = {})
+        }
+        composeRule.onNodeWithTag("loading_indicator").assertIsDisplayed()
+    }
+}</code></pre>
+      </div>
+
+      <p>Because Composables are pure functions of State, UI tests are straightforward: create state → render → assert. No navigation, no ViewModels, no fakes.</p>
+    </section>
+
+    <!-- Integration Tests -->
+    <section>
+      <h2>Integration Tests: The Full Stack</h2>
+
+      <div class="highlight-box">
+        <h4>Full-Stack Integration Test</h4>
+        <pre><code>class RecipeFlowIntegrationTest {
+    private val fakeRepo = FakeRecipeRepository()
+    private val getRecipes = GetRecipesUseCase(fakeRepo)
+    private val saveRecipe = SaveRecipeUseCase(fakeRepo)
+    private val deleteRecipe = DeleteRecipeUseCase(fakeRepo)
+
+    @Test fun `full recipe lifecycle - create, list, delete`() = runTest {
+        val recipe = Recipe(id = 0, title = "Test", servings = 4, isFavorite = false)
+        assertThat(saveRecipe(recipe)).isInstanceOf(Result.Success::class.java)
+        val listed = (getRecipes() as Result.Success).data
+        assertThat(listed).hasSize(1)
+        assertThat(deleteRecipe(listed.first().id)).isInstanceOf(Result.Success::class.java)
+        assertThat((getRecipes() as Result.Success).data).isEmpty()
+    }
+}</code></pre>
+      </div>
+
+      <p>Real use cases, fake repository. The test reads like a user story: create → list → delete → verify empty. Integration tests verify that layers connect correctly.</p>
+    </section>
+
+    <!-- Common AI Mistakes -->
+    <section>
+      <h2>AI Testing Mistakes</h2>
+
+      <table class="comparison">
+        <thead><tr><th>Mistake</th><th>What AI Does</th><th>Rule / Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Mocks everywhere</td>
+            <td><code>@Mock</code>, <code>mockk()</code>, <code>verify()</code></td>
+            <td>TEST-002: fakes in :core:testing</td>
+          </tr>
+          <tr>
+            <td>Happy path only</td>
+            <td>Tests success, ignores errors</td>
+            <td>Every test class needs error + edge cases</td>
+          </tr>
+          <tr>
+            <td>runBlocking instead of runTest</td>
+            <td><code>runBlocking { ... }</code></td>
+            <td>TEST-003: use <code>runTest</code> (virtual time)</td>
+          </tr>
+          <tr>
+            <td>Thread.sleep()</td>
+            <td>Waits for async operations</td>
+            <td>Use Turbine's <code>awaitItem()</code></td>
+          </tr>
+          <tr>
+            <td>JUnit 4 leftovers</td>
+            <td><code>@Rule</code>, <code>assertEquals</code></td>
+            <td>TEST-003: JUnit 5 + Truth</td>
+          </tr>
+          <tr>
+            <td>Testing implementation</td>
+            <td>Verifies internal method calls</td>
+            <td>Test outputs and state, not call chains</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Exercise: Generate Your Test Suite</h2>
+
+      <div class="exercise-box">
+        <h4>Exercise 10: The Test Generation Sprint</h4>
+        <ol>
+          <li><strong>Fakes first:</strong> Generate <code>FakeRecipeRepository</code> in <code>:core:testing</code> with TEST-002. Verify no Mockito/MockK imports.</li>
+          <li><strong>Domain tests:</strong> Generate tests for all use cases with TEST-001/003. Success + error + edge cases. Target: 35+ tests.</li>
+          <li><strong>ViewModel tests:</strong> Generate contract tests for all ViewModels. Provide Contract + fake + require Turbine. Target: 25+ per feature.</li>
+          <li><strong>Review:</strong> Apply the AI Test Quality Review table. Reject mocks, <code>verify()</code>, <code>runBlocking</code>, <code>assertEquals</code>.</li>
+          <li><strong>Count:</strong> Total all tests. If under 128, generate additional edge case tests.</li>
+        </ol>
+        <p><strong>Success criteria:</strong> 128+ tests. Zero mocks. Suite runs in under 5 seconds. Every test tests behavior, not implementation.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>128+ tests, every layer verified. Chapter 11 is the integration sprint: connecting all layers into a running app, comparing behavior against the monolith, validating performance, and producing the final release build.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="09-navigation-errors.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Navigation, Errors, and Cross-Cutting Concerns</span>
+    </a>
+    <a href="11-integration-sprint.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">The Integration Sprint</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

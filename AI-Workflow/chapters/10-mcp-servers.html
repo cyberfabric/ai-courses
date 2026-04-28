@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: MCP Servers for Your Team | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-productivity-agents.html">&larr; Prev</a>
+      <a href="11-orchestrating-workflows.html">Next &rarr;</a>
+      <a href="maps/10-mcp-servers-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>MCP Servers for Your Team</h1>
+    <p class="subtitle">Give Claude Code superpowers by connecting it to your internal tools and data</p>
+  </header>
+
+  <main>
+
+    <h2>Beyond the Filesystem</h2>
+
+    <p>Everything you&rsquo;ve built so far &mdash; skills, hooks, CI/CD workflows &mdash; works with what Claude Code can already see: files, git, and shell commands. But your development workflow doesn&rsquo;t live entirely in the filesystem.</p>
+
+    <p>Your tickets are in Jira. Your conversations are in Slack. Your deployment status is in an internal dashboard. Your staging database has the data you need to debug that weird production bug. And right now, to get any of that information into Claude Code, you have to copy-paste it manually.</p>
+
+    <p><strong>MCP (Model Context Protocol) changes that.</strong> It lets you build servers that give Claude Code direct access to any tool, API, or data source your team uses. Ask Claude Code &ldquo;what&rsquo;s the status of JIRA-1234?&rdquo; and it fetches the answer from Jira. Ask &ldquo;is staging healthy?&rdquo; and it checks your deployment dashboard.</p>
+
+    <h2>What MCP Is (Simply)</h2>
+
+    <p>Think of MCP as a USB port for Claude Code. Just like USB lets you plug any peripheral into your computer, MCP lets you plug any data source into Claude Code.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Claude Code</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">MCP Protocol</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Your MCP Server</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Your Internal Tool</div>
+    </div>
+
+    <p>An MCP server is a small program that:</p>
+
+    <ol>
+      <li><strong>Declares tools</strong> &mdash; tells Claude Code what it can do (&ldquo;I can look up Jira tickets&rdquo;)</li>
+      <li><strong>Handles requests</strong> &mdash; when Claude Code calls a tool, the server executes it</li>
+      <li><strong>Returns results</strong> &mdash; sends the data back to Claude Code in a format it understands</li>
+    </ol>
+
+    <p>You don&rsquo;t need to understand the protocol details. You just need a server that talks to your tool and exposes it as named functions.</p>
+
+    <p>MCP servers come in two flavours, and Claude Code speaks both:</p>
+
+    <ul>
+      <li><strong>Local (stdio).</strong> A process Claude Code spawns on your machine and talks to over stdin/stdout. Best for talking to internal systems, local databases, or anything that needs filesystem or VPN access.</li>
+      <li><strong>Remote (HTTP / SSE).</strong> A URL Claude Code calls over HTTPS. Most vendor-hosted servers (Stripe, Notion, Linear, Sentry, GitHub, Atlassian, &hellip;) ship as HTTP endpoints &mdash; <code>claude mcp add --transport http stripe https://mcp.stripe.com</code> and you&rsquo;re done. No hosting, no install.</li>
+    </ul>
+
+    <p>You&rsquo;ll write your own stdio servers for internal tools and lean on hosted servers for popular SaaS.</p>
+
+    <h2>Anatomy of an MCP Server</h2>
+
+    <p>An MCP server has three main parts:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>What It Does</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Tools</strong></td>
+          <td>Functions Claude Code can call</td>
+          <td><code>get_ticket</code>, <code>query_database</code>, <code>check_deploy</code></td>
+        </tr>
+        <tr>
+          <td><strong>Resources</strong></td>
+          <td>Data Claude Code can read</td>
+          <td>API docs, schema definitions, configuration files</td>
+        </tr>
+        <tr>
+          <td><strong>Prompts</strong></td>
+          <td>Pre-built prompt templates</td>
+          <td>&ldquo;Summarize this ticket&rdquo;, &ldquo;Debug this query&rdquo;</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Most servers focus on <strong>tools</strong> &mdash; that&rsquo;s where the automation power is.</p>
+
+    <h2>Building Your First MCP Server</h2>
+
+    <p>Let&rsquo;s build a practical MCP server: one that checks your deployment status. We&rsquo;ll use TypeScript with the official MCP SDK.</p>
+
+    <div class="recipe-box">
+      <h3>Building a Deployment Status MCP Server</h3>
+      <ol>
+        <li><strong>Set up the project:</strong></li>
+      </ol>
+      <pre><code>mkdir mcp-deploy-status &amp;&amp; cd mcp-deploy-status
+npm init -y
+npm install @modelcontextprotocol/sdk zod
+npm install -D typescript @types/node
+npx tsc --init</code></pre>
+      <ol start="2">
+        <li><strong>Create the server:</strong> <code>src/index.ts</code></li>
+      </ol>
+      <pre><code>import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({
+  name: "deploy-status",
+  version: "1.0.0",
+});
+
+// Tool: Check deployment status
+server.registerTool(
+  "check_deploy_status",
+  {
+    title: "Check Deployment Status",
+    description: "Check the current deployment status for an environment",
+    inputSchema: {
+      environment: z.enum(["staging", "production"])
+        .describe("Which environment to check"),
+    },
+  },
+  async ({ environment }) => {
+    const response = await fetch(
+      `https://deploy.internal.company.com/api/status/${environment}`,
+      { headers: { Authorization: `Bearer ${process.env.DEPLOY_TOKEN}` } }
+    );
+    const status = await response.json();
+    return {
+      content: [{
+        type: "text",
+        text: `## ${environment} Deployment Status
+**Version:** ${status.version}
+**Deployed at:** ${status.deployedAt}
+**Status:** ${status.healthy ? "Healthy" : "UNHEALTHY"}
+**Commit:** ${status.commitSha}
+**Deployer:** ${status.deployedBy}`
+      }]
+    };
+  }
+);
+
+// Tool: List recent deployments
+server.registerTool(
+  "list_deployments",
+  {
+    title: "List Recent Deployments",
+    description: "List recent deployments for an environment",
+    inputSchema: {
+      environment: z.enum(["staging", "production"]),
+      count: z.number().int().positive().default(5),
+    },
+  },
+  async ({ environment, count }) => {
+    const response = await fetch(
+      `https://deploy.internal.company.com/api/history/${environment}?limit=${count}`,
+      { headers: { Authorization: `Bearer ${process.env.DEPLOY_TOKEN}` } }
+    );
+    const history = await response.json();
+    const rows = history.map((d: any) =>
+      `| ${d.version} | ${d.deployedAt} | ${d.deployedBy} | ${d.status} |`
+    ).join("\n");
+    return {
+      content: [{
+        type: "text",
+        text: `| Version | Deployed | By | Status |\n|---|---|---|---|\n${rows}`
+      }]
+    };
+  }
+);
+
+const transport = new StdioServerTransport();
+await server.connect(transport);</code></pre>
+      <ol start="3">
+        <li><strong>Build it:</strong> <code>npx tsc</code></li>
+        <li><strong>Register with Claude Code</strong> (see next section)</li>
+      </ol>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>API note:</strong> the modern SDK uses <code>server.registerTool(name, { description, inputSchema, &hellip; }, handler)</code> with Zod schemas as the input shape. The legacy four-argument form (<code>server.tool(name, desc, schema, handler)</code>) still compiles but is deprecated &mdash; new servers should use <code>registerTool</code>.</p>
+    </div>
+
+    <p>Now you can ask Claude Code: &ldquo;Is staging healthy?&rdquo; or &ldquo;Who deployed to production last?&rdquo; and it calls your server to get real answers.</p>
+
+    <h2>Registering MCP Servers</h2>
+
+    <p>The fastest way is the <code>claude mcp add</code> CLI &mdash; it figures out the config file for you and writes the right shape. The <code>--scope</code> flag picks where the entry lands:</p>
+
+    <pre><code># Project scope: writes to .mcp.json at the project root.
+# Designed to be checked into git so the whole team gets the server.
+claude mcp add deploy-status --scope project --transport stdio \
+  --env DEPLOY_TOKEN=$DEPLOY_TOKEN \
+  -- node ./mcp-deploy-status/dist/index.js
+
+# User scope: writes to your user config — applies across every project.
+# Good for personal credentials and personal-only servers.
+claude mcp add my-notes --scope user --transport stdio -- node ~/tools/notes.js
+
+# Local scope (default): scoped to this project + this machine only,
+# stored in your local user settings — never committed.
+claude mcp add scratch --transport stdio -- node ./scratch-server.js</code></pre>
+
+    <p>For project-shared servers, the resulting <code>.mcp.json</code> at your project root looks like:</p>
+
+    <pre><code>// .mcp.json — checked into git for the team
+{
+  "mcpServers": {
+    "deploy-status": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./mcp-deploy-status/dist/index.js"],
+      "env": {
+        "DEPLOY_TOKEN": "${DEPLOY_TOKEN}"
+      }
+    }
+  }
+}</code></pre>
+
+    <p>The top-level <code>mcpServers</code> key, the <code>${VAR}</code> env-variable expansion, and the project-root location are all part of the spec &mdash; <code>.mcp.json</code> is the canonical project-shared registration path. You can hand-edit it, or stick with <code>claude mcp add</code> and let the CLI manage it. There&rsquo;s also <code>claude mcp add-json</code> for pasting a JSON blob and <code>claude mcp add-from-claude-desktop</code> for importing servers from Claude Desktop.</p>
+
+    <div class="tip-box">
+      <p><strong>Don&rsquo;t commit secrets.</strong> Use the <code>${ENV_VAR}</code> expansion in <code>.mcp.json</code> so the file references variables from your shell or <code>.env</code> file. Then add the actual values via your usual secret store (1Password, direnv, OS keychain) &mdash; never hardcode them. Project-scoped servers also prompt for approval the first time, so a malicious checked-in <code>.mcp.json</code> can&rsquo;t silently exfiltrate data.</p>
+    </div>
+
+    <h2>MCP Server for Jira / Issue Trackers</h2>
+
+    <p>Want Claude Code to read your tickets while working on code? Build an issue tracker MCP server:</p>
+
+    <pre><code>// Key tools to implement in a Jira MCP server
+import { z } from "zod";
+
+server.registerTool(
+  "get_ticket",
+  {
+    description: "Get details of a Jira ticket",
+    inputSchema: { ticketId: z.string().describe("e.g., PROJ-1234") },
+  },
+  async ({ ticketId }) => {
+    const ticket = await jiraClient.getIssue(ticketId);
+    return {
+      content: [{
+        type: "text",
+        text: `## ${ticket.key}: ${ticket.fields.summary}
+**Status:** ${ticket.fields.status.name}
+**Assignee:** ${ticket.fields.assignee?.displayName || "Unassigned"}
+**Priority:** ${ticket.fields.priority.name}
+**Description:**
+${ticket.fields.description}`
+      }]
+    };
+  }
+);
+
+server.registerTool(
+  "search_tickets",
+  {
+    description: "Search Jira tickets with JQL",
+    inputSchema: { query: z.string().describe("JQL query or plain text search") },
+  },
+  async ({ query }) => {
+    const results = await jiraClient.searchJira(query);
+    // Format and return results
+  }
+);
+
+server.registerTool(
+  "add_comment",
+  {
+    description: "Add a comment to a Jira ticket",
+    inputSchema: { ticketId: z.string(), comment: z.string() },
+  },
+  async ({ ticketId, comment }) => {
+    await jiraClient.addComment(ticketId, comment);
+    return { content: [{ type: "text", text: `Comment added to ${ticketId}` }] };
+  }
+);</code></pre>
+
+    <p>With this server, you can say: &ldquo;Read PROJ-1234 and implement the feature described in the ticket.&rdquo; Claude Code fetches the ticket, reads the description, and starts coding. No tab-switching, no copy-pasting.</p>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Working with Jira Without MCP</h4>
+        <ol>
+          <li>Open Jira in the browser</li>
+          <li>Find the ticket</li>
+          <li>Read the description and acceptance criteria</li>
+          <li>Switch back to Claude Code</li>
+          <li>Paste the relevant details into your prompt</li>
+          <li>Repeat when you need more context</li>
+        </ol>
+        <p><strong>Context switches: 4+. Time lost: 5&ndash;10 min per ticket.</strong></p>
+      </div>
+      <div class="after">
+        <h4>Working with Jira With MCP</h4>
+        <ol>
+          <li>Tell Claude Code: &ldquo;Read PROJ-1234 and implement it&rdquo;</li>
+          <li>Claude Code fetches the ticket directly</li>
+          <li>Codes the feature with full ticket context</li>
+        </ol>
+        <p><strong>Context switches: 0. Time lost: 0.</strong></p>
+      </div>
+    </div>
+
+    <h2>MCP Server for Database Queries</h2>
+
+    <p>Give Claude Code read-only access to your staging database. Perfect for debugging data issues or understanding schema relationships:</p>
+
+    <pre><code>server.registerTool(
+  "query_database",
+  {
+    description: "Run a read-only SQL query on staging",
+    inputSchema: { query: z.string().describe("SQL SELECT query") },
+  },
+  async ({ query }) => {
+    // Safety: only allow SELECT queries
+    if (!query.trim().toUpperCase().startsWith("SELECT")) {
+      return {
+        content: [{
+          type: "text",
+          text: "ERROR: Only SELECT queries are allowed. No mutations permitted."
+        }]
+      };
+    }
+
+    const result = await pool.query(query);
+    // Format as markdown table
+    const headers = Object.keys(result.rows[0] || {});
+    const headerRow = `| ${headers.join(" | ")} |`;
+    const separator = `| ${headers.map(() => "---").join(" | ")} |`;
+    const dataRows = result.rows.slice(0, 50).map(row =>
+      `| ${headers.map(h => row[h]).join(" | ")} |`
+    ).join("\n");
+
+    return {
+      content: [{
+        type: "text",
+        text: `${headerRow}\n${separator}\n${dataRows}\n\n(${result.rowCount} rows)`
+      }]
+    };
+  }
+);
+
+server.registerTool(
+  "describe_table",
+  {
+    description: "Get the schema of a database table",
+    inputSchema: { table: z.string() },
+  },
+  async ({ table }) => {
+    const result = await pool.query(
+      "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = $1",
+      [table]
+    );
+    // Format and return schema
+  }
+);</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Read-only access only. No exceptions.</strong> Your database MCP server must enforce read-only at the server level. Don&rsquo;t rely on Claude Code to be careful &mdash; validate every query before executing. Use a database user with SELECT-only permissions as a second layer of defense. Never connect to production &mdash; staging only.</p>
+    </div>
+
+    <h2>Team-Shared MCP Configurations</h2>
+
+    <p>MCP servers become really powerful when the whole team uses them. Commit a single <code>.mcp.json</code> at the project root and every teammate gets the same servers on their next session:</p>
+
+    <pre><code>// .mcp.json — checked into the repo
+{
+  "mcpServers": {
+    "jira": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./tools/mcp-jira/dist/index.js"],
+      "env": {
+        "JIRA_URL": "https://yourcompany.atlassian.net",
+        "JIRA_TOKEN": "${JIRA_API_TOKEN}"
+      }
+    },
+    "deploy-status": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./tools/mcp-deploy/dist/index.js"]
+    },
+    "staging-db": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./tools/mcp-db/dist/index.js"],
+      "env": {
+        "DB_HOST": "staging-db.internal.company.com",
+        "DB_NAME": "myapp_staging"
+      }
+    },
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp"
+    }
+  }
+}</code></pre>
+
+    <p>The Sentry entry shows the second flavour: a hosted HTTP server. No local process to run, no token to wire up &mdash; Claude Code authenticates with the vendor on first use.</p>
+
+    <div class="automation-box">
+      <p><strong>MCP servers are a force multiplier for every automation you&rsquo;ve built.</strong> Your <code>/standup</code> skill can now include ticket status from Jira. Your <code>/review</code> skill can check deployment history. Your <code>/morning-digest</code> can include database health metrics. Every skill and hook gains access to every tool your MCP servers expose. The automation possibilities multiply with each server you add.</p>
+    </div>
+
+    <h2>Security Best Practices</h2>
+
+    <p>MCP servers bridge Claude Code to your internal systems. Security is non-negotiable:</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Read-only by default.</strong> Start with read-only tools. Add write capabilities only when explicitly needed and approved.</li>
+      <li class="checked"><strong>Principle of least privilege.</strong> Each server gets the minimum permissions it needs. The DB server gets SELECT only. The Jira server gets read and comment, not admin.</li>
+      <li class="checked"><strong>No production database access.</strong> Staging only. Always.</li>
+      <li class="checked"><strong>Secrets in environment variables.</strong> Never hardcode tokens. Reference them via <code>${ENV_VAR}</code> expansion in <code>.mcp.json</code>; keep the actual values in your shell, <code>.env</code>, or OS keychain.</li>
+      <li class="checked"><strong>Input validation.</strong> Sanitize every input before passing to APIs or databases. Prevent injection attacks.</li>
+      <li class="checked"><strong>Audit logging.</strong> Log every tool call with timestamp, user, and parameters for security review.</li>
+    </ul>
+
+    <h2>Testing MCP Servers</h2>
+
+    <p>Before rolling out to the team, verify your server works correctly:</p>
+
+    <pre><code># 1. Test the server starts without errors
+node dist/index.js
+# Should start and wait for input (Ctrl+C to stop)
+
+# 2. Test with Claude Code interactively
+# Just start a Claude Code session with the server configured
+# and ask it to use the tools:
+# "Check the staging deployment status"
+# "Describe the users table in the staging database"
+# "Look up ticket PROJ-1234"
+
+# 3. Test error handling
+# Ask Claude Code to do something the server should reject:
+# "Run DELETE FROM users" → should be blocked
+# "Check production database" → should be denied</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Build incrementally.</strong> Start with one tool per server. Get it working, test it with the team, then add more. A server with one reliable tool is better than a server with ten untested ones.</p>
+    </div>
+
+    <h2>MCP Server Ideas for Your Team</h2>
+
+    <p>Before you write your own, check whether the vendor already ships one. As of 2026 there are official hosted MCP servers for <strong>Stripe, Linear, Sentry, Notion, GitHub, Atlassian, HubSpot, Slack, Asana, Figma, Vercel, Neon, Supabase, PayPal</strong> and dozens more. The Anthropic MCP registry lists current ones, and a one-liner like <code>claude mcp add --transport http stripe https://mcp.stripe.com</code> is usually enough to add them. Build your own only for internal tools the vendor list doesn&rsquo;t cover &mdash; that&rsquo;s where the gallery below comes in.</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">S</div>
+      <div class="tool-info">
+        <div class="tool-name">Slack Server</div>
+        <div class="tool-desc">Read channel messages, post updates, search conversations. Your standup skill can post directly to Slack. (Hosted version available; build your own only if you need internal-channel-only access.)</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">F</div>
+      <div class="tool-info">
+        <div class="tool-name">Firebase / Analytics Server</div>
+        <div class="tool-desc">Query crash reports, check analytics events, monitor error rates. Debug production issues without leaving Claude Code.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">C</div>
+      <div class="tool-info">
+        <div class="tool-name">Confluence / Wiki Server</div>
+        <div class="tool-desc">Search and read team documentation, architecture pages, runbooks. Claude Code gets full context from your knowledge base.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">G</div>
+      <div class="tool-info">
+        <div class="tool-name">Grafana / Monitoring Server</div>
+        <div class="tool-desc">Check dashboards, query metrics, read alerts. When debugging performance, Claude Code sees what the monitoring sees.</div>
+      </div>
+    </div>
+
+    <h2>Exercise: Build Your First MCP Server</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Create a Team Info MCP Server</h3>
+      <p>Build a simple but useful MCP server. About 20 minutes.</p>
+
+      <h4>The server: team-info</h4>
+      <p>A server that gives Claude Code access to team-specific information that isn&rsquo;t in the codebase.</p>
+
+      <ol>
+        <li><strong>Scaffold the project:</strong>
+          <pre><code>mkdir mcp-team-info &amp;&amp; cd mcp-team-info
+npm init -y
+npm install @modelcontextprotocol/sdk
+npm install -D typescript @types/node
+npx tsc --init</code></pre>
+        </li>
+        <li><strong>Implement two tools:</strong>
+          <ul>
+            <li><code>get_team_member</code> &mdash; returns role, expertise areas, and timezone for a team member (read from a JSON file)</li>
+            <li><code>get_oncall</code> &mdash; returns who is currently on call (read from a schedule JSON or API)</li>
+          </ul>
+        </li>
+        <li><strong>Build and test:</strong> <code>npx tsc</code></li>
+        <li><strong>Register it:</strong> <code>claude mcp add team-info --scope project --transport stdio -- node ./mcp-team-info/dist/index.js</code></li>
+        <li><strong>Test it:</strong> Ask Claude Code &ldquo;Who is on call right now?&rdquo; or &ldquo;Who should I talk to about the payment module?&rdquo;</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Add a <code>get_service_status</code> tool that hits your team&rsquo;s health check endpoints and reports which services are up or down.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now have skills, hooks, CI/CD workflows, productivity agents, and MCP servers &mdash; each powerful on its own. But the real magic happens when you <strong>chain them together</strong> into multi-step workflows.</p>
+
+    <p>In <strong>Chapter 11: Orchestrating Multi-Step Workflows</strong>, you&rsquo;ll compose everything into end-to-end pipelines. A single command that reads a Jira ticket, creates a branch, scaffolds the feature, generates tests, writes the PR, and posts a status update to Slack. From ticket to PR in one shot.</p>
+
+    <p>Let&rsquo;s orchestrate.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-productivity-agents.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Personal Productivity Agents</span>
+      </a>
+      <a href="11-orchestrating-workflows.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Orchestrating Multi-Step Workflows</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Orchestration Patterns | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-task-decomposition.html">&larr; Prev</a>
+      <a href="05-tool-design.html">Next &rarr;</a>
+      <a href="maps/04-orchestration-patterns-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 4</div>
+    <h1>Orchestration Patterns</h1>
+    <p class="subtitle">The playbook for coordinating agents &mdash; hub-and-spoke, pipelines, map-reduce, routing, and when each one wins</p>
+  </header>
+
+  <main>
+
+    <h2>Completing Domain 1</h2>
+
+    <p>This is our final chapter on <strong>Domain 1: Agentic Architecture &amp; Orchestration (27%)</strong>. In Chapter 2, you learned why multi-agent systems exist. In Chapter 3, you learned how to break tasks apart. Now we bring it together: <em>which orchestration pattern do you choose, and why?</em></p>
+
+    <p>The exam doesn't just ask you to name patterns &mdash; it presents a scenario and asks you to pick the right one. This chapter gives you the decision framework to do that confidently.</p>
+
+    <div class="highlight-box">
+      <h3>The Five Patterns You Must Know</h3>
+      <p>Every orchestration question on the exam maps to one of these: <strong>hub-and-spoke</strong>, <strong>pipeline/chain</strong>, <strong>map-reduce</strong>, <strong>routing</strong>, or <strong>escalation/fallback</strong>. Know what each one looks like, when to use it, and when it's the wrong choice.</p>
+    </div>
+
+    <h2>Pattern 1: Hub-and-Spoke (In Depth)</h2>
+
+    <p>We introduced hub-and-spoke in Chapter 2. Now let's go deeper into the orchestrator's responsibilities, because this is where the exam gets specific.</p>
+
+    <h3>The Orchestrator's Job</h3>
+
+    <p>The hub (coordinator) has four responsibilities:</p>
+
+    <ol>
+      <li><strong>Task decomposition:</strong> Break the incoming request into subtasks</li>
+      <li><strong>Delegation:</strong> Assign each subtask to the right subagent with the right context</li>
+      <li><strong>Aggregation:</strong> Collect results from all subagents and synthesize a final output</li>
+      <li><strong>Error handling:</strong> Detect subagent failures and respond (retry, skip, or escalate)</li>
+    </ol>
+
+    <pre><code># Hub-and-spoke orchestrator pseudocode
+def orchestrate(user_request):
+    # 1. Decompose
+    subtasks = decompose(user_request)
+
+    # 2. Delegate (parallel where possible)
+    results = {}
+    for task in subtasks:
+        subagent = spawn_subagent(
+            prompt=task.description,
+            tools=task.required_tools,
+            context=task.relevant_context  # NOT full conversation
+        )
+        results[task.id] = subagent.run()
+
+    # 3. Aggregate
+    synthesis = synthesize(results)
+
+    # 4. Error handling (simplified)
+    failed = [t for t in results if results[t].failed]
+    if any(t.critical for t in failed):
+        return escalate(failed)
+
+    return synthesis</code></pre>
+
+    <div class="exam-tip-box">
+      When the exam asks about the orchestrator's role, all four responsibilities matter. A common distractor answer describes an orchestrator that only delegates but doesn't aggregate &mdash; or one that aggregates but doesn't handle errors. The complete orchestrator does <strong>all four</strong>: decompose, delegate, aggregate, and handle errors.
+    </div>
+
+    <h3>The allowedTools Requirement</h3>
+
+    <p>For the orchestrator to spawn subagents in the Agent SDK, its <code>allowedTools</code> must include <code>"Task"</code>. This is a specific implementation detail the exam tests. Without it, the orchestrator can't create subagents.</p>
+
+    <pre><code># Orchestrator configuration in Agent SDK
+{
+  "agent": "coordinator",
+  "allowedTools": ["Task"],  // Required for subagent spawning
+  "system_prompt": "You are a coordinator that delegates research tasks..."
+}
+
+# Subagent configuration (spawned by Task tool)
+{
+  "agent": "researcher",
+  "allowedTools": ["WebSearch", "ReadDocument"],
+  "system_prompt": "You are a researcher. Search for..."
+}</code></pre>
+
+    <h3>Parallel Subagent Execution</h3>
+
+    <p>When the orchestrator makes multiple Task tool calls in a single response, they execute <strong>in parallel</strong>. This is how you get the performance benefit of multi-agent systems. The orchestrator doesn't need to wait for one subagent to finish before starting the next.</p>
+
+    <div class="tip-box">
+      The number of parallel subagents matters. Too few (1&ndash;2) and you lose the parallelism benefit. Too many (20+) and you overwhelm the system with coordination overhead. The sweet spot for most scenarios is <strong>3&ndash;7 parallel subagents</strong>. The exam occasionally tests this judgment.
+    </div>
+
+    <h2>Pattern 2: Pipeline / Chain</h2>
+
+    <p>In a pipeline, agents process data <strong>sequentially</strong>. Each agent transforms the input and passes it to the next. Think of an assembly line: each station adds something, and the product moves forward.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Agent A: Extract</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Agent B: Transform</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Agent C: Validate</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Agent D: Load</div>
+    </div>
+
+    <p>Each agent in the pipeline follows the <strong>single responsibility principle</strong>: it does one thing well. Agent A's output becomes Agent B's input. No branching, no parallel paths.</p>
+
+    <pre><code># Pipeline for document processing
+raw_text = agent_extract(pdf_document)      # Extract text from PDF
+structured = agent_parse(raw_text)          # Parse into structured data
+validated = agent_validate(structured)      # Validate against schema
+enriched = agent_enrich(validated)          # Add metadata, lookups
+final = agent_format(enriched)             # Format for output</code></pre>
+
+    <h3>When to Use Pipelines</h3>
+
+    <ul>
+      <li>Each step has a clear, single responsibility</li>
+      <li>Output of one step is the input of the next</li>
+      <li>The order is fixed and deterministic</li>
+      <li>Each agent specializes in one transformation</li>
+    </ul>
+
+    <h3>When NOT to Use Pipelines</h3>
+
+    <ul>
+      <li>When steps can run in parallel (use fan-out instead)</li>
+      <li>When you need conditional branching (use routing instead)</li>
+      <li>When the number of steps isn't known in advance (use adaptive decomposition)</li>
+    </ul>
+
+    <div class="architect-box">
+      <strong>Pipeline vs. single agent with multiple tools.</strong> A common exam question: should you use a pipeline of 4 specialized agents, or a single agent with 4 tools? The answer depends on <strong>context window pressure</strong>. If each step produces large intermediate output (e.g., extracting text from a 100-page document), a pipeline is better because each agent has a fresh context window. If the steps are lightweight (a few tool calls each), a single agent is simpler and avoids inter-agent overhead.
+      <br><br>
+      <strong>Rule of thumb:</strong> Use a pipeline when intermediate results are large or when each step needs a specialized system prompt. Use a single agent when steps are lightweight and share context.
+    </div>
+
+    <h2>Pattern 3: Map-Reduce</h2>
+
+    <p>Map-reduce is fan-out/fan-in formalized. You already learned it in Chapter 3, but here we focus on the <strong>reduce</strong> step &mdash; the part that trips people up.</p>
+
+    <h3>The Map Phase (Fan-Out)</h3>
+
+    <p>Distribute the same type of task across multiple data points. Each subagent handles one chunk independently.</p>
+
+    <pre><code># Map: parallel analysis of 10 customer reviews
+for review in reviews:
+    spawn_subagent(
+        prompt=f"Analyze this review for sentiment and key themes: {review}",
+        tools=["SentimentAnalyzer"]
+    )</code></pre>
+
+    <h3>The Reduce Phase (Fan-In)</h3>
+
+    <p>Collect all results and combine them into a single output. This is where the orchestrator (or a dedicated reducer agent) does the synthesis.</p>
+
+    <pre><code># Reduce: aggregate all analysis results
+all_results = collect_subagent_results()
+summary = synthesize_agent(
+    prompt=f"""Combine these {len(all_results)} review analyses into
+    a single report: overall sentiment trend, top 5 themes,
+    notable outliers. Results: {all_results}"""
+)</code></pre>
+
+    <div class="warning-box">
+      <strong>The reduce step bottleneck.</strong> If you have 20 subagents each returning 2,000 tokens of results, the reducer needs to fit 40,000 tokens in its context window just for the input. This is a real constraint. Solutions: (1) ask each subagent to return a concise summary instead of raw results, (2) do hierarchical reduce (reduce groups of 5, then reduce the 4 partial results), or (3) have each subagent write to a shared data store and have the reducer read selectively.
+    </div>
+
+    <h3>Exam Scenario: Multi-Agent Research</h3>
+
+    <p>The <strong>Multi-Agent Research System</strong> scenario is map-reduce in action:</p>
+
+    <ol>
+      <li><strong>Map:</strong> Orchestrator decomposes "Research topic X" into 4 sub-questions, spawns 4 researcher agents in parallel</li>
+      <li><strong>Each researcher:</strong> Searches its assigned sub-question, returns a summary of findings</li>
+      <li><strong>Reduce:</strong> Orchestrator (or a dedicated writer agent) synthesizes all 4 summaries into a cohesive report</li>
+    </ol>
+
+    <div class="exam-tip-box">
+      In the Multi-Agent Research scenario, the exam tests whether you understand that the <strong>reduce step is not just concatenation</strong>. The reducer must synthesize, resolve contradictions between sources, identify gaps, and produce a coherent narrative. A distractor will suggest "combine all results into one document" &mdash; that's concatenation, not synthesis.
+    </div>
+
+    <h2>Pattern 4: Routing</h2>
+
+    <p>A routing pattern directs tasks to specialized agents based on classification. Think of a phone tree: "Press 1 for billing, 2 for technical support, 3 for shipping."</p>
+
+    <pre><code># Routing pattern for customer support
+def route_request(customer_message):
+    # Step 1: Classify the request
+    category = classifier_agent(customer_message)
+    # Returns: "billing", "technical", or "shipping"
+
+    # Step 2: Route to specialist
+    if category == "billing":
+        return billing_agent(customer_message, account_info)
+    elif category == "technical":
+        return technical_agent(customer_message, product_info)
+    elif category == "shipping":
+        return shipping_agent(customer_message, order_info)
+    else:
+        return escalate_to_human(customer_message)</code></pre>
+
+    <p>Routing is the bread-and-butter of the <strong>Customer Support Resolution Agent</strong> scenario. The exam tests three aspects:</p>
+
+    <ol>
+      <li><strong>Classification accuracy:</strong> How does the router decide which specialist to invoke? (Usually an LLM call with a constrained output schema)</li>
+      <li><strong>Context passing:</strong> What information does the specialist receive? (The customer message plus relevant data &mdash; not the entire conversation)</li>
+      <li><strong>Fallback handling:</strong> What happens when the classifier is unsure? (Escalate to human, don't guess)</li>
+    </ol>
+
+    <div class="architect-box">
+      <strong>Routing can be nested.</strong> The first router classifies by category (billing/technical/shipping). The technical router then sub-classifies (hardware/software/network). Each level narrows the specialist. This hierarchical routing is common in production &mdash; and on the exam.
+      <br><br>
+      <strong>The key decision:</strong> Should you use an LLM for classification (flexible but probabilistic) or deterministic rules (rigid but 100% reliable)? For simple routing (3&ndash;5 clear categories), an LLM classifier works well. For critical routing where misclassification has consequences, combine LLM classification with a programmatic hook that validates the routing decision.
+    </div>
+
+    <h2>Pattern 5: Escalation and Fallback</h2>
+
+    <p>Every production agent system needs a "what if the agent can't handle it?" path. Escalation patterns define when and how to hand off to a human or a higher-level agent.</p>
+
+    <h3>Valid Escalation Triggers</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Trigger</th>
+          <th>Example</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Explicit customer request</td>
+          <td>"I want to speak to a human"</td>
+          <td>Immediate escalation</td>
+        </tr>
+        <tr>
+          <td>Policy gap</td>
+          <td>No rule covers this situation</td>
+          <td>Escalate with context summary</td>
+        </tr>
+        <tr>
+          <td>Capability exceeded</td>
+          <td>Task requires external system access the agent lacks</td>
+          <td>Escalate with attempted actions</td>
+        </tr>
+        <tr>
+          <td>Business threshold</td>
+          <td>Refund amount exceeds $500 limit</td>
+          <td>Escalate for human approval</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Invalid Escalation Triggers</h3>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Sentiment-Based</div>
+        <div class="prompt-text">"The customer seems angry, so escalate to a human."</div>
+        <div class="prompt-explanation">Sentiment analysis is unreliable. An angry customer might have a simple issue the agent can solve. Don't escalate based on tone.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Confidence-Based</div>
+        <div class="prompt-text">"The agent's confidence score is below 0.7, so escalate."</div>
+        <div class="prompt-explanation">LLM confidence scores are poorly calibrated. A model might be "90% confident" in a wrong answer. Don't use self-reported confidence for escalation decisions.</div>
+      </div>
+    </div>
+
+    <h3>The Escalation Handoff</h3>
+
+    <p>When escalating, the agent should provide:</p>
+
+    <ul>
+      <li><strong>Summary of the conversation</strong> &mdash; what the customer asked for</li>
+      <li><strong>Actions already taken</strong> &mdash; what the agent tried</li>
+      <li><strong>Reason for escalation</strong> &mdash; why the agent can't resolve it</li>
+      <li><strong>Relevant data</strong> &mdash; account info, order numbers, etc.</li>
+    </ul>
+
+    <p>A human receiving an escalation with this context can pick up immediately instead of re-asking the customer everything.</p>
+
+    <div class="exam-tip-box">
+      The exam consistently marks <strong>sentiment-based and confidence-based escalation as wrong</strong>. Expect at least one question where these are distractors. The correct escalation triggers are always explicit, rule-based, or threshold-based. This is one of the most predictable patterns on the exam.
+    </div>
+
+    <h2>State Passing Between Agents</h2>
+
+    <p>How do agents share information? This is a critical design decision with real tradeoffs:</p>
+
+    <h3>Option 1: Through the Orchestrator</h3>
+    <p>All state flows through the hub. Agent A returns results to the orchestrator, which passes relevant parts to Agent B. This is clean and observable, but the orchestrator becomes a bottleneck.</p>
+
+    <h3>Option 2: Shared External State</h3>
+    <p>Agents read and write to a shared database, file system, or message queue. This allows direct communication without bottlenecking the orchestrator, but introduces coordination complexity.</p>
+
+    <h3>Option 3: Message Passing</h3>
+    <p>Agents send structured messages directly to each other. Fast and flexible, but harder to debug because there's no central log.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Approach</th>
+          <th>Pros</th>
+          <th>Cons</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Through orchestrator</td>
+          <td>Observable, controlled</td>
+          <td>Bottleneck, token cost</td>
+          <td>Most hub-and-spoke systems</td>
+        </tr>
+        <tr>
+          <td>Shared external state</td>
+          <td>No bottleneck, persistent</td>
+          <td>Coordination complexity</td>
+          <td>Long-running workflows</td>
+        </tr>
+        <tr>
+          <td>Message passing</td>
+          <td>Fast, flexible</td>
+          <td>Hard to debug</td>
+          <td>Peer-to-peer systems</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      For the exam, "through the orchestrator" is the default correct answer unless the scenario specifically describes a need for direct agent-to-agent communication. Hub-and-spoke systems pass state through the hub &mdash; that's the entire point of having a hub.
+    </div>
+
+    <h2>Anti-Patterns: What NOT to Build</h2>
+
+    <p>The exam loves presenting broken architectures and asking you to identify the problem. Here are the big anti-patterns:</p>
+
+    <h3>1. The God Orchestrator</h3>
+    <p>An orchestrator that does everything: classifies, processes, validates, formats, <em>and</em> delegates. If the orchestrator is doing the work itself instead of delegating, it's not an orchestrator &mdash; it's a monolithic agent pretending to be a coordinator.</p>
+
+    <h3>2. Circular Dependencies</h3>
+    <p>Agent A delegates to Agent B, which delegates back to Agent A. This creates an infinite loop. In a DAG, there are no cycles by definition. If your workflow graph has a cycle, you have a design error.</p>
+
+    <h3>3. Missing Error Propagation</h3>
+    <p>A subagent fails, but the orchestrator doesn't detect it and proceeds as if the subtask succeeded. Always check subagent results for errors before aggregating.</p>
+
+    <h3>4. Cascading Hallucinations</h3>
+    <p>Agent A hallucinates a fact ("refunds over $100 require manager approval"). Agent B receives this as context and acts on it. Agent C cites B's output as evidence. The hallucination becomes "fact" through the pipeline. Prevent this with validation at each step and authoritative data sources.</p>
+
+    <h3>5. Context Bleed</h3>
+    <p>Sharing the full orchestrator context with subagents, causing them to act on irrelevant information or exceed their context windows. Always pass only task-specific context.</p>
+
+    <div class="warning-box">
+      <strong>Cascading hallucinations</strong> is the sneakiest anti-pattern. On the exam, look for scenarios where one agent's output feeds directly into another without validation. The fix is always to validate against an authoritative source (a database, an API, a knowledge base) rather than trusting another agent's output at face value.
+    </div>
+
+    <h2>Choosing the Right Pattern: Decision Framework</h2>
+
+    <p>When the exam presents a scenario, use this framework to pick the right orchestration pattern:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>If the scenario has...</th>
+          <th>Use this pattern</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A coordinator managing specialists</td>
+          <td><strong>Hub-and-spoke</strong></td>
+        </tr>
+        <tr>
+          <td>Sequential transformations on data</td>
+          <td><strong>Pipeline / chain</strong></td>
+        </tr>
+        <tr>
+          <td>Same task applied to many items, then combined</td>
+          <td><strong>Map-reduce</strong></td>
+        </tr>
+        <tr>
+          <td>Classification leading to different handlers</td>
+          <td><strong>Routing</strong></td>
+        </tr>
+        <tr>
+          <td>Agent can't handle something, needs a human</td>
+          <td><strong>Escalation / fallback</strong></td>
+        </tr>
+        <tr>
+          <td>Multiple independent queries combined into a report</td>
+          <td><strong>Fan-out / fan-in (map-reduce)</strong></td>
+        </tr>
+        <tr>
+          <td>A complex system with many types of work</td>
+          <td><strong>Combination</strong> (routing + hub-and-spoke + escalation)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Most real-world systems and most exam scenarios use a <strong>combination</strong>. The Customer Support Agent, for example, uses routing (classify issue type) + hub-and-spoke (specialist delegates to tool-calling subagents) + escalation (hand off when stuck).</p>
+
+    <h2>Scenario Deep Dive: Customer Support</h2>
+
+    <p>Let's wire up the full orchestration for the Customer Support scenario, since it tests the most patterns at once:</p>
+
+    <pre><code># Complete Customer Support orchestration
+#
+#  User Message
+#       │
+#  ┌────▼────┐
+#  │ Router  │  ← Classifies: billing / technical / shipping
+#  └────┬────┘
+#       │
+#  ┌────▼──────────────────────────┐
+#  │ Specialist Agent (e.g. billing)│
+#  │   ├── Tool: LookupAccount     │
+#  │   ├── Tool: SearchKB          │
+#  │   └── Tool: ProcessRefund     │  ← Hook validates amount ≤ $500
+#  └────┬──────────────────────────┘
+#       │
+#  ┌────▼────┐
+#  │ Check   │  ← Can the specialist resolve it?
+#  └────┬────┘
+#    Yes│    No
+#       │  ┌────▼─────┐
+#       │  │ Escalate  │  ← Summary + context → human agent
+#       │  └───────────┘
+#  ┌────▼────┐
+#  │ Respond │  ← Final answer to customer
+#  └─────────┘</code></pre>
+
+    <p>This combines <strong>routing</strong> (classify the issue), <strong>hub-and-spoke</strong> (specialist uses tools), <strong>hooks</strong> (validate refund amounts), and <strong>escalation</strong> (hand off on failure). That's why it's the exam's most comprehensive scenario.</p>
+
+    <div class="exercise-box">
+      <strong>Exercise: Choose the Pattern</strong>
+      <p>For each scenario below, identify the primary orchestration pattern and justify your choice:</p>
+      <ol>
+        <li>A system that reviews 50 pull requests overnight and generates a summary report of all changes.</li>
+        <li>A chatbot that answers questions about three different products, each with its own knowledge base.</li>
+        <li>A document processing pipeline: OCR &rarr; entity extraction &rarr; classification &rarr; database insert.</li>
+        <li>A research assistant that takes a broad question, finds relevant papers, and writes a literature review.</li>
+        <li>A support agent that detects when a customer's request requires access to a system the agent doesn't have credentials for.</li>
+      </ol>
+      <p><strong>Answers:</strong> (1) Map-reduce: same task (review) applied to many items (PRs), then synthesized. (2) Routing: classify which product, then route to the right knowledge base agent. (3) Pipeline: fixed sequential transformations. (4) Hub-and-spoke with fan-out: decompose question, parallel research, synthesize. (5) Escalation: capability exceeded &rarr; hand off with context.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Hub-and-spoke: orchestrator decomposes, delegates, aggregates, and handles errors &mdash; needs "Task" in allowedTools</li>
+      <li>Pipeline: sequential agents, each with single responsibility &mdash; use when steps are ordered and context-heavy</li>
+      <li>Map-reduce: parallel processing of similar items + synthesis &mdash; watch for the reduce-step bottleneck</li>
+      <li>Routing: classify then dispatch to specialist &mdash; combine with hooks for critical routing decisions</li>
+      <li>Escalation triggers must be explicit (human request, policy gap, capability exceeded, threshold) &mdash; never sentiment or confidence-based</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>Domain 1 is complete! You now have a solid foundation in agentic architecture, task decomposition, and orchestration patterns. In <strong>Chapter 5: Designing Agent Tools</strong>, we move to <strong>Domain 2: Tool Design &amp; MCP Integration (18%)</strong>. You'll learn how to design tool schemas that Claude actually uses well, the reasoning boundary between agent and tool, and how to handle tool errors gracefully.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-task-decomposition.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Task Decomposition</span>
+      </a>
+      <a href="05-tool-design.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Designing Agent Tools</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

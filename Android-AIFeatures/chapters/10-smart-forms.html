@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Smart Forms &amp; Data Extraction | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-notifications-recommendations.html">&larr; Prev</a>
+      <a href="11-ab-testing-metrics.html">Next &rarr;</a>
+      <a href="maps/10-smart-forms-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Smart Forms &amp; Data Extraction</h1>
+    <p class="subtitle">Auto-fill from photos, receipt parsing, natural language input, and forms that fill themselves</p>
+  </header>
+
+  <main>
+
+    <h2>Users Hate Forms</h2>
+
+    <p>Nobody has ever said "I love filling out forms." Every field the user has to type is friction. Every dropdown they have to scroll through is a micro-frustration. And on mobile, where typing is slower and screens are smaller, forms are the #1 place users abandon tasks.</p>
+
+    <p>AI can fix this. Every field the AI fills is a field the user doesn't type. Every photo that becomes a form entry is 30 seconds of tedious data entry eliminated. Smart forms don't just collect data &mdash; they <em>extract</em> it from the world around the user.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">67%</span>
+        <span class="stat-label">Of mobile users abandon forms with more than 3 fields</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5x</span>
+        <span class="stat-label">Faster form completion with AI auto-fill vs manual entry</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">92%</span>
+        <span class="stat-label">Accuracy of receipt parsing with OCR + LLM pipeline</span>
+      </div>
+    </div>
+
+    <h2>Photo-to-Form: The "Snap and Done" Pattern</h2>
+
+    <div class="product-pattern">
+      <h3>The Snap-and-Done Pattern</h3>
+      <p>The most satisfying smart form experience: point the camera at a document, tap, and watch the form fill itself.</p>
+      <ol>
+        <li><strong>User taps "Scan"</strong> &mdash; Camera opens (or photo picker)</li>
+        <li><strong>AI extracts data</strong> &mdash; OCR reads text, LLM parses it into structured fields</li>
+        <li><strong>Form pre-fills</strong> &mdash; All fields populate with extracted data, highlighted in blue to signal "AI filled this"</li>
+        <li><strong>User reviews and edits</strong> &mdash; Each field is editable. Low-confidence fields are highlighted in yellow</li>
+        <li><strong>User confirms</strong> &mdash; One tap saves the entry. Done.</li>
+      </ol>
+      <p><strong>Real-world example:</strong> Expensify lets you photograph a receipt and auto-fills merchant, date, amount, and category. Adobe Scan captures business cards and creates contacts. Both follow the same pattern: scan, extract, review, save.</p>
+    </div>
+
+    <h2>The Receipt Parsing Pipeline</h2>
+
+    <p>Receipt parsing is the killer use case for smart forms. Let's build the complete pipeline.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Photo</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">ML Kit OCR</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Raw Text</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">LLM Extract</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Structured JSON</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Form Fields</div>
+    </div>
+
+    <div class="api-recipe">
+      <h3>Recipe: Receipt Photo to Expense Form</h3>
+      <p><strong>Goal:</strong> User photographs a receipt, app extracts merchant, date, total, and line items into an editable expense form.</p>
+      <p><strong>Step 1:</strong> Extract raw text with ML Kit (on-device, free):</p>
+<pre><code>suspend fun extractText(bitmap: Bitmap): String {
+    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    val image = InputImage.fromBitmap(bitmap, 0)
+    return suspendCoroutine { cont -&gt;
+        recognizer.process(image)
+            .addOnSuccessListener { result -&gt; cont.resume(result.text) }
+            .addOnFailureListener { cont.resume("") }
+    }
+}</code></pre>
+      <p><strong>Step 2:</strong> Parse the raw text with Gemini into structured JSON:</p>
+<pre><code>suspend fun parseReceipt(rawText: String): ReceiptData {
+    val prompt = """
+        Extract data from this receipt text. Return valid JSON only:
+        {
+          "merchant": "store name",
+          "date": "YYYY-MM-DD",
+          "total": 0.00,
+          "currency": "USD",
+          "items": [{"name": "item", "price": 0.00}],
+          "confidence": {"merchant": "high|medium|low", "date": "high|medium|low",
+                         "total": "high|medium|low"}
+        }
+        If a field cannot be determined, use null.
+        Receipt text:
+        $rawText
+    """.trimIndent()
+
+    val response = model.generateContent(prompt)
+    return Json.decodeFromString(response.text ?: "{}")
+}</code></pre>
+      <p><strong>Step 3:</strong> Display in an editable form with confidence indicators:</p>
+<pre><code>@Composable
+fun ExpenseForm(receipt: ReceiptData, onSave: (ReceiptData) -&gt; Unit) {
+    var merchant by remember { mutableStateOf(receipt.merchant ?: "") }
+    var date by remember { mutableStateOf(receipt.date ?: "") }
+    var total by remember { mutableStateOf(receipt.total?.toString() ?: "") }
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        SmartTextField(
+            value = merchant, onValueChange = { merchant = it },
+            label = "Merchant",
+            confidence = receipt.confidence?.merchant
+        )
+        SmartTextField(
+            value = date, onValueChange = { date = it },
+            label = "Date",
+            confidence = receipt.confidence?.date
+        )
+        SmartTextField(
+            value = total, onValueChange = { total = it },
+            label = "Total",
+            confidence = receipt.confidence?.total,
+            prefix = receipt.currency ?: "$"
+        )
+        // Line items list...
+        Button(onClick = { onSave(/* updated data */) }) {
+            Text("Save Expense")
+        }
+    }
+}</code></pre>
+      <p>The <code>SmartTextField</code> shows a blue border for high-confidence fields and a yellow border for low-confidence ones, signaling to the user which fields to double-check.</p>
+    </div>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Aisha just had lunch with a client. She photographs the crumpled receipt. The app processes it in 2 seconds: "Café Bella, March 31, 2026, Total: $47.50." The merchant and total are highlighted blue (high confidence). The date is yellow (the receipt was faded). Aisha confirms the date, taps "Save," and the expense is logged. Total time: 8 seconds instead of 2 minutes of manual typing.</p>
+    </div>
+
+    <h2>Business Card Scanning</h2>
+
+    <p>Same pipeline, different document. Business cards are smaller and more structured, which makes extraction more reliable:</p>
+
+<pre><code>val cardPrompt = """
+    Extract contact information from this business card text. Return valid JSON:
+    {
+      "name": "", "title": "", "company": "",
+      "phone": "", "email": "", "address": "",
+      "website": ""
+    }
+    Use null for fields not found. Card text:
+    $rawText
+""".trimIndent()</code></pre>
+
+    <p>After extraction, offer a one-tap "Add to Contacts" button that creates an Android contact using the <code>ContactsContract</code> API. The user scans a card at a conference and has the contact saved in 3 seconds.</p>
+
+    <h2>Natural Language to Structured Data</h2>
+
+    <p>Sometimes the user doesn't have a document to scan &mdash; they just want to type naturally and have the app figure out the structure.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Traditional Form</p>
+        <p class="prompt-text">Event: [____________]
+Person: [____________]
+Date: [__/__/____]
+Time: [__:__]
+Location: [____________]
+
+Five fields. Five taps. Five chances to abandon.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Natural Language Input</p>
+        <p class="prompt-text">User types: "lunch with Anna tomorrow at noon at the Italian place"
+
+AI extracts:
+  Event: Lunch
+  Person: Anna
+  Date: 2026-04-01
+  Time: 12:00
+  Location: Italian restaurant
+
+One field. One sentence. Done.</p>
+      </div>
+    </div>
+
+<pre><code>suspend fun parseNaturalInput(input: String, today: LocalDate): EventData {
+    val prompt = """
+        Extract event details from this natural language input.
+        Today's date is ${today}. Return valid JSON:
+        {"event": "", "person": "", "date": "YYYY-MM-DD",
+         "time": "HH:MM", "location": ""}
+        Use null for fields not mentioned.
+        Input: $input
+    """.trimIndent()
+
+    val response = model.generateContent(prompt)
+    return Json.decodeFromString(response.text ?: "{}")
+}</code></pre>
+
+    <p>The UX works best as a <strong>confirm-before-save</strong> pattern: show the extracted fields in a card, let the user tap to edit any field, then confirm to save. Never auto-create the event without review.</p>
+
+    <div class="tip-box">
+      <p><strong>Always pass today's date to the LLM.</strong> "Tomorrow," "next Tuesday," and "this weekend" are meaningless without a reference date. Include the current date in every prompt that involves relative time expressions.</p>
+    </div>
+
+    <h2>Intelligent Autofill</h2>
+
+    <p>Beyond scanning documents, AI can predict field values based on context &mdash; what screen the user is on, what they've entered before, and what makes sense.</p>
+
+    <h3>Cross-Field Prediction</h3>
+    <p>When the user fills one field, predict the others:</p>
+
+<pre><code>fun predictExpenseFields(merchant: String, history: List&lt;Expense&gt;): PredictedFields {
+    // Find past expenses at this merchant
+    val pastEntries = history.filter {
+        it.merchant.contains(merchant, ignoreCase = true)
+    }.sortedByDescending { it.date }
+
+    if (pastEntries.isEmpty()) return PredictedFields()
+
+    // Predict category from history
+    val likelyCategory = pastEntries
+        .groupBy { it.category }
+        .maxByOrNull { it.value.size }?.key
+
+    // Predict typical amount range
+    val avgAmount = pastEntries.map { it.amount }.average()
+
+    return PredictedFields(
+        category = likelyCategory,
+        estimatedAmount = avgAmount,
+        paymentMethod = pastEntries.first().paymentMethod
+    )
+}
+
+// When user types "Starbucks" in the merchant field:
+// Category auto-selects "Coffee/Dining"
+// Amount hint shows "Usually ~$5.50"
+// Payment method pre-selects "Corporate Card"</code></pre>
+
+    <p>This doesn't even require AI APIs &mdash; it's pattern matching on local history. Simple, instant, and incredibly useful for repeat expenses.</p>
+
+    <h2>AI-Powered Input Validation</h2>
+
+    <p>Traditional validation: "Does this match a regex?" AI validation: "Does this make sense?"</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Validation Type</th>
+          <th>Traditional</th>
+          <th>AI-Powered</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Email</td>
+          <td>Regex pattern match</td>
+          <td>Pattern + "Did you mean john@gmail.com?" (typo in domain)</td>
+        </tr>
+        <tr>
+          <td>Address</td>
+          <td>Required fields filled</td>
+          <td>Geocoding check: "Is this a real address?"</td>
+        </tr>
+        <tr>
+          <td>Phone number</td>
+          <td>Digit count check</td>
+          <td>Format detection: "Looks like a US number, formatting as (555) 123-4567"</td>
+        </tr>
+        <tr>
+          <td>Description</td>
+          <td>Min/max length</td>
+          <td>Content moderation: "Is this appropriate for public display?"</td>
+        </tr>
+        <tr>
+          <td>Amount</td>
+          <td>Is it a number?</td>
+          <td>"This is 10x your usual spend at this merchant. Confirm?"</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <p><strong>AI validation supplements, never replaces.</strong> Always keep your traditional validation (regex, required fields, type checks) as the baseline. AI validation adds a layer of intelligence on top. If the AI is wrong about a "suspicious" amount, the user can still override it. If your regex is wrong, nothing can save you.</p>
+    </div>
+
+    <h2>Handling Extraction Errors</h2>
+
+    <p>AI will misread text and extract wrong values. The UX must make correction effortless.</p>
+
+    <h3>The Confidence-Based UI</h3>
+
+<pre><code>@Composable
+fun SmartTextField(
+    value: String, onValueChange: (String) -&gt; Unit,
+    label: String, confidence: String?,
+    prefix: String? = null
+) {
+    val borderColor = when (confidence) {
+        "high" -&gt; MaterialTheme.colorScheme.primary          // blue
+        "medium" -&gt; Color(0xFFD97706)                        // amber
+        "low" -&gt; MaterialTheme.colorScheme.error              // red
+        else -&gt; MaterialTheme.colorScheme.outline             // default
+    }
+
+    OutlinedTextField(
+        value = value, onValueChange = onValueChange,
+        label = { Text(label) },
+        prefix = prefix?.let { { Text(it) } },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = borderColor,
+            unfocusedBorderColor = borderColor.copy(alpha = 0.6f)
+        ),
+        trailingIcon = {
+            if (confidence == "low") {
+                Icon(Icons.Default.Warning, "Low confidence",
+                    tint = MaterialTheme.colorScheme.error)
+            } else if (confidence != null) {
+                Icon(Icons.Outlined.AutoAwesome, "AI filled",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp))
+            }
+        }
+    )
+}</code></pre>
+
+    <p>High-confidence fields get a subtle sparkle icon. Low-confidence fields get a warning icon and an amber/red border. The user's eye is naturally drawn to the fields that need attention, while confident fields can be quickly scanned and accepted.</p>
+
+    <h2>Form Field Suggestions</h2>
+
+    <p>As the user fills one field, proactively suggest values for related fields:</p>
+
+    <div class="highlight-box">
+      <h3>Smart Suggestion Chains</h3>
+      <p><strong>Expense tracking:</strong> Merchant "Starbucks" &rarr; auto-suggest Category "Coffee/Dining" + Payment "Corporate Card"</p>
+      <p><strong>Calendar event:</strong> Title "Team standup" &rarr; auto-suggest Time "9:00 AM" + Duration "15 min" + Recurring "Daily"</p>
+      <p><strong>Contact form:</strong> Company "Google" &rarr; auto-suggest Domain "@google.com" + Address "1600 Amphitheatre Parkway"</p>
+      <p>Each suggestion appears as a tappable chip below the next field. Tap to accept, ignore to type your own value. Zero friction when the prediction is right.</p>
+    </div>
+
+    <h2>Offline Form Intelligence</h2>
+
+    <p>Expense tracking and document scanning often happen where there's no signal &mdash; on a plane, in a basement parking garage, or at a conference with overwhelmed Wi-Fi.</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>ML Kit OCR:</strong> Runs entirely on-device. Always available</li>
+      <li class="checked"><strong>Local prediction models:</strong> Cross-field suggestions from history work offline</li>
+      <li class="checked"><strong>Queue LLM parsing:</strong> If cloud parsing isn't available, save the photo and raw OCR text. Parse when back online</li>
+      <li class="checked"><strong>Basic local extraction:</strong> Use regex for common patterns (dates, currency amounts, email addresses) as an offline fallback for LLM parsing</li>
+    </ul>
+
+<pre><code>suspend fun extractReceiptData(bitmap: Bitmap): ReceiptData {
+    val rawText = extractText(bitmap)  // ML Kit, always works
+
+    return if (isOnline()) {
+        parseReceiptWithLlm(rawText)   // best quality
+    } else {
+        parseReceiptLocally(rawText)   // regex fallback
+    }
+}
+
+fun parseReceiptLocally(text: String): ReceiptData {
+    val datePattern = Regex("""\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}""")
+    val amountPattern = Regex("""\$?\d+\.\d{2}""")
+
+    return ReceiptData(
+        date = datePattern.find(text)?.value,
+        total = amountPattern.findAll(text).lastOrNull()?.value,  // last amount is usually total
+        merchant = text.lines().firstOrNull()?.take(40),          // first line is often merchant
+        confidence = mapOf("merchant" to "low", "date" to "medium", "total" to "medium")
+    )
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The offline experience should feel seamless.</strong> Don't show "AI unavailable" &mdash; just silently use the local fallback. The form fills with lower accuracy, but the user can correct the fields. When back online, silently re-process queued items for better accuracy and update the entries.</p>
+    </div>
+
+    <h2>Data Privacy for Extracted Data</h2>
+
+    <p>Receipts and documents contain sensitive information: financial data, personal contacts, business information. Handle with care:</p>
+
+    <ul>
+      <li><strong>Process on-device when possible:</strong> ML Kit OCR never sends data off-device. Use it as the first step</li>
+      <li><strong>Minimize cloud data:</strong> Send the extracted <em>text</em> to the LLM, not the original <em>image</em>. Text is smaller and contains less incidental data (no background, no other documents visible)</li>
+      <li><strong>Encrypt local storage:</strong> Expense data stored in Room should use <code>SQLCipher</code> or Android's <code>EncryptedSharedPreferences</code> for sensitive fields</li>
+      <li><strong>Clear data retention policy:</strong> Tell users how long you keep extracted data, and actually delete it when the time comes</li>
+    </ul>
+
+    <h2>Your Turn: Build an Expense Capture Feature</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Receipt to Expense</h3>
+      <p>Build an "expense capture" feature that turns a receipt photo into a database entry. Here's your plan:</p>
+      <ol>
+        <li><strong>Photo input:</strong> Camera capture or gallery picker. Preprocess the image (resize, fix orientation)</li>
+        <li><strong>OCR extraction:</strong> ML Kit Text Recognition to get raw text from the receipt</li>
+        <li><strong>LLM parsing:</strong> Send raw text to Gemini Flash with a structured prompt that returns JSON with merchant, date, total, and line items. Include a confidence field for each</li>
+        <li><strong>Editable form:</strong> Display extracted data in <code>SmartTextField</code> components with confidence-based coloring (blue for high, amber for medium, red for low)</li>
+        <li><strong>Persistence:</strong> Save to Room database with the original photo URI, raw OCR text, and structured data</li>
+        <li><strong>Cross-field suggestions:</strong> When the merchant matches a previous expense, auto-suggest the category</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add an offline fallback that uses regex extraction for dates and amounts when the cloud LLM is unavailable. Queue the receipt for re-processing when back online.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've built smart forms that extract data from the real world &mdash; photos, natural language, and cross-field prediction. Users type less, make fewer mistakes, and complete tasks faster.</p>
+
+    <p>But how do you know if your AI features actually <em>work</em>? Are they helping users or frustrating them? Are they worth the API cost? <strong>Chapter 11: A/B Testing &amp; Measuring AI Features</strong> gives you the measurement toolkit &mdash; success metrics, A/B testing, prompt experiments, and cost monitoring to make data-driven decisions about your AI features.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="09-notifications-recommendations.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Intelligent Notifications &amp; Recommendations</span>
+        </a>
+        <a href="11-ab-testing-metrics.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">A/B Testing &amp; Measuring AI Features</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

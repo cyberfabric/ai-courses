@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: The AI Code Reviewer | From Zero to App With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏭</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">From Zero to App With AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-developer.html">&larr; Prev</a>
+      <a href="10-security-and-qa.html">Next &rarr;</a>
+      <a href="maps/09-code-reviewer-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>The AI Code Reviewer: Quality at Machine Speed</h1>
+    <p class="subtitle">Build the Reviewer skill that checks every Developer output against architecture rules</p>
+  </header>
+
+  <main>
+
+    <!-- ===== Opening ===== -->
+    <section>
+      <h2>The Quality Gate</h2>
+
+      <p>
+        The Developer finished Task 1 &mdash; four domain entity files, four test files,
+        a completion report claiming all acceptance criteria are met. Do you trust it?
+      </p>
+
+      <p>
+        You shouldn't. The Developer follows rules mechanically, but <strong>it can't judge its
+        own work</strong>. It can miss a naming drift it doesn't notice, forget a rule it loaded
+        but didn't apply, or produce code that compiles but violates the dependency graph. The
+        Developer's "it compiles and tests pass" is necessary but not sufficient.
+      </p>
+
+      <p>
+        The Code Reviewer is the pipeline's quality gate &mdash; a <strong>separate AI invocation</strong>
+        that loads the same architecture rules, reads the Developer's output, and produces
+        structured findings with rule IDs, severity levels, and specific fix suggestions.
+        It's the automated first pass before human eyes see anything.
+      </p>
+
+      <p>
+        For more on the human side of reviewing AI-generated code, see
+        <a href="../../AI-CodeReview/chapters/index.html">Reviewing AI Code For Dummies</a>.
+        This chapter automates the first pass.
+      </p>
+    </section>
+
+    <!-- ===== Role Card ===== -->
+    <section>
+      <h2>The Code Reviewer Role</h2>
+
+      <div class="role-card">
+        <div class="role-name">Code Reviewer</div>
+        <div class="role-input">
+          <strong>Input:</strong> Developer output (source files + test files),
+          rules.md, architecture.md, task spec, acceptance criteria
+        </div>
+        <div class="role-output">
+          <strong>Output:</strong> Structured review with findings (rule ID + severity + location + explanation + fix),
+          overall verdict (PASS / REVISE / REJECT), summary of issues found
+        </div>
+        <div class="role-output">
+          <strong>Model:</strong> Opus 4.7 &mdash; judgment calls require deep reasoning about rule intent vs. literal compliance
+        </div>
+      </div>
+
+      <p>
+        Notice: the Reviewer runs on <strong>Opus 4.7</strong>, not Sonnet. Writing code
+        mechanically is Sonnet's strength. Judging whether code <em>correctly</em> follows
+        rules &mdash; catching subtle violations, weighing severity, deciding pass vs. reject
+        &mdash; requires the deeper reasoning Opus provides. The 2026 economic argument has
+        flipped: with Opus 4.7 at $5/$25 per MTok and Sonnet 4.6 at $3/$15, an Opus review
+        is now roughly at cost parity with a Sonnet review (~$0.10/task once Opus 4.7's
+        ~35% larger tokenizer is factored in). The decision is purely about quality,
+        not cost &mdash; and on judgment-heavy review work, Opus 4.7 wins.
+      </p>
+    </section>
+
+    <!-- ===== Why Separate Roles ===== -->
+    <section>
+      <h2>Why Not Let the Developer Self-Review?</h2>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h3>Self-Review (Same Context)</h3>
+          <ul>
+            <li>Same biases that wrote the code judge the code</li>
+            <li>"Verify" step at the end of the 5-step process</li>
+            <li>Catches ~60% of issues at best</li>
+            <li>Can't detect its own blind spots</li>
+            <li>No structured output &mdash; just a checklist</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h3>Separate Reviewer (Fresh Context)</h3>
+          <ul>
+            <li>Fresh context &mdash; no anchoring to the code it wrote</li>
+            <li>Loads rules as primary context, code as secondary</li>
+            <li>Catches ~90% of rule violations</li>
+            <li>Structured findings with severity and fix suggestions</li>
+            <li>Clear verdict: PASS, REVISE, or REJECT</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The fresh-eyes principle:</strong> The Developer's "Verify" step (Step 5 in
+        its process) is like a programmer re-reading their own PR. The Code Reviewer is like
+        a teammate reviewing it. Fresh context catches what self-review misses.
+      </div>
+    </section>
+
+    <!-- ===== The Skill File ===== -->
+    <section>
+      <h2>The Code Reviewer Skill</h2>
+
+      <p>
+        The complete skill file lives at <code>.claude/commands/review-code.md</code>.
+        Here's the full implementation:
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">Skill File &mdash; Code Reviewer</span>
+<pre><code># Identity
+You are the Code Reviewer for the AI Factory pipeline.
+Check Developer output against architecture rules and produce
+structured findings. Model: Opus.
+
+# Input
+1. rules.md — architecture rules with ✅/❌ examples
+2. Task spec dispatched to the Developer
+3. All source + test files the Developer created
+4. architecture.md (summary) for structural context
+
+# Review Process
+1. LOAD rules.md. Every rule is a checklist item.
+2. READ each source file — check naming, imports, layer
+   boundaries, patterns (sealed UiState, @Inject, Result&lt;T&gt;),
+   and completeness (no TODOs or placeholders).
+3. READ each test file — check coverage (test per public class),
+   assertions (real, not "does not throw"), naming.
+4. CHECK acceptance criteria from task spec — all must be met.
+5. PRODUCE structured findings (see Output Format).
+
+# Severity Levels
+- MUST: Breaks pipeline or other modules (wrong package,
+  missing @Inject, circular dependency).
+- SHOULD: Degrades quality but won't block (naming drift,
+  missing edge case test).
+- PREFER: Style suggestion (parameter ordering, import order).
+
+# Verdicts
+- PASS: 0 MUST, ≤2 SHOULD. Ship it.
+- REVISE: Any MUST OR >2 SHOULD. Send back to Developer.
+- REJECT: Fundamental structural problem. Escalate.
+
+# Output Format
+## Review: Task [N] — [Title]
+### Verdict: [PASS | REVISE | REJECT]
+### Findings
+- **[MUST|SHOULD|PREFER]-[NNN]**: [Summary]
+  - Rule: RULE-NNN | File: path.kt | Line: N
+  - Issue: [What's wrong]
+  - Fix: [Specific change]
+### Summary
+- Files/Tests reviewed: N/N
+- Findings: N MUST, N SHOULD, N PREFER
+- Acceptance criteria: N/N met</code></pre>
+      </div>
+    </section>
+
+    <!-- ===== Structured Review Output ===== -->
+    <section>
+      <h2>Structured Review Output</h2>
+
+      <p>
+        The Reviewer doesn't write prose. It produces <strong>machine-parseable findings</strong>
+        that the orchestrator can act on. Each finding has five fields:
+      </p>
+
+      <p>
+        Each finding has five fields: <strong>rule ID</strong> (which RULE-NNN was violated),
+        <strong>severity</strong> (MUST/SHOULD/PREFER), <strong>location</strong> (file + line),
+        <strong>issue</strong> (what's wrong), and <strong>fix</strong> (specific change).
+        When findings go back to the Developer, each one is a mini task spec &mdash; no vague
+        "improve error handling."
+      </p>
+
+      <div class="highlight-box">
+        <h4>The Severity Math</h4>
+        <p>
+          <strong>PASS</strong> = 0 MUST + at most 2 SHOULD.<br>
+          <strong>REVISE</strong> = any MUST, or 3+ SHOULD.<br>
+          <strong>REJECT</strong> = structural failure (wrong module, wrong pattern entirely).<br>
+          PREFER findings are logged but never affect the verdict.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===== Live Review Example ===== -->
+    <section>
+      <h2>Live Review: Task 1 Domain Entities</h2>
+
+      <p>
+        The Developer generated four domain entities (<code>Recipe</code>, <code>Ingredient</code>,
+        <code>Step</code>, <code>RecipeBook</code>) with four test files. Let's run the Reviewer.
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-badge">Review Output &mdash; Task 1</span>
+<pre><code>## Review: Task 1 — Domain Entities
+### Verdict: REVISE
+
+### Findings
+- **MUST-001**: Recipe uses java.util.UUID instead of String for ID
+  - Rule: RULE-001 | File: core/domain/model/Recipe.kt | Line: 8
+  - Issue: java.util.UUID creates platform coupling. Domain
+    entities must use only Kotlin stdlib types.
+  - Fix: Change `val id: UUID` to `val id: String`
+
+- **SHOULD-001**: Ingredient.quantity uses Double (precision issues)
+  - Rule: RULE-001 | File: core/domain/model/Ingredient.kt | Line: 5
+  - Issue: 0.1 + 0.2 ≠ 0.3. Kitchen measurements need exact values.
+  - Fix: Use `val quantity: String` with a display formatter.
+
+- **SHOULD-002**: RecipeBook allows empty name (missing validation)
+  - Rule: RULE-007 | File: core/domain/model/RecipeBook.kt | Line: 3-7
+  - Issue: copy() can create invalid instances.
+  - Fix: Add init { require(name.isNotBlank()) }
+
+- **PREFER-001**: Test names use camelCase instead of backtick format
+  - Rule: RULE-004 | File: core/domain/model/RecipeTest.kt | Line: 12
+  - Issue: `testRecipeCreation()` doesn't describe the scenario.
+  - Fix: Use backtick names describing behavior.
+
+### Summary
+- Files/Tests reviewed: 4/4
+- Findings: 1 MUST, 2 SHOULD, 1 PREFER
+- Acceptance criteria: 3/4 met</code></pre>
+      </div>
+
+      <p>
+        Verdict: <strong>REVISE</strong>. One MUST finding (UUID import) plus two SHOULD findings
+        triggers the review-fix loop.
+      </p>
+    </section>
+
+    <!-- ===== The Review-Fix Loop ===== -->
+    <section>
+      <h2>The Review-Fix Loop</h2>
+
+      <p>
+        When the Reviewer returns REVISE, the orchestrator doesn't just re-run the Developer
+        from scratch. It re-dispatches with <strong>targeted context</strong>: the original task spec
+        plus the review findings.
+      </p>
+
+      <div class="pipeline-stage">
+        <div class="stage">Developer<br><small>generates code</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage">Reviewer<br><small>checks rules</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage highlight">REVISE?<br><small>findings</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage">Developer<br><small>fixes issues</small></div>
+        <span class="arrow">&rarr;</span>
+        <div class="stage">Reviewer<br><small>re-checks</small></div>
+      </div>
+
+      <div class="orchestration-trace">
+        <div class="trace-header">Review-Fix Loop &mdash; Task 1</div>
+        <div class="trace-step">
+          <span class="trace-role">Developer</span>
+          <span class="trace-action">Generated 4 source + 4 test files (compiles ✅)</span>
+          <span class="trace-cost">~$0.10 &bull; 2 min</span>
+        </div>
+        <div class="trace-step">
+          <span class="trace-role">Reviewer</span>
+          <span class="trace-action">REVISE: 1 MUST, 2 SHOULD, 1 PREFER</span>
+          <span class="trace-cost">~$0.10 &bull; 1 min</span>
+        </div>
+        <div class="trace-step">
+          <span class="trace-role">Developer</span>
+          <span class="trace-action">Fixed UUID → String, added init block, renamed tests</span>
+          <span class="trace-cost">~$0.10 &bull; 1 min</span>
+        </div>
+        <div class="trace-step">
+          <span class="trace-role">Reviewer</span>
+          <span class="trace-action">PASS: 0 MUST, 0 SHOULD, 0 PREFER ✅</span>
+          <span class="trace-cost">~$0.10 &bull; 1 min</span>
+        </div>
+        <div class="trace-step trace-total">
+          <span class="trace-role">Total</span>
+          <span class="trace-action">Task 1 complete (1 review-fix cycle)</span>
+          <span class="trace-cost">~$0.40 &bull; ~5 min</span>
+        </div>
+      </div>
+
+      <div class="warning-box">
+        <strong>Max 2 review-fix cycles.</strong> If the Developer can't satisfy the Reviewer
+        after two rounds, the orchestrator escalates to the human. After 2 cycles, the problem
+        is likely a bad task spec or a rule conflict &mdash; not something the Developer can fix
+        by retrying.
+      </div>
+    </section>
+
+    <!-- ===== When to Accept ===== -->
+    <section>
+      <h2>The Acceptance Threshold</h2>
+
+      <p>
+        Not every finding needs fixing before the task can advance. The Reviewer uses a
+        <strong>graduated acceptance model</strong>:
+      </p>
+
+      <table class="comparison" style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Verdict</th>
+            <th>Criteria</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>PASS</strong></td>
+            <td>0 MUST, &le;2 SHOULD</td>
+            <td>Advance to next task. Log PREFER findings for future reference.</td>
+          </tr>
+          <tr>
+            <td><strong>REVISE</strong></td>
+            <td>Any MUST, or 3+ SHOULD</td>
+            <td>Re-dispatch Developer with findings. Developer fixes and resubmits.</td>
+          </tr>
+          <tr>
+            <td><strong>REJECT</strong></td>
+            <td>Structural failure</td>
+            <td>Don't re-dispatch. The task spec or architecture needs revision. Escalate.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="tip-box">
+        <strong>PREFER findings accumulate.</strong> They don't affect any single verdict, but if
+        the same PREFER finding appears across 5+ tasks, promote it to a SHOULD in the rules.
+        That's a signal the Developer needs a stronger constraint.
+      </div>
+    </section>
+
+    <!-- ===== Common Findings ===== -->
+    <section>
+      <h2>The Top 10 Findings</h2>
+
+      <p>
+        After reviewing 20 tasks for RecipeVault, certain findings appear repeatedly. Knowing
+        them in advance helps you write better rules and task specs:
+      </p>
+
+      <div class="checklist">
+        <h4>MUST Severity (always)</h4>
+        <ul>
+          <li><strong>#1</strong> Wrong dependency direction &mdash; feature imports another feature</li>
+          <li><strong>#2</strong> Missing <code>@Inject</code> annotation on constructor</li>
+          <li><strong>#3</strong> Domain entity with framework import (Room, Hilt)</li>
+          <li><strong>#4</strong> Repository returning raw type instead of <code>Result&lt;T&gt;</code></li>
+          <li><strong>#5</strong> ViewModel exposing <code>MutableStateFlow</code> (should be <code>StateFlow</code>)</li>
+        </ul>
+        <h4>SHOULD Severity (promoted to MUST if recurring)</h4>
+        <ul>
+          <li><strong>#6</strong> Naming drift &mdash; RecipeRepo vs RecipeRepository</li>
+          <li><strong>#7</strong> Test with no assertions &mdash; just "does not throw"</li>
+          <li><strong>#8</strong> Missing sealed interface for UiState</li>
+          <li><strong>#9</strong> Wildcard imports instead of explicit</li>
+          <li><strong>#10</strong> Missing error state in sealed UiState hierarchy</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ===== Risk-Based Review Routing ===== -->
+    <section>
+      <h2>Risk-Based Review Routing</h2>
+
+      <p>
+        Not every task needs the full Reviewer treatment. The implementation plan assigns
+        a risk level to each task, and the orchestrator uses it to decide the review path:
+      </p>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">Low Risk</span>
+          <div class="step-content">
+            <strong>Domain entities, test fakes, Room entities, DAOs.</strong>
+            Skip the Reviewer &mdash; go straight to QA. These tasks follow simple patterns
+            where the Developer's self-verification (Step 5) is sufficient. Saves ~$0.10
+            per task and a couple of minutes of wall-clock time.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">Medium Risk</span>
+          <div class="step-content">
+            <strong>ViewModels, repositories, Compose screens.</strong>
+            Standard review loop. Reviewer checks all rules, returns structured findings.
+            Most tasks (12 of 20) fall in this category.
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">High Risk</span>
+          <div class="step-content">
+            <strong>AppDatabase, navigation graph, Hilt wiring, integration.</strong>
+            Reviewer + Security check (Chapter 10). Cross-module wiring has the highest
+            failure rate. Plan for at least one review-fix cycle.
+          </div>
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Review Cost Budget (Opus 4.7)</h4>
+        <p>
+          Low risk (4 tasks &times; $0): <strong>$0.00</strong><br>
+          Medium risk (12 tasks &times; $0.10): <strong>$1.20</strong><br>
+          High risk (4 tasks &times; $0.20): <strong>$0.80</strong><br>
+          Review-fix retries (~6 &times; $0.15): <strong>$0.90</strong><br>
+          <strong>Total review budget: ~$2.90</strong> (about 20&ndash;25% of the pipeline cost)
+        </p>
+        <p style="margin-top: 0.5em; font-size: 0.92em; opacity: 0.85;">
+          Recomputed under Opus 4.7's $5/$25 per MTok pricing (down 3&times; from the
+          Opus 4/4.1 era). The old budget of ~$7.10 was based on the older Opus rate card.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===== Review Across 20 Tasks ===== -->
+    <section>
+      <h2>RecipeVault: Review Stats</h2>
+
+      <p>
+        The Reviewer cross-references four sources: architecture rules (~70% of findings),
+        task acceptance criteria (~15%), dependency consistency (~10%), and code completeness (~5%).
+        Across all 20 RecipeVault tasks:
+      </p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">16</div>
+          <div class="stat-label">Tasks reviewed (4 low-risk skipped)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">11</div>
+          <div class="stat-label">Passed on first review</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">5</div>
+          <div class="stat-label">Required one review-fix cycle</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">23</div>
+          <div class="stat-label">Total MUST findings caught</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">$2.90</div>
+          <div class="stat-label">Total review cost (~20&ndash;25% of pipeline, Opus 4.7)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Rejected (no structural failures)</div>
+        </div>
+      </div>
+
+      <p>
+        Under Opus 4.7 pricing, the review step adds ~20&ndash;25% to the pipeline cost
+        (down from ~40% on the older Opus rate card) but catches issues that cascade
+        through later tasks. A MUST finding in Task 2 that goes undetected breaks
+        Tasks 5&ndash;16 downstream. The review cost pays for itself many times over &mdash;
+        and the price drop made that argument easier to make.
+      </p>
+    </section>
+
+    <!-- ===== Reviewer vs Human ===== -->
+    <section>
+      <h2>AI Reviewer + Human = Full Coverage</h2>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h3>AI Catches (Mechanical)</h3>
+          <ul>
+            <li>Rule violations, naming drift</li>
+            <li>Missing test coverage and annotations</li>
+            <li>Dependency direction violations</li>
+            <li>Pattern compliance (sealed UiState, Result&lt;T&gt;)</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h3>Human Catches (Judgment)</h3>
+          <ul>
+            <li>Business logic correctness</li>
+            <li>Performance and UX implications</li>
+            <li>Edge cases the spec missed</li>
+            <li>"This works but there's a better way"</li>
+          </ul>
+        </div>
+      </div>
+
+      <p>
+        The AI handles <strong>mechanical</strong> checks, the human handles <strong>judgment</strong>.
+        The human only reviews code that already passes all rule checks &mdash; minimal time, maximum impact.
+      </p>
+    </section>
+
+    <!-- ===== Exercise ===== -->
+    <section>
+      <h2>Exercise: Customize the Reviewer Skill</h2>
+
+      <div class="exercise-box">
+        <h4>Build Your Own Review Checklist</h4>
+        <ol>
+          <li>
+            Copy the <code>review-code.md</code> skill file into your project's
+            <code>.claude/commands/</code> directory.
+          </li>
+          <li>
+            Add a domain-specific check with ✅/❌ examples: decimal precision for money,
+            timezone handling for dates, input sanitization for user-facing fields.
+          </li>
+          <li>
+            Customize severity: define what MUST vs. SHOULD means for your domain.
+            In a healthcare app, missing validation might always be MUST.
+          </li>
+          <li>
+            Run the Reviewer against code from a Developer dispatch. Compare AI findings
+            to what you'd catch manually. Tune the acceptance threshold if too lenient or strict.
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== The Code Reviewer Output Contract ===== -->
+    <section>
+      <h2>The Code Reviewer Output Contract</h2>
+
+      <div class="checklist">
+        <ul>
+          <li>Every architecture rule checked against every file</li>
+          <li>Every acceptance criterion verified (met or not met)</li>
+          <li>Every finding has: rule ID, severity, file, line, issue, fix</li>
+          <li>Verdict is one of: PASS, REVISE, REJECT</li>
+          <li>Summary includes counts of findings by severity</li>
+          <li>PREFER findings logged but don't affect verdict</li>
+          <li>No false positives &mdash; every finding cites a specific rule</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ===== What's Next ===== -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>
+        The Code Reviewer catches rule violations and pattern issues. But it doesn't check
+        for security vulnerabilities, and it doesn't generate comprehensive test suites.
+        In <a href="10-security-and-qa.html">Chapter 10: Security Review and QA Engineering</a>,
+        you'll build two more roles &mdash; the Security Reviewer (OWASP checks, dependency
+        audit, secret detection) and the QA Engineer (test generation, edge case discovery,
+        coverage measurement) &mdash; completing the pipeline's quality stack.
+      </p>
+    </section>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="08-developer.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">The AI Developer: Writing Code at Scale</span>
+    </a>
+    <a href="10-security-and-qa.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Security Review and QA Engineering</span>
+    </a>
+  </nav>
+
+  <footer class="site-footer">
+    <p>From Zero to App With AI For Dummies &copy; 2026</p>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

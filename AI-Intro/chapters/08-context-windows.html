@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Context Windows &amp; How Conversations Work | How AI Actually Works</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">How AI Actually Works</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-temperature-and-friends.html">&larr; Prev</a>
+      <a href="09-embeddings.html">Next &rarr;</a>
+      <a href="maps/08-context-windows-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Context Windows &amp; How Conversations Work</h1>
+    <p class="chapter-subtitle">System prompts, chat history, the memory illusion, and why AI &ldquo;forgets&rdquo;</p>
+  </header>
+
+  <main>
+
+    <p>You've been having "conversations" with ChatGPT, Claude, and other AI tools for a while now. You ask a question, get an answer, ask a follow-up, and the model references things you said earlier. It follows up on previous messages. It seems to track the thread of discussion. It <em>feels</em> like a conversation with someone who's paying attention.</p>
+
+    <p>But here's the uncomfortable truth we teased at the end of Chapter 7:</p>
+
+    <div class="highlight-box">
+      <p>AI has <strong>no memory</strong> between requests. None. Zero. Every single response is generated from scratch, as if the model has never seen you before.</p>
+      <p>What you experience as a "conversation" is actually the application sending the <strong>entire conversation history</strong> with every single message.</p>
+    </div>
+
+    <p>This chapter explains how the illusion works, what context windows are, why conversations "break" after a while, and why understanding this will make you significantly better at using AI tools.</p>
+
+    <!-- ============================================ -->
+    <h2>The Fundamental Truth: No Memory</h2>
+    <!-- ============================================ -->
+
+    <p>Let's be absolutely clear about this: when you send message #5 in a ChatGPT conversation, the model does not "remember" messages #1 through #4. It has no persistent state between requests. No internal notebook. No memory bank. No hidden database of past conversations.</p>
+
+    <p>The model doesn't even know it's in a "conversation." From its perspective, every request is a brand new, standalone prompt that happens to contain some text formatted like a conversation.</p>
+
+    <p>So how does it work? The application (ChatGPT, Claude, Cursor) does something clever: it takes your <em>entire</em> conversation history &mdash; every message you've sent and every response the model has given &mdash; and sends it all as a single, giant prompt with your new message appended at the end.</p>
+
+    <div class="analogy-box">
+      <h4>Analogy: The Amnesia Friend</h4>
+      <p>Imagine you have a friend with complete amnesia. Every time you talk to them, they've forgotten everything. But you've been keeping a journal of all your previous conversations.</p>
+      <p>Each time you want to talk, you hand them the entire journal and say "Read this first, then answer my new question." They read the journal, understand the full context, and give you a great response. Then they immediately forget everything again.</p>
+      <p>Next time you talk, you hand them the journal again &mdash; now with the previous response added &mdash; plus your new question. They read the whole thing from scratch, respond, forget.</p>
+      <p>That's <em>exactly</em> how AI conversations work. The "journal" is the conversation history. The "amnesia" is the model's lack of persistent memory.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Conversation Stack</h2>
+    <!-- ============================================ -->
+
+    <p>Every time you send a message, the application constructs a single prompt that looks something like this:</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">What actually gets sent to the model (message #3 of a conversation)</p>
+      <div class="prompt-text">[System] You are a helpful assistant...
+
+[User] What's the best way to sort an array in Python?
+
+[Assistant] There are several ways to sort arrays
+in Python. The most common approach is...
+
+[User] What about if I need to sort by a custom key?
+
+[Assistant] For custom sorting, you can use the
+key parameter in sorted() or .sort()...
+
+[User] Can you show me an example with a list of
+dictionaries?</div>
+      <p class="prompt-explanation">The entire conversation &mdash; system prompt, all previous messages and responses, and your latest message &mdash; is sent as one prompt. The model processes everything from scratch each time.</p>
+    </div>
+
+    <p>This stack has three layers:</p>
+
+    <h3>1. System Prompt: The Hidden Instructions</h3>
+
+    <p>The system prompt is a set of instructions that comes before everything else. You usually never see it. It tells the model how to behave: "You are a helpful assistant," "Always respond in JSON," "You are an expert Python developer," etc.</p>
+
+    <p>In tools like Claude Code, the system prompt includes detailed instructions about how to interact with your codebase, what tools are available, and how to format responses. When you create a CLAUDE.md file in your project, its contents get included in this system prompt. That's why CLAUDE.md works &mdash; it's literally part of the prompt the model sees every time.</p>
+
+    <p>System prompts can be quite long &mdash; sometimes thousands of tokens. This is context window space that you "pay" before you've even typed your first message. It's usually worth it because good system instructions dramatically improve response quality, but it's important to know they're there.</p>
+
+    <h3>2. Conversation History: The Replay</h3>
+
+    <p>Every previous message and response is replayed in order. The model reads through all of it, building up context through its attention mechanism (Chapter 5). By the time it reaches your latest message, it has "attended to" the entire conversation.</p>
+
+    <p>This means the model re-reads your first message every single time. Message #1 gets processed when you send message #2, again when you send #3, again for #4, and so on. It's wasteful in a sense &mdash; but it's the only way a stateless system can maintain the illusion of continuity.</p>
+
+    <h3>3. Your Latest Message: The Actual Question</h3>
+
+    <p>Your new message comes last. The model generates a response to this, informed by everything above it in the stack. The position of your message at the end is important &mdash; it means the model has maximum context when it starts generating the response.</p>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>This architecture explains why the first message in a conversation feels just as fast as the fifth &mdash; message #5 isn't built on top of message #4. It's a complete re-read of everything from scratch. The model is doing more work (reading more tokens), but it's the same process every time.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Context Window: How Much the Model Can See</h2>
+    <!-- ============================================ -->
+
+    <p>The <strong>context window</strong> is the maximum number of tokens the model can process in a single request &mdash; the combined total of system prompt + conversation history + your message + the response.</p>
+
+    <p>Context windows have grown dramatically:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">4K</div>
+        <div class="stat-label">GPT-3.5 (2022)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">128K</div>
+        <div class="stat-label">GPT-4 Turbo (2024)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">200K</div>
+        <div class="stat-label">Claude 3.5 (2024)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">1M</div>
+        <div class="stat-label">Gemini 1.5 / Claude (2025)</div>
+      </div>
+    </div>
+
+    <p>In Chapter 4, we discussed that 1 token &asymp; 0.75 words. So:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Context Window</th>
+          <th>Approximate Words</th>
+          <th>Roughly Equivalent To</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>4K tokens</td>
+          <td>~3,000 words</td>
+          <td>A few pages</td>
+        </tr>
+        <tr>
+          <td>32K tokens</td>
+          <td>~24,000 words</td>
+          <td>A long article or report</td>
+        </tr>
+        <tr>
+          <td>128K tokens</td>
+          <td>~96,000 words</td>
+          <td>A short novel</td>
+        </tr>
+        <tr>
+          <td>1M tokens</td>
+          <td>~750,000 words</td>
+          <td>Several novels, or a large codebase</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============================================ -->
+    <h2>What Happens When You Hit the Limit</h2>
+    <!-- ============================================ -->
+
+    <p>As your conversation grows longer, the total token count (system prompt + history + new message + response) approaches the context window limit. When it gets too long, something has to give. Different tools handle this differently:</p>
+
+    <ul>
+      <li><strong>Truncation:</strong> The oldest messages get dropped from the history. The model literally can't see them anymore. This is the most common approach and usually happens silently &mdash; you won't get a warning.</li>
+      <li><strong>Summarization:</strong> Older parts of the conversation are summarized into a shorter version, preserving key points while reducing token count. More sophisticated but harder to implement well.</li>
+      <li><strong>Sliding window:</strong> Keep only the most recent N messages. Simple and predictable, but can lose important early context.</li>
+      <li><strong>Error:</strong> Some API implementations simply refuse the request if it exceeds the limit, returning an error that you need to handle.</li>
+    </ul>
+
+    <div class="aha-box">
+      <h4>Aha Moment</h4>
+      <p>This is why AI "forgets" things in long conversations. It's not getting confused or losing track. The old messages are literally <strong>being removed from the prompt</strong>. The model can't reference what it can't see.</p>
+      <p>When you have a 50-message conversation and the model seems to have "forgotten" what you discussed at the beginning, it probably has &mdash; because those early messages were truncated to fit within the context window. It's not a bug. It's a space constraint.</p>
+    </div>
+
+    <p>This is also why starting a new conversation sometimes helps. A fresh conversation has no history consuming your context window &mdash; the model can dedicate more capacity to your actual question.</p>
+
+    <p>And this explains a common frustration: you're debugging something with an AI, and after many back-and-forth messages, the model starts making contradictory suggestions or forgetting earlier findings. It's not getting "confused" &mdash; it's losing context. The earliest (and often most important) messages are being dropped as the conversation outgrows the window.</p>
+
+    <div class="tip-box">
+      <h4>Practical Advice</h4>
+      <p>If a long conversation starts going sideways, start a new one. Summarize the key findings and context from the old conversation in your first message. This gives the model a fresh context window with the most important information front and center, instead of buried under dozens of messages.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Context Window Is RAM, Not a Hard Drive</h2>
+    <!-- ============================================ -->
+
+    <p>Here's the best mental model for context windows:</p>
+
+    <div class="analogy-box">
+      <h4>Analogy: RAM vs Hard Drive</h4>
+      <p>Think of the context window as <strong>RAM</strong>, not a hard drive. It's the model's working memory &mdash; what it can actively think about right now. And just like RAM, it has a fixed size.</p>
+      <p>When your computer runs out of RAM, it starts swapping things to disk (slow) or killing processes. When an AI conversation runs out of context window, it starts dropping old messages (forgetting) or summarizing.</p>
+      <p>The model has no "hard drive" &mdash; no persistent storage between conversations. Everything it knows about your conversation exists only in this RAM-like context window. Close the window, and it's gone.</p>
+    </div>
+
+    <p>This analogy also explains why bigger context windows help but don't solve everything. More RAM lets your computer handle more tasks simultaneously, but it doesn't make the CPU faster. Similarly, a 1M-token context window lets the model see more text, but it doesn't necessarily make the model <em>smarter</em> at using that text.</p>
+
+    <p>And just like closing unused browser tabs frees up RAM, removing unnecessary conversation history or irrelevant files from the context frees up tokens for what actually matters. Context window management is resource management.</p>
+
+    <!-- ============================================ -->
+    <h2>How Coding Tools Manage Context</h2>
+    <!-- ============================================ -->
+
+    <p>This is where things get really practical. Tools like Claude Code, Cursor, and Copilot face a particular challenge: your codebase has thousands of files, but the context window can only hold so much.</p>
+
+    <p>So these tools make smart decisions about what to include:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">CC</div>
+      <div class="tool-info">
+        <div class="tool-name">Claude Code</div>
+        <div class="tool-desc">Reads your project structure, CLAUDE.md instructions, and selectively includes relevant files based on your prompt. Uses tool calls to read specific files as needed rather than loading everything upfront.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">Cu</div>
+      <div class="tool-info">
+        <div class="tool-name">Cursor</div>
+        <div class="tool-desc">Indexes your codebase and includes currently open files, recent edits, and files that seem relevant to your query. Uses embeddings (Chapter 9) to find the most related code.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">CP</div>
+      <div class="tool-info">
+        <div class="tool-name">GitHub Copilot</div>
+        <div class="tool-desc">Primarily uses the current file and nearby files as context. Focuses on the code immediately around your cursor position for inline completions.</div>
+      </div>
+    </div>
+
+    <p>The quality of these tools largely comes down to how well they select context. A tool that picks the right 5 files to include will outperform one that dumps 50 irrelevant files into the prompt. This is why different coding assistants can use the same underlying model but produce very different results &mdash; the model is only as good as the context it receives.</p>
+
+    <p>This context curation is one of the hardest engineering problems in AI tooling. How do you figure out which files are relevant to a user's question before you even know the answer? Tools use a combination of heuristics (current file, recently edited files, imported modules) and semantic search (embeddings, which we'll explore in Chapter 9) to make these decisions.</p>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>This is why CLAUDE.md files are so powerful. They give the model permanent, always-present context about your project's conventions, architecture, and preferences. Instead of the model guessing what framework you use or how you name variables, CLAUDE.md tells it directly &mdash; and it's included in every single request.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Why "Just Make It Bigger" Isn't the Answer</h2>
+    <!-- ============================================ -->
+
+    <p>Context windows have grown from 4K to 1M tokens. Problem solved, right? Not quite.</p>
+
+    <h3>Cost</h3>
+    <p>You pay per token. A 100K-token prompt costs roughly 100x more than a 1K-token prompt. Stuffing your entire codebase into every request would be extraordinarily expensive. For an API-heavy application processing thousands of requests per day, unnecessary context tokens add up to real money fast.</p>
+
+    <h3>Speed</h3>
+    <p>More input tokens means more computation. Processing 500K tokens of context takes significantly longer than processing 5K tokens. The model's attention mechanism has to compare every token with every other token &mdash; that's roughly quadratic in cost. Double the context, roughly quadruple the computation for the attention layers.</p>
+
+    <h3>Attention Degradation (The "Lost in the Middle" Problem)</h3>
+    <p>Here's the subtlest problem: models get worse at finding relevant information as the context gets longer. When you dump 100K tokens of text into a prompt, the model has to sort through all of it to find what's relevant to your question.</p>
+
+    <p>Research has shown a striking pattern: models are best at using information at the <strong>beginning</strong> and <strong>end</strong> of the context, and tend to overlook information buried in the middle. If the critical detail is on "page 50 of 100," the model is more likely to miss it than if it were on page 1 or page 100.</p>
+
+    <p>This has real implications for how you structure prompts. Important instructions belong at the beginning (system prompt) or end (just before your question), not buried in the middle of a long context dump.</p>
+
+    <div class="warning-box">
+      <h4>More Context Is Not Always Better</h4>
+      <p>1M tokens of capacity doesn't mean you <em>should</em> use 1M tokens. Including irrelevant files, old conversation history, and unnecessary boilerplate actively hurts the model's ability to focus on what matters. Think of it like giving someone a 500-page document when the answer is on page 237 &mdash; they'll find it eventually, but they'd find it much faster if you just gave them page 237.</p>
+    </div>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Bad: Dump everything</p>
+        <div class="prompt-text">"Here are all 200 files in my project.
+Also here is the full git log.
+And the complete test output.
+
+Now fix the bug in user.py."
+
+→ Model drowns in irrelevant context.
+  Misses the key information.
+  Slow and expensive.</div>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Good: Curate the context</p>
+        <div class="prompt-text">"Here is user.py and the error traceback.
+The User model is in models/user.py.
+We use SQLAlchemy for the ORM.
+
+Fix the bug on line 42."
+
+→ Model has exactly what it needs.
+  Fast, cheap, accurate.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>KV Cache: Why Long Conversations Use More Memory</h2>
+    <!-- ============================================ -->
+
+    <p>There's a technical detail worth knowing if you're curious about why AI providers charge more for longer contexts: the <strong>KV cache</strong>.</p>
+
+    <p>Remember how attention works (Chapter 5)? Each token computes keys and values that other tokens reference. When generating a response, the model stores the keys and values for every token in the conversation &mdash; this is the KV cache.</p>
+
+    <p>As the conversation grows, the KV cache grows with it. A 100K-token conversation requires storing keys and values for all 100K tokens across every attention head in every layer. This takes a lot of GPU memory.</p>
+
+    <p>This is a significant part of why longer contexts are more expensive. It's not just the computation &mdash; it's the memory needed to hold the KV cache for the entire conversation while the model generates each output token.</p>
+
+    <p>Some providers use "prompt caching" to optimize this: if the first part of your prompt is the same across multiple requests (which it often is &mdash; same system prompt, same conversation history), they can reuse the cached KV values and only compute the new tokens. This is why subsequent messages in a conversation can sometimes feel faster than the first one.</p>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>This is why some providers offer different pricing tiers for different context lengths. A 4K-context request is not only faster but uses dramatically less GPU memory than a 128K-context request. When designing AI-powered features, the most cost-effective approach is to use the minimum necessary context, not the maximum available.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Putting It All Together</h2>
+    <!-- ============================================ -->
+
+    <ul class="checklist">
+      <li class="checked">AI has zero memory between requests. Every response is generated from scratch.</li>
+      <li class="checked">"Conversations" work by sending the complete history (system prompt + all messages) with every request.</li>
+      <li class="checked">The context window is the maximum tokens the model can handle. It's shared between input and output.</li>
+      <li class="checked">When conversations exceed the context window, old messages get dropped (truncation) or compressed (summarization).</li>
+      <li class="checked">The context window is RAM, not a hard drive. Bigger helps, but there are costs: money, speed, and attention degradation.</li>
+      <li class="checked">Coding tools succeed by <em>curating</em> context well &mdash; including the right files, not all files.</li>
+      <li class="checked">CLAUDE.md files work because they're included in the context with every request.</li>
+      <li class="checked">More context isn't always better. Focused, relevant context outperforms massive dumps of text.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <h4>Exercise: Test the Memory Illusion</h4>
+      <p>Try this experiment in any AI chatbot:</p>
+      <ol>
+        <li>Start a new conversation. In your first message, tell the model: "My favorite color is turquoise. Remember that."</li>
+        <li>Send 20-30 messages on various unrelated topics (just ask random questions).</li>
+        <li>Then ask: "What's my favorite color?"</li>
+        <li>Does it remember? If you're using a tool with a large context window, it probably does &mdash; because your first message is still in the context. If the context window is small, it might have been truncated.</li>
+      </ol>
+      <p>Now try the same thing but start the conversation in a <strong>new chat window</strong>:</p>
+      <ol>
+        <li>In a brand new chat, ask: "What's my favorite color?"</li>
+        <li>The model will have no idea. Because this is a new context window &mdash; your previous conversation doesn't exist.</li>
+      </ol>
+      <p><strong>What to notice:</strong> The model "remembers" within a conversation (because the history is re-sent each time) but has zero memory across conversations. That's the illusion at work.</p>
+      <p><strong>Going further:</strong> Some tools (like ChatGPT's "Memory" feature or Claude's memory system) add a layer on top by saving key facts to a persistent store and injecting them into the system prompt. This gives the <em>appearance</em> of long-term memory, but it's still the same mechanism &mdash; the saved facts are just added to the context window of future conversations.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+    <!-- ============================================ -->
+
+    <p>You now understand how conversations work &mdash; and why they're an illusion built on top of stateless next-token prediction. But there's one more piece of the puzzle.</p>
+
+    <p>We mentioned that Cursor uses "embeddings" to find relevant code files. We said that tokens get converted to "numerical representations." But what <em>are</em> these numbers? How does AI represent the <em>meaning</em> of text?</p>
+
+    <p>In <a href="09-embeddings.html">Chapter 9: Embeddings &mdash; How AI Understands Meaning</a>, you'll discover one of the most elegant ideas in AI: turning meaning into coordinates in a mathematical space. It's the bridge between everything you've learned and the practical AI ecosystem you'll encounter as a developer.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="07-temperature-and-friends.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Temperature, Top-p &amp; Friends</span>
+    </a>
+    <a href="09-embeddings.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Embeddings: How AI Understands Meaning</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

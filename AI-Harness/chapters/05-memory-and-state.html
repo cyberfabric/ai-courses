@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Memory and State — AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-tools-and-tool-use.html">Prev</a>
+      <a href="06-claude-code-under-the-hood.html">Next</a>
+      <a href="maps/05-memory-and-state-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Memory and State</h1>
+    <p class="subtitle">LLMs have no memory &mdash; how harnesses create the illusion of continuity</p>
+  </header>
+
+  <main>
+
+    <p>
+      In Chapter 4, we gave the model hands (tools). Now let's talk about what happens between uses of those hands. You ask Claude Code to fix a bug. It reads a file, edits it, runs the tests. Ten minutes later, you ask a follow-up question. The model seems to "remember" the bug, the file, and the fix.
+    </p>
+
+    <p>
+      It doesn't. <strong>LLMs have zero memory.</strong> Not "limited memory." Not "short-term memory." Zero. Every single API call starts from a completely blank slate. The model has no idea who you are, what you said five seconds ago, or what project you're working on.
+    </p>
+
+    <p>
+      Everything that feels like memory is the harness faking it. And it fakes it brilliantly.
+    </p>
+
+    <!-- The Desk Analogy -->
+    <h2>The Desk, the Filing Cabinet, and the Warehouse</h2>
+
+    <p>
+      Think of memory in layers, like storage at an office:
+    </p>
+
+    <ul>
+      <li><strong>Your desk</strong> (working memory) &mdash; What's right in front of you. Limited space, but instant access. This is the context window.</li>
+      <li><strong>The filing cabinet</strong> (session state) &mdash; Nearby, organized by project. Things you pull out when needed. This is what the harness tracks in memory during a session.</li>
+      <li><strong>The warehouse archive</strong> (persistent storage) &mdash; In another building. Takes effort to retrieve, but survives forever. This is files on disk, git history, and persistent memory systems.</li>
+    </ul>
+
+    <p>
+      Each layer trades off speed for durability. Your desk is fast but gets cleared when you go home. The warehouse survives a fire but takes 20 minutes to find anything. The harness manages all three layers simultaneously.
+    </p>
+
+    <!-- Working Memory -->
+    <h2>Working Memory: The Context Window</h2>
+
+    <p>
+      This is the memory you interact with most. The conversation you see on screen &mdash; your messages, the model's responses, tool calls and their results &mdash; all of it lives in the context window.
+    </p>
+
+    <p>
+      Here's the trick: the harness <strong>replays the entire conversation</strong> with every single API call. When you send your 15th message, the harness doesn't send just that message. It sends messages 1 through 15, all tool calls and results, plus the system prompt and project context. The model processes the whole thing from scratch, as if it's seeing the conversation for the first time.
+    </p>
+
+    <div class="highlight-box">
+      <h3>The Movie Analogy</h3>
+      <p>
+        Imagine an actor who has amnesia between every take. To film scene 15, the director plays scenes 1 through 14 before rolling the camera. The actor performs scene 15 perfectly &mdash; but only because they just watched the whole movie. That's how LLM "memory" works. The harness is the director, replaying the tape every time.
+      </p>
+    </div>
+
+    <p>
+      This works beautifully &mdash; until the conversation gets too long and the tape doesn't fit in the player anymore. That's when compaction kicks in (we covered this in Chapter 3). Older turns get summarized, detail is lost, and the model works from meeting notes instead of the full transcript.
+    </p>
+
+    <div class="tip-box">
+      Practical implication: if you need the model to remember something specific across a very long conversation, <strong>don't rely on the conversation history alone.</strong> Write it to a file (CLAUDE.md, a progress file, or a comment in the code). Files survive compaction. Conversation turns don't.
+    </div>
+
+    <!-- Session State -->
+    <h2>Session State: What the Harness Tracks</h2>
+
+    <p>
+      Beyond the conversation itself, the harness maintains its own state &mdash; things the model can't see directly but that affect how the harness behaves:
+    </p>
+
+    <ul>
+      <li><strong>Token usage</strong> &mdash; How much of the context window is consumed. Triggers compaction at ~95%.</li>
+      <li><strong>Permission grants</strong> &mdash; Which tools you've approved during this session.</li>
+      <li><strong>Active MCP connections</strong> &mdash; Which external servers are connected and available.</li>
+      <li><strong>Modified files</strong> &mdash; Which files the model has changed (tracked by the harness, not the model).</li>
+      <li><strong>Cost tracking</strong> &mdash; API calls made, tokens consumed, estimated cost.</li>
+      <li><strong>Session metadata</strong> &mdash; Start time, session ID, working directory.</li>
+    </ul>
+
+    <p>
+      This state lives in the harness process, not in the model. If the harness crashes, this state is lost &mdash; but the files on disk and the git history survive. This is why the filesystem is the most reliable memory backend.
+    </p>
+
+    <p>
+      An important nuance: session state isn't sent to the model directly. The model doesn't see a variable called <code>tokensUsed: 142000</code>. Instead, the harness <em>uses</em> that state to make decisions &mdash; like triggering compaction when tokens are high, or blocking a tool when permissions haven't been granted. The model experiences the effects of session state without seeing the state itself.
+    </p>
+
+    <!-- Chat Apps Fake Memory -->
+    <h2>How Chat Apps Fake Memory</h2>
+
+    <p>
+      ChatGPT feels like it remembers you. You open a new conversation, and it greets you by name and knows your preferences. How?
+    </p>
+
+    <p>
+      Two mechanisms, both harness-level:
+    </p>
+
+    <h3>1. Conversation Replay</h3>
+    <p>
+      Within a single chat, ChatGPT does exactly what we described: replays the full conversation with every message. The model "remembers" your first message because the harness sent it again.
+    </p>
+
+    <h3>2. Saved Memories</h3>
+    <p>
+      Across chats, ChatGPT uses a separate "memory" system. When the model notices something it thinks is worth remembering &mdash; your name, your job, your preferences &mdash; it saves a fact to an external database. On the next conversation, these facts are injected into the system prompt.
+    </p>
+
+    <p>
+      The key insight: ChatGPT's memory is <strong>intentionally vague</strong>. It stores "user prefers Python over JavaScript" rather than exact code snippets. It learns high-level facts, not precise details. This is a deliberate design choice &mdash; storing exact templates would be fragile and create data management headaches.
+    </p>
+
+    <div class="warning-box">
+      ChatGPT's "memory" and "chat history" are separate features with separate controls in settings. Memory stores facts you explicitly or implicitly want retained. Chat history allows the model to search past conversations for context. You can disable either one independently. If you're wondering why ChatGPT remembers something surprising, check both.
+    </div>
+
+    <!-- Filesystem as Memory -->
+    <h2>The Filesystem IS the Memory</h2>
+
+    <p>
+      Here's one of the most important insights about coding agent memory: <strong>the filesystem is the most reliable memory system.</strong> Not a database. Not an in-memory store. Files on disk.
+    </p>
+
+    <p>
+      Think about it: when Claude Code edits your code, that edit persists on your filesystem. If the process crashes, the context window is wiped, and the session state is gone &mdash; but the file changes are still there. When you start a new session, the model can read the files and reconstruct what happened.
+    </p>
+
+    <p>
+      This is why sophisticated harnesses use <strong>progress files</strong> for long-running work:
+    </p>
+
+<pre><code># claude-progress.txt
+
+## Completed
+- [x] Set up Express server with TypeScript
+- [x] Added PostgreSQL connection with Drizzle
+- [x] Created user CRUD endpoints
+- [x] Added JWT authentication middleware
+
+## In Progress
+- [ ] Rate limiting on public endpoints
+- [ ] Input validation with Zod schemas
+
+## Blockers
+- Redis not configured yet for rate limiting store
+
+## Key Decisions
+- Using Drizzle over Prisma for type-safe queries
+- JWT stored in httpOnly cookies, not localStorage</code></pre>
+
+    <p>
+      A new session (or a new agent) reads this file and immediately understands the project state. No conversation replay needed. No memory system. Just a file.
+    </p>
+
+    <div class="tip-box">
+      This is perhaps the most practical memory tip in the entire course: <strong>if something is important enough that a future session needs it, write it to a file.</strong> CLAUDE.md for permanent project context. A progress file for long-running features. Code comments for decisions that future developers (human or AI) need to understand. Files are the only memory layer that survives everything &mdash; crashes, compaction, new sessions, even switching to a different AI tool entirely.
+    </div>
+
+    <!-- Git as Memory -->
+    <h3>Git: The Version-Controlled Memory</h3>
+
+    <p>
+      Git is even more powerful than progress files because it captures <em>what changed and why</em>. A new agent can run <code>git log --oneline -20</code> and see the last 20 commits. Each commit message is a memory entry.
+    </p>
+
+    <p>
+      Anthropic's guide for long-running agents recommends a specific pattern:
+    </p>
+
+    <ul>
+      <li><strong>Initializer agent</strong> &mdash; Sets up the environment, creates progress files, makes an initial git commit</li>
+      <li><strong>Working agents</strong> &mdash; Each session reads the progress file and git log, does work, commits with descriptive messages, updates the progress file</li>
+      <li><strong>HANDOFF.md</strong> &mdash; For feature branches, a handoff document at <code>.agents/handoffs/{branch}/{session}.md</code> records what was done and what's next</li>
+    </ul>
+
+    <p>
+      The result: an agent can work across 10 sessions on a complex feature, and each new session picks up exactly where the last one left off &mdash; by reading files, not by having memory.
+    </p>
+
+    <!-- Memory Hierarchy Summary -->
+    <h2>The Memory Hierarchy at a Glance</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th>What It Holds</th>
+          <th>Lifetime</th>
+          <th>Survives Crash?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Context Window</strong></td>
+          <td>Conversation history, tool results, system prompt</td>
+          <td>Current turn (replayed each time)</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td><strong>Session State</strong></td>
+          <td>Token count, permissions, MCP connections</td>
+          <td>Current session</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td><strong>Auto Memory</strong></td>
+          <td>Learned preferences, patterns, insights</td>
+          <td>Across sessions (per project)</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Project Files</strong></td>
+          <td>CLAUDE.md, progress files, HANDOFF.md</td>
+          <td>Permanent (until deleted)</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Git History</strong></td>
+          <td>Commits, diffs, branch state</td>
+          <td>Permanent (version-controlled)</td>
+          <td>Yes</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      The pattern is clear: the higher the layer, the faster and more detailed but less durable. The lower the layer, the slower to access but virtually permanent. Good harness engineering uses all five layers &mdash; and good users learn which layer to trust for which kind of information.
+    </p>
+
+    <!-- Cross-Session Memory Compared -->
+    <h2>Cross-Session Memory Compared</h2>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Claude Code</div>
+        <p><strong>Auto Memory:</strong> Silently learns build commands, debugging insights, code style preferences from your sessions. Stored at <code>~/.claude/projects/</code>.</p>
+        <p><strong>CLAUDE.md:</strong> Manual project instructions loaded every turn. Most reliable &mdash; you control exactly what's remembered.</p>
+        <p><strong>Session summaries:</strong> Automatic background summaries stored for future reference.</p>
+        <p><strong>Scope:</strong> Project-level. Memories stay with the project directory.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">ChatGPT</div>
+        <p><strong>Saved Memories:</strong> Facts extracted from conversations and stored externally. Injected into system prompt on next chat.</p>
+        <p><strong>Chat History:</strong> Past conversations searchable for context. Separate from saved memories.</p>
+        <p><strong>Style:</strong> Intentionally vague &mdash; stores preferences, not exact templates.</p>
+        <p><strong>Scope:</strong> User-level. Memories follow you across all projects and topics.</p>
+      </div>
+    </div>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Windsurf (Cascade)</div>
+        <p><strong>Autonomous Memories:</strong> Cascade generates memories on its own when encountering useful context. Stored at <code>~/.codeium/windsurf/memories/</code>.</p>
+        <p><strong>Manual Memories:</strong> You can ask "Create a memory of..." for critical decisions.</p>
+        <p><strong>End-of-session review:</strong> Prompts you to confirm what was captured.</p>
+        <p><strong>Scope:</strong> Workspace-level. Memories are tied to the workspace, not the repo.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Cursor</div>
+        <p><strong>Git Worktrees:</strong> Each parallel agent works in an isolated worktree with its own branch and full git history.</p>
+        <p><strong>Session IDs:</strong> Saved in worktree metadata, allowing resumption with full context.</p>
+        <p><strong>.cursorrules:</strong> Project-level instructions (similar to CLAUDE.md).</p>
+        <p><strong>Scope:</strong> Per-worktree/branch. Agents in different worktrees don't see each other's work.</p>
+      </div>
+    </div>
+
+    <!-- The Compaction Challenge -->
+    <h2>The Compaction Challenge</h2>
+
+    <p>
+      We covered compaction in Chapter 3, but let's revisit it through the lens of memory. When the context window fills up and the harness compacts, <strong>you lose memory.</strong> Specifically, you lose the detailed working memory that let the model reason precisely about earlier turns.
+    </p>
+
+    <p>
+      What this looks like in practice:
+    </p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Before compaction</p>
+        <div class="prompt-text">You: "Fix the auth bug"
+Model: [Reads auth.ts, finds null check missing on line 42, edits line 42, runs tests — all details in context]
+
+You: "What did you change on line 42?"
+Model: "I added a null check for the user object before accessing user.email"</div>
+        <p class="prompt-explanation">Full details available — the model can answer precisely.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">After compaction</p>
+        <div class="prompt-text">You: "What did you change on line 42?"
+Model: "Based on the conversation summary, I fixed an auth bug in auth.ts. I can read the file again to see the current state."</div>
+        <p class="prompt-explanation">Details compacted away — the model knows WHAT happened but not the specifics.</p>
+      </div>
+    </div>
+
+    <p>
+      The model isn't wrong &mdash; it's working from a summary. It offers to re-read the file, which is the right move. But the precision is gone.
+    </p>
+
+    <p>
+      This is why experienced users develop habits to work <em>with</em> compaction rather than against it:
+    </p>
+
+    <ul class="checklist">
+      <li class="checked">Keep conversations focused on one task &mdash; start a new session for a new topic</li>
+      <li class="checked">Write critical information to files (CLAUDE.md, progress files, code comments)</li>
+      <li class="checked">Use <code>/compact</code> manually at natural breakpoints, not when you're mid-task</li>
+      <li class="checked">Commit work frequently so git history serves as a memory backup</li>
+      <li>Rely on conversation history for precise details after 50+ turns</li>
+      <li>Expect the model to remember exact line numbers from 30 turns ago</li>
+    </ul>
+
+    <!-- Inside the Harness -->
+    <h2>Inside the Harness: What Happens When You Hit the Context Limit</h2>
+
+    <div class="inside-look-box">
+      <p>You've been working with Claude Code for 40 turns. You've read 8 files, made 12 edits, run tests 5 times. The context window is at 92% capacity. You send another message. Here's what happens:</p>
+
+      <ol>
+        <li><strong>The harness checks token count.</strong> Your message plus the accumulated history would push the context to 97%. That's past the compaction threshold (~95%).</li>
+        <li><strong>Compaction triggers automatically.</strong> The harness sends the full conversation to a summarization step, asking: "Compress this conversation while preserving: completed tasks, current state, files modified, active constraints, and next steps."</li>
+        <li><strong>A summary replaces the history.</strong> The 180,000-token conversation becomes a 5,000-token summary. Everything before this point is gone from working memory.</li>
+        <li><strong>Your new message is added</strong> to the fresh context window, which now contains: system prompt + CLAUDE.md + compacted summary + your new message. Plenty of room.</li>
+        <li><strong>The model processes your request</strong> using the summary as context. If it needs details that were compacted away, it calls tools to re-read files or check git history.</li>
+        <li><strong>The conversation continues</strong> from this new baseline, accumulating history again until the next compaction.</li>
+      </ol>
+
+      <p><strong>The model doesn't know compaction happened.</strong> It sees a summary that looks like conversation context, processes your request, and continues working. The transition is seamless &mdash; but the precision of earlier turns is gone. The harness traded detail for continuity.</p>
+    </div>
+
+    <!-- Exercise -->
+    <h2>Try It Yourself</h2>
+
+    <div class="exercise-box">
+      <p><strong>Test the Memory Boundaries</strong></p>
+      <p>Pick your AI coding tool and run this experiment:</p>
+      <ol>
+        <li><strong>Early reference test:</strong> Start a conversation. In your first message, mention a specific, unusual detail: "My favorite color is chartreuse and my dog's name is Fibonacci." Continue the conversation about coding for 20+ turns. Then ask: "What's my dog's name?" Does it remember?</li>
+        <li><strong>Cross-session test:</strong> Close the conversation. Start a completely new one. Ask the same question. Does it remember across sessions? (It will in ChatGPT if memory is on. It won't in most coding tools unless you wrote it to a file.)</li>
+        <li><strong>Compaction test:</strong> In Claude Code, have a long conversation (read several large files, make many edits). When compaction triggers (you'll see the context shrink), ask about something specific from early in the conversation. Notice how the model's answer changes from precise to summary-level.</li>
+      </ol>
+      <p>
+        <strong>The takeaway:</strong> Once you see the boundaries, you'll naturally adapt. You'll start writing critical info to files, keeping conversations focused, and treating the filesystem as your real long-term memory.
+      </p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What's Next</h2>
+
+    <p>
+      You now understand the three layers of memory that create the illusion of continuity, and you know how each major tool implements them differently. In Part III, we shift from concepts to case studies.
+    </p>
+
+    <p>
+      <strong>Chapter 6: Claude Code Under the Hood</strong> is a deep dive into one specific harness. We'll trace the complete architecture &mdash; the system prompt, the tool registry, the agent loop, the permission system, hooks, compaction, sub-agents, and plan mode. It's the most detailed case study in the course, and it will make every concept from Chapters 1&ndash;5 concrete.
+    </p>
+
+    <p>
+      Time to take the engine apart and see how all the pieces fit together.
+    </p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-tools-and-tool-use.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">4. Tools and Tool Use</span>
+      </a>
+      <a href="06-claude-code-under-the-hood.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">6. Claude Code Under the Hood</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

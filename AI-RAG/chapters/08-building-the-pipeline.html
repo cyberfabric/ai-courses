@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Building a Production RAG Pipeline | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-retrieval-that-works.html">&larr; Prev</a>
+      <a href="09-advanced-patterns.html">Next &rarr;</a>
+      <a href="maps/08-building-the-pipeline-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Building a Production RAG Pipeline</h1>
+    <p class="subtitle">From notebook prototype to a system that handles real users, messy documents, and everything in between</p>
+  </header>
+
+  <main>
+
+    <p>Over the last four chapters, you've collected every building block: embeddings, vector databases, chunking strategies, and retrieval methods. You have all the LEGO bricks. Now it's time to build the actual house.</p>
+
+    <p>This chapter is about the jump from <strong>"it works in a Jupyter notebook"</strong> to <strong>"it works reliably for real users."</strong> That gap is bigger than most people expect. In production, your documents aren't clean text files — they're messy PDFs, HTML pages with boilerplate, and Confluence wikis with broken formatting.</p>
+
+    <div class="highlight-box">
+      <h3>The Big Idea</h3>
+      <p>A production RAG system is two pipelines stitched together: an <strong>ingestion pipeline</strong> that turns messy documents into searchable chunks, and a <strong>query pipeline</strong> that turns user questions into grounded answers. Getting each one right — and connecting them cleanly — is what separates a demo from a product.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Two Pipelines, One System</h2>
+
+    <p>Every RAG system, from a weekend prototype to an enterprise knowledge base, has the same two-phase architecture:</p>
+
+    <div class="pipeline-box">
+      <h3>The RAG Pipeline Architecture</h3>
+      <p><strong>Ingestion pipeline</strong> (runs ahead of time, often on a schedule):</p>
+      <p>Load documents &rarr; Preprocess &amp; clean &rarr; Chunk &rarr; Embed &rarr; Store in vector DB</p>
+      <p><strong>Query pipeline</strong> (runs in real time, when a user asks a question):</p>
+      <p>Receive question &rarr; Embed question &rarr; Retrieve chunks &rarr; Build prompt &rarr; Generate answer &rarr; Return with sources</p>
+      <p>The ingestion pipeline is your kitchen prep — washing, chopping, and organizing ingredients before the restaurant opens. The query pipeline is the cook assembling a dish to order. Both matter, but if your prep is sloppy, no amount of cooking skill will save the meal.</p>
+    </div>
+
+    <p>Let's build each one, piece by piece.</p>
+
+    <!-- ============================================ -->
+    <h2>The Ingestion Pipeline</h2>
+
+    <p>The ingestion pipeline takes raw documents and turns them into searchable vectors. Here's the full flow:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Load</strong>
+        <p>Read documents from their source</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Preprocess</strong>
+        <p>Clean, normalize, extract text</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Chunk</strong>
+        <p>Split into retrieval-sized pieces</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Embed</strong>
+        <p>Convert chunks to vectors</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>5. Store</strong>
+        <p>Upsert into vector database</p>
+      </div>
+    </div>
+
+    <p>Sounds simple on paper. The devil is in step 1 and 2.</p>
+
+    <!-- ============================================ -->
+    <h2>Document Loaders: The Messy Reality</h2>
+
+    <p>In a tutorial, your documents are clean <code>.txt</code> files. In the real world, they're a chaotic mix of formats — each needing special handling. Here's how to tackle the most common ones:</p>
+
+    <h3>PDFs — The Hardest Format</h3>
+
+    <p>PDFs are the bane of every RAG engineer's existence. They look nice to humans but are a nightmare for machines — text can be out of order, tables are rendered as positioned elements, and headers are indistinguishable from body text.</p>
+
+    <pre><code>import pymupdf  # PyMuPDF — fast, reliable PDF extraction
+
+def load_pdf(file_path: str) -> list[dict]:
+    """Extract text from a PDF, page by page."""
+    doc = pymupdf.open(file_path)
+    pages = []
+    for page_num, page in enumerate(doc):
+        text = page.get_text("text")  # Plain text extraction
+        if text.strip():  # Skip blank pages
+            pages.append({
+                "content": text,
+                "metadata": {
+                    "source": file_path,
+                    "page": page_num + 1,
+                    "total_pages": len(doc)
+                }
+            })
+    return pages
+</code></pre>
+
+    <div class="tip-box">
+      <h3>When PDFs Fight Back</h3>
+      <p>For complex PDFs with tables, multi-column layouts, or embedded images, plain text extraction won't cut it. Use <strong>Unstructured.io</strong> or <strong>OpenDataLoader</strong> — they understand document structure and can extract tables as Markdown, preserve reading order, and even handle scanned documents with OCR. In 2026, these tools have gotten remarkably good at producing clean, structured output from messy PDFs.</p>
+    </div>
+
+    <h3>HTML — Strip the Boilerplate</h3>
+
+    <pre><code>from bs4 import BeautifulSoup
+
+def load_html(file_path: str) -> dict:
+    """Extract meaningful content from HTML, ignoring nav, footer, ads."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        soup = BeautifulSoup(f.read(), "html.parser")
+
+    # Remove non-content elements
+    for tag in soup.select("nav, footer, header, script, style, .sidebar, .ads"):
+        tag.decompose()
+
+    # Extract text from the main content area
+    main = soup.select_one("main, article, .content, #content")
+    text = main.get_text(separator="\n", strip=True) if main else soup.get_text(separator="\n", strip=True)
+
+    return {
+        "content": text,
+        "metadata": {
+            "source": file_path,
+            "title": soup.title.string if soup.title else ""
+        }
+    }
+</code></pre>
+
+    <h3>Markdown and Plain Text — The Easy Ones</h3>
+
+    <p>Markdown is straightforward — read the file, optionally extract the title from the first <code>#</code> heading. Plain text is even simpler. These are the formats where you can skip straight to chunking.</p>
+
+    <h3>Enterprise Sources: Confluence, Notion, Google Docs</h3>
+
+    <p>Enterprise data lives in wikis and SaaS tools. The pattern is always: <strong>export or API call</strong> (pull as HTML/Markdown) &rarr; <strong>clean</strong> (strip platform boilerplate) &rarr; <strong>normalize</strong> (convert to a consistent format). LangChain and LlamaIndex ship with dozens of connectors for these sources — don't reinvent them.</p>
+
+    <!-- ============================================ -->
+    <h2>Preprocessing: Cleaning the Mess</h2>
+
+    <p>Raw extracted text is rarely ready for chunking. You need a preprocessing step that cleans, normalizes, and enriches the text:</p>
+
+    <pre><code>import re
+
+def preprocess(text: str) -> str:
+    """Clean extracted text for chunking."""
+    text = re.sub(r"\n{3,}", "\n\n", text)          # Collapse blank lines
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)  # Remove invisible chars
+    text = re.sub(r"[^\S\n]+", " ", text)            # Normalize whitespace
+    text = re.sub(r"\n\s*Page \d+ of \d+\s*\n", "\n", text)  # Remove page numbers
+    return "\n".join(line.strip() for line in text.split("\n")).strip()
+</code></pre>
+
+    <div class="gotcha-box">
+      <h3>Tables Are a Special Kind of Pain</h3>
+      <p>When you extract text from a PDF table, the columns often get smashed together or read in the wrong order. "Revenue | Q1 | $10M" might become "Revenue Q1 $10M" or worse, "Revenue $10M Q1". If your documents contain important tables, use a table-aware parser like <strong>Unstructured.io</strong> or <strong>PyMuPDF's table extraction</strong>, and convert tables to Markdown format before chunking. A Markdown table preserves structure that a vector search can actually work with.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Putting the Ingestion Pipeline Together</h2>
+
+    <p>Here's a complete ingestion pipeline that handles multiple file types, preprocesses, chunks, embeds, and stores:</p>
+
+    <pre><code>import os
+from pathlib import Path
+from openai import OpenAI
+import chromadb
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+client = OpenAI()
+chroma = chromadb.PersistentClient(path="./chroma_db")
+collection = chroma.get_or_create_collection("my_docs")
+
+# Configure chunking
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50,
+    separators=["\n\n", "\n", ". ", " ", ""]
+)
+
+def ingest_directory(docs_dir: str):
+    """Ingest all supported documents from a directory."""
+    loaders = {
+        ".pdf": load_pdf,
+        ".html": load_html,
+        ".md": load_markdown,
+        ".txt": lambda p: {"content": Path(p).read_text(), "metadata": {"source": p}}
+    }
+
+    for file_path in Path(docs_dir).rglob("*"):
+        ext = file_path.suffix.lower()
+        if ext not in loaders:
+            continue
+
+        print(f"Processing: {file_path}")
+
+        # Load — returns a dict or list of dicts (PDFs return per-page)
+        result = loaders[ext](str(file_path))
+        docs = result if isinstance(result, list) else [result]
+
+        for doc in docs:
+            # Preprocess
+            clean_text = preprocess(doc["content"])
+            if not clean_text:
+                continue
+
+            # Chunk
+            chunks = splitter.split_text(clean_text)
+
+            # Embed all chunks in one batch
+            response = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=chunks
+            )
+            embeddings = [e.embedding for e in response.data]
+
+            # Store with metadata
+            ids = [f"{file_path.stem}_chunk_{i}" for i in range(len(chunks))]
+            metadatas = [{**doc["metadata"], "chunk_index": i} for i in range(len(chunks))]
+
+            collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                documents=chunks,
+                metadatas=metadatas
+            )
+
+    print(f"Ingestion complete. Total chunks: {collection.count()}")
+
+# Run it
+ingest_directory("./documents")
+</code></pre>
+
+    <div class="tip-box">
+      <h3>Batch Your Embedding Calls</h3>
+      <p>Embedding APIs accept batches of text. Instead of embedding one chunk at a time (slow, expensive in API overhead), collect all chunks from a document and embed them in a single call. OpenAI's <code>text-embedding-3-small</code> accepts up to 2048 inputs per batch. This alone can make your ingestion 10-50x faster.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Query Pipeline</h2>
+
+    <p>The query pipeline runs in real time — a user asks a question, and your system needs to return a grounded answer in under 2 seconds. Here's the full flow:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Question</strong>
+        <p>User asks something</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Embed</strong>
+        <p>Convert question to vector</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Retrieve</strong>
+        <p>Find top-K similar chunks</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Build Prompt</strong>
+        <p>Assemble context + question</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>5. Generate</strong>
+        <p>LLM produces grounded answer</p>
+      </div>
+    </div>
+
+    <p>Let's implement it:</p>
+
+    <pre><code>import anthropic
+
+llm = anthropic.Anthropic()
+
+def query(question: str, top_k: int = 5) -> dict:
+    """Run the full query pipeline: embed, retrieve, generate."""
+
+    # Step 1: Embed the question
+    q_embedding = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=question
+    ).data[0].embedding
+
+    # Step 2: Retrieve similar chunks
+    results = collection.query(
+        query_embeddings=[q_embedding],
+        n_results=top_k
+    )
+    chunks = results["documents"][0]
+    sources = results["metadatas"][0]
+
+    # Step 3: Build the prompt with context
+    context = "\n\n---\n\n".join(
+        f"[Source: {s.get('source', 'unknown')}, chunk {s.get('chunk_index', '?')}]\n{chunk}"
+        for chunk, s in zip(chunks, sources)
+    )
+
+    # Step 4: Generate a grounded answer
+    response = llm.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=RAG_SYSTEM_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {question}"
+        }]
+    )
+
+    return {
+        "answer": response.content[0].text,
+        "sources": sources
+    }
+</code></pre>
+
+    <!-- ============================================ -->
+    <h2>Prompt Engineering for RAG</h2>
+
+    <p>The system prompt is the most underrated part of a RAG pipeline. A bad system prompt lets the LLM hallucinate freely. A good one enforces grounding — the model answers <em>only</em> from the provided context.</p>
+
+    <div class="retrieval-box">
+      <h3>Context Engineering > Prompt Engineering</h3>
+      <p>In 2026, the RAG community talks about <strong>context engineering</strong> rather than prompt engineering. The insight: what matters most isn't how cleverly you phrase your instructions — it's the <em>quality and relevance of the context</em> you put in front of the model. A mediocre prompt with excellent context beats a brilliant prompt with garbage context every time. Focus your effort on retrieval quality first, then tune the prompt.</p>
+    </div>
+
+    <p>That said, the system prompt still matters. Here's one that works well in production:</p>
+
+    <div class="prompt-example good">
+      <h4>Production RAG System Prompt</h4>
+      <pre><code>RAG_SYSTEM_PROMPT = """You are a helpful assistant that answers
+questions based on the provided context.
+
+RULES:
+1. Answer ONLY based on the provided context. Do not use
+   prior knowledge.
+2. If the context does not contain enough information to
+   answer the question, say: "I don't have enough
+   information in the available documents to answer this."
+3. When you use information from the context, cite the
+   source using [Source: filename] format.
+4. Be concise but complete. Don't pad your answer.
+5. If the context contains contradictory information,
+   acknowledge the contradiction and cite both sources.
+"""</code></pre>
+    </div>
+
+    <p>Without these rules, a generic prompt like <code>"You are a helpful assistant"</code> lets the LLM fill gaps from its training data — you'll get confident-sounding answers with no basis in your actual documents.</p>
+
+    <div class="tip-box">
+      <h3>Context Placement Matters</h3>
+      <p>Where you put the retrieved context in the prompt affects quality. Research consistently shows: put the context <strong>before</strong> the question, not after. LLMs process text sequentially, and having the context fresh in their "working memory" when they encounter the question produces more grounded answers. The format <code>Context: [chunks]\n\nQuestion: [user's question]</code> outperforms <code>Question: [question]\n\nContext: [chunks]</code>.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Source Attribution: Trust Through Transparency</h2>
+
+    <p>Users need to verify your system's answers. Source attribution turns "the AI said so" into "the AI said so, and here's where it found that information."</p>
+
+    <p>There are two levels: <strong>document-level</strong> ("Based on refund-policy.pdf") and <strong>chunk-level</strong> ("refund-policy.pdf, page 3, section 'Enterprise Accounts'"). The key is storing <strong>rich metadata</strong> during ingestion — source path, page number, section heading, last-updated date. Then when the LLM cites a source, your frontend can link directly to the original document or even highlight the specific passage. This is the difference between a RAG system people tolerate and one they trust.</p>
+
+    <!-- ============================================ -->
+    <h2>Streaming Responses: UX Matters</h2>
+
+    <p>LLM generation is the slowest part of the query pipeline — often 1-3 seconds before the full answer is ready. Streaming shows words as they're generated, turning a frustrating wait into a fluid experience.</p>
+
+    <pre><code># The key change: use messages.stream() instead of messages.create()
+with llm.messages.stream(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    system=RAG_SYSTEM_PROMPT,
+    messages=[{
+        "role": "user",
+        "content": f"Context:\n{context}\n\nQuestion: {question}"
+    }]
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+</code></pre>
+
+    <div class="gotcha-box">
+      <h3>Streaming + Source Attribution Is Tricky</h3>
+      <p>When you stream the answer, the LLM hasn't finished generating yet — so you can't show source citations until the stream completes. The common pattern: stream the answer text, then append a "Sources" section at the end once the full response is available. Some teams parse the LLM's inline citations (like <code>[Source: file.pdf]</code>) from the stream in real time and render them as footnotes — but this requires careful parsing of partial token streams.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Caching: Don't Repeat Expensive Work</h2>
+
+    <p>Three types of caching can dramatically reduce cost and latency in a RAG pipeline:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value">Embedding Cache</div>
+        <div class="stat-label">Cache computed embeddings to avoid re-embedding the same text. Essential during ingestion when you re-process documents.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">Query Cache</div>
+        <div class="stat-label">Cache full query results (question &rarr; answer). If someone asks the same question twice, return the cached answer instantly.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">Semantic Cache</div>
+        <div class="stat-label">Cache by meaning, not exact match. "What's the refund policy?" and "How do refunds work?" hit the same cache entry.</div>
+      </div>
+    </div>
+
+    <p>A simple query cache: hash the question, store the result with a timestamp, return cached answers for duplicates within a TTL (e.g., 1 hour). Use Redis or even a Python dict for small-scale systems.</p>
+
+    <div class="tip-box">
+      <h3>Semantic Caching in Practice</h3>
+      <p>For semantic caching, embed the incoming question and check if any cached question vector is within a similarity threshold (cosine similarity &gt; 0.95). Libraries like <strong>GPTCache</strong> handle this out of the box. Semantic caching can reduce LLM calls by 30-50% in scenarios with repetitive queries — like customer support where many people ask the same questions in different words.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Error Handling: When Things Go Wrong</h2>
+
+    <p>Production systems encounter failures. Here are the three most common and how to handle each:</p>
+
+    <h3>1. Empty Retrieval</h3>
+    <p>The vector search returns no relevant chunks (or chunks with very low similarity scores).</p>
+
+    <pre><code># After retrieving, check distances (ChromaDB: lower = more similar)
+results = collection.query(
+    query_embeddings=[embed(question)],
+    n_results=5,
+    include=["documents", "metadatas", "distances"]
+)
+
+# Filter out low-relevance chunks
+relevant = [
+    (doc, meta) for doc, meta, dist
+    in zip(results["documents"][0], results["metadatas"][0], results["distances"][0])
+    if dist < 0.7  # Threshold — tune for your data
+]
+
+if not relevant:
+    return {"answer": "I couldn't find relevant information. "
+                      "Could you rephrase your question?", "sources": []}
+</code></pre>
+
+    <h3>2. API Failures</h3>
+    <p>Embedding or LLM APIs can be slow or temporarily down. Use retries with exponential backoff — the <code>tenacity</code> library makes this trivial, or write a simple loop with <code>time.sleep(base_delay * 2**attempt)</code>. Always set a max retry count (3 is typical) so you fail fast rather than hanging.</p>
+
+    <h3>3. The LLM Ignores Context</h3>
+
+    <div class="warning-box">
+      <h3>When the LLM Goes Rogue</h3>
+      <p>If your LLM consistently ignores the provided context, check these in order: (1) Is the system prompt explicitly requiring grounded answers? (2) Is the context placed <em>before</em> the question? (3) Are you retrieving too many chunks, burying the relevant ones in noise? (4) Is the question ambiguous enough that the model's prior knowledge is "more confident" than the context? Reducing top-K from 10 to 3-5 and strengthening the grounding instructions usually fixes this.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Pipeline Orchestration: Build vs Framework</h2>
+
+    <p>You have three options for structuring your pipeline:</p>
+
+    <div class="pipeline-box">
+      <h3>Choosing Your Orchestration Layer</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th>Best For</th>
+            <th>Trade-offs</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Custom Python</strong></td>
+            <td>Simple pipelines, full control, small teams</td>
+            <td>You own every line — easy to debug, but you build everything yourself</td>
+          </tr>
+          <tr>
+            <td><strong>LangChain / LangGraph</strong></td>
+            <td>Complex agent workflows, multi-step reasoning, tool use</td>
+            <td>Rich ecosystem and connectors; LangGraph adds stateful graph-based orchestration for production</td>
+          </tr>
+          <tr>
+            <td><strong>LlamaIndex</strong></td>
+            <td>Document-heavy RAG, complex data sources, knowledge indices</td>
+            <td>Best-in-class data connectors and index types; Workflows API for production pipelines</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Honest advice: <strong>start custom, adopt a framework when the complexity justifies it.</strong> If you have a straightforward query flow — custom Python is simpler and easier to debug. You've already seen the code in this chapter: it's about 150 lines total. Adopt LangChain/LangGraph when you need complex agent workflows. Adopt LlamaIndex when your data complexity grows — dozens of sources, multiple index types, sophisticated document relationships.</p>
+
+    <div class="gotcha-box">
+      <h3>The Framework Trap</h3>
+      <p>Don't pick a framework because it has the most GitHub stars. Pick it because it solves a problem you actually have. Many production RAG systems are 200 lines of Python with <code>openai</code>, <code>chromadb</code>, and <code>anthropic</code> — no framework needed. Frameworks add value when your pipeline becomes complex enough that you're reinventing their abstractions anyway. If you catch yourself writing your own retry logic, state management, and connector library, that's the signal.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Complete Picture</h2>
+
+    <p>Let's zoom out. Here's a production-ready pipeline architecture with all the components we've covered:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Ingestion:</strong> Document loaders for each format (PDF, HTML, MD) &rarr; Preprocessing &amp; cleaning &rarr; Recursive chunking (500 tokens, 50 overlap) &rarr; Batch embedding &rarr; Upsert to vector DB with rich metadata</li>
+        <li><strong>Query:</strong> Receive question &rarr; Embed question &rarr; Retrieve top-5 chunks &rarr; Score filter (drop low-relevance) &rarr; Build grounded prompt &rarr; Stream LLM response &rarr; Return answer with source citations</li>
+        <li><strong>Caching:</strong> Embedding cache for ingestion &rarr; Query cache for repeat questions &rarr; Optional semantic cache for similar questions</li>
+        <li><strong>Error handling:</strong> Retry with backoff for API calls &rarr; Fallback message for empty retrieval &rarr; Score threshold to filter noise</li>
+        <li><strong>Monitoring:</strong> Log queries, retrieved chunks, and user feedback &rarr; Track retrieval quality over time</li>
+      </ul>
+    </div>
+
+    <p>Every component here is something you already understand from previous chapters. The pipeline is just these pieces working together.</p>
+
+    <!-- ============================================ -->
+    <h2>Try It: Build a Complete Pipeline</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: End-to-End RAG Pipeline</h3>
+      <p>Build a complete ingestion + query pipeline for a set of Markdown documentation files. Here's your checklist:</p>
+      <ol>
+        <li><strong>Collect 10-20 Markdown files</strong> — use any documentation you have. Your project's README files, internal wiki exports, or even chapters from this course saved as <code>.md</code>.</li>
+        <li><strong>Build the ingestion pipeline:</strong>
+          <ul>
+            <li>Load each Markdown file</li>
+            <li>Preprocess (clean whitespace, remove HTML if mixed)</li>
+            <li>Chunk with <code>RecursiveCharacterTextSplitter</code> (500 tokens, 50 overlap)</li>
+            <li>Embed with <code>text-embedding-3-small</code></li>
+            <li>Store in ChromaDB with metadata (source file, title)</li>
+          </ul>
+        </li>
+        <li><strong>Build the query pipeline:</strong>
+          <ul>
+            <li>Accept a question from the user</li>
+            <li>Embed the question and retrieve top-5 chunks</li>
+            <li>Build a prompt with the grounding system prompt from this chapter</li>
+            <li>Stream the answer using Claude or GPT</li>
+            <li>Print source citations at the end</li>
+          </ul>
+        </li>
+        <li><strong>Test with 5 questions</strong> — including at least one question the documents can't answer (to test the "I don't know" behavior).</li>
+        <li><strong>Bonus:</strong> Add a simple query cache and measure the latency improvement on repeated questions.</li>
+      </ol>
+      <p>When you're done, you'll have a working RAG system that you can point at any collection of documents. That's a genuinely useful tool.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+
+    <p>You now have a complete, working production pipeline. But it's still <em>basic</em> RAG — the user asks a question, you retrieve similar chunks, and the LLM answers. What happens when the question is vague? When the answer spans multiple documents?</p>
+
+    <p>In the next chapter, we'll explore <strong>advanced RAG patterns</strong> — query rewriting, HyDE, parent-child retrieval, and self-RAG — techniques that dramatically improve answer quality and separate a good RAG system from a great one.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="07-retrieval-that-works.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Retrieval That Actually Works</span>
+    </a>
+    <a href="09-advanced-patterns.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Advanced RAG Patterns</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

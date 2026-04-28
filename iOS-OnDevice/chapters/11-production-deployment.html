@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Model Management and Production Deployment — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-mlx-swift.html">&larr; Prev</a>
+      <a href="12-ai-toolkit.html">Next &rarr;</a>
+      <a href="maps/11-production-deployment-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Model Management and Production Deployment</h1>
+    <p class="subtitle">From "Works on My Phone" to "Ships to a Million Users"</p>
+  </header>
+
+  <main>
+
+    <h2>The Production Gap</h2>
+
+    <p>You've built an image classifier, a document scanner, a chat interface with MLX. Everything works beautifully on your iPhone 16 Pro. Ship it, right?</p>
+
+    <p>Not so fast. Your users have iPhone SE with 4GB RAM. iPhone 12 running iOS 17. iPad Air without a Neural Engine powerful enough for your 3B model. "Works on my device" is not a deployment strategy &mdash; it's a demo.</p>
+
+    <p>This chapter is about the gap between a working prototype and a production feature that runs reliably on millions of devices.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">50+</div>
+        <div class="stat-label">iPhone models in active use</div>
+        <p>From iPhone 8 to iPhone 16 Pro Max</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">4&ndash;8 GB</div>
+        <div class="stat-label">RAM range across devices</div>
+        <p>Your model must fit within this budget</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">iOS 16&ndash;26</div>
+        <div class="stat-label">OS versions to consider</div>
+        <p>Foundation Models = iOS 26 only</p>
+      </div>
+    </div>
+
+    <h2>Model Bundling Strategies</h2>
+
+    <p>How do you get the model onto the user's device? Three options, each with tradeoffs.</p>
+
+    <div class="model-pipeline">
+      <h3>Bundling Decision Tree</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Model &lt; 20 MB?</strong>
+            <p>Bundle in app binary</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>20&ndash;200 MB?</strong>
+            <p>On-Demand Resources</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>&gt; 200 MB?</strong>
+            <p>Background Assets framework</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3>Option 1: Embed in App Bundle</h3>
+
+    <p>Drag the .mlmodel or .mlpackage into Xcode. It ships with your app binary. The user has it immediately on install &mdash; no downloads, no waiting.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Pros</h4>
+        <ul>
+          <li>Available immediately at launch</li>
+          <li>No download management code</li>
+          <li>Works offline from first launch</li>
+          <li>Simplest implementation</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Cons</h4>
+        <ul>
+          <li>Increases app download size</li>
+          <li>App Store limit: 4 GB total binary</li>
+          <li>Can't update model without app update</li>
+          <li>All users download it, even those who don't use the feature</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Option 2: On-Demand Resources (ODR)</h3>
+
+    <p>Tag your model as an on-demand resource. Apple hosts it on their CDN. Your app downloads it when needed and iOS manages the storage automatically.</p>
+
+<pre><code>// Request the model when the user opens the AI feature
+let request = NSBundleResourceRequest(tags: ["image-classifier"])
+
+request.beginAccessingResources { error in
+    if let error = error {
+        print("Download failed: \(error)")
+        return
+    }
+
+    // Model is now available in the bundle
+    let model = try? ImageClassifier(configuration: .init())
+    // ... use the model
+
+    // Release when done (iOS may purge if storage is low)
+    request.endAccessingResources()
+}</code></pre>
+
+    <div class="tip-box">
+      <h4>ODR Best Practices</h4>
+      <p>Tag models with descriptive resource tags in Xcode's Resource Tags panel. Set the <strong>initial install tags</strong> for critical models (downloaded with the app) and <strong>prefetch tags</strong> for models you want pre-downloaded after install. Keep download-on-demand for optional features.</p>
+    </div>
+
+    <h3>Option 3: Background Assets Framework</h3>
+
+    <p>For large models (100MB+), the Background Assets framework downloads content silently in the background, even before the user first opens your app. Apple hosts the assets on their CDN (200GB included with your developer account).</p>
+
+    <p>This is the recommended path for MLX models and large Core ML packages. The user never sees a loading spinner &mdash; the model arrives before they need it.</p>
+
+    <h2>App Store Guidelines for AI</h2>
+
+    <p>Apple has specific rules for AI-powered apps. Violate them and your app gets rejected.</p>
+
+    <div class="apple-framework">
+      <h3>App Store Review: AI Requirements</h3>
+      <table>
+        <thead>
+          <tr><th>Guideline</th><th>Requirement</th><th>How to Comply</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>5.1.2 &mdash; Data Privacy</strong></td>
+            <td>Disclose any AI data processing in App Privacy Report</td>
+            <td>On-device = "Data Not Collected." If using cloud fallback, disclose it.</td>
+          </tr>
+          <tr>
+            <td><strong>4.7 &mdash; Third-Party SDKs</strong></td>
+            <td>Declare AI SDKs and their data practices</td>
+            <td>List MLX, llama.cpp, or ExecuTorch in your privacy manifest.</td>
+          </tr>
+          <tr>
+            <td><strong>1.1 &mdash; Generated Content</strong></td>
+            <td>AI-generated content must comply with content guidelines</td>
+            <td>Filter outputs. No generating harmful, illegal, or misleading content.</td>
+          </tr>
+          <tr>
+            <td><strong>Binary Size</strong></td>
+            <td>App binary must be under 4 GB</td>
+            <td>Use ODR or Background Assets for large models.</td>
+          </tr>
+          <tr>
+            <td><strong>2.3.1 &mdash; Transparency</strong></td>
+            <td>Users must know when they're interacting with AI</td>
+            <td>Label AI-generated content. Don't pretend the AI is a person.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="warning-box">
+      <h4>The Privacy Advantage</h4>
+      <p>On-device AI is a <strong>regulatory superpower</strong>. If data never leaves the device, you don't need GDPR consent dialogs for AI processing, you can mark "Data Not Collected" in App Store privacy labels, and you dodge the entire third-party AI data sharing disclosure. This is a genuine competitive advantage.</p>
+    </div>
+
+    <h2>Device Capability Detection</h2>
+
+    <p>Not all iPhones are equal. Your app needs to detect what's available at runtime and adapt.</p>
+
+<pre><code>import CoreML
+import UIKit
+
+struct DeviceCapability {
+    /// Available RAM in GB
+    static var ramGB: Double {
+        Double(ProcessInfo.processInfo.physicalMemory)
+            / 1_073_741_824
+    }
+
+    /// Does this device support the Neural Engine?
+    static var hasNeuralEngine: Bool {
+        MLModel.availableComputeDevices.contains(
+            where: { $0.description.contains("neuralEngine") }
+        )
+    }
+
+    /// Can this device run Foundation Models?
+    static var supportsFoundationModels: Bool {
+        if #available(iOS 26, *) {
+            return SystemLanguageModel.default.availability
+                == .available
+        }
+        return false
+    }
+
+    /// Recommended model tier based on device
+    static var modelTier: ModelTier {
+        if supportsFoundationModels { return .foundationModels }
+        if ramGB >= 6 { return .mlxLarge }   // 3B model
+        if ramGB >= 4 { return .mlxSmall }   // 1B model
+        return .visionOnly                    // Built-in frameworks
+    }
+}
+
+enum ModelTier {
+    case foundationModels  // iPhone 15 Pro+, iOS 26
+    case mlxLarge          // 6+ GB RAM, 3B model
+    case mlxSmall          // 4+ GB RAM, 1B model
+    case visionOnly        // Older devices, built-in only
+}</code></pre>
+
+    <div class="tip-box">
+      <h4>Progressive Enhancement, Not Lowest Common Denominator</h4>
+      <p>Don't disable AI features for everyone just because iPhone SE can't run them. Instead: iPhone SE gets Vision framework features (text recognition, classification). iPhone 15 adds MLX chat. iPhone 15 Pro gets Foundation Models with guided generation. Every user gets value; Pro users get more.</p>
+    </div>
+
+    <h2>Error Handling and Graceful Degradation</h2>
+
+    <p>Models fail. Downloads stall. Inference crashes. Your app needs to handle every failure gracefully.</p>
+
+<pre><code>func classifyImage(_ image: CGImage) async -> ClassificationResult {
+    do {
+        // Attempt model-based classification
+        let model = try loadModel()
+        let prediction = try await model.classify(image)
+        return .success(prediction)
+    } catch let error as MLModel.Error {
+        // Model loading failed — corrupt or incompatible
+        logger.error("Model load failed: \(error)")
+        return .fallback(reason: "AI feature temporarily unavailable")
+    } catch {
+        // Unexpected inference error
+        logger.error("Inference failed: \(error)")
+        return .fallback(reason: "Could not analyze image")
+    }
+}
+
+enum ClassificationResult {
+    case success(Prediction)
+    case fallback(reason: String)
+}</code></pre>
+
+    <div class="checklist">
+      <h4>Error Handling Checklist</h4>
+      <ul>
+        <li><strong>Model not found</strong> &mdash; ODR download failed or file corrupt. Show retry button, disable feature gracefully.</li>
+        <li><strong>Insufficient memory</strong> &mdash; model too large for device. Fall back to smaller model or built-in framework.</li>
+        <li><strong>Inference timeout</strong> &mdash; model takes too long (thermal throttling). Return cached result or show "try again."</li>
+        <li><strong>Unexpected output</strong> &mdash; model returns garbage (wrong input format). Log and show fallback UI.</li>
+        <li><strong>OS version mismatch</strong> &mdash; API not available on user's iOS version. Use <code>#available</code> checks.</li>
+      </ul>
+    </div>
+
+    <h2>Memory Management in Production</h2>
+
+    <p>A model that works in testing can still crash in production when the user has 47 Safari tabs open. Memory discipline is non-negotiable.</p>
+
+<pre><code>class ModelLifecycleManager {
+    private var model: MLModel?
+
+    init() {
+        // Load when view appears
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { try? await self?.loadModel() }
+        }
+
+        // Unload when backgrounded
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.unloadModel()
+        }
+
+        // Emergency unload on memory warning
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.unloadModel()
+        }
+    }
+
+    func unloadModel() {
+        model = nil
+        // Core ML releases memory, but nudge it
+        autoreleasepool { }
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <h4>The 47-Safari-Tabs Rule</h4>
+      <p>Test your AI feature after opening dozens of Safari tabs, playing music, and running navigation. That's what real user memory pressure looks like. If your model loads successfully in a clean simulator but crashes on a memory-pressured device, you have a production bug.</p>
+    </div>
+
+    <h2>Performance Monitoring with os_signpost and MetricKit</h2>
+
+    <p>You can't fix what you can't measure. Instrument your AI features to track real-world performance.</p>
+
+<pre><code>import os
+
+let inferenceLog = OSLog(
+    subsystem: "com.yourapp.ml",
+    category: .pointsOfInterest
+)
+
+func measureInference&lt;T&gt;(
+    _ name: StaticString,
+    block: () throws -> T
+) rethrows -> T {
+    let signpostID = OSSignpostID(log: inferenceLog)
+    os_signpost(.begin, log: inferenceLog,
+                name: name, signpostID: signpostID)
+
+    let result = try block()
+
+    os_signpost(.end, log: inferenceLog,
+                name: name, signpostID: signpostID)
+    return result
+}
+
+// Usage
+let prediction = try measureInference("ImageClassification") {
+    try model.prediction(from: input)
+}</code></pre>
+
+    <p>For production telemetry, use <strong>MetricKit</strong> with <code>MXSignpostMetric</code>:</p>
+
+<pre><code>import MetricKit
+
+class PerformanceReporter: NSObject, MXMetricManagerSubscriber {
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for payload in payloads {
+            // Custom signpost metrics (aggregated by OS)
+            if let signpost = payload.signpostMetrics?.first(
+                where: { $0.signpostName == "ImageClassification" }
+            ) {
+                let p50 = signpost.signpostIntervalData
+                    .histogrammedSignpostDurations
+                    .bucketEnumerator
+                // Send to your analytics backend
+                analytics.track("ml_inference_p50",
+                                value: p50)
+            }
+        }
+    }
+}</code></pre>
+
+    <div class="device-benchmark">
+      <h3>Key Metrics to Track in Production</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Target</th>
+            <th>How to Measure</th>
+            <th>Alert Threshold</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Model load time</td>
+            <td>&lt; 500 ms</td>
+            <td>os_signpost around MLModel init</td>
+            <td>&gt; 2 seconds</td>
+          </tr>
+          <tr>
+            <td>Inference latency (p50)</td>
+            <td>&lt; 30 ms</td>
+            <td>os_signpost around prediction</td>
+            <td>&gt; 100 ms</td>
+          </tr>
+          <tr>
+            <td>Inference latency (p95)</td>
+            <td>&lt; 100 ms</td>
+            <td>MetricKit histogram</td>
+            <td>&gt; 500 ms</td>
+          </tr>
+          <tr>
+            <td>Memory footprint</td>
+            <td>&lt; 200 MB</td>
+            <td>Instruments / Memory Graph</td>
+            <td>&gt; 400 MB</td>
+          </tr>
+          <tr>
+            <td>Inference success rate</td>
+            <td>&gt; 99.5%</td>
+            <td>Error counting in analytics</td>
+            <td>&lt; 98%</td>
+          </tr>
+          <tr>
+            <td>Feature adoption</td>
+            <td>Varies</td>
+            <td>Analytics events on feature use</td>
+            <td>Declining trend</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>A/B Testing Models</h2>
+
+    <p>Should you ship the 4-bit palettized model or the int8 quantized one? A/B testing lets you answer with real user data instead of guessing.</p>
+
+<pre><code>// Simple feature flag for model variant
+let modelVariant: String = RemoteConfig.shared
+    .string(forKey: "ml_model_variant") ?? "v2-4bit"
+
+func loadModel() throws -> MLModel {
+    switch modelVariant {
+    case "v2-4bit":
+        return try ClassifierV2_4bit(configuration: .init()).model
+    case "v2-int8":
+        return try ClassifierV2_int8(configuration: .init()).model
+    default:
+        return try ClassifierV2_4bit(configuration: .init()).model
+    }
+}</code></pre>
+
+    <p>Track both <strong>technical metrics</strong> (latency, accuracy, errors) and <strong>product metrics</strong> (feature adoption, user satisfaction, task completion rate). A faster model that gives worse results isn't a win.</p>
+
+    <h2>Model Update Strategy</h2>
+
+    <p>Your model will need updates &mdash; new classes, better accuracy, bug fixes. Plan for this from day one.</p>
+
+    <div class="model-pipeline">
+      <h3>Model Update Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Train New Version</strong>
+            <p>Create ML or coremltools</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Validate Offline</strong>
+            <p>Test accuracy, latency, memory</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Staged Rollout</strong>
+            <p>5% &rarr; 25% &rarr; 100% of users</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Monitor Metrics</strong>
+            <p>Watch for regressions</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>Rollback Plan</strong>
+            <p>Keep previous version available</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <h4>Version Your Models</h4>
+      <p>Name your model files with versions: <code>ClassifierV3_4bit.mlpackage</code>. When using ODR or Background Assets, include the version in the resource tag. Always keep the previous version available as fallback in case the new version has issues you didn't catch in testing.</p>
+    </div>
+
+    <h2>The Production Hardening Checklist</h2>
+
+    <div class="highlight-box">
+      <h3>Ship-Ready Checklist</h3>
+      <ul>
+        <li><strong>Device detection</strong> &mdash; runtime capability check selects appropriate model variant</li>
+        <li><strong>Graceful degradation</strong> &mdash; fallback UI for unsupported devices, download failures, and inference errors</li>
+        <li><strong>Memory lifecycle</strong> &mdash; load on foreground, unload on background, respond to memory warnings</li>
+        <li><strong>Performance telemetry</strong> &mdash; os_signpost for inference latency, MetricKit for production aggregates</li>
+        <li><strong>Error logging</strong> &mdash; OSLog for all model failures with enough context to debug</li>
+        <li><strong>Thermal awareness</strong> &mdash; check thermalState before heavy inference; defer if .serious</li>
+        <li><strong>App Store compliance</strong> &mdash; privacy labels, generated content guidelines, binary size within limits</li>
+        <li><strong>Offline support</strong> &mdash; model available without network, or graceful handling when download required</li>
+        <li><strong>Update path</strong> &mdash; model versioning, staged rollout, rollback mechanism</li>
+        <li><strong>Real-device testing</strong> &mdash; tested on lowest-tier supported device under memory pressure</li>
+      </ul>
+    </div>
+
+    <h2>Exercise: Production-Harden an AI Feature</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: Ship-Ready AI</h3>
+      <p>Take any AI feature you built in earlier chapters and add production hardening:</p>
+      <ol>
+        <li><strong>Device capability check</strong> &mdash; implement the <code>DeviceCapability</code> struct from this chapter. Detect RAM, Neural Engine, and Foundation Models support. Choose model variant accordingly.</li>
+        <li><strong>Error handling</strong> &mdash; wrap model loading and inference in do-catch blocks. Return fallback results on failure. Log errors with OSLog.</li>
+        <li><strong>Memory lifecycle</strong> &mdash; implement <code>ModelLifecycleManager</code>. Load on foreground, unload on background, respond to memory warnings.</li>
+        <li><strong>Performance telemetry</strong> &mdash; add os_signpost around model loading and inference. Measure p50 latency on your device.</li>
+        <li><strong>Graceful degradation UI</strong> &mdash; build a fallback view that appears when the AI feature is unavailable (unsupported device, download pending, or inference failure).</li>
+      </ol>
+      <h4>Bonus:</h4>
+      <ul>
+        <li>Add a simple A/B test: switch between two model variants via a local toggle, track latency and accuracy for each</li>
+        <li>Simulate memory pressure in Simulator (Debug &rarr; Simulate Memory Warning) and verify your app survives</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now know how to ship AI features to real users. In the final chapter, <strong>Chapter 12: Building Your On-Device AI Toolkit</strong>, you'll tie everything together into a reusable decision framework, build a multi-model pipeline combining Vision + NaturalLanguage + Foundation Models, and chart your roadmap for staying current as on-device AI evolves.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-mlx-swift.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">MLX Swift and Open-Source Models</span>
+      </a>
+      <a href="12-ai-toolkit.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Building Your On-Device AI Toolkit</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

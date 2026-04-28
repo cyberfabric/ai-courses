@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Battery and Power Optimization | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-gradle-build-performance.html">&larr; Prev</a>
+      <a href="09-ai-assisted-profiling.html">Next &rarr;</a>
+      <a href="maps/08-battery-power-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Battery and Power Optimization</h1>
+    <p class="subtitle">Your app works great &mdash; until the user notices it ate 30% of their battery by lunch</p>
+  </header>
+
+  <main>
+
+    <h2>The Battery Is the Scoreboard</h2>
+
+    <p>In Chapter 7, we optimized build times &mdash; the developer&rsquo;s productivity bottleneck. This chapter tackles the <em>user&rsquo;s</em> most visible resource: their battery. Users don&rsquo;t know what a recomposition count is. They don&rsquo;t care about your Gradle cache hit rate. But they <em>absolutely</em> notice when your app shows up in Settings &rarr; Battery as a top consumer.</p>
+
+    <p>And Android notices too. Starting with Android 9, the system aggressively restricts background behavior for apps it considers battery-heavy. Your perfectly working background sync can simply stop firing.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">46%</span>
+        <span class="stat-label">of users check battery usage stats at least weekly</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5</span>
+        <span class="stat-label">App Standby Buckets that throttle your app&rsquo;s background work</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">2h / 28d</span>
+        <span class="stat-label">Play Console&rsquo;s &ldquo;excessive wake locks&rdquo; threshold &mdash; can derank your store listing</span>
+      </div>
+    </div>
+
+    <h2>Doze Mode and App Standby Buckets</h2>
+
+    <p>Before debugging battery issues, you need to understand the two systems that control your app&rsquo;s background access:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>System</th>
+          <th>What It Does</th>
+          <th>Impact on Your App</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Doze Mode</strong></td>
+          <td>Defers alarms, network, jobs, and syncs when device is idle</td>
+          <td>Your <code>AlarmManager</code> alarms and <code>JobScheduler</code> jobs get batched into maintenance windows</td>
+        </tr>
+        <tr>
+          <td><strong>App Standby Buckets</strong></td>
+          <td>Categorizes apps by usage frequency: Active, Working Set, Frequent, Rare, Restricted</td>
+          <td>Rare/Restricted apps can only run jobs once per day; alarms are heavily deferred</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      Check your app&rsquo;s current standby bucket with: <code>adb shell am get-standby-bucket com.example.myapp</code>. If you&rsquo;re in &ldquo;Rare&rdquo; or &ldquo;Restricted&rdquo; during testing, the system is throttling your background work &mdash; which will mask real issues. Reset with: <code>adb shell am set-standby-bucket com.example.myapp active</code>.
+    </div>
+
+    <h2>The Excessive Wake Locks Metric (New for 2026)</h2>
+
+    <p>In November 2025, Google Play exited beta on a new Android vitals metric: <strong>excessive partial wake locks</strong>. Starting <strong>March 1, 2026</strong>, this metric is part of the Play Store quality-enforcement system &mdash; meaning if you fail it, your app can be excluded from recommendations and discovery surfaces, and users may see a battery-drain warning on your store listing.</p>
+
+    <p>This is not a soft warning. It&rsquo;s the same enforcement mechanism that already exists for crash rate and ANR rate. Battery is now a Play Console quality bar.</p>
+
+    <div class="warning-box">
+      <strong>The bad-behavior threshold:</strong> A user session is flagged as <em>excessive</em> if your app holds non-exempt partial wake locks for <strong>more than 2 cumulative hours</strong> while the screen is off in a 24-hour period. If <strong>more than 5% of your sessions</strong> over the last <strong>28 days</strong> are excessive, you cross the bad-behavior threshold and become subject to discovery suppression and the store-listing warning.
+    </div>
+
+    <p>Android Studio&rsquo;s App Quality Insights and the Play Console both surface this data. The Play Console shows a per-wake-lock-tag breakdown of P90 / P99 durations &mdash; Google&rsquo;s own guidance is to investigate any wake lock with P90 or P99 above 60 minutes.</p>
+
+    <h3>Some Wake Locks Are Exempt</h3>
+
+    <p>Not every partial wake lock counts against the metric. Wake locks held during these states are <em>exempt</em> and do not contribute to the threshold:</p>
+
+    <ul>
+      <li>While a foreground service is running</li>
+      <li>While the app is the top-visible app</li>
+      <li>While media is being played or recorded</li>
+      <li>While a user-initiated job is executing</li>
+      <li>While the device is charging</li>
+    </ul>
+
+    <p>This is why the metric is targeted specifically at <em>background</em> wake-lock abuse &mdash; not the legitimate cases where the user is actively engaged with your app.</p>
+
+    <div class="debug-trace">
+      <h4>Crashlytics + Android Vitals: Top Wake Lock Tag</h4>
+<pre><code># Android vitals export (top wake lock tags by P99):
+
+Tag: ProductSyncAdapter
+  Sessions held: 12.4% of all sessions
+  P90 duration: 1h 47m
+  P99 duration: 4h 12m
+  Median holds per session: 3
+
+Tag: LocationUpdateService
+  Sessions held: 38.1% of all sessions
+  P90 duration: 38m
+  P99 duration: 1h 03m
+
+Tag: AnalyticsFlush
+  Sessions held: 89.6% of all sessions
+  P90 duration: 12s
+  P99 duration: 38s
+
+Excessive sessions (>2h cumulative): 8.3% of last 28 days</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) ProductSyncAdapter is the offender</strong> &mdash; P99 of 4h 12m means the worst-case user is holding this tag for over four hours per session. The 12.4% session reach × ~2h+ duration is what&rsquo;s pushing &ldquo;excessive sessions&rdquo; to 8.3%, well above the 5% threshold. <strong>(2) LocationUpdateService at P99 1h is suspicious</strong> but borderline &mdash; check whether these holds are during a foreground service (exempt) or background (counts). <strong>(3) AnalyticsFlush is fine</strong> &mdash; P99 of 38 seconds, no contribution to the threshold.</p>
+    </div>
+
+    <h2>Battery Historian</h2>
+
+    <p>Battery Historian is Google&rsquo;s tool for visualizing what your app is doing to the battery. It takes a bug report and produces a timeline showing wake locks, jobs, alarms, network activity, and CPU usage.</p>
+
+    <h3>Capturing Battery Data</h3>
+
+    <pre><code># 1. Reset battery stats (start with a clean slate)
+adb shell dumpsys batterystats --reset
+
+# 2. Disconnect USB (charging masks battery drain)
+#    Use WiFi ADB or just let the app run on battery
+
+# 3. Use the app normally for 30-60 minutes
+
+# 4. Reconnect and capture a bug report
+adb bugreport bugreport.zip
+
+# 5. Run Battery Historian (Docker):
+docker run -p 9999:9999 gcr.io/android-battery-historian/stable:3.1 \
+    --port 9999
+
+# 6. Open http://localhost:9999 and upload bugreport.zip</code></pre>
+
+    <p>Battery Historian produces a timeline visualization. The key rows for your app are: <strong>Wakelock</strong> (held), <strong>JobScheduler</strong> (jobs running), <strong>SyncManager</strong> (syncs), <strong>GPS</strong> (location requests), and <strong>Mobile radio</strong> (network activity).</p>
+
+    <h3>Extracting Data for Claude Code</h3>
+
+    <p>You can&rsquo;t paste a Battery Historian visualization into Claude Code. Instead, extract the text summary:</p>
+
+    <pre><code># Get battery stats text dump for your app:
+adb shell dumpsys batterystats --charged com.example.myapp
+
+# Key sections to extract:
+# - "Wake lock" — list of wake locks, duration, count
+# - "Job" — scheduled jobs, execution count, total time
+# - "Sync" — sync adapter activity
+# - "Sensor" — GPS, accelerometer usage
+# - "Network" — mobile/wifi packets and bytes</code></pre>
+
+    <div class="debug-trace">
+      <h4>Battery Stats Dump: Excessive Wake Locks</h4>
+<pre><code>$ adb shell dumpsys batterystats --charged com.example.shopapp
+
+  Wake lock *sync*/com.example.shopapp/com.example.shopapp.sync.ProductSyncAdapter
+    realtime: 18m 32s 450ms
+    count: 847
+    max duration: 4s 230ms
+
+  Wake lock LocationUpdateService
+    realtime: 42m 17s 120ms
+    count: 2,531
+    max duration: 890ms
+
+  Job com.example.shopapp/.sync.SyncJobService
+    Total execution: 12m 8s
+    Count: 214
+    Average: 3.4s
+
+  Sensor GPS
+    Total time: 38m 52s
+    Count: 1,247
+
+  Network: 847 wifi packets tx, 1,203 rx (2.4MB total)
+
+  Estimated battery usage: 8.7%</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) LocationUpdateService wake lock</strong> is held for 42 minutes total across 2,531 acquisitions. This is the top battery drain &mdash; the service is requesting location updates far too frequently. <strong>(2) ProductSyncAdapter</strong> fired 847 times, which is excessive for a product catalog that changes daily. <strong>(3) GPS is active for 38 minutes</strong>, likely correlated with the location wake lock. <strong>(4) Total estimated usage of 8.7% is very high</strong> for an e-commerce app &mdash; target is under 2%.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Over-Aggressive Location Updates + Sync Frequency</h4>
+      <p>Two compounding issues: <strong>(1)</strong> <code>LocationUpdateService</code> requests GPS updates every 5 seconds with <code>PRIORITY_HIGH_ACCURACY</code>, keeping the GPS radio active almost continuously. For a shopping app, this precision and frequency are unnecessary &mdash; store locations don&rsquo;t move. <strong>(2)</strong> <code>ProductSyncAdapter</code> runs every 2 minutes to check for catalog updates. A product catalog that changes daily does not need minute-level sync.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Right-Size Location Requests + Reduce Sync Frequency</h4>
+<pre><code>// BEFORE: Over-aggressive location request
+val locationRequest = LocationRequest.Builder(
+    Priority.PRIORITY_HIGH_ACCURACY,
+    5_000L  // Every 5 seconds — way too frequent for store finder
+).build()
+
+// AFTER: Appropriate for a store finder feature
+val locationRequest = LocationRequest.Builder(
+    Priority.PRIORITY_BALANCED_POWER_ACCURACY,  // Cell/WiFi, not GPS
+    300_000L  // Every 5 minutes — stores don't move
+).setMinUpdateDistanceMeters(100f)  // Only if user moves 100m
+ .setMaxUpdateDelayMillis(600_000L)  // Batch up to 10 min
+ .build()
+
+// BEFORE: Sync every 2 minutes
+PeriodicWorkRequestBuilder&lt;ProductSyncWorker&gt;(
+    2, TimeUnit.MINUTES  // 720 syncs per day!
+).build()
+
+// AFTER: Sync once per day, with constraints
+PeriodicWorkRequestBuilder&lt;ProductSyncWorker&gt;(
+    24, TimeUnit.HOURS
+).setConstraints(
+    Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.UNMETERED)  // WiFi only
+        .setRequiresBatteryNotLow(true)
+        .build()
+).build()</code></pre>
+      <p><strong>Key changes:</strong> (1) <code>PRIORITY_BALANCED_POWER_ACCURACY</code> uses cell towers and WiFi instead of GPS &mdash; 10x less battery drain. (2) Update interval of 5 minutes with distance filter means the radio only activates when meaningful. (3) Sync drops from 720/day to 1/day, constrained to WiFi and sufficient battery.</p>
+    </div>
+
+    <h2>Building an <code>/analyze-battery</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/analyze-battery.md</code>:</p>
+
+    <pre><code># /analyze-battery — Battery Usage Analysis
+
+Analyze battery stats from `dumpsys batterystats` output and identify
+the top power drains.
+
+## Input
+The user will paste output from:
+- `adb shell dumpsys batterystats --charged [package]`
+- Battery Historian summary data
+- Wake lock or job scheduler logs
+
+## Analysis Steps
+
+1. **Rank wake locks** by total realtime held. Any wake lock held for
+   more than 1 minute total in a session is suspicious. Flag any tag
+   whose P90/P99 duration approaches or exceeds 60 minutes &mdash; that
+   is the threshold Google&rsquo;s own guidance calls out as a risk for the
+   Play Console excessive-wake-lock metric.
+
+2. **Audit location usage:**
+   - GPS active time (target: < 5 min per hour for non-navigation apps)
+   - Location request priority and interval
+   - Is PRIORITY_HIGH_ACCURACY necessary?
+
+3. **Review job/sync frequency:**
+   - Jobs firing more than once per hour for non-critical data
+   - Sync adapters without network or battery constraints
+
+4. **Check wake lock hygiene:**
+   - Wake locks acquired but never released (leak)
+   - Wake locks held during long operations
+   - Partial wake locks vs full wake locks
+
+5. **Network pattern analysis:**
+   - Frequent small requests (should be batched)
+   - Network activity during Doze windows
+   - Missing connectivity constraints on jobs
+
+## Output Format
+
+### Battery Usage Summary
+[Estimated %, top consumers]
+
+### Top Drains (ranked)
+[Each drain with time, count, and severity]
+
+### Optimization Recommendations
+[Ranked by expected battery savings]
+
+### Code Fixes
+```kotlin
+[Specific changes]
+```</code></pre>
+
+    <h2>WakeLock Audit</h2>
+
+    <p>Wake locks are the #1 cause of unnecessary battery drain. They keep the CPU running when it should be sleeping. Every acquire without a matching release is a battery leak.</p>
+
+    <pre><code>// The dangerous pattern:
+val wakeLock = powerManager.newWakeLock(
+    PowerManager.PARTIAL_WAKE_LOCK, "MyApp::SyncLock"
+)
+wakeLock.acquire()  // CPU stays awake...
+doLongSync()        // If this throws, release is never called!
+wakeLock.release()
+
+// The safe pattern:
+val wakeLock = powerManager.newWakeLock(
+    PowerManager.PARTIAL_WAKE_LOCK, "MyApp::SyncLock"
+)
+wakeLock.acquire(10 * 60 * 1000L)  // 10 min timeout — auto-release!
+try {
+    doLongSync()
+} finally {
+    if (wakeLock.isHeld) wakeLock.release()
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Always use a timeout on <code>wakeLock.acquire()</code>.</strong> The overload <code>acquire(timeoutMs)</code> automatically releases the lock after the timeout. This prevents battery-killing leaks if your code throws an exception or hangs.
+    </div>
+
+    <h2>WorkManager vs AlarmManager vs JobScheduler</h2>
+
+    <p>Choosing the wrong scheduling API is a common source of battery drain. Here&rsquo;s when to use each:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>API</th>
+          <th>Use When</th>
+          <th>Battery Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>WorkManager</strong></td>
+          <td>Any deferrable background work. Default choice for most tasks.</td>
+          <td>Low &mdash; respects Doze, batches intelligently</td>
+        </tr>
+        <tr>
+          <td><strong>AlarmManager (exact)</strong></td>
+          <td>User-facing alarms (medication reminders, meeting alerts)</td>
+          <td>High &mdash; wakes device from Doze. Requires SCHEDULE_EXACT_ALARM permission.</td>
+        </tr>
+        <tr>
+          <td><strong>AlarmManager (inexact)</strong></td>
+          <td>Periodic triggers where timing isn&rsquo;t critical</td>
+          <td>Medium &mdash; system batches with other alarms</td>
+        </tr>
+        <tr>
+          <td><strong>Foreground Service</strong></td>
+          <td>User-initiated ongoing tasks (music playback, navigation, file upload)</td>
+          <td>Varies &mdash; shows notification, user is aware</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here's our background scheduling code. We use AlarmManager for product sync, a foreground service for checking new messages, and WorkManager for image upload. Are we using the right API for each task?
+
+[paste scheduling code for all three]
+
+Product sync: checks catalog every 2 hours, not user-visible
+Message check: polls server every 30 seconds for new messages
+Image upload: user takes a photo, upload can happen anytime</div>
+      <div class="prompt-explanation">AI will likely flag: product sync should use WorkManager (not AlarmManager); message check should use FCM push instead of polling; image upload is correctly using WorkManager.</div>
+    </div>
+
+    <h2>Location Services Battery Drain</h2>
+
+    <p>Location is the single biggest battery drain after the screen. The difference between good and bad location usage can be 10x in battery impact.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Location Config</div>
+        <div class="prompt-text">Priority: HIGH_ACCURACY (GPS)
+Interval: 1 second
+Smallest displacement: 0 meters
+Running in: foreground service, always on</div>
+        <div class="prompt-explanation">GPS radio on continuously. Appropriate only for turn-by-turn navigation. Drains ~15% battery per hour.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Location Config</div>
+        <div class="prompt-text">Priority: BALANCED_POWER_ACCURACY
+Interval: 5 minutes
+Smallest displacement: 50 meters
+Running in: WorkManager periodic task
+Geofencing for store proximity alerts</div>
+        <div class="prompt-explanation">Cell/WiFi positioning, only when user moves significantly. Geofences are hardware-accelerated and nearly free. Drains ~0.5% per hour.</div>
+      </div>
+    </div>
+
+    <h3>Geofencing vs Continuous Location</h3>
+
+    <pre><code>// Instead of continuously tracking location to detect "near a store",
+// use geofences — they're hardware-accelerated and battery-free:
+val geofence = Geofence.Builder()
+    .setRequestId("store-123")
+    .setCircularRegion(lat, lng, 200f)  // 200m radius
+    .setExpirationDuration(Geofence.NEVER_EXPIRE)
+    .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
+    .build()
+
+val request = GeofencingRequest.Builder()
+    .addGeofence(geofence)
+    .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+    .build()
+
+geofencingClient.addGeofences(request, geofencePendingIntent)</code></pre>
+
+    <h2>Foreground Service Audit</h2>
+
+    <p>Android 14+ requires you to declare the <em>type</em> of foreground service, and some types require specific permissions. AI can audit your foreground service usage:</p>
+
+    <pre><code>// AndroidManifest.xml — must declare type:
+&lt;service
+    android:name=".service.SyncForegroundService"
+    android:foregroundServiceType="dataSync"
+    android:exported="false" /&gt;
+
+// Question to ask Claude Code:
+// "Do I really need a foreground service for data sync, or can
+//  WorkManager handle it? Here's what the service does: [paste code]"</code></pre>
+
+    <div class="tip-box">
+      In most cases, <code>WorkManager</code> with a long-running worker is a better choice than a foreground service for background data operations. WorkManager handles wake locks, constraints, and retries automatically. Reserve foreground services for truly user-initiated ongoing tasks.
+    </div>
+
+    <h3>Android 15: The 6-Hour Timeout for <code>dataSync</code> and <code>mediaProcessing</code></h3>
+
+    <p>If your app targets Android 15 or higher, the system tracks how long <code>dataSync</code> and <code>mediaProcessing</code> foreground services run while the app is in the background. Cumulative <strong>6 hours per 24-hour period</strong>, shared across all FGS instances of that type. After that, the system calls <code>Service.onTimeout(int, int)</code> and your service must call <code>stopSelf()</code> within a few seconds &mdash; or the system throws a <code>RemoteServiceException</code>.</p>
+
+    <pre><code>// Handle the Android 15 timeout callback:
+override fun onTimeout(startId: Int, fgsType: Int) {
+    super.onTimeout(startId, fgsType)
+    // Persist whatever state you need, then stop:
+    saveProgress()
+    stopSelf()
+}
+
+// Test the timeout without waiting 6 real hours:
+// adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS com.your.package</code></pre>
+
+    <div class="warning-box">
+      <strong>The timer is shared per type.</strong> If a <code>dataSync</code> service runs for 4 hours, then a <em>different</em> <code>dataSync</code> service starts, the second one gets only 2 hours before timeout. Bringing the app to the foreground resets the budget. The 6-hour budget is tracked separately for <code>dataSync</code> and <code>mediaProcessing</code>.
+    </div>
+
+    <h3>The <code>BOOT_COMPLETED</code> Trap</h3>
+
+    <p>Since Android 14, starting a foreground service from a <code>BOOT_COMPLETED</code> broadcast receiver throws <code>ForegroundServiceStartNotAllowedException</code> for most FGS types. You can&rsquo;t spin up a sync service the moment the device boots anymore &mdash; the system considers the app &ldquo;not user-visible.&rdquo; Use <code>WorkManager</code> with <code>setInitialDelay</code>, or a one-time <code>OneTimeWorkRequest</code>, instead.</p>
+
+    <pre><code>// Test the BOOT_COMPLETED restriction without rebooting:
+// adb shell am compat enable FGS_BOOT_COMPLETED_RESTRICTIONS com.your.package
+// Then trigger your BOOT_COMPLETED handler with:
+// adb shell am broadcast -a android.intent.action.BOOT_COMPLETED -p com.your.package</code></pre>
+
+    <p>Android 16 adds further pressure: <strong>job runtime quotas</strong> apply to jobs that run concurrently with foreground services, so the &ldquo;hide everything behind an FGS&rdquo; pattern no longer buys unlimited compute. If a job exceeds its quota while an FGS is running, the system stops the job. The fix is the same direction as the Android 15 timeout: design your background work to be interruptible, save progress regularly, and prefer <code>WorkManager</code>&rsquo;s constraint system over manually managing service lifecycles.</p>
+
+    <h2>Network Batching</h2>
+
+    <p>Each network request wakes the cellular radio for ~20 seconds (the &ldquo;radio tail&rdquo;). Ten small requests in 10 minutes means the radio is active almost continuously. Batching those into one request eliminates 90% of the radio time.</p>
+
+    <pre><code>// BAD: Individual analytics events sent immediately
+fun trackEvent(event: AnalyticsEvent) {
+    scope.launch {
+        api.sendEvent(event)  // Each call wakes the radio for ~20s
+    }
+}
+
+// GOOD: Batch analytics events
+class AnalyticsBatcher @Inject constructor(
+    private val api: AnalyticsApi
+) {
+    private val batch = mutableListOf&lt;AnalyticsEvent&gt;()
+
+    fun trackEvent(event: AnalyticsEvent) {
+        synchronized(batch) { batch.add(event) }
+    }
+
+    // Flush periodically via WorkManager, not on every event
+    suspend fun flush() {
+        val events = synchronized(batch) {
+            batch.toList().also { batch.clear() }
+        }
+        if (events.isNotEmpty()) {
+            api.sendBatch(events)  // One request instead of many
+        }
+    }
+}</code></pre>
+
+    <h2>Measuring Battery Improvement</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Aggressive Location + Frequent Sync</h4>
+        <p><strong>Battery usage (1 hour):</strong> 8.7%</p>
+        <p><strong>Wake locks held:</strong> 42 min total</p>
+        <p><strong>GPS active:</strong> 38 min</p>
+        <p><strong>Sync operations:</strong> 847 in session</p>
+        <p><strong>User complaint:</strong> &ldquo;Your app kills my battery&rdquo;</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: Balanced Location + Daily Sync</h4>
+        <p><strong>Battery usage (1 hour):</strong> 1.2%</p>
+        <p><strong>Wake locks held:</strong> 3 min total</p>
+        <p><strong>GPS active:</strong> 0 min (using cell/WiFi)</p>
+        <p><strong>Sync operations:</strong> 1 per day</p>
+        <p><strong>User complaint:</strong> None</p>
+      </div>
+    </div>
+
+    <h2>Your Battery Optimization Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Always use <code>acquire(timeoutMs)</code> for wake locks &mdash; never bare <code>acquire()</code></li>
+      <li class="checked">Use <code>PRIORITY_BALANCED_POWER_ACCURACY</code> for location unless navigation is the feature</li>
+      <li class="checked">Use geofences instead of continuous location tracking for proximity detection</li>
+      <li class="checked">Default to WorkManager for all background work &mdash; reserve foreground services for user-initiated tasks</li>
+      <li class="checked">Add constraints to WorkManager jobs: network type, battery level, charging state</li>
+      <li class="checked">Batch network requests &mdash; especially analytics events</li>
+      <li class="checked">Use FCM push instead of polling for real-time updates</li>
+      <li class="checked">Audit with <code>dumpsys batterystats</code> periodically</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Battery Mindset</h3>
+      <p>Every time your code wakes the CPU, activates the radio, or requests a GPS fix, you&rsquo;re spending a shared resource &mdash; the user&rsquo;s battery. Ask yourself: &ldquo;Is the user getting visible value from this work right now?&rdquo; If not, defer it, batch it, or eliminate it. The user doesn&rsquo;t see your sync operation. They <em>do</em> see &ldquo;24% battery used by ShopApp.&rdquo;</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Audit Your App&rsquo;s Battery Usage</h4>
+      <ol>
+        <li><strong>Reset battery stats:</strong> Run <code>adb shell dumpsys batterystats --reset</code>.</li>
+        <li><strong>Use the app:</strong> Disconnect USB and use the app normally for 30 minutes. Navigate between screens, trigger background features, let it sit idle.</li>
+        <li><strong>Capture stats:</strong> Reconnect and run <code>adb shell dumpsys batterystats --charged com.your.package</code>. Extract the wake lock, job, sensor, and network sections.</li>
+        <li><strong>Run <code>/analyze-battery</code>:</strong> Paste the dump into Claude Code. Ask it to identify the top 3 battery drains and suggest fixes.</li>
+        <li><strong>Check location settings:</strong> Search your codebase for <code>LocationRequest</code> or <code>PRIORITY_HIGH_ACCURACY</code>. Ask Claude Code if the priority and interval are appropriate for your use case.</li>
+        <li><strong>Bonus:</strong> Set up Battery Historian with Docker and upload a bug report. Compare the visual timeline with the text dump analysis from Claude Code.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>We&rsquo;ve covered specific debugging domains &mdash; crashes, ANRs, memory, Compose, networking, builds, and battery. But sometimes the problem isn&rsquo;t in one domain. It&rsquo;s a vague &ldquo;the app feels slow&rdquo; that you need to trace through CPU profiles, memory allocations, and system traces to pinpoint.</p>
+
+    <p>In <strong>Chapter 9: AI-Assisted Profiling</strong>, we&rsquo;ll take raw profiler output from Android Studio &mdash; CPU traces, memory allocations, Perfetto system traces &mdash; and use Claude Code to interpret what the graphs and flame charts actually mean.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-gradle-build-performance.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Gradle Build Performance</span>
+      </a>
+      <a href="09-ai-assisted-profiling.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">AI-Assisted Profiling</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

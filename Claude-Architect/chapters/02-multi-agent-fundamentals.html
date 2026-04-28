@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Multi-Agent Systems | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-exam-landscape.html">&larr; Prev</a>
+      <a href="03-task-decomposition.html">Next &rarr;</a>
+      <a href="maps/02-multi-agent-fundamentals-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 2</div>
+    <h1>Multi-Agent Systems</h1>
+    <p class="subtitle">Why one agent isn't enough &mdash; and how to design systems where multiple agents collaborate</p>
+  </header>
+
+  <main>
+
+    <h2>Welcome to Domain 1</h2>
+
+    <p>This chapter begins our deep dive into <strong>Domain 1: Agentic Architecture &amp; Orchestration</strong>, which makes up <strong>27% of the exam</strong> &mdash; the single largest domain. We'll spend three chapters here (Chapters 2, 3, and 4) because there's a lot of ground to cover and the exam tests this material heavily.</p>
+
+    <p>In this chapter, you'll learn why single agents hit walls, how multi-agent systems solve those problems, the two fundamental topologies (hub-and-spoke vs. peer-to-peer), and how the agent loop actually works under the hood.</p>
+
+    <div class="highlight-box">
+      <h3>Domain 1 on the Exam</h3>
+      <p>Domain 1 covers four task statements: agentic loops &amp; core API mechanics, multi-agent orchestration, hooks &amp; programmatic enforcement, and session management &amp; workflows. This chapter focuses on the first two. Chapters 3 and 4 complete the picture.</p>
+    </div>
+
+    <h2>Why Single Agents Hit Walls</h2>
+
+    <p>Let's start with the obvious question: why do you need more than one agent?</p>
+
+    <p>A single Claude agent is powerful. It can reason, call tools, write code, and manage multi-step tasks. But in production, you'll hit three walls pretty quickly:</p>
+
+    <h3>Wall 1: Context Window Limits</h3>
+    <p>Every tool call, every tool result, every message &mdash; it all goes into the context window. A single agent handling a complex research task might burn through 100K tokens just on intermediate results. Once you're near the limit, the agent starts losing track of earlier information.</p>
+
+    <h3>Wall 2: Specialization</h3>
+    <p>A single agent's system prompt tries to cover everything: "you're a researcher AND a coder AND a reviewer AND a deployment specialist." The more roles you pile on, the worse the agent performs at each one. It's like asking one person to be the chef, waiter, and dishwasher simultaneously.</p>
+
+    <h3>Wall 3: Parallelism</h3>
+    <p>A single agent processes sequentially. If you need to search three databases, analyze five documents, and check two APIs &mdash; a single agent does them one at a time. Multiple agents can do them in parallel.</p>
+
+    <div class="exam-tip-box">
+      The exam loves to present a scenario where a single agent is struggling, then ask you to identify <strong>which wall</strong> the system is hitting. The correct answer usually maps to one of these three: context exhaustion, role overload, or sequential bottleneck. Learn to recognize the symptoms of each.
+    </div>
+
+    <h2>The Agent Loop: Plan &rarr; Act &rarr; Observe &rarr; Repeat</h2>
+
+    <p>Before we go multi-agent, you need to understand the fundamental loop that every Claude agent runs. Whether it's a single agent or one of twenty subagents, they all follow the same cycle:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Receive Task</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Reason / Plan</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Call Tool</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Observe Result</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Decide: Continue or Stop</div>
+    </div>
+
+    <p>In the Claude API, this loop is controlled by the <code>stop_reason</code> field in the response:</p>
+
+    <ul>
+      <li><code>stop_reason: "tool_use"</code> &mdash; The agent wants to call a tool. Execute it, append the result, and send the conversation back to Claude.</li>
+      <li><code>stop_reason: "end_turn"</code> &mdash; The agent is done. It has a final response ready.</li>
+    </ul>
+
+    <p>Here's the minimal agent loop in Python:</p>
+
+    <pre><code>import anthropic
+
+client = anthropic.Anthropic()
+messages = [{"role": "user", "content": task}]
+
+while True:
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        tools=my_tools,
+        messages=messages
+    )
+
+    # Append assistant response to conversation
+    messages.append({"role": "assistant", "content": response.content})
+
+    if response.stop_reason == "end_turn":
+        break  # Agent is done
+
+    # Execute tool calls and append results
+    tool_results = []
+    for block in response.content:
+        if block.type == "tool_use":
+            result = execute_tool(block.name, block.input)
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result
+            })
+
+    messages.append({"role": "user", "content": tool_results})</code></pre>
+
+    <div class="warning-box">
+      <strong>Exam trap:</strong> A common distractor answer suggests parsing the agent's text output to decide whether to continue the loop (e.g., looking for phrases like "I'm done" or "task complete"). The correct approach is <em>always</em> to check <code>stop_reason</code>. Never parse natural language to control loop execution &mdash; it's unreliable and the exam specifically tests this.
+    </div>
+
+    <h3>What the Agent SDK Does for You</h3>
+
+    <p>The <strong>Claude Agent SDK</strong> (<code>@anthropic-ai/claude-agent-sdk</code>) automates this loop. Instead of writing the while loop yourself, the SDK handles:</p>
+
+    <ul>
+      <li>Automatic loop execution based on <code>stop_reason</code></li>
+      <li>Tool registration and execution</li>
+      <li>Subagent spawning and context isolation</li>
+      <li>Context compaction when approaching window limits</li>
+    </ul>
+
+    <p>For the exam, you need to understand <em>both</em> the manual loop (to know what's happening under the hood) and the SDK abstractions (to know best practices).</p>
+
+    <h2>Agent Roles and Specialization</h2>
+
+    <p>In a multi-agent system, each agent gets a focused role. Think of it like a software team: you wouldn't ask the same person to write code, review it, test it, and deploy it. Here are common agent roles you'll encounter on the exam:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Responsibility</th>
+          <th>Example Tools</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Orchestrator</strong></td>
+          <td>Plans, delegates, aggregates results</td>
+          <td>Task (subagent spawning)</td>
+        </tr>
+        <tr>
+          <td><strong>Researcher</strong></td>
+          <td>Searches and retrieves information</td>
+          <td>WebSearch, DatabaseQuery</td>
+        </tr>
+        <tr>
+          <td><strong>Coder</strong></td>
+          <td>Writes and refactors code</td>
+          <td>FileWrite, FileEdit, Bash</td>
+        </tr>
+        <tr>
+          <td><strong>Reviewer</strong></td>
+          <td>Validates output, checks quality</td>
+          <td>FileRead, Lint, Test</td>
+        </tr>
+        <tr>
+          <td><strong>Extractor</strong></td>
+          <td>Pulls structured data from unstructured text</td>
+          <td>tool_use (schema enforcement)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The key insight: each agent has a <strong>focused system prompt</strong> and a <strong>limited set of tools</strong>. A researcher agent doesn't need file-writing tools. A coder agent doesn't need web search. By constraining each agent's capabilities, you get better performance from each one.</p>
+
+    <div class="architect-box">
+      <strong>The Principle of Least Privilege for Agents.</strong> Just as you give microservices only the permissions they need, give each agent only the tools it needs. An orchestrator's <code>allowedTools</code> should include "Task" for spawning subagents. A research subagent's tools should be limited to search and retrieval. This isn't just security &mdash; it improves agent focus. When a model has 20 tools available, it spends more reasoning tokens deciding which one to use. With 3&ndash;5 focused tools, decisions are faster and more accurate.
+    </div>
+
+    <h2>Topology 1: Hub-and-Spoke</h2>
+
+    <p>The hub-and-spoke pattern is the most common multi-agent architecture, and the one the exam tests most heavily. Think of it like an orchestra conductor:</p>
+
+    <ul>
+      <li>The <strong>hub</strong> (orchestrator/coordinator) receives the task, breaks it down, and delegates subtasks to specialized agents</li>
+      <li>The <strong>spokes</strong> (subagents) each handle their subtask independently and return results to the hub</li>
+      <li>The hub aggregates results and produces the final output</li>
+    </ul>
+
+    <pre><code># Hub-and-spoke: orchestrator spawns subagents
+# In the Agent SDK, the orchestrator uses the Task tool
+
+Orchestrator (hub)
+    ├── Researcher Agent (spoke) → searches knowledge base
+    ├── Analyst Agent (spoke)    → processes retrieved data
+    └── Writer Agent (spoke)     → synthesizes final report</code></pre>
+
+    <h3>Context Isolation: The Critical Detail</h3>
+
+    <p>Here's the most exam-tested aspect of hub-and-spoke: <strong>subagents do NOT inherit the orchestrator's conversation history.</strong> Each subagent starts with a clean context that includes only:</p>
+
+    <ol>
+      <li>Its own system prompt (role, tools, constraints)</li>
+      <li>The specific task description the orchestrator passes to it</li>
+    </ol>
+
+    <p>This is <em>by design</em>. If subagents inherited the full orchestrator context, you'd be wasting tokens and potentially confusing the subagent with irrelevant information.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Correct: Explicit Context Passing</div>
+        <div class="prompt-text">Task to subagent: "Search the knowledge base for articles about refund policies. Return the top 3 most relevant article titles and their URLs."</div>
+        <div class="prompt-explanation">Subagent gets only what it needs &mdash; a clear, focused task with specific output format.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Wrong: Sharing Full Context</div>
+        <div class="prompt-text">Task to subagent: [entire 50-message conversation history including user complaints, previous tool calls, and orchestrator reasoning]</div>
+        <div class="prompt-explanation">Wastes tokens, confuses the subagent with irrelevant details, and may exceed context limits.</div>
+      </div>
+    </div>
+
+    <div class="exam-tip-box">
+      The exam frequently asks: "In a hub-and-spoke architecture, what context does a subagent receive?" The answer is <strong>only the task-specific context explicitly passed by the orchestrator</strong>. Distractors will suggest the subagent inherits the full conversation, gets the orchestrator's system prompt, or has access to other subagents' results. All wrong. Context isolation is a fundamental principle.
+    </div>
+
+    <h3>When to Use Hub-and-Spoke</h3>
+
+    <ul>
+      <li>When you have a clear coordinator role that can decompose the task</li>
+      <li>When subagents don't need to communicate with each other</li>
+      <li>When you want centralized observability (all communication goes through the hub)</li>
+      <li>When parallel execution matters (multiple spokes can run simultaneously)</li>
+    </ul>
+
+    <p>In the <strong>Customer Support Agent</strong> scenario, the orchestrator classifies the customer issue, then delegates to specialized agents: one looks up account info, another searches the knowledge base, a third checks order status. Results flow back to the orchestrator, which synthesizes a response.</p>
+
+    <p>In the <strong>Multi-Agent Research System</strong> scenario, the orchestrator breaks a research query into sub-questions, spawns researcher agents for each, and aggregates their findings into a cohesive report.</p>
+
+    <h2>Topology 2: Peer-to-Peer</h2>
+
+    <p>In a peer-to-peer topology, agents collaborate as equals without a central coordinator. Think of a jazz ensemble: each musician listens to the others and adapts in real time, with no conductor.</p>
+
+    <ul>
+      <li>Agents communicate directly with each other</li>
+      <li>No single point of control or failure</li>
+      <li>Each agent can trigger actions in other agents</li>
+    </ul>
+
+    <p>This sounds elegant, but in practice it's <strong>harder to debug, harder to observe, and harder to control</strong>. Without a central coordinator:</p>
+
+    <ul>
+      <li>How do you know when the task is done?</li>
+      <li>How do you prevent circular communication (Agent A asks B, B asks A, infinite loop)?</li>
+      <li>How do you aggregate results if there's no aggregator?</li>
+    </ul>
+
+    <div class="architect-box">
+      <strong>Hub-and-spoke vs. peer-to-peer &mdash; the architect's tradeoff.</strong>
+      <br><br>
+      <strong>Hub-and-spoke</strong> gives you centralized control, clear observability, and predictable data flow. The tradeoff: the coordinator is a bottleneck and a single point of failure.
+      <br><br>
+      <strong>Peer-to-peer</strong> gives you resilience and flexibility. The tradeoff: it's complex to implement, hard to debug, and risky for circular dependencies.
+      <br><br>
+      <strong>For the exam:</strong> Unless the question specifically describes a scenario that requires decentralized coordination (rare), hub-and-spoke is almost always the right answer. Anthropic's Agent SDK is built around the hub-and-spoke model with the Task tool for subagent spawning.
+    </div>
+
+    <h2>The Orchestra vs. Jazz Analogy</h2>
+
+    <p>This analogy shows up frequently in study materials and can help you reason about exam questions:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>Orchestra (Hub-and-Spoke)</th>
+          <th>Jazz Ensemble (Peer-to-Peer)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Leadership</td>
+          <td>Conductor controls everything</td>
+          <td>Musicians self-coordinate</td>
+        </tr>
+        <tr>
+          <td>Communication</td>
+          <td>All through conductor</td>
+          <td>Direct between players</td>
+        </tr>
+        <tr>
+          <td>Predictability</td>
+          <td>High &mdash; follows a score</td>
+          <td>Lower &mdash; improvised</td>
+        </tr>
+        <tr>
+          <td>Failure mode</td>
+          <td>Conductor = single point of failure</td>
+          <td>Resilient but chaotic</td>
+        </tr>
+        <tr>
+          <td>Best for</td>
+          <td>Structured, repeatable tasks</td>
+          <td>Creative, adaptive tasks</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Autonomous vs. Orchestrated Agents</h2>
+
+    <p>Beyond topology, there's another axis to consider: how much freedom each agent has.</p>
+
+    <h3>Orchestrated Agents</h3>
+    <p>The orchestrator tells them exactly what to do: "Search for X," "Analyze Y," "Summarize Z." They follow instructions and return results. Predictable, testable, easy to debug.</p>
+
+    <h3>Autonomous Agents</h3>
+    <p>The agent decides its own course of action based on a high-level goal: "Resolve this customer's issue." It chooses which tools to use, in what order, and when to stop. More flexible, but harder to control.</p>
+
+    <p>In practice, production systems use a <strong>spectrum</strong>. The orchestrator might be fairly autonomous (deciding how to decompose a task), while subagents are tightly orchestrated (given specific instructions). This gives you flexibility at the top and predictability at the bottom.</p>
+
+    <div class="tip-box">
+      Think of autonomy like a dial, not a switch. The exam tests whether you can identify the right level of autonomy for a given scenario. Customer support? More orchestrated &mdash; you want predictable, policy-compliant behavior. Research? More autonomous &mdash; the agent needs freedom to explore unexpected connections.
+    </div>
+
+    <h2>Agent Communication: Structured Messages and Handoffs</h2>
+
+    <p>How do agents talk to each other? In the Claude Agent SDK, communication happens through two mechanisms:</p>
+
+    <h3>1. Task Tool (Subagent Spawning)</h3>
+    <p>The orchestrator uses the <code>Task</code> tool to create a subagent. It passes a task description (plain text) and receives the subagent's final output. The orchestrator's <code>allowedTools</code> must include "Task" for this to work.</p>
+
+    <h3>2. Shared State (External)</h3>
+    <p>For more complex coordination, agents can read and write to shared external state &mdash; a database, a file system, or a task board. This is how Anthropic's Agent Teams feature works: agents share a task board tracking dependencies and coordinate via inter-agent messaging.</p>
+
+    <p>The exam tests the first pattern heavily. Know how the Task tool works and what context gets passed.</p>
+
+    <h2>Common Pitfalls</h2>
+
+    <p>The exam loves to present anti-patterns and ask you to identify what's wrong. Here are the big ones:</p>
+
+    <h3>1. Over-Decomposition</h3>
+    <p>Breaking a task into too many tiny subtasks. Each subagent has overhead (spawning, context setup, result passing). If you decompose "write a function" into "write line 1," "write line 2," etc., you've created more overhead than value.</p>
+
+    <h3>2. Chatty Agents</h3>
+    <p>Agents that pass too much information back and forth. If your subagent returns a 10,000-token response when the orchestrator only needs a 3-sentence summary, you're wasting context budget.</p>
+
+    <h3>3. Unclear Responsibilities</h3>
+    <p>When two agents overlap in their roles, they might duplicate work or produce conflicting results. Every agent should have a clear, non-overlapping responsibility.</p>
+
+    <h3>4. Missing Error Handling</h3>
+    <p>What happens when a subagent fails? If the orchestrator doesn't handle failures, the entire system breaks. Always design for: retry, skip, or escalate.</p>
+
+    <h3>5. Arbitrary Iteration Caps</h3>
+    <p>Setting <code>max_iterations = 10</code> as the primary way to stop an agent loop. The correct stopping mechanism is <code>stop_reason == "end_turn"</code>. Iteration caps are a safety net, not a control mechanism.</p>
+
+    <div class="warning-box">
+      <strong>Anti-pattern alert:</strong> Using confidence scores or sentiment analysis to decide when to escalate to a human. The exam considers this unreliable. Valid escalation triggers are: explicit human request, policy gap (no rule covers the situation), task exceeds agent capability, or a business threshold is exceeded. Not "the agent seems unsure."
+    </div>
+
+    <h2>Hooks: Deterministic vs. Probabilistic Enforcement</h2>
+
+    <p>One more Domain 1 concept that crosses into multi-agent design: the distinction between <strong>hooks</strong> and <strong>prompts</strong> for enforcing rules.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Mechanism</th>
+          <th>Reliability</th>
+          <th>Use For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Hooks</strong> (PreToolUse, PostToolUse)</td>
+          <td>100% deterministic</td>
+          <td>Refund limits, compliance rules, security constraints</td>
+        </tr>
+        <tr>
+          <td><strong>Prompts</strong> (system prompt instructions)</td>
+          <td>Probabilistic (model may ignore)</td>
+          <td>Tone, style preferences, soft guidelines</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>In the <strong>Customer Support Agent</strong> scenario, imagine a refund limit of $500. Do you enforce it via the system prompt ("never approve refunds over $500") or via a PostToolUse hook that checks the refund amount before it executes?</p>
+
+    <p><strong>Answer: hook.</strong> A prompt can be ignored or misinterpreted. A hook is code &mdash; it runs every time, no exceptions.</p>
+
+    <div class="exam-tip-box">
+      Whenever the exam asks about enforcing a <strong>critical business rule</strong> (refund limits, compliance requirements, security policies), the answer is almost always <strong>hooks, not prompts</strong>. Prompts are for style and tone. Hooks are for hard constraints. This is one of the most predictable patterns on the exam.
+    </div>
+
+    <h2>Session Management: Resume vs. Fork</h2>
+
+    <p>The Agent SDK provides two ways to handle ongoing agent sessions:</p>
+
+    <ul>
+      <li><code>--resume</code> &mdash; Continues an existing session with its full conversation history. Use when the user comes back to continue a task.</li>
+      <li><code>fork_session</code> &mdash; Creates a new session that branches from an existing one. Use when you want to explore an alternative approach without losing the original conversation state.</li>
+    </ul>
+
+    <p>Think of it like Git: <code>--resume</code> is continuing to commit on the same branch; <code>fork_session</code> is creating a new branch from a specific point.</p>
+
+    <div class="exercise-box">
+      <strong>Exercise: Design a Multi-Agent Customer Support System</strong>
+      <p>You're building a customer support agent that handles three types of issues: billing, technical, and shipping. Design the multi-agent architecture:</p>
+      <ol>
+        <li>What agent roles do you need? (Hint: at minimum an orchestrator + 3 specialists)</li>
+        <li>What tools does each agent get?</li>
+        <li>Draw the communication flow: who talks to whom?</li>
+        <li>How does the orchestrator decide which specialist to invoke?</li>
+        <li>What happens if a specialist can't resolve the issue?</li>
+      </ol>
+      <p>Bonus: Which business rules would you enforce with hooks vs. prompts?</p>
+      <p><strong>Check yourself:</strong> Your design should use hub-and-spoke. The orchestrator classifies the issue (billing/technical/shipping), delegates to the right specialist, and handles escalation if the specialist fails. Refund limits = hook. Friendly tone = prompt.</p>
+    </div>
+
+    <h2>Scenario Connections</h2>
+
+    <p>Here's where this chapter's concepts show up in the exam scenarios:</p>
+
+    <ul>
+      <li><strong>Customer Support Resolution Agent:</strong> Hub-and-spoke with routing. The orchestrator classifies issues and delegates to specialists. Escalation to human agents when policy gaps occur.</li>
+      <li><strong>Multi-Agent Research System:</strong> Hub-and-spoke with parallel execution. The orchestrator decomposes the research query, spawns parallel researcher agents, and aggregates results.</li>
+      <li><strong>Code Generation with Claude Code:</strong> Claude Code itself uses a multi-agent architecture internally &mdash; the main agent can spawn subagents for parallel work via the Agent tool.</li>
+    </ul>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Single agents hit walls on context limits, specialization, and parallelism &mdash; multi-agent systems solve all three</li>
+      <li>The agent loop checks <code>stop_reason</code>: "tool_use" means continue, "end_turn" means stop &mdash; never parse text to control the loop</li>
+      <li>Hub-and-spoke is the primary pattern: orchestrator delegates to subagents with isolated contexts &mdash; subagents do NOT inherit coordinator history</li>
+      <li>Use hooks for critical business rules (100% deterministic), prompts for style preferences (probabilistic)</li>
+      <li>Valid escalation triggers: explicit human request, policy gap, capability exceeded, business threshold &mdash; NOT sentiment or confidence scores</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>Now that you understand <em>why</em> we need multiple agents and the basic topology, the next question is: how do you break a complex task into pieces that agents can handle? In <strong>Chapter 3: Task Decomposition</strong>, we'll cover hierarchical decomposition, DAG-based workflows, static vs. dynamic decomposition, and the fan-out/fan-in pattern. This is where architecture becomes practical.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="01-exam-landscape.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Welcome to the CCA-F</span>
+      </a>
+      <a href="03-task-decomposition.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Task Decomposition</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

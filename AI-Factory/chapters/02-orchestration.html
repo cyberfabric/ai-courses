@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Orchestration With Claude Code | From Zero to App With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏭</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">From Zero to App With AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-ai-factory.html">&larr; Prev</a>
+      <a href="03-the-idea.html">Next &rarr;</a>
+      <a href="maps/02-orchestration-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Orchestration With Claude Code</h1>
+    <p class="subtitle">The technical foundation for multi-role AI pipelines</p>
+  </header>
+
+  <main>
+
+    <!-- ===== Opening ===== -->
+    <section>
+      <h2>From Concept to Machinery</h2>
+
+      <p>
+        Chapter 1 introduced the idea: roles, not prompts. Seven specialized AI team members, each
+        with a contract, assembled into a pipeline. Great concept. But how does it actually
+        <em>work</em>?
+      </p>
+
+      <p>
+        This chapter is the technical foundation. You'll learn the three mechanisms that make
+        multi-role orchestration possible in Claude Code: the <strong>Agent tool</strong> for
+        dispatching to subagents, <strong>plan mode</strong> for structured thinking before action,
+        and <strong>skill files</strong> as the building blocks that encode each role. By the end,
+        you'll have a working orchestrator skill that coordinates the entire pipeline.
+      </p>
+    </section>
+
+    <!-- ===== The Agent Tool ===== -->
+    <section>
+      <h2>The Agent Tool: Dispatching to Specialists</h2>
+
+      <p>
+        The Agent tool is the core mechanism for orchestration. It lets you spawn a
+        <strong>subagent</strong> &mdash; an isolated Claude instance with its own context, tools,
+        and instructions &mdash; that executes a specific task and returns a result.
+      </p>
+
+      <p>
+        Think of it as a function call, except the function is an AI with full coding capabilities:
+      </p>
+
+      <pre><code>Agent({
+  description: "Generate product vision",
+  prompt: `You are the Product Owner role.
+
+Input: "${seedIdea}"
+Platform: Android (Kotlin, Compose, Room, Hilt)
+Audience: Home cooks who want to organize recipes
+
+Produce a Product Vision Document with:
+1. App Description (2-3 paragraphs)
+2. User Personas (3-5)
+3. Feature List (MoSCoW prioritized)
+4. MVP Scope
+5. Release Roadmap
+6. Success Metrics`,
+  subagent_type: "general-purpose"
+})</code></pre>
+
+      <p>
+        The subagent runs in isolation. It doesn't see the orchestrator's conversation history.
+        It doesn't see other roles' outputs unless you explicitly pass them in the prompt. This
+        isolation is a <em>feature</em>, not a limitation &mdash; it prevents roles from
+        overstepping their contracts.
+      </p>
+
+      <div class="tip-box">
+        <strong>Key insight:</strong> The Agent tool's <code>prompt</code> parameter is where you
+        embed the role contract. Everything the subagent needs &mdash; role identity, inputs,
+        output format, rules &mdash; goes in this prompt. The subagent has access to all tools
+        (Read, Write, Edit, Bash, Grep, Glob) so it can read existing code, write files, and
+        run commands.
+      </div>
+
+      <div class="tip-box">
+        <strong>Built-in vs custom sub-agents:</strong> <code>subagent_type: "general-purpose"</code>
+        works for one-off dispatches. For roles you'll re-use, define a custom sub-agent in
+        <code>.claude/agents/&lt;role&gt;.md</code> with YAML frontmatter (<code>name</code>,
+        <code>description</code>, <code>tools</code>, <code>model</code>) followed by the system
+        prompt &mdash; then dispatch with <code>subagent_type: "&lt;role&gt;"</code>. Custom
+        sub-agents are the 2026 canonical pattern for reusable role definitions; this chapter
+        uses <code>general-purpose</code> in inline examples to keep them self-contained.
+      </div>
+
+      <h3>What the Agent Tool Returns</h3>
+
+      <p>
+        When a subagent finishes, it returns a single text result to the orchestrator. This is
+        the artifact &mdash; the role's output. The orchestrator captures it and passes it to
+        the next role:
+      </p>
+
+      <div class="orchestration-trace">
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; Agent(prompt: "You are the PO role...")
+        </div>
+        <div class="trace-result">
+          Agent returns: <strong>Product Vision Document</strong> (2,400 tokens)
+        </div>
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; Agent(prompt: "You are the PM role. Here is the vision: ${poResult}...")
+        </div>
+        <div class="trace-result">
+          Agent returns: <strong>Feature Specifications</strong> (4,100 tokens)
+        </div>
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; Agent(prompt: "You are the Architect role. Here are the specs: ${pmResult}...")
+        </div>
+        <div class="trace-result">
+          Agent returns: <strong>Architecture Design</strong> (5,800 tokens)
+        </div>
+        <div class="trace-cost">
+          3 Agent dispatches &bull; 12,300 output tokens &bull; ~45 seconds &bull; ~$0.10 (Opus 4.7)
+        </div>
+      </div>
+
+      <p>
+        Notice the pattern: each dispatch includes the previous role's output as context. This is
+        the <strong>artifact chain</strong> &mdash; the pipeline's data flow.
+      </p>
+    </section>
+
+    <!-- ===== Plan Mode ===== -->
+    <section>
+      <h2>Plan Mode: Think Before You Build</h2>
+
+      <p>
+        Before the orchestrator dispatches any role, it should <em>plan</em>. Claude Code's
+        plan mode forces structured thinking: analyze the request, design the approach, then
+        execute. For an orchestrator, planning means deciding:
+      </p>
+
+      <ul>
+        <li>Which roles to invoke and in what order</li>
+        <li>What context each role needs</li>
+        <li>Where human oversight checkpoints go</li>
+        <li>What happens if a role fails</li>
+      </ul>
+
+      <p>
+        The orchestrator skill uses plan mode as its first step. Before spawning any subagents,
+        it writes a pipeline execution plan:
+      </p>
+
+      <div class="artifact-box">
+        <span class="artifact-source">Orchestrator</span>
+        <div class="artifact-title">Pipeline Execution Plan</div>
+        <pre><code>## Pipeline Plan for: Recipes App
+
+### Phase 1: Discovery
+1. Product Owner → vision document
+   - Input: seed idea + constraints
+   - Human review: YES (approve vision before specs)
+
+2. Product Manager → feature specs
+   - Input: approved vision document
+   - Human review: NO (proceed to architecture)
+
+### Phase 2: Design
+3. Architect → architecture design + rules
+   - Input: feature specs
+   - Human review: YES (approve architecture before coding)
+
+### Phase 3: Implementation
+4. Developer → code (per module, 10 iterations)
+   - Input: architecture + rules + task spec
+   - Human review: NO (reviewer handles quality)
+
+### Phase 4: Quality
+5. Code Reviewer → findings
+   - Input: generated code + architecture rules
+   - If FAIL: re-dispatch Developer with findings
+
+6. Security Reviewer → security findings
+   - Input: generated code
+   - If CRITICAL: halt pipeline, require human
+
+7. QA Engineer → test suite
+   - Input: code + specs + acceptance criteria
+
+### Estimated: 15-20 Agent dispatches, ~$2-5 total</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't skip planning.</strong> Without a plan, the orchestrator will make ad-hoc
+        decisions about role ordering, context passing, and error handling. That's exactly the
+        problem we're trying to solve. The orchestrator should be as disciplined as the roles
+        it dispatches.
+      </div>
+    </section>
+
+    <!-- ===== Skill Files ===== -->
+    <section>
+      <h2>Skill Files: Anatomy of a Role</h2>
+
+      <p>
+        In Chapter 1, you saw a basic skill file for the Product Owner. Now let's look at the
+        full anatomy of a production-grade skill that embodies a role:
+      </p>
+
+      <pre><code># .claude/commands/architect.md
+
+You are the **Architect** role in the AI Factory pipeline.
+
+## Identity
+You design software systems. You do NOT write code (that's the
+Developer's job). You do NOT write specs (that's the PM's job).
+
+## Input
+A **Feature Specifications** document from the PM role containing:
+feature list, acceptance criteria, user stories, NFRs.
+
+## Output
+Produce an **Architecture Design Document** with:
+
+### 1. Module Structure
+- Every Gradle module (e.g., `:core:domain`, `:data:recipe`)
+- Module dependencies and layer assignments
+
+### 2. Data Models
+- Domain entities (pure Kotlin, no framework deps)
+- Room entities, DTOs, mapper interfaces
+
+### 3. Architecture Rules (BOTH formats)
+- Prose format for CLAUDE.md
+- Structured checklist for the Reviewer role
+
+### 4. Technology Decisions
+- Justify each library choice with alternatives considered
+
+## Rules
+- Domain layer MUST have zero Android framework dependencies
+- Data layer MUST NOT expose Room entities to domain
+- All cross-module communication through interfaces
+- NEVER produce code — only design documents and rules</code></pre>
+
+      <p>
+        Notice the structure: <strong>Identity</strong> (who you are and aren't),
+        <strong>Input</strong> (what you receive), <strong>Output</strong> (what you produce
+        with exact sections), and <strong>Rules</strong> (boundaries you must not cross).
+      </p>
+
+      <div class="role-card">
+        <div class="role-name">Architect (Skill Anatomy)</div>
+        <div class="role-input">
+          <strong>Identity:</strong> "You design systems. You do NOT write code."<br>
+          <strong>Input:</strong> Feature specs from PM role<br>
+          <strong>Rules:</strong> Scope boundaries the role must never cross
+        </div>
+        <div class="role-output">
+          <strong>Output:</strong> Architecture design with exact section structure<br>
+          <strong>Format:</strong> Markdown with module list, data models, rules, decisions
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The "NOT" pattern:</strong> Every skill should explicitly state what the role
+        does <em>not</em> do. "You do NOT write code" prevents the Architect from generating
+        Kotlin files. "You do NOT suggest technologies" keeps the PO focused on the product.
+        Boundaries prevent role bleeding.
+      </div>
+
+      <div class="tip-box">
+        <strong>Skills, sub-agents, slash commands &mdash; what's what (2026):</strong>
+        <code>.claude/skills/&lt;name&gt;/SKILL.md</code> and
+        <code>.claude/commands/&lt;name&gt;.md</code> are the same thing now &mdash; both create
+        <code>/&lt;name&gt;</code> and can be auto-loaded by Claude when relevant.
+        <code>.claude/agents/&lt;name&gt;.md</code> is different: a sub-agent is delegated to
+        via the Agent tool with its own context window. In this course, each role can be
+        authored as a skill (user invokes it, or Claude loads it when relevant) or as a
+        sub-agent (the orchestrator dispatches it). The orchestrator itself is best as a skill;
+        the seven roles work well as sub-agents because each runs in isolation.
+      </div>
+    </section>
+
+    <!-- ===== The Orchestrator Skill ===== -->
+    <section>
+      <h2>The Orchestrator Skill Pattern</h2>
+
+      <p>
+        The orchestrator is itself a skill &mdash; a master coordinator that dispatches to the
+        other role skills. It's the team lead that assigns work, collects results, and decides
+        what happens next.
+      </p>
+
+      <pre><code># .claude/commands/orchestrate-pipeline.md
+
+You are the **Pipeline Orchestrator**. Coordinate the AI Factory
+pipeline from idea to tested code.
+
+## Input
+- A one-sentence app idea
+- Platform and technology constraints
+
+## Execution Protocol
+
+### Step 1: Plan
+Create a Pipeline Execution Plan in `pipeline-plan.md`.
+
+### Step 2: Discovery
+1. **Product Owner** → save to `artifacts/vision.md`
+   - CHECKPOINT: Show vision to user. Wait for approval.
+2. **Product Manager** → save to `artifacts/specs.md`
+
+### Step 3: Design
+3. **Architect** → save to `artifacts/architecture.md`
+   - CHECKPOINT: Show architecture to user. Wait for approval.
+
+### Step 4: Implementation
+4. **Developer** → code in `src/`, one module at a time
+   - If code doesn't compile: re-dispatch with errors
+
+### Step 5: Quality
+5. **Code Reviewer** → if MUST-fix: re-dispatch Developer
+6. **Security Reviewer** → if CRITICAL: HALT, notify user
+7. **QA Engineer** → tests in `src/test/`
+
+## Rules
+- NEVER skip a human checkpoint
+- ALWAYS save artifacts to files (not just in memory)
+- Max retries per role: 2. Then ask the human.</code></pre>
+
+      <div class="highlight-box">
+        <strong>Why save artifacts to files?</strong> Two reasons. First, files survive if the
+        pipeline is interrupted &mdash; you can resume from the last saved artifact. Second,
+        files let you inspect and edit artifacts between roles. If the PO's vision is 90% right,
+        you fix it in the file and let the PM role consume the corrected version.
+      </div>
+    </section>
+
+    <!-- ===== Context Passing ===== -->
+    <section>
+      <h2>Passing Context Between Roles</h2>
+
+      <p>
+        The artifact chain is the pipeline's data flow. Each role reads the previous role's
+        artifact and produces its own. But how do you actually pass artifacts between Agent
+        dispatches?
+      </p>
+
+      <p>There are two strategies. <strong>Inline</strong>: paste the artifact into the Agent
+        prompt. Simple but fragile &mdash; bloats the prompt and can't be edited between runs.
+        <strong>File reference</strong>: tell the subagent to read the artifact from disk. This
+        is the recommended approach:</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="prompt-label">File Reference (Recommended)</div>
+          <div class="prompt-text">
+            Read artifacts/architecture.md for the module design. Read artifacts/rules.md for
+            architecture rules. Implement task-03 in :data:recipe module.
+          </div>
+          <div class="prompt-explanation">
+            Subagent reads files itself. Works with any artifact size. Artifacts are editable
+            between dispatches. Subagent sees the latest version.
+          </div>
+        </div>
+        <div class="prompt-example bad">
+          <div class="prompt-label">Inline Embedding (Fragile)</div>
+          <div class="prompt-text">
+            Here is the architecture: [4,000 tokens of pasted content]. Here are the rules:
+            [3,000 tokens of pasted content]. Now implement task-03.
+          </div>
+          <div class="prompt-explanation">
+            Bloats the prompt. Can't be edited between runs. Risk of hitting context limits.
+            Content is frozen at dispatch time.
+          </div>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The file-based handoff pattern:</strong> Save artifacts to
+        <code>artifacts/</code> directory. Each role reads what it needs. The orchestrator
+        doesn't need to manage artifact content &mdash; just file paths.
+      </div>
+    </section>
+
+    <!-- ===== Error Handling ===== -->
+    <section>
+      <h2>Error Handling and Re-Dispatch</h2>
+
+      <p>
+        Roles fail. The Developer produces code that doesn't compile. The Reviewer finds MUST-fix
+        violations. The Architect forgets a module. When a role fails, the orchestrator needs a
+        strategy:
+      </p>
+
+      <ol>
+        <li><strong>Detect:</strong> Check output against the role's contract. All sections present? Code compiles? Review passed?</li>
+        <li><strong>Diagnose:</strong> Include failure details in the re-dispatch: "Your output had these issues: [specifics]."</li>
+        <li><strong>Re-dispatch:</strong> Send the role back with original input PLUS failure feedback.</li>
+        <li><strong>Escalate:</strong> After 2 retries, stop and ask the human.</li>
+      </ol>
+
+      <p>
+        The Developer-Reviewer loop is the most common re-dispatch pattern:
+      </p>
+
+      <div class="orchestration-trace">
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; <strong>Developer</strong>: "Implement :data:recipe module"
+        </div>
+        <div class="trace-result">
+          Developer returns: 12 Kotlin files written
+        </div>
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; <strong>Code Reviewer</strong>: "Review :data:recipe"
+        </div>
+        <div class="trace-result">
+          Reviewer returns: <strong>FAIL</strong> &mdash; 3 MUST-fix findings
+        </div>
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; <strong>Developer</strong>: "Fix these 3 findings: [details]"
+        </div>
+        <div class="trace-result">
+          Developer returns: 3 files updated
+        </div>
+        <div class="trace-dispatch">
+          <strong>Orchestrator</strong> &rarr; <strong>Code Reviewer</strong>: "Re-review :data:recipe"
+        </div>
+        <div class="trace-result">
+          Reviewer returns: <strong>PASS</strong> &mdash; 0 MUST-fix, 2 SHOULD-fix (accepted)
+        </div>
+        <div class="trace-cost">
+          4 dispatches &bull; Developer-Reviewer loop converged in 1 iteration
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Role Registry ===== -->
+    <section>
+      <h2>The Role Registry</h2>
+
+      <p>
+        The orchestrator needs to know which skill handles which role. The
+        <strong>role registry</strong> is a simple mapping, defined at the top of the
+        orchestrator skill:
+      </p>
+
+      <pre><code>## Role Registry
+| Role               | Skill / Sub-agent File   | Model        | Cheaper fallback                          |
+|--------------------|--------------------------|--------------|-------------------------------------------|
+| Product Owner      | /product-owner           | opus-4.7     | sonnet-4.6 (now ~equivalent cost)         |
+| Product Manager    | /product-manager         | opus-4.7     | sonnet-4.6                                |
+| Architect          | /architect               | opus-4.7     | none (critical judgment)                  |
+| Developer          | /developer               | sonnet-4.6   | haiku-4.5 (3&times; cheaper, mechanical tasks) |
+| Code Reviewer      | /code-reviewer           | opus-4.7     | sonnet-4.6                                |
+| Security Reviewer  | /security-reviewer       | opus-4.7     | none (critical judgment)                  |
+| QA Engineer        | /qa-engineer             | sonnet-4.6   | haiku-4.5 (high-volume test generation)   |</code></pre>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">Opus 4.7</div>
+          <div class="stat-label">For roles requiring deep judgment: Architect, Code Reviewer, Security. Opus 4.7's price drop ($5/$25 per MTok) made it economical for everyday review work, not just high-stakes design.</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">Sonnet 4.6</div>
+          <div class="stat-label">For roles following clear rules: Developer, QA. Sonnet's edge over Opus is now mostly speed; for the cheapest mechanical work, Haiku 4.5 ($1/$5 per MTok) is the better lane.</div>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Cost optimization:</strong> Not every role needs Opus. The Developer follows
+        explicit rules &mdash; Sonnet handles this well and is faster, and Haiku 4.5 handles
+        the most mechanical tasks for ~3&times; less. The Architect makes design decisions
+        with ambiguous tradeoffs &mdash; Opus territory, but the price gap to Sonnet has
+        collapsed. Chapter 12 covers cost optimization in detail.
+      </div>
+    </section>
+
+    <!-- ===== Human Oversight ===== -->
+    <section>
+      <h2>Human Oversight Insertion Points</h2>
+
+      <p>
+        A fully autonomous pipeline sounds exciting, but it's dangerous. Some decisions need
+        human judgment. The orchestrator skill defines explicit <strong>checkpoints</strong>
+        where the pipeline pauses and waits for human approval:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Checkpoint</th>
+            <th>After Role</th>
+            <th>Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Vision Review</strong></td>
+            <td>Product Owner</td>
+            <td>Wrong vision = wrong everything downstream. Catch it early.</td>
+          </tr>
+          <tr>
+            <td><strong>Architecture Review</strong></td>
+            <td>Architect</td>
+            <td>Module structure is expensive to change later. Validate before coding.</td>
+          </tr>
+          <tr>
+            <td><strong>Security Escalation</strong></td>
+            <td>Security Reviewer</td>
+            <td>CRITICAL findings may need domain expertise the AI doesn't have.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Notice there's no checkpoint after the Developer role. That's intentional &mdash; the
+        Code Reviewer handles quality automatically. Humans only step in where AI judgment is
+        unreliable: product direction, architectural tradeoffs, and security risk assessment.
+      </p>
+
+      <div class="warning-box">
+        <strong>Rule of thumb:</strong> Insert checkpoints where a wrong decision is
+        <em>expensive to reverse</em>. Vision and architecture affect everything downstream.
+        A coding bug is cheap to fix. A wrong module structure requires rewriting the whole app.
+      </div>
+    </section>
+
+    <!-- ===== Exercise ===== -->
+    <section>
+      <div class="exercise-box">
+        <h3>Exercise: Build Your First Orchestrator Skill</h3>
+        <p>Create a minimal orchestrator skill that coordinates just the first two roles:</p>
+        <ol>
+          <li>
+            Create <code>.claude/commands/mini-orchestrator.md</code> in your project
+          </li>
+          <li>
+            Define the orchestrator identity: "You coordinate the discovery phase of the
+            AI Factory pipeline."
+          </li>
+          <li>
+            Add the execution protocol:
+            <ul>
+              <li>Step 1: Dispatch to PO role with the seed idea</li>
+              <li>Step 2: Save PO output to <code>artifacts/vision.md</code></li>
+              <li>Step 3: Show vision to user, wait for approval</li>
+              <li>Step 4: Dispatch to PM role with the approved vision</li>
+              <li>Step 5: Save PM output to <code>artifacts/specs.md</code></li>
+            </ul>
+          </li>
+          <li>
+            Add error handling: if either role produces empty output, retry once.
+          </li>
+          <li>
+            Test it by running <code>/mini-orchestrator</code> with your seed idea from
+            Chapter 1's exercise.
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== What's Next ===== -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>
+        You now have the complete technical foundation: Agent tool for dispatching, plan mode for
+        thinking, skill files for role definitions, and the orchestrator pattern for coordination.
+        These are the building blocks of the AI Factory.
+      </p>
+
+      <p>
+        In <a href="03-the-idea.html">Chapter 3: One Sentence to App</a>, we configure the
+        pipeline for our recipes app. You'll see the full artifact chain mapped out, estimate
+        time and cost, and set up the project structure that every role will work within.
+      </p>
+
+      <div class="highlight-box">
+        <strong>Cross-reference:</strong>
+        <a href="../../Claude-Architect/chapters/04-orchestration.html">Claude-Architect Chapter 4</a>
+        covers orchestration patterns abstractly &mdash; routing, fan-out, sequential, and
+        conditional dispatch. This chapter implements the sequential pattern with human
+        checkpoints and error recovery loops.
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="01-ai-factory.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">The AI Factory: Roles, Not Prompts</span>
+    </a>
+    <a href="03-the-idea.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">One Sentence to App</span>
+    </a>
+  </nav>
+
+  <footer class="site-footer">
+    <p>From Zero to App With AI For Dummies &copy; 2026</p>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

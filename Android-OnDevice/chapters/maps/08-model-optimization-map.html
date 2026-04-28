@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Model Optimization — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../08-model-optimization.html">Chapter</a>
+      <a href="07-hardware-acceleration-map.html">&#8592; Prev Map</a>
+      <a href="09-computer-vision-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Model Optimization &mdash; Making Models Mobile-Ready</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- Big Idea -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Quantization is like JPEG compression for models — the "knowledge" stays almost the same, but the file is 2-4x smaller and 2-4x faster. <strong>Int8 quantization solves 90% of "model too big" problems in 5 minutes of work.</strong> Combine it with hardware acceleration (Ch. 7) for 10x total speedup.</p>
+    </div>
+
+    <!-- Mobile Targets -->
+    <h2>🎯 Mobile Shipping Targets</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">&lt; 20 MB Model Size</div>
+        <div class="map-card-desc">Target for bundling in APK. Users abandon installs over 50 MB on mobile data.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚡</span>
+        <div class="map-card-title">&lt; 15 ms Inference</div>
+        <div class="map-card-desc">Target on NPU. Fast enough for real-time camera features at 30+ fps.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title">&lt; 50 MB Runtime Memory</div>
+        <div class="map-card-desc">Target for RAM usage. On 4 GB devices with 2 GB free, larger models trigger OOM kills.</div>
+      </div>
+    </div>
+
+    <!-- Quantization Flow -->
+    <h2>🔄 What Quantization Does</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📊 Float32 Model<br><small>14 MB, 4 bytes/weight</small></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔧 Quantize Weights<br><small>TFLite Converter</small></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📦 Int8 Model<br><small>3.5 MB, 1 byte/weight</small></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✅ Same Accuracy<br><small>&plusmn;1-2% drop</small></div>
+    </div>
+
+    <p style="text-align: center; color: var(--color-text-light);">Like JPEG for models — looks the same, 4x smaller file, 2-4x faster inference, runs efficiently on NPU.</p>
+
+    <!-- Three Quantization Types -->
+    <h2>📏 Three Types of Post-Training Quantization</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>What It Quantizes</th>
+          <th>Size</th>
+          <th>Speed</th>
+          <th>Accuracy Loss</th>
+          <th>Data Needed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Dynamic Range</strong></td>
+          <td>Weights only</td>
+          <td>~2x smaller</td>
+          <td>~1.5-2x CPU</td>
+          <td>&lt; 1%</td>
+          <td>None</td>
+        </tr>
+        <tr>
+          <td><strong>Full Int8</strong> ⭐</td>
+          <td>Weights + activations</td>
+          <td>~4x smaller</td>
+          <td>~2-4x CPU, 5-10x NPU</td>
+          <td>1-2%</td>
+          <td>100-500 samples</td>
+        </tr>
+        <tr>
+          <td><strong>Float16</strong></td>
+          <td>Precision halved</td>
+          <td>~2x smaller</td>
+          <td>~1.5-2x GPU</td>
+          <td>&lt; 0.5%</td>
+          <td>None</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; color: var(--color-text-light);">⭐ <strong>Full int8 is the production standard.</strong> NPUs are designed for int8 — a float32 model on NNAPI may fall back to CPU, while int8 runs entirely on NPU.</p>
+
+    <!-- MobileNetV2 Real Benchmarks -->
+    <h2>📊 Real Numbers: MobileNetV2 on Pixel 8 Pro</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Variant</th>
+          <th>Size</th>
+          <th>CPU</th>
+          <th>NPU</th>
+          <th>Accuracy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Float32 (original)</td>
+          <td>14.0 MB</td>
+          <td>25 ms</td>
+          <td>8 ms</td>
+          <td>71.8%</td>
+        </tr>
+        <tr>
+          <td>Float16</td>
+          <td>7.0 MB</td>
+          <td>22 ms</td>
+          <td>6 ms</td>
+          <td>71.7%</td>
+        </tr>
+        <tr>
+          <td>Dynamic range</td>
+          <td>4.3 MB</td>
+          <td>15 ms</td>
+          <td>5 ms</td>
+          <td>71.2%</td>
+        </tr>
+        <tr>
+          <td><strong>Full int8</strong></td>
+          <td><strong>3.5 MB</strong></td>
+          <td><strong>10 ms</strong></td>
+          <td><strong>2.5 ms</strong></td>
+          <td><strong>70.5%</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; color: var(--color-text-light);">Int8: 4x smaller, 10x faster on NPU, only 1.3% accuracy loss. That's the sweet spot for mobile.</p>
+
+    <!-- Beyond Quantization -->
+    <h2>🛠️ Beyond Quantization</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">✂️</span>
+        <div class="map-card-title">Structured Pruning</div>
+        <div class="map-card-desc">Remove entire channels/layers. Model is genuinely smaller — fewer ops. Works on any hardware. 30-50% channels removed.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🕸️</span>
+        <div class="map-card-title">Unstructured Pruning</div>
+        <div class="map-card-desc">Zero individual weights (70-90% sparse). Looks impressive but most mobile NPUs can't exploit sparsity. Avoid for mobile.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎓</span>
+        <div class="map-card-title">Knowledge Distillation</div>
+        <div class="map-card-desc">Train a small "student" to mimic a big "teacher." Most powerful technique, but needs full training pipeline + dataset.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔬</span>
+        <div class="map-card-title">QAT (Quantization-Aware Training)</div>
+        <div class="map-card-desc">Simulate quantization during training so model compensates. Use only when PTQ drops accuracy too much (&gt;2-3%).</div>
+      </div>
+    </div>
+
+    <!-- Pruning Analogy -->
+    <p style="text-align: center; color: var(--color-text-light);">🌳 <strong>Pruning is like removing dead branches from a tree</strong> — same fruit, lighter tree. <strong>Distillation is like a student learning from a master</strong> — smaller person, same knowledge.</p>
+
+    <!-- The Decision Tree -->
+    <h2>🌳 The Optimization Decision Tree</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Start: Int8 Post-Training Quantization</h4>
+        <p>4x smaller, 2-4x faster, 5 minutes of work. If accuracy loss &lt; 2%, <strong>you're done.</strong> (Solves 90% of cases.)</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Accuracy too low? Try Float16</h4>
+        <p>2x smaller, almost zero accuracy loss. Pair with GPU delegate. No representative data needed.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Still too large? Structured Pruning</h4>
+        <p>Remove 30-50% of channels, then quantize the pruned model. Genuinely fewer operations.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Still not enough? Knowledge Distillation</h4>
+        <p>Train a smaller architecture to match the big model. Requires training pipeline, dataset, and Python ML skills.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Nothing works? Pick a Different Base Model</h4>
+        <p>Switch EfficientNet → MobileNet, or generic → domain-specific. Sometimes the right model beats the right optimization.</p>
+      </li>
+    </ol>
+
+    <!-- Conversion Paths -->
+    <h2>🔀 Model Format Conversion</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">🔥 PyTorch<br><small>→ ONNX → TFLite</small></div>
+      <div class="map-rel-node">📊 TF SavedModel<br><small>→ TFLite (direct)</small></div>
+      <div class="map-rel-center">📱 Mobile Formats<br><small>.tflite or .onnx</small></div>
+      <div class="map-rel-node">⚠️ Watch for:<br><small>Unsupported ops,<br>dynamic shapes,<br>accuracy drift</small></div>
+      <div class="map-rel-node">🔄 ONNX Runtime<br><small>Alternative to TFLite<br>for PyTorch models</small></div>
+    </div>
+
+    <!-- TFLite vs ONNX -->
+    <h2>⚖️ TFLite vs ONNX Runtime Mobile</h2>
+
+    <dl class="map-terms">
+      <dt>Use TFLite when</dt>
+      <dd>Model is from TensorFlow/Keras, you want widest NNAPI/GPU/QNN support, or you use Google's ecosystem (ML Kit, MediaPipe).</dd>
+      <dt>Use ONNX when</dt>
+      <dd>Model is from PyTorch and won't convert cleanly, you need cross-platform (iOS too), or the model uses ops TFLite doesn't support.</dd>
+      <dt>Both support</dt>
+      <dd>NNAPI hardware acceleration, quantized models, and all Android devices back to API 21.</dd>
+    </dl>
+
+    <!-- The Combined Power -->
+    <h2>🚀 Optimization + Acceleration = 10x</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Configuration</th>
+          <th>Size</th>
+          <th>Inference</th>
+          <th>Speedup</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Float32 + CPU (baseline)</td>
+          <td>14 MB</td>
+          <td>25 ms</td>
+          <td>1x</td>
+        </tr>
+        <tr>
+          <td>Float32 + GPU</td>
+          <td>14 MB</td>
+          <td>8 ms</td>
+          <td>3x</td>
+        </tr>
+        <tr>
+          <td>Int8 + CPU</td>
+          <td>3.5 MB</td>
+          <td>10 ms</td>
+          <td>2.5x</td>
+        </tr>
+        <tr>
+          <td><strong>Int8 + NPU</strong> ⭐</td>
+          <td><strong>3.5 MB</strong></td>
+          <td><strong>2.5 ms</strong></td>
+          <td><strong>10x</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; color: var(--color-text-light);">14 MB / 25 ms → 3.5 MB / 2.5 ms. <strong>4x smaller, 10x faster.</strong> Same accuracy within 1.3%.</p>
+
+    <!-- Quick Quiz -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+      <details>
+        <summary>What's the analogy for quantization?</summary>
+        <p class="quiz-answer">JPEG compression for models. A RAW photo and JPEG look almost identical, but JPEG is 10x smaller. Quantization does the same — the model's "knowledge" is almost the same, but the file is 2-4x smaller and inference is 2-4x faster.</p>
+      </details>
+      <details>
+        <summary>Which quantization type should you try first?</summary>
+        <p class="quiz-answer">Full int8 post-training quantization. It's the production standard: 4x smaller, 2-4x faster on CPU, 5-10x faster on NPU, and only needs 100-500 representative samples. It solves 90% of "model too big" problems.</p>
+      </details>
+      <details>
+        <summary>Why is int8 better than float32 on NPU, but worse on GPU?</summary>
+        <p class="quiz-answer">NPUs are purpose-built for int8 tensor operations — they run at maximum throughput. GPUs prefer float32/float16 math. Use int8 for NPU/CPU, float16 for GPU delegate.</p>
+      </details>
+      <details>
+        <summary>When should you use QAT instead of post-training quantization?</summary>
+        <p class="quiz-answer">Only when PTQ drops accuracy more than 2-3%. QAT requires the original training pipeline and dataset. Try PTQ first — it works well for most models.</p>
+      </details>
+      <details>
+        <summary>Why is structured pruning better than unstructured for mobile?</summary>
+        <p class="quiz-answer">Structured pruning removes entire channels — the model is physically smaller with fewer ops. Unstructured pruning just zeros scattered weights (sparse model, same shape). Most mobile NPUs can't exploit sparsity, so unstructured pruning gives no real speedup.</p>
+      </details>
+    </div>
+
+    <!-- Summary Strip -->
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Quantization = JPEG for models. Int8 gives 4x smaller, 2-4x faster, ~1-2% accuracy loss. Try this first — it solves 90% of cases.</li>
+        <li class="map-summary-item">Three PTQ types: dynamic range (easy, 2x), full int8 (production standard, 4x), float16 (safe, GPU-friendly, 2x).</li>
+        <li class="map-summary-item">Int8 + NPU = best combo. NPUs are built for int8. Float32 on NNAPI may fall back to CPU; int8 stays on NPU.</li>
+        <li class="map-summary-item">Decision tree: int8 PTQ → float16 → structured pruning → distillation → different model.</li>
+        <li class="map-summary-item">Structured pruning removes real channels (fewer ops). Unstructured pruning creates sparsity mobile hardware can't exploit.</li>
+        <li class="map-summary-item">Knowledge distillation is the most powerful but needs full training pipeline. Reserve for when nothing else works.</li>
+        <li class="map-summary-item">Optimization + acceleration combined: 14 MB/25 ms → 3.5 MB/2.5 ms. 4x smaller, 10x faster.</li>
+        <li class="map-summary-item">TFLite for TensorFlow models + Google ecosystem. ONNX for PyTorch models + cross-platform needs.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-hardware-acceleration-map.html" class="prev">
+        <span class="nav-direction">&larr; Prev Map</span>
+        <span class="nav-chapter">Hardware Acceleration — NPU, GPU, and DSP</span>
+      </a>
+      <a href="09-computer-vision-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Computer Vision Features</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

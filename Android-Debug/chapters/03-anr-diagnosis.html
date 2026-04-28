@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: ANR Diagnosis and Prevention | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-crash-logs-logcat.html">&larr; Prev</a>
+      <a href="04-memory-leaks.html">Next &rarr;</a>
+      <a href="maps/03-anr-diagnosis-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>ANR Diagnosis and Prevention</h1>
+    <p class="subtitle">The silent app-killer that users never forgive &mdash; diagnosed by AI in seconds</p>
+  </header>
+
+  <main>
+
+    <h2>Worse Than a Crash</h2>
+
+    <p>In Chapter 2, we mastered crash analysis &mdash; the app blows up, you get a stacktrace, AI tells you why. ANRs are a different beast entirely. The app doesn&rsquo;t crash. It <em>freezes</em>. The UI stops responding. The user taps, swipes, presses Back &mdash; nothing happens. After 5 seconds, Android shows the dreaded &ldquo;App isn&rsquo;t responding&rdquo; dialog.</p>
+
+    <p>And then the user uninstalls your app. Quietly. Without leaving a review. You never even know it happened.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">47%</span>
+        <span class="stat-label">of users uninstall after experiencing an ANR</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">2x</span>
+        <span class="stat-label">penalty weight of ANRs vs crashes in Play Store vitals</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5 sec</span>
+        <span class="stat-label">is all it takes &mdash; main thread blocked for 5 seconds = ANR</span>
+      </div>
+    </div>
+
+    <p>Google Play Console tracks ANR rates alongside crashes, and a high ANR rate will hurt your app&rsquo;s visibility in the Play Store. The bad-behavior threshold is 0.47% &mdash; meaning if roughly 1 in 200 daily sessions experiences an ANR, your app gets flagged.</p>
+
+    <h2>The Three ANR Triggers</h2>
+
+    <p>ANRs aren&rsquo;t random. Android triggers them in exactly three scenarios:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>ANR Type</th>
+          <th>Trigger</th>
+          <th>Timeout</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Input dispatching</strong></td>
+          <td>Main thread doesn&rsquo;t respond to a touch/key event</td>
+          <td>5 seconds</td>
+        </tr>
+        <tr>
+          <td><strong>BroadcastReceiver</strong></td>
+          <td>Receiver&rsquo;s <code>onReceive()</code> doesn&rsquo;t complete</td>
+          <td>10 seconds (foreground) / 60 seconds (background)</td>
+        </tr>
+        <tr>
+          <td><strong>Service</strong></td>
+          <td>Service&rsquo;s <code>onCreate()</code>, <code>onStartCommand()</code>, or <code>onBind()</code> doesn&rsquo;t complete</td>
+          <td>20 seconds (foreground) / 200 seconds (background)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The input dispatching ANR is by far the most common. It means your main thread is busy doing something it shouldn&rsquo;t be &mdash; database queries, network calls, heavy computation, or waiting on a lock held by another thread.</p>
+
+    <h2>Reading ANR Traces</h2>
+
+    <p>When an ANR happens, Android dumps a thread trace to <code>/data/anr/traces.txt</code>. This file is the ANR equivalent of a crash stacktrace, except it shows <em>every</em> thread in your process and what each one was doing at the moment of the ANR.</p>
+
+    <h3>How to Pull ANR Traces</h3>
+
+    <pre><code># Pull the ANR trace file from the device
+adb pull /data/anr/traces.txt
+
+# On newer Android versions, you might need:
+adb bugreport bugreport.zip
+# Then extract and find the ANR traces inside
+
+# For quick access during development:
+adb shell cat /data/anr/traces.txt | head -200</code></pre>
+
+    <div class="tip-box">
+      On Android 11+, direct access to <code>/data/anr/traces.txt</code> may be restricted. Use <code>adb bugreport</code> instead, which bundles ANR traces along with system logs, memory info, and more. Claude Code can analyze the relevant sections from a bugreport too.
+    </div>
+
+    <h3>Anatomy of an ANR Trace</h3>
+
+    <p>An ANR trace file looks intimidating &mdash; it can be hundreds of lines. Here&rsquo;s what matters:</p>
+
+    <div class="debug-trace">
+      <h4>ANR Trace: Main Thread Blocked on Database</h4>
+<pre><code>----- pid 18432 at 2026-03-28 14:23:07.892 -----
+Cmd line: com.example.shopapp
+
+"main" prio=5 tid=1 Blocked
+  | group="main" sCount=1 ucsCount=0 flags=1 obj=0x72a85e10
+  | sysTid=18432 nice=-10 cgrp=top-app sched=0/0 handle=0x7b3f4e54f8
+  | state=S schedstat=( 4852917382 1283746291 8432 ) utm=312 stm=173
+  | core=4 HZ=100
+  | stack=0x7fce8a1000-0x7fce8a3000 stackSize=8188KB
+  | held mutexes=
+  at com.example.shopapp.data.db.ProductDao_Impl.searchProducts(ProductDao_Impl.java:247)
+  - waiting to lock &lt;0x02a3e5c8&gt; (a androidx.room.RoomDatabase)
+    held by thread 14
+  at com.example.shopapp.ui.search.SearchViewModel.onQueryChanged(SearchViewModel.kt:34)
+  at com.example.shopapp.ui.search.SearchFragment.afterTextChanged(SearchFragment.kt:52)
+  at android.widget.TextView.sendAfterTextChanged(TextView.java:11482)
+  at android.widget.TextView.handleTextChanged(TextView.java:11316)
+
+"RoomQueryThread-2" prio=5 tid=14 Runnable
+  | group="main" sCount=0 ucsCount=0 flags=0 obj=0x13a462b0
+  at com.example.shopapp.data.db.ProductDao_Impl.getProductsWithInventory(ProductDao_Impl.java:189)
+  at com.example.shopapp.data.repository.ProductRepository.syncInventory(ProductRepository.kt:67)
+  at com.example.shopapp.data.sync.SyncWorker.doWork(SyncWorker.kt:28)</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>Thread &ldquo;main&rdquo;</strong> is in state <code>Blocked</code>, waiting to acquire a lock on the Room database (<code>0x02a3e5c8</code>). <strong>Thread &ldquo;RoomQueryThread-2&rdquo;</strong> (tid=14) holds that lock and is running a long inventory sync query. The main thread is calling <code>searchProducts()</code> directly from <code>afterTextChanged</code> &mdash; a synchronous database query triggered on every keystroke in the search bar.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Synchronous Database Query on Main Thread + Lock Contention</h4>
+      <p>Two problems compound here: <strong>(1)</strong> <code>SearchViewModel.onQueryChanged()</code> runs a Room query synchronously on the main thread. <strong>(2)</strong> That query can&rsquo;t proceed because the database lock is held by a background sync operation running a long query.</p>
+      <p>Either problem alone might not cause an ANR. Together &mdash; synchronous main-thread query + lock contention with a slow background query &mdash; the main thread stalls for 5+ seconds.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Move Query Off Main Thread + Debounce Input</h4>
+<pre><code>class SearchViewModel @Inject constructor(
+    private val productDao: ProductDao
+) : ViewModel() {
+
+    private val _query = MutableStateFlow("")
+
+    val searchResults: StateFlow&lt;List&lt;Product&gt;&gt; = _query
+        .debounce(300)  // Don't query on every keystroke
+        .distinctUntilChanged()
+        .flatMapLatest { query -&gt;
+            if (query.length &lt; 2) flowOf(emptyList())
+            else productDao.searchProductsFlow(query)  // Room Flow runs on IO
+        }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun onQueryChanged(text: String) {
+        _query.value = text  // Just update the flow, no blocking
+    }
+}</code></pre>
+      <p><strong>Key changes:</strong> (1) Use Room&rsquo;s <code>Flow</code> return type, which automatically runs on a background thread. (2) Debounce by 300ms so we don&rsquo;t fire a query on every keystroke. (3) The main thread never touches the database directly.</p>
+    </div>
+
+    <h2>Building an <code>/analyze-anr</code> Skill</h2>
+
+    <p>ANR traces are more complex than crash stacktraces because you need to analyze <em>multiple threads</em> and their interactions. Let&rsquo;s build a skill that handles this.</p>
+
+    <p>Create <code>.claude/commands/analyze-anr.md</code>:</p>
+
+    <pre><code># /analyze-anr — ANR Trace Analysis
+
+Analyze an ANR trace dump and identify the blocked thread, lock holder,
+and root cause.
+
+## Input
+The user will paste an ANR trace (from /data/anr/traces.txt or a
+bugreport). It may include multiple thread dumps.
+
+## Analysis Steps
+
+1. **Find the main thread** — look for `"main" prio=5 tid=1` and check
+   its state (Blocked, Waiting, Sleeping, or Runnable doing heavy work).
+
+2. **If Blocked:** identify what lock/monitor it's waiting on, and find
+   which thread holds that lock. Follow the chain — sometimes thread A
+   waits on B, which waits on C (deadlock potential).
+
+3. **If Runnable:** the main thread is doing CPU-intensive work. Look at
+   the top stack frames to identify what computation is blocking.
+
+4. **If Waiting/Sleeping:** the main thread is waiting for a callback,
+   future, or synchronous IPC that hasn't returned.
+
+5. **Trace to user code** — find the stack frame in the app's package
+   (not android.*, java.*, or androidx.*).
+
+6. **Classify the ANR type:**
+   - Database on main thread (Room, SQLite, SharedPreferences)
+   - Network on main thread (OkHttp, HttpURLConnection)
+   - Lock contention (main thread waiting for background thread's lock)
+   - Heavy computation (JSON parsing, bitmap processing, list sorting)
+   - Deadlock (two threads each waiting for each other's lock)
+   - Binder IPC (slow system service call)
+
+## Output Format
+
+### Main Thread State
+[State and what it's doing]
+
+### Blocked By
+[Which thread holds the lock / what operation is slow]
+
+### ANR Classification
+[Database / Network / Lock / Computation / Deadlock / IPC]
+
+### Your Code Entry Point
+[File:line in your code that started this]
+
+### Root Cause
+[Why the main thread is blocked]
+
+### Suggested Fix
+```kotlin
+[Code showing the fix]
+```
+
+### Prevention
+[How to prevent this class of ANR]</code></pre>
+
+    <h2>Common ANR Patterns AI Catches Instantly</h2>
+
+    <p>After analyzing thousands of ANR traces, certain patterns emerge over and over. Here are the ones AI recognizes immediately:</p>
+
+    <h3>Pattern 1: SharedPreferences on Main Thread</h3>
+
+    <p>This is the sneakiest ANR cause because <code>SharedPreferences</code> looks harmless. A quick <code>getString()</code> &mdash; what could go wrong?</p>
+
+    <pre><code>// This looks innocent but can ANR:
+val token = prefs.getString("auth_token", null)
+
+// Why? SharedPreferences.getString() is synchronous.
+// First call loads the entire XML file from disk.
+// If another thread is calling commit(), getString()
+// blocks until the commit finishes.
+// On a phone with slow flash storage = ANR.</code></pre>
+
+    <div class="tip-box">
+      Migrate from <code>SharedPreferences</code> to <strong>DataStore</strong> (Preferences DataStore) for any data accessed on the main thread. DataStore is fully asynchronous and won&rsquo;t block.
+    </div>
+
+    <h3>Pattern 2: Dispatchers.Main Where Dispatchers.IO Should Be</h3>
+
+    <pre><code>// ANR waiting to happen:
+viewModelScope.launch {  // Default: Dispatchers.Main
+    val users = database.userDao().getAllUsers()  // Blocking IO!
+    _users.value = users
+}
+
+// Safe version:
+viewModelScope.launch {
+    val users = withContext(Dispatchers.IO) {
+        database.userDao().getAllUsers()
+    }
+    _users.value = users
+}</code></pre>
+
+    <p><code>viewModelScope.launch</code> defaults to <code>Dispatchers.Main</code>. If your Room DAO returns a plain <code>List&lt;User&gt;</code> instead of <code>Flow&lt;List&lt;User&gt;&gt;</code>, that query runs on the main thread. Room will actually throw an exception by default, but some developers disable this check with <code>allowMainThreadQueries()</code> &mdash; which is just asking for ANRs.</p>
+
+    <div class="warning-box">
+      <strong>Never use <code>.allowMainThreadQueries()</code> in production code.</strong> Room&rsquo;s main-thread check exists to prevent exactly this class of ANRs. If you need a synchronous-looking API, use <code>suspend</code> functions or <code>Flow</code>.
+    </div>
+
+    <h3>Pattern 3: Binder IPC Stalls</h3>
+
+    <p>Sometimes the main thread isn&rsquo;t blocked by your code at all &mdash; it&rsquo;s waiting for a system service. You&rsquo;ll see stack frames like:</p>
+
+    <pre><code>at android.os.BinderProxy.transactNative(Native Method)
+at android.os.BinderProxy.transact(BinderProxy.java:584)
+at android.content.pm.IPackageManager$Stub$Proxy.getPackageInfo(...)
+at android.app.ApplicationPackageManager.getPackageInfo(...)</code></pre>
+
+    <p>When Claude Code sees this pattern, it identifies it as a Binder IPC stall &mdash; the system&rsquo;s PackageManager service is overloaded. This is often transient and device-specific, but if it happens frequently, the fix is to move the <code>getPackageInfo()</code> call off the main thread.</p>
+
+    <h2>StrictMode: Your ANR Early Warning System</h2>
+
+    <p>StrictMode detects accidental main-thread violations <em>before</em> they become ANRs. Think of it as a smoke detector &mdash; it alerts you to the fire before the building burns down.</p>
+
+    <pre><code>// Add to your Application.onCreate() — debug builds only:
+if (BuildConfig.DEBUG) {
+    StrictMode.setThreadPolicy(
+        StrictMode.ThreadPolicy.Builder()
+            .detectDiskReads()
+            .detectDiskWrites()
+            .detectNetwork()
+            .detectCustomSlowCalls()
+            .penaltyLog()  // Log violations to logcat
+            .penaltyFlashScreen()  // Flash the screen red (very visible!)
+            .build()
+    )
+    StrictMode.setVmPolicy(
+        StrictMode.VmPolicy.Builder()
+            .detectLeakedClosableObjects()
+            .detectLeakedRegistrationObjects()
+            .detectLeakedSqlLiteObjects()
+            .penaltyLog()
+            .build()
+    )
+}</code></pre>
+
+    <p>Once StrictMode is enabled, every disk read, disk write, or network call on the main thread gets logged. Feed these logs to Claude Code:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">StrictMode is flagging these violations in my app. Which ones are real ANR risks vs false positives? Here are the logcat entries:
+
+D/StrictMode: StrictMode policy violation: android.os.strictmode.DiskReadViolation
+  at com.example.myapp.ui.home.HomeFragment.onViewCreated(HomeFragment.kt:38)
+  at ...
+
+D/StrictMode: StrictMode policy violation: android.os.strictmode.DiskReadViolation
+  at android.content.res.AssetManager.nativeGetResourceValue(Native Method)
+  at ...</div>
+      <div class="prompt-explanation">The first violation (your code reading from disk in onViewCreated) is a real risk. The second (AssetManager) is a framework-level read that's typically fast and safe — AI helps you triage which violations matter.</div>
+    </div>
+
+    <h2>Building a <code>/check-anr-risks</code> Skill</h2>
+
+    <p>Prevention is better than diagnosis. Let&rsquo;s build a skill that scans your code for common ANR patterns before they ship.</p>
+
+    <p>Create <code>.claude/commands/check-anr-risks.md</code>:</p>
+
+    <pre><code># /check-anr-risks — Scan for Main-Thread Violations
+
+Scan the codebase for code patterns that could cause ANRs.
+
+## What to Look For
+
+1. **Database on main thread:**
+   - Room DAO calls not wrapped in withContext(Dispatchers.IO)
+   - SharedPreferences.edit().commit() (use apply() instead)
+   - SQLite operations outside coroutine scope
+
+2. **Network on main thread:**
+   - Synchronous OkHttp/Retrofit calls
+   - URL.openConnection() outside background thread
+
+3. **Heavy computation on main thread:**
+   - JSON parsing (Gson/Moshi) in UI layer
+   - Bitmap operations in onDraw/onBind
+   - Large list sorting/filtering in adapters
+
+4. **Lock contention risks:**
+   - synchronized blocks accessed from both main and background threads
+   - ReentrantLock usage shared across threads
+
+5. **Dispatcher misuse:**
+   - viewModelScope.launch without withContext for IO ops
+   - lifecycleScope.launch with blocking calls
+
+## Output Format
+For each risk found, report:
+- **File:line** — where the risky code is
+- **Risk level** — High/Medium/Low
+- **Pattern** — what type of ANR risk
+- **Fix** — how to make it safe</code></pre>
+
+    <div class="tip-box">
+      Run <code>/check-anr-risks</code> as part of your pre-PR review routine. It takes 30 seconds and can catch ANR-causing code before it reaches production.
+    </div>
+
+    <h2>Measuring ANR Impact</h2>
+
+    <p>How much time does AI-assisted ANR diagnosis save? ANRs are notoriously harder to debug than crashes because the trace files are large and involve multiple threads.</p>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Manual ANR Diagnosis</h4>
+        <p><strong>Pull &amp; open traces.txt:</strong> 3 min</p>
+        <p><strong>Find main thread in dump:</strong> 5 min</p>
+        <p><strong>Identify lock/wait target:</strong> 8 min</p>
+        <p><strong>Find lock-holding thread:</strong> 10 min</p>
+        <p><strong>Cross-reference with code:</strong> 8 min</p>
+        <p><strong>Determine root cause:</strong> 6 min</p>
+        <p><strong>Total: ~40 minutes</strong></p>
+      </div>
+      <div class="metric-after">
+        <h4>AI-Assisted ANR Diagnosis</h4>
+        <p><strong>Pull traces &amp; paste to Claude Code:</strong> 2 min</p>
+        <p><strong>AI analysis returned:</strong> &lt;1 min</p>
+        <p><strong>Verify blocked thread &amp; lock:</strong> 3 min</p>
+        <p><strong>Follow-up on lock holder:</strong> 2 min</p>
+        <p><strong>Write &amp; test fix:</strong> 5 min</p>
+        <p>&nbsp;</p>
+        <p><strong>Total: ~13 minutes</strong></p>
+      </div>
+    </div>
+
+    <h2>Your ANR Prevention Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Enable StrictMode in debug builds to catch main-thread violations early</li>
+      <li class="checked">Never call <code>allowMainThreadQueries()</code> in production Room builds</li>
+      <li class="checked">Use <code>SharedPreferences.apply()</code> instead of <code>commit()</code> (or migrate to DataStore)</li>
+      <li class="checked">Default to <code>Dispatchers.IO</code> for all database and file operations in coroutines</li>
+      <li class="checked">Debounce text input that triggers database queries</li>
+      <li class="checked">Use Room&rsquo;s <code>Flow</code> or <code>suspend</code> return types instead of plain lists</li>
+      <li class="checked">Set up the <code>/analyze-anr</code> and <code>/check-anr-risks</code> skills</li>
+      <li class="checked">Monitor ANR rates in Google Play Console &mdash; keep below 0.47%</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The ANR Mindset</h3>
+      <p>Every time you write code that runs on the main thread, ask yourself: &ldquo;Could this ever take more than 100ms?&rdquo; If the answer is yes, or even &ldquo;maybe on a slow device,&rdquo; move it to a background thread. The main thread has one job: respond to the user. Everything else belongs somewhere else.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Trigger, Capture, and Diagnose an ANR</h4>
+      <ol>
+        <li><strong>Trigger a deliberate ANR:</strong> In any Activity&rsquo;s <code>onCreate()</code>, add <code>Thread.sleep(6000)</code>. Build and run the app, then tap on the screen. Wait for the ANR dialog.</li>
+        <li><strong>Capture the trace:</strong> Run <code>adb bugreport bugreport.zip</code>, unzip it, and find the ANR trace section. Alternatively, try <code>adb pull /data/anr/traces.txt</code>.</li>
+        <li><strong>Run <code>/analyze-anr</code>:</strong> Paste the main thread&rsquo;s trace into Claude Code using your new skill. Verify it identifies <code>Thread.sleep()</code> as the blocking call.</li>
+        <li><strong>Try a realistic ANR:</strong> Replace the <code>Thread.sleep()</code> with a synchronous database query or SharedPreferences <code>commit()</code> with a large payload. Capture and analyze the ANR trace again &mdash; is the AI analysis more nuanced?</li>
+        <li><strong>Run <code>/check-anr-risks</code>:</strong> Point Claude Code at your project and let it scan for main-thread violations. How many real risks does it find?</li>
+      </ol>
+      <p>Remove the deliberate <code>Thread.sleep()</code> when you&rsquo;re done! Commit the skills files, though &mdash; you&rsquo;ll use them throughout this course.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>ANRs freeze your app. Memory leaks <em>slowly kill</em> it. Your app gets sluggish, frames drop, garbage collection pauses multiply, and eventually &mdash; <code>OutOfMemoryError</code>. The worst part? Memory leaks are silent. No crash, no dialog, no stacktrace. Just a slow decline.</p>
+
+    <p>In <strong>Chapter 4: Memory Leak Detection with AI</strong>, we&rsquo;ll combine LeakCanary output with Claude Code to find and fix memory leaks systematically &mdash; from the classic Activity-in-static-field leak to the Compose-era <code>remember</code> gotchas.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-crash-logs-logcat.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Crash Logs, Logcat &amp; Stacktraces</span>
+      </a>
+      <a href="04-memory-leaks.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Memory Leak Detection with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

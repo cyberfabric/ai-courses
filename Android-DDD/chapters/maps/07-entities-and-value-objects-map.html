@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map — Chapter 7: Entities and Value Objects</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../07-entities-and-value-objects.html">Chapter</a>
+      <a href="06-domain-events-map.html">&#8592; Prev Map</a>
+      <a href="08-aggregates-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Entities and Value Objects</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🆔</span>
+      <h3>The Big Idea</h3>
+      <p>One question separates the two atoms of tactical DDD: <em>if you swapped this object for another with the exact same fields, would the system care?</em> Yes &rarr; <strong>entity</strong> (identity matters). No &rarr; <strong>value object</strong> (defined by attributes). A Kotlin <code>data class</code> is <em>not</em> automatically a value object &mdash; it's one ingredient out of four.</p>
+    </div>
+
+    <h2>⚖️ Entity vs Value Object</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Entity</th><th>Value Object</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Defined by</td><td>Identity (an ID)</td><td>Its attributes</td></tr>
+        <tr><td>Equality</td><td>Same ID = same entity</td><td>Same fields = same value</td></tr>
+        <tr><td>Lifecycle</td><td>Born, mutated, retired</td><td>None &mdash; it just <em>is</em></td></tr>
+        <tr><td>Mutable?</td><td>Internally, sometimes</td><td>Never. Operations return new instances</td></tr>
+        <tr><td>Examples</td><td><code>User</code>, <code>Order</code>, <code>Ride</code></td><td><code>Money</code>, <code>EmailAddress</code>, <code>GeoPoint</code></td></tr>
+        <tr><td>Money analogy</td><td>A specific named bank account</td><td>A $20 bill (any $20 bill)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🪤 The <code>data class</code> Trap</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">✅</span>
+        <div class="map-card-title">What it gives you</div>
+        <div class="map-card-desc">Structural <code>equals</code>/<code>hashCode</code>, <code>toString</code>, <code>componentN</code>. The equality piece is exactly right for value objects.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚠️</span>
+        <div class="map-card-title">What it doesn't</div>
+        <div class="map-card-desc">No invariant enforcement. <code>copy()</code> bypasses factory validation (but <code>init</code> still runs). <code>val</code> can hold mutable refs.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🛡️</span>
+        <div class="map-card-title">The fix</div>
+        <div class="map-card-desc"><code>private constructor</code> + factory + <code>init { require(…) }</code>. Now <code>copy()</code> still validates because <code>init</code> runs on every construction.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">For entities</div>
+        <div class="map-card-desc"><code>data class</code> for an entity is <em>wrong by default</em> &mdash; its generated <code>equals</code> compares all fields. Override <code>equals</code>/<code>hashCode</code> to use <code>id</code> only.</div>
+      </div>
+    </div>
+
+    <h2>🧱 The Four Criteria of a Real Value Object</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">🪨 Immutable<br>(all <code>val</code>, no mut. refs)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔒 Self-validating<br>(throws on bad input)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🟰 Equal by attributes</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✨ No side effects<br>(returns new instances)</div>
+    </div>
+
+    <h2>🎯 Inline Value Classes: Zero-Cost Wrappers</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node"><code>UserId(Long)</code></div>
+      <div class="map-rel-node"><code>Cents(Long)</code></div>
+      <div class="map-rel-center">@JvmInline<br>value class</div>
+      <div class="map-rel-node"><code>Percent(Int)</code><br>0..100</div>
+      <div class="map-rel-node"><code>OrderId(String)</code></div>
+    </div>
+
+    <p>Compile-time wrapper, runtime primitive. Type-safety with no allocation cost. Use for any primitive with domain meaning &mdash; especially every ID type in your codebase.</p>
+
+    <h2>🔁 The Refactor: Primitives → Domain Types</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Spot the anemic record</h4>
+        <p><code>data class User(val id: Long, val email: String, val countryCode: String, ...)</code>. Every field begs the question: validated? trimmed? which encoding?</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Wrap one primitive</h4>
+        <p><code>@JvmInline value class UserId(val value: Long)</code>. Or <code>EmailAddress</code> with <code>private constructor</code> + factory.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Push validation into constructor</h4>
+        <p><code>init { require(EMAIL_REGEX.matches(raw)) }</code>. Now invalid instances cannot exist anywhere.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Let the compiler walk every call site</h4>
+        <p>Each scattered manual validation collapses into one place. <code>StringUtils.formatXyz()</code> moves onto the value as a method.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Replace entity equality</h4>
+        <p>Override <code>equals</code>/<code>hashCode</code> by <code>id</code>. Two snapshots of the same user at different times are still <em>the same entity</em>.</p>
+      </li>
+    </ol>
+
+    <h2>📦 Where Each Lives on Android</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🧪</span>
+        <div class="map-card-title">:domain (pure Kotlin)</div>
+        <div class="map-card-desc">Entities (classes), value objects (inline value classes / data classes). No Android. No androidx. JVM unit tests in milliseconds.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title">:data (Android)</div>
+        <div class="map-card-desc">Room <code>@Entity</code>s (separate from domain entities!), Retrofit DTOs, mappers DTO ↔ domain. The mapper is your tiny ACL.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎨</span>
+        <div class="map-card-title">:feature-* (Compose, ViewModels)</div>
+        <div class="map-card-desc">Depends on <code>:domain</code>. Validation runs on construction &mdash; your <code>TextWatcher</code> just calls <code>EmailAddress.parse(input)</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚠️</span>
+        <div class="map-card-title">Room <code>@Entity</code> ≠ domain entity</div>
+        <div class="map-card-desc">Same name, different shape. Persistence is its own context. Map between them in the repository.</div>
+      </div>
+    </div>
+
+    <h2>🚨 Android-Specific Mistakes</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📝</span>
+        <div class="map-card-title">Validation in TextWatcher</div>
+        <div class="map-card-desc">Validation belongs on the value object, not the UI. One source of truth, every screen + test agrees.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Primitives across screens</div>
+        <div class="map-card-desc">Pass <code>UserId</code>, not <code>Long</code>. Inline value classes parcel the same way; compiler catches the swap.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗄️</span>
+        <div class="map-card-title">Room as domain</div>
+        <div class="map-card-desc">No-arg constructors, public fields, <code>@PrimaryKey</code> &mdash; Room shape is bad domain shape.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🏷️</span>
+        <div class="map-card-title">"It's just a label"</div>
+        <div class="map-card-desc">"Why wrap orderId?" Because the day a junior passes <code>userId</code> to <code>refundOrder()</code>, the compiler says nothing.</div>
+      </div>
+    </div>
+
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Identity</dt>
+      <dd>What makes one entity distinct from another regardless of its fields. Usually an ID.</dd>
+
+      <dt>Structural Equality</dt>
+      <dd>Two objects equal if all their fields are equal. Right semantics for value objects, wrong for entities.</dd>
+
+      <dt>Inline Value Class</dt>
+      <dd><code>@JvmInline value class</code> &mdash; a compile-time wrapper that disappears at runtime. Type safety without allocation.</dd>
+
+      <dt>Self-Validation</dt>
+      <dd>Invalid instances cannot exist. The constructor (or <code>init</code> block) throws on bad input.</dd>
+
+      <dt>Side-Effect-Free Method</dt>
+      <dd>A method that returns a new value instead of mutating. Standard for value objects.</dd>
+
+      <dt>Anemic Model</dt>
+      <dd>A record-like class with only fields and no behavior. The opposite of a real domain type.</dd>
+
+      <dt>ID-only equals</dt>
+      <dd>Override <code>equals</code>/<code>hashCode</code> on an entity to compare only the <code>id</code>. The same entity at any point in its lifecycle equals itself.</dd>
+    </dl>
+
+    <h2>🧭 When to Wrap, When to Stay Primitive</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Wrap when…</th><th>Stay primitive when…</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>It has domain rules (validation, normalization)</td><td>Purely scalar with no rules (counter, index)</td></tr>
+        <tr><td>It has domain operations (<code>Money.plus</code>)</td><td>Internal detail that never crosses the domain</td></tr>
+        <tr><td>It's confusable with other primitives (IDs)</td><td>You'd be wrapping for the sake of wrapping</td></tr>
+        <tr><td>It appears in many function signatures</td><td>Local variable in one tight scope</td></tr>
+      </tbody>
+    </table>
+
+    <h2>❓ Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test yourself</h3>
+      <details>
+        <summary>What's the litmus test for entity vs value object?</summary>
+        <p class="quiz-answer">"If I swapped this object for another with the same fields, would the system care?" Yes = entity (identity matters). No = value object (defined by attributes alone).</p>
+      </details>
+      <details>
+        <summary>Why isn't a Kotlin <code>data class</code> automatically a value object?</summary>
+        <p class="quiz-answer">It gives you structural equality (one of four criteria) but not the others: no invariant enforcement, <code>copy()</code> bypasses factory validation, and <code>val</code> fields can hold mutable references. Add <code>private constructor</code> + factory + <code>init { require(…) }</code> to close the gaps.</p>
+      </details>
+      <details>
+        <summary>How should you override <code>equals</code> on an entity?</summary>
+        <p class="quiz-answer">By ID only. <code>other is User &amp;&amp; other.id == id</code>. Two snapshots of the same entity at different times must still compare equal &mdash; only its identity defines equality.</p>
+      </details>
+      <details>
+        <summary>What's the runtime cost of <code>@JvmInline value class UserId(val value: Long)</code>?</summary>
+        <p class="quiz-answer">Almost zero. The wrapper is a compile-time fiction in most contexts; the JVM sees a <code>Long</code>. So there's no performance excuse to keep raw <code>Long</code>s for IDs.</p>
+      </details>
+      <details>
+        <summary>Should a Room <code>@Entity</code> be your domain entity?</summary>
+        <p class="quiz-answer">No. Room <code>@Entity</code>s have constraints (no-arg constructor, public fields, <code>@PrimaryKey</code>) that make them poor domain types. Keep them in <code>:data</code>, write a mapper to your real domain entity, treat the mapper as a tiny ACL.</p>
+      </details>
+      <details>
+        <summary>Why is the <code>init</code> block your "value object insurance policy"?</summary>
+        <p class="quiz-answer">It runs on every construction path: the primary constructor, <code>copy()</code>, deserialization. Put your <code>require(…)</code> calls there and no path produces an invalid instance.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Identity vs equality is the central tactical-DDD distinction. Entities have identity; value objects are defined by their attributes.</li>
+        <li class="map-summary-item">A Kotlin <code>data class</code> alone is not a value object. Add <code>private constructor</code> + factory + <code>init { require(…) }</code> to make one.</li>
+        <li class="map-summary-item">Inline value classes (<code>@JvmInline</code>) give you typed wrappers with zero runtime overhead. Use them for every ID and every bounded scalar.</li>
+        <li class="map-summary-item">Override <code>equals</code>/<code>hashCode</code> on entities to compare by ID only. <code>data class</code> default equality is wrong for entities.</li>
+        <li class="map-summary-item">The four value-object criteria: immutable, self-validating, equal by attributes, side-effect-free behavior.</li>
+        <li class="map-summary-item">Room <code>@Entity</code> ≠ domain entity. Different module, different shape, mapper between them.</li>
+        <li class="map-summary-item">Lift primitives to value objects when they have rules, operations, or confusion risk. Stay primitive when they're truly scalar with no domain meaning.</li>
+        <li class="map-summary-item">All of this is pure Kotlin in <code>:domain</code> &mdash; tests run in milliseconds with no Android dependency.</li>
+        <li class="map-summary-item">"It's just a label" is the lie that leads to passing <code>userId</code> to <code>refundOrder(orderId)</code> in production.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="06-domain-events-map.html">
+        <span class="nav-direction">&#8592; Previous Map</span>
+        <span class="nav-chapter">Domain Events</span>
+      </a>
+      <a href="../07-entities-and-value-objects.html">
+        <span class="nav-direction">📖 Read</span>
+        <span class="nav-chapter">Chapter 7</span>
+      </a>
+      <a href="08-aggregates-map.html" class="next">
+        <span class="nav-direction">Next Map &#8594;</span>
+        <span class="nav-chapter">Aggregates</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

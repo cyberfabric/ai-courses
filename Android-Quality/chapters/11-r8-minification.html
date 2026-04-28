@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11 &mdash; R8: Minification Without Mysteries | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="10-version-catalogs-and-deps.html">&larr; Prev</a>
+      <a href="12-convention-plugins-and-ci-gate.html">Next &rarr;</a>
+      <a href="maps/11-r8-minification-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>R8: Minification Without Mysteries</h1>
+    <p class="subtitle">Smaller APKs, faster startups &mdash; without <code>ClassNotFoundException</code> on release</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The "we'll turn on minification later" problem</h2>
+
+      <p>You know R8 exists. You know your release APK is bigger than it needs to be. You may have even <em>tried</em> turning <code>minifyEnabled = true</code> once &mdash; the build worked, you shipped, an hour later Crashlytics lit up with <code>NoSuchMethodError</code> from an obfuscated class name nobody could read, and you reverted in a panic. Since then: nothing. Release APK still 30% too big.</p>
+
+      <p>This is the chapter that fixes that, permanently. R8 is not magic and not scary. It strips unused code, optimizes what's left, and renames symbols to short tokens. Your job is to tell it which symbols can't be renamed (because they're referenced by string &mdash; through reflection, JNI, XML, or framework lookup). Once you know the patterns, R8 becomes one of the cheapest wins in the whole quality stack.</p>
+
+      <div class="highlight-box">
+        <p><strong>The frame:</strong> your release APK has 20-40% of code that nobody runs. R8 removes it. The pricetag is a few keep-rule lines per library that uses reflection. After your first <code>mapping.txt</code>-driven debugging session, those rules are obvious; before the first one, they feel like voodoo. This chapter takes you across that line.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Meet the tool</h2>
+
+      <div class="tool-profile-box">
+        <h3>Meet R8</h3>
+        <p><strong>What it is:</strong> the bundled minifier in Android Gradle Plugin (replaced ProGuard in AGP 3.4+). Four phases &mdash; <strong>shrink</strong>, <strong>optimize</strong>, <strong>obfuscate</strong>, <strong>preverify</strong> &mdash; applied to release builds.</p>
+        <p><strong>What it does that humans can't:</strong> dead-code analysis across your entire app + every library, inlining of small methods, class merging, value propagation, name shortening to single letters. Manual equivalents: impossible at any reasonable cost.</p>
+        <p><strong>Install:</strong> none required &mdash; bundled with AGP. You enable it via <code>minifyEnabled = true</code> + <code>shrinkResources = true</code> in your release <code>buildType</code>.</p>
+        <p><strong>Runtime cost:</strong> <em>negative</em> &mdash; smaller APK, faster class loading, faster cold start. Build-time cost: 30-90 seconds added to release builds depending on size.</p>
+        <p><strong>When to skip it:</strong> never for production releases. Some teams skip for <code>debug</code> builds (the default). Don't ship a release without it &mdash; the APK-size and obfuscation gains compound.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What R8 actually does, in 60 seconds</h2>
+
+      <p>R8 reads your compiled bytecode, your <code>AndroidManifest.xml</code>, your resources, and your keep rules. From the manifest entry points (<code>Application</code>, <code>Activity</code>, <code>BroadcastReceiver</code>, etc.) it walks the call graph, marks every reachable class/method/field, and discards the rest. Then it optimizes the survivors. Then it renames them to <code>a.b.C.d()</code>-shaped tokens so the APK is smaller and the bytecode is harder to read.</p>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <h4>1. Shrink</h4>
+          <p>Remove unreachable classes, methods, fields. Anything not referenced from a manifest entry, a keep rule, or another reachable symbol &mdash; gone.</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>2. Optimize</h4>
+          <p>Inline small methods, propagate constant values, merge sibling classes, devirtualize calls, eliminate dead branches.</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>3. Obfuscate</h4>
+          <p>Rename packages, classes, methods, fields to single letters. Saves bytes; makes reverse-engineering harder.</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>4. Preverify</h4>
+          <p>Add metadata so Android's runtime can verify the bytecode faster. Tiny but free.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Turn it on</h2>
+
+      <div class="config-recipe">
+        <h4><code>app/build.gradle.kts</code> &mdash; minimal release config</h4>
+<pre><code>android {
+    buildTypes {
+        release {
+            isMinifyEnabled = true       // shrink + optimize + obfuscate
+            isShrinkResources = true     // strip unused PNG/XML/string resources
+
+            proguardFiles(
+                // Default Android-aware optimizations (use the "-optimize" variant)
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                // Your app-specific keep rules
+                "proguard-rules.pro"
+            )
+
+            signingConfig = signingConfigs.getByName("release")
+        }
+
+        debug {
+            // Default: minifyEnabled = false. Leave it. Debug builds want fast iteration.
+        }
+    }
+}</code></pre>
+        <p class="recipe-note">Two lines. <code>isMinifyEnabled</code> turns on the R8 pipeline; <code>isShrinkResources</code> additionally strips unused resources. The latter requires the former &mdash; resource shrinking can't happen without code shrinking, because R8 needs to know which classes survive to know which resources are referenced.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The keep-rule mental model</h2>
+
+      <p>R8 strips everything not reachable from a manifest entry or a keep rule. So the question becomes: <em>which of my code is reachable in a way R8 can't see?</em> Three usual suspects:</p>
+
+      <div class="map-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.8rem; margin:1rem 0;">
+        <div class="tool-card">
+          <h4>🔍 Reflection</h4>
+          <p>Anything looked up by string at runtime: Gson/Moshi DTOs, Hilt DI, Dagger components, Retrofit interfaces, room entities accessed via <code>Class.forName</code>, Compose <code>@Composable</code> previews referenced from XML.</p>
+        </div>
+        <div class="tool-card">
+          <h4>🌉 JNI</h4>
+          <p>Native code calling back into Java/Kotlin. Method names matter to C++. Strip the name, native crashes on <code>JNIEnv::FindClass</code>.</p>
+        </div>
+        <div class="tool-card">
+          <h4>📄 XML / String references</h4>
+          <p>Custom views in layouts, fragments referenced by class name in nav graphs, services and receivers in the manifest, broadcast actions matched by package-qualified strings.</p>
+        </div>
+      </div>
+
+      <p>Anything reflected, JNI'd, or named-by-string needs a keep rule. Most modern libraries ship their own &mdash; you'll see them under <code>META-INF/proguard/</code> in the AAR &mdash; but not all, and not always completely.</p>
+    </section>
+
+    <section>
+      <h2>The keep-rule patterns you'll actually use</h2>
+
+      <p>Below is a battle-tested <code>proguard-rules.pro</code> covering the libraries every Android team ships. Add only the rules you need; don't paste the whole thing.</p>
+
+      <div class="config-recipe">
+        <h4><code>app/proguard-rules.pro</code> &mdash; common patterns</h4>
+<pre><code># --- Kotlin metadata (for reflection-using libraries) ---
+-keep class kotlin.Metadata { *; }
+
+# --- Gson / Moshi DTOs ---
+# Keep all classes annotated with @JsonClass (Moshi)
+-keep,allowobfuscation,allowshrinking @com.squareup.moshi.JsonClass class *
+
+# Keep generated adapters
+-keep class **JsonAdapter { *; }
+-keep class **_MoshiJsonAdapter { *; }
+
+# Or with Gson — keep model classes by package
+-keep class com.example.app.api.dto.** { *; }
+-keepclassmembers class com.example.app.api.dto.** {
+    &lt;fields&gt;;
+    &lt;init&gt;(...);
+}
+
+# --- Retrofit ---
+# Retrofit interfaces are looked up by name
+-keep,allowobfuscation,allowshrinking interface retrofit2.Call
+-keep,allowobfuscation,allowshrinking class retrofit2.Response
+# Your own API interfaces
+-keep interface com.example.app.api.** { *; }
+
+# --- Hilt / Dagger ---
+# Library ships rules; this catches edge cases
+-keep class dagger.hilt.** { *; }
+-keep class * extends dagger.hilt.android.HiltAndroidApp { *; }
+
+# --- Coroutines (already shipped by the library, but pin the safety net) ---
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+
+# --- ViewBinding generated classes ---
+# Usually not needed (AGP injects rules), but here for completeness:
+-keep class * implements androidx.viewbinding.ViewBinding {
+    public static * inflate(...);
+    public static * bind(...);
+}
+
+# --- Custom Views referenced from XML layouts ---
+-keep public class * extends android.view.View {
+    public &lt;init&gt;(android.content.Context);
+    public &lt;init&gt;(android.content.Context, android.util.AttributeSet);
+    public &lt;init&gt;(android.content.Context, android.util.AttributeSet, int);
+}
+
+# --- Native methods (JNI) ---
+-keepclasseswithmembernames class * {
+    native &lt;methods&gt;;
+}
+
+# --- Crashlytics: keep useful stack frames ---
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile</code></pre>
+        <p class="recipe-note">Most teams need fewer than 10 of these for their app code &mdash; modern AndroidX, Compose, Retrofit, Moshi, and Hilt all ship their own keep rules. The two you almost always need to write yourself: your <strong>API DTO package</strong> and your <strong>Retrofit interface package</strong>.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>The <code>SourceFile</code> + <code>LineNumberTable</code> attributes are the difference between a useful Crashlytics stack trace and a useless one.</strong> Without them, your retraced stack still shows real class names but no file/line info. With them, it tells you exactly which line crashed. Always keep these. The 1-2 KB they cost is nothing compared to debugging time saved.
+      </div>
+    </section>
+
+    <section>
+      <h2>The <code>mapping.txt</code> golden rule</h2>
+
+      <p>Every R8 build produces a <code>mapping.txt</code> file at <code>app/build/outputs/mapping/release/mapping.txt</code>. It records every original-name &harr; obfuscated-name pair. Without it, an obfuscated stack trace reads:</p>
+
+      <pre><code>java.lang.NullPointerException
+    at a.b.C.d(:0)
+    at a.b.C.e(:0)
+    at a.f.G.h(:0)</code></pre>
+
+      <p>Useless. <em>With</em> it &mdash; via the Android Studio "Retrace" tool or <code>retrace.jar</code> &mdash; the same trace becomes:</p>
+
+      <pre><code>java.lang.NullPointerException
+    at com.example.app.profile.ProfileViewModel.loadAvatar(ProfileViewModel.kt:74)
+    at com.example.app.profile.ProfileViewModel.observeUser(ProfileViewModel.kt:51)
+    at com.example.app.di.AppGraph.getProfileViewModel(AppGraph.kt:128)</code></pre>
+
+      <div class="warning-box">
+        <strong><code>mapping.txt</code> is build-specific. If you lose it, the obfuscated stack traces from that build are unrecoverable forever.</strong> Either: (1) commit it to a private storage bucket per release, (2) upload it automatically to Crashlytics/Bugsnag/Sentry as part of the release pipeline. Both is even better. Never just leave it in <code>build/</code>.
+      </div>
+
+      <h3>Auto-uploading to Crashlytics</h3>
+
+      <div class="config-recipe">
+        <h4><code>app/build.gradle.kts</code> &mdash; the Crashlytics + Firebase rule</h4>
+<pre><code>plugins {
+    alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.crashlytics)
+}
+
+android {
+    buildTypes {
+        release {
+            // Crashlytics plugin uploads mapping.txt automatically on every release build
+            // when both plugins above are applied. Verify in build logs:
+            //   "Successfully uploaded mapping file"
+        }
+    }
+}</code></pre>
+        <p class="recipe-note">If you don't use Crashlytics, the equivalent for Sentry / Bugsnag is one Gradle config block and an API key. The key behavior is the same: every release build triggers an upload, retracing happens server-side automatically.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Reading a release-only crash</h2>
+
+      <p>You ship a release. Within an hour Crashlytics flags a crash in <code>a.b.c.d()</code>. The trace looks gibberish. You have <code>mapping.txt</code> for that build version. Walk through:</p>
+
+      <ol class="checklist">
+        <li>Open Crashlytics &mdash; if mapping was uploaded, the trace is already retraced. Done. Skip to step 4.</li>
+        <li>If not, find <code>mapping.txt</code> for the exact build version. <em>Exact</em>: a mismatched mapping retraces to <strong>wrong</strong> lines, not "no line."</li>
+        <li>Run <code>retrace.jar mapping.txt obfuscated-trace.txt</code>, or paste both into Android Studio's "ReTrace" tool (Build &rarr; Analyze APK &rarr; ProGuard ReTrace).</li>
+        <li>Read the retraced trace. The first frame in <em>your</em> package is the entry point. Walk down the trace until you hit framework code &mdash; that's the boundary.</li>
+        <li>If the crash is <code>NoSuchMethodError</code>, <code>ClassNotFoundException</code>, <code>NoClassDefFoundError</code>, or "unable to instantiate," it's a missing keep rule. Add it, ship a patch.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>The "rules from libraries" pattern</h2>
+
+      <p>Most modern libraries ship a <code>consumer-proguard-rules.pro</code> inside their AAR. R8 picks it up automatically &mdash; you don't need to write rules for them. AndroidX, Retrofit, OkHttp, Moshi, Hilt, Coroutines, Compose, Coil, Glide all do this.</p>
+
+      <p>The libraries that <em>don't</em> tend to be older ones (pre-2020) or smaller open-source projects. Symptoms: release-only crashes referencing the library's package, or worse, your own package using a library API. Diagnose by:</p>
+
+      <div class="config-recipe">
+        <h4>Check what rules a library actually ships</h4>
+<pre><code># 1. Find the AAR in your gradle cache
+find ~/.gradle/caches/modules-2 -name "library-name-*.aar"
+
+# 2. AARs are zip files
+unzip -l path/to/library.aar | grep proguard
+
+# 3. Inspect the rules
+unzip -p path/to/library.aar proguard.txt
+# or
+unzip -p path/to/library.aar META-INF/proguard/library.pro</code></pre>
+        <p class="recipe-note">If the AAR has no proguard rules and you're crashing on it, you'll need to write your own keep rules for that library. Start with <code>-keep class com.thatlibrary.** { *; }</code>, ship a patch, then narrow down once you see what actually gets used.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The dangerous optimizations &mdash; and which to enable</h2>
+
+      <p>The default <code>proguard-android-optimize.txt</code> is conservative. There are three knobs you can turn for more aggressive optimization. Two are safe; one isn't.</p>
+
+      <table class="map-compare" style="width:100%; margin:1rem 0;">
+        <thead>
+          <tr><th>Flag</th><th>What it does</th><th>Safe?</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>android.enableR8.fullMode=true</code> (in <code>gradle.properties</code>)</td>
+            <td>Default since AGP 8.0. More aggressive optimizations &amp; obfuscation. Some libraries needed extra rules at first; ecosystem has caught up.</td>
+            <td>✅ Yes</td>
+          </tr>
+          <tr>
+            <td><code>-allowaccessmodification</code></td>
+            <td>Lets R8 widen access modifiers (private &rarr; public) when it enables an optimization.</td>
+            <td>✅ Yes &mdash; only used internally to the optimizer.</td>
+          </tr>
+          <tr>
+            <td><code>-repackageclasses ''</code></td>
+            <td>Moves all classes to the empty package (extreme name shortening).</td>
+            <td>⚠️ Mostly &mdash; breaks anything that does package-name-based reflection (rare, but real).</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="tip-box">
+        <strong>Default recommendation:</strong> turn on <code>fullMode</code> (or just leave it &mdash; it's the AGP 8+ default), enable <code>-allowaccessmodification</code> in your rules file, leave <code>-repackageclasses</code> off unless you're benchmarking the last few KB. The first two get you 90% of the gains with zero ongoing maintenance burden.
+      </div>
+    </section>
+
+    <section>
+      <h2>Baseline Profiles &mdash; the next-level optimization</h2>
+
+      <p>Once R8 is solid and your APK is shrunk, the next lever is <em>cold start time</em>. Baseline Profiles are AOT-compilation hints &mdash; you record which classes/methods run during your critical user journeys, the Play Store ships that profile alongside the APK, and the runtime pre-compiles them. 20-40% startup improvements are typical.</p>
+
+      <p>Outside this chapter's scope, but: once R8 is wired and you have a working release pipeline, Baseline Profiles via the Macrobenchmark library is the right next investment. The <a href="https://developer.android.com/topic/performance/baselineprofiles">official guide</a> is sufficient. Mention them on the next "we have time for a perf project" cycle.</p>
+    </section>
+
+    <section>
+      <h2>AI-Assisted Setup: <code>/draft-keep-rules</code></h2>
+
+      <p>Writing keep rules from scratch is busywork &mdash; you stare at a release-only stack trace and a library doc, then translate. Hand it to Claude.</p>
+
+      <div class="prompt-example good">
+        <h4>Good prompt</h4>
+        <p>"I have a release-only crash. Stack trace is below (already retraced via <code>mapping.txt</code>). Build is using <code>minifyEnabled = true</code>, <code>fullMode = true</code>, default <code>proguard-android-optimize.txt</code>. Library involved: <code>com.example:legacy-sdk:3.4.0</code>. Output: (1) the precise <code>-keep</code> rule(s) to add, (2) where in <code>proguard-rules.pro</code> they should go (with a comment header), (3) any narrower variant that would still fix the crash but keep more bytes shrunk. Do not output a wildcard <code>-keep class com.example.** { *; }</code> unless it's the only safe answer &mdash; explain why if it is."</p>
+      </div>
+
+      <div class="prompt-example bad">
+        <h4>Bad prompt</h4>
+        <p>"Fix this crash."</p>
+        <p><em>Why it fails:</em> no signal that R8 is the cause, no library identification, no constraints on rule scope. You'll get a <code>try/catch</code> Stack-Overflow snippet and zero R8 understanding.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>.claude/commands/draft-keep-rules.md</code></h4>
+<pre><code># /draft-keep-rules
+
+Diagnose a release-only Android crash and produce ProGuard/R8 keep rules.
+
+Inputs (paste in the conversation):
+- The retraced stack trace (after mapping.txt application).
+- The library/dependency involved.
+- Current proguard-rules.pro content.
+- Current minify config from build.gradle.kts.
+
+Output:
+1. The minimal keep rule(s) that fix the crash.
+2. Placement: where in proguard-rules.pro to add them, with a section comment.
+3. A narrower variant if any (preferring -keepclasseswithmembers
+   over wildcard -keep when possible).
+4. Brief explanation of WHY R8 stripped this — reflection? JNI? XML?
+   The reader should understand the pattern, not just the patch.
+
+Constraints:
+- Prefer -keep,allowobfuscation,allowshrinking when only signature
+  preservation is needed.
+- Avoid -keep class **.* { *; } unless no narrower rule exists.
+- Always output keep rules in proper R8 syntax — single-quoted method
+  signatures, &lt;init&gt;(...) constructors, etc.</code></pre>
+      </div>
+
+      <p>Run the skill once per release-only crash. After ~5 invocations, you'll start spotting the patterns yourself and only need it for unfamiliar libraries.</p>
+    </section>
+
+    <section>
+      <h2>Adoption ladder</h2>
+
+      <div class="adoption-ladder">
+
+        <div class="rung">
+          <h4>Day 1</h4>
+          <p>Enable <code>isMinifyEnabled = true</code> + <code>isShrinkResources = true</code> in a feature branch's <code>release</code> build type. Add the standard keep rules from this chapter. Build a release APK. Diff its size against the previous release: expect 20-35% reduction. Don't ship yet.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Week 1</h4>
+          <p>Smoke-test the release APK end-to-end on at least one device. Use the <code>/draft-keep-rules</code> skill to fix any release-only crashes that surface. Wire Crashlytics (or your crash reporter) to auto-upload <code>mapping.txt</code>. Ship the minified release behind a staged rollout (10% &rarr; 50% &rarr; 100%).</p>
+        </div>
+
+        <div class="rung">
+          <h4>Month 1</h4>
+          <p>Wire <code>android.enableR8.fullMode=true</code> (or accept the AGP 8+ default). Audit your <code>proguard-rules.pro</code> and remove rules that newer library versions now ship themselves. Schedule a Baseline Profile project as the next perf investment.</p>
+        </div>
+
+      </div>
+    </section>
+
+    <section>
+      <h2>The before/after</h2>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <h4>Before</h4>
+          <p>Release APK 38 MB. Cold start 1.8s on a mid-tier device. Reverse-engineering the APK takes 10 minutes with <code>jadx</code>: every class and method named exactly as in source. "We tried minification once but it broke."</p>
+        </div>
+        <div class="prompt-example good">
+          <h4>After</h4>
+          <p>Release APK 24 MB (37% smaller). Cold start 1.4s. <code>jadx</code> output is <code>a.b.C.d()</code>-shaped &mdash; same logic, much harder to read. Crashlytics retraces every stack server-side. Adding a new library? Run <code>/draft-keep-rules</code>, ship.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The pitfalls</h2>
+
+      <div class="warning-box">
+        <strong>Don't disable minification "until we figure it out."</strong> Once you skip a release, the next "let's enable it" gets pushed forever. Enable it in a branch, fix the keep rules, ship. Two hours of work. Permanent payoff.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't use <code>-keep class com.example.** { *; }</code> as a default sledgehammer.</strong> It works, but every wildcard you keep is bytes R8 can't shrink and a class an attacker can read. Narrow down with <code>-keepclasseswithmembers</code>, package boundaries, or annotation-based keeps as soon as you have time.
+      </div>
+
+      <div class="warning-box">
+        <strong>Do not lose <code>mapping.txt</code>.</strong> Once a release is in users' hands and you've lost the mapping, every crash from that build is unreadable forever. Auto-upload to Crashlytics or commit to a private store. Belt-and-braces.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't put keep rules in <code>proguard-android-optimize.txt</code>.</strong> That file is the default Android one and gets overwritten on AGP upgrades. Your rules go in <code>proguard-rules.pro</code>. Both files are listed in <code>proguardFiles(...)</code>; both are applied; only the second is yours.
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Turn on R8 for real, end-to-end</h3>
+        <ol>
+          <li>On a feature branch, enable <code>isMinifyEnabled = true</code> + <code>isShrinkResources = true</code> in your release build type.</li>
+          <li>Build a release APK. Note its size. Compare to the previous unminified release. Record the percentage reduction.</li>
+          <li>Install and exercise the release APK on at least one real device for 5 minutes. Note any crashes.</li>
+          <li>For each release-only crash: locate the <code>mapping.txt</code>, retrace the stack with Android Studio's ReTrace tool, run <code>/draft-keep-rules</code> with the trace, apply the suggested rule, rebuild.</li>
+          <li>Wire <code>com.google.firebase.crashlytics</code> Gradle plugin (or your crash reporter's equivalent) to auto-upload <code>mapping.txt</code>. Verify in build logs that the upload happens.</li>
+          <li>Open a PR titled "Enable R8 minification + resource shrinking." Body: pre/post APK sizes, crashes found and fixed, link to the verified mapping upload.</li>
+        </ol>
+        <p><strong>Deliverable:</strong> a green build with minification on, an APK that's 20%+ smaller, and a crash-reporter pipeline that retraces every future release stack automatically. Bonus: <code>/draft-keep-rules</code> committed to <code>.claude/commands/</code>.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>You've got the whole stack working &mdash; lint, detekt, ktlint, pre-commit hooks, StrictMode, LeakCanary, debug inspectors, version catalogs, dependency health checks, and a minified release pipeline. Each module's <code>build.gradle.kts</code> probably has 30+ lines of repeated configuration to wire all of it. That's the last problem.</p>
+
+      <p>Chapter 12 is the payoff: <strong>convention plugins</strong>. You'll package the entire quality stack into a single Gradle plugin (<code>my.app.quality</code>) that every module applies in one line, and wire a CI quality gate that runs the full stack on every PR. The result is a repo where every new module gets the standards for free, every PR gets the same checks, and "we'll add it later" becomes structurally impossible.</p>
+
+    </section>
+
+    <footer class="chapter-nav">
+      <a href="10-version-catalogs-and-deps.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Version Catalogs &amp; Dependency Health</span>
+      </a>
+      <a href="12-convention-plugins-and-ci-gate.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Convention Plugins &amp; The CI Quality Gate</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

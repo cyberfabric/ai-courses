@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map — Chapter 10: DDD on Android Architecture</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../10-ddd-on-android-architecture.html">Chapter</a>
+      <a href="09-repositories-and-services-map.html">&#8592; Prev Map</a>
+      <a href="11-ubiquitous-language-skill-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>DDD on Android Architecture</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🏗️</span>
+      <h3>The Big Idea</h3>
+      <p>A DDD-shaped Android codebase is one where the <strong>build graph itself enforces the boundaries</strong>. Each bounded context gets its own <code>:domain</code>, <code>:data</code>, and <code>:feature</code> modules; <code>:domain</code> is pure Kotlin, depends on nothing Android, and runs in milliseconds. The compiler refuses what the team would otherwise have to argue about in code review.</p>
+    </div>
+
+    <h2>📦 The Canonical Module Layout</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🧠</span>
+        <div class="map-card-title"><code>:domain:*</code></div>
+        <div class="map-card-desc">Pure Kotlin/JVM. Aggregates, value objects, repository <em>interfaces</em>, domain services, events. Zero Android.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title"><code>:data:*</code></div>
+        <div class="map-card-desc">Room, Retrofit, DTOs, mappers. Repository <em>implementations</em>. The ACL between API/DB and domain.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎨</span>
+        <div class="map-card-title"><code>:feature:*</code></div>
+        <div class="map-card-desc">UI per user-facing flow. ViewModels, Compose, navigation. Depends on <code>:domain</code> only.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🏠</span>
+        <div class="map-card-title"><code>:app</code></div>
+        <div class="map-card-desc">The shell. Hilt graph wires <code>:data</code> implementations into <code>:domain</code> interfaces. Knows everyone.</div>
+      </div>
+    </div>
+
+    <h2>➡️ Dependency Arrows (read top to bottom)</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">:app</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">:feature:*</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">:domain:*</div>
+      <span class="map-flow-arrow">←</span>
+      <div class="map-flow-step">:data:*</div>
+    </div>
+
+    <p>Both <code>:feature</code> and <code>:data</code> point at <code>:domain</code>. <code>:domain</code> points at nothing app-specific. <code>:feature</code> never directly depends on <code>:data</code> &mdash; Hilt bridges them at <code>:app</code>.</p>
+
+    <h2>🚧 One Bounded Context = One Module Per Layer</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">:feature:workout-log</div>
+      <div class="map-rel-node">:feature:workout-detail</div>
+      <div class="map-rel-center">:domain:workouts<br>(aggregates, events)</div>
+      <div class="map-rel-node">:data:workouts<br>(Room + Retrofit)</div>
+      <div class="map-rel-node">🚫 :domain:billing<br>(off-limits)</div>
+    </div>
+
+    <p>Cross-context coupling at the domain layer is exactly what bounded contexts exist to prevent. Talk via domain events or an explicit ACL &mdash; never by importing another context's types.</p>
+
+    <h2>🧬 DDD Slots Inside Clean Architecture</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Clean layer</th><th>DDD building blocks</th><th>Module</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Entities / Domain</td><td>Aggregates, VOs, events, repo interfaces, domain services</td><td><code>:domain:*</code></td></tr>
+        <tr><td>Use cases</td><td>Application services (one per user intent)</td><td><code>:domain</code> or <code>:feature</code></td></tr>
+        <tr><td>Interface adapters</td><td>ViewModels, mappers, repo impls</td><td><code>:feature:*</code> + <code>:data:*</code></td></tr>
+        <tr><td>Frameworks &amp; drivers</td><td>Room, Retrofit, OkHttp, Hilt, Compose</td><td><code>:data:*</code> + <code>:app</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>🌀 MVI: Two State Machines, Not One</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Domain state</th><th>UI state</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Example</td><td><code>Cart.Empty / Active / Submitted</code></td><td><code>Loading / Showing / Error</code></td></tr>
+        <tr><td>Lives in</td><td><code>:domain</code></td><td><code>:feature</code></td></tr>
+        <tr><td>Concerns</td><td>Business invariants</td><td>Loading, error UI, derived totals</td></tr>
+        <tr><td>Owns</td><td>Aggregates</td><td>StateFlow inside ViewModel</td></tr>
+        <tr><td>Test with</td><td>Pure JUnit, no Android</td><td>Robolectric or Compose tests</td></tr>
+      </tbody>
+    </table>
+
+    <p>Confusing the two is the silent killer: domain rules end up in the UI layer, UI quirks pollute the domain.</p>
+
+    <h2>🎯 ViewModel = Application Service, Not Domain</h2>
+
+    <ul>
+      <li>✅ <strong>Orchestrates:</strong> calls use cases, maps domain state to UI state, forwards user intents.</li>
+      <li>✅ <strong>Holds <code>StateFlow&lt;UiState&gt;</code></strong> &mdash; not domain logic.</li>
+      <li>❌ <strong>Validates emails</strong> &mdash; that belongs in an <code>EmailAddress</code> value object.</li>
+      <li>❌ <strong>Computes discounts</strong> &mdash; that belongs in a domain service.</li>
+      <li>❌ <strong>Decides invariants</strong> &mdash; that belongs on the aggregate.</li>
+    </ul>
+
+    <h2>🔗 Coroutines and Flow Discipline</h2>
+
+    <ul>
+      <li>📥 <strong>Repos may return <code>Flow&lt;T&gt;</code></strong> &mdash; aggregate lifecycles are naturally observable.</li>
+      <li>🧮 <strong>Domain services return values</strong> &mdash; no I/O, no time, no flow.</li>
+      <li>📐 <strong>Aggregates expose plain methods</strong> &mdash; <code>order.place(fee, now)</code> returns an event.</li>
+      <li>🚫 <strong>No <code>kotlinx-coroutines-android</code> in <code>:domain</code></strong> &mdash; that's an Android dispatcher leak.</li>
+      <li>🧵 <strong><code>withContext(Dispatchers.IO)</code> belongs in <code>:data</code></strong>, never in <code>:domain</code>.</li>
+    </ul>
+
+    <h2>🗄️ Room ↔ Aggregate Mapping Rules</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Room rows are not aggregates</h4>
+        <p>They're storage shape. Mappers in <code>:data</code> rebuild the aggregate from rows.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Aggregate writes are transactional</h4>
+        <p><code>@Transaction</code> on <code>saveAggregate</code> ensures root + children land atomically.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Load whole or nothing</h4>
+        <p>Lazy <code>@Relation</code> across aggregate boundaries is a footgun. Half-loaded aggregates break invariants silently.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Never expose Room types upward</h4>
+        <p><code>Flow&lt;WorkoutWithSets&gt;</code> stays in <code>:data</code>. The repository's <code>observe</code> returns <code>Flow&lt;Workout?&gt;</code>.</p>
+      </li>
+    </ol>
+
+    <h2>🌐 Retrofit + DTOs = ACL</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Backend JSON</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">WorkoutDto<br>(snake_case, ISO strings)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">toDomain() mapper<br>(in :data)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Workout aggregate<br>(in :domain)</div>
+    </div>
+
+    <p>The day the backend renames <code>started_at</code> to <code>begin_ts</code>, exactly one file changes &mdash; the mapper. Nothing else in the codebase notices.</p>
+
+    <h2>🌍 Why KMP Pays Off</h2>
+
+    <ul>
+      <li>📚 <code>:domain</code> becomes <code>commonMain</code> &mdash; aggregates and VOs shared with iOS unchanged.</li>
+      <li>🔌 <code>androidMain</code> / <code>iosMain</code> hold <code>actual</code> implementations of the same interfaces.</li>
+      <li>⚡ If <code>:domain</code> was Android-free from day one, KMP migration is a build-script change, not a rewrite.</li>
+      <li>🎯 Same discipline pays off on Wear, Auto, desktop, and CLI &mdash; optionality is the win.</li>
+    </ul>
+
+    <h2>🛡️ Three Lines of Defense</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⚙️</span>
+        <div class="map-card-title">Compiler-enforced</div>
+        <div class="map-card-desc"><code>:domain</code> uses <code>kotlin-jvm</code>, not <code>com.android.library</code>. Android types literally aren't on the classpath.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔍</span>
+        <div class="map-card-title">Lint-enforced</div>
+        <div class="map-card-desc">detekt <code>ForbiddenImport</code> rule blocks <code>android.*</code> / <code>androidx.*</code> in <code>:domain</code> at static analysis.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧪</span>
+        <div class="map-card-title">CI-enforced</div>
+        <div class="map-card-desc">Konsist or ArchUnit test fails the build if any <code>:domain</code> file imports an Android package.</div>
+      </div>
+    </div>
+
+    <h2>🚨 Android-Specific Anti-Patterns</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📱</span>
+        <div class="map-card-title">Domain logic in Activities</div>
+        <div class="map-card-desc">Validation in <code>onClickListener</code>, business rules in <code>TextWatcher</code>. Push down into VOs and aggregates.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧱</span>
+        <div class="map-card-title">Rules in Adapters / Composables</div>
+        <div class="map-card-desc">Discounts computed in a <code>RecyclerView.Adapter</code>. Pre-compute in domain or ViewModel; UI just renders.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗑️</span>
+        <div class="map-card-title">The <code>:common</code> magnet</div>
+        <div class="map-card-desc">Becomes <code>:everything</code>. Replace with intent-shaped <code>:platform:logging</code>, <code>:designsystem</code>, etc.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">ViewModel as god-object</div>
+        <div class="map-card-desc">Validation + orchestration + UI logic concentrated in one un-testable class. Push rules into <code>:domain</code>.</div>
+      </div>
+    </div>
+
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Pure-Kotlin domain module</dt>
+      <dd>A Gradle module using <code>kotlin-jvm</code> (or KMP), depending on zero Android artifacts.</dd>
+
+      <dt>Module per context per layer</dt>
+      <dd>One bounded context maps to a <code>:domain:context</code>, <code>:data:context</code>, and one or more <code>:feature:*</code> modules.</dd>
+
+      <dt>Inward dependency rule</dt>
+      <dd>All arrows point toward <code>:domain</code>. <code>:data</code> depends on <code>:domain</code>; never the reverse.</dd>
+
+      <dt>Application service (use case)</dt>
+      <dd>Orchestrator inside <code>:domain</code> or <code>:feature</code>. ViewModels delegate to these instead of implementing them.</dd>
+
+      <dt>ACL mapper</dt>
+      <dd>Translates DTOs (HTTP) or Room rows (DB) to domain aggregates. Lives in <code>:data</code>.</dd>
+
+      <dt>Konsist / ArchUnit</dt>
+      <dd>JVM tools that run as tests and assert structural rules (no Android in <code>:domain</code>, no cross-context imports).</dd>
+
+      <dt>commonMain</dt>
+      <dd>The KMP source set that becomes shared <code>:domain</code> across Android and iOS.</dd>
+    </dl>
+
+    <h2>❓ Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test yourself</h3>
+      <details>
+        <summary>Why must <code>:domain</code> avoid the <code>com.android.library</code> Gradle plugin?</summary>
+        <p class="quiz-answer">Because then Android types are on its classpath, and a teammate can accidentally <code>import android.util.Log</code> in an aggregate without anything failing the build. Using <code>kotlin-jvm</code> makes the constraint compiler-enforced &mdash; the import literally won't resolve.</p>
+      </details>
+      <details>
+        <summary>Should the domain state and the UI state ever be the same type?</summary>
+        <p class="quiz-answer">No. The domain state is the business state machine (<code>Cart.Empty / Active / Submitted</code>); the UI state is what the screen renders right now (<code>Loading / Showing / Error</code>) plus derived values. Conflating them either pollutes the domain with UI concerns or buries domain rules in the ViewModel.</p>
+      </details>
+      <details>
+        <summary>Where does the Retrofit-DTO mapper live?</summary>
+        <p class="quiz-answer">In <code>:data</code>, alongside the DTO and the API interface. <code>:domain</code> only ever sees the aggregate and its value objects. The mapper is the ACL between the API context and your domain context.</p>
+      </details>
+      <details>
+        <summary>Can <code>:feature:checkout</code> directly depend on <code>:data:checkout</code>?</summary>
+        <p class="quiz-answer">No. <code>:feature</code> depends on <code>:domain</code> only. Hilt at the <code>:app</code> graph wires the <code>:data</code> implementation into the interfaces <code>:feature</code> requested. Direct <code>:feature</code> &rarr; <code>:data</code> coupling leaks Room and Retrofit upward and breaks fast unit tests.</p>
+      </details>
+      <details>
+        <summary>Why is <code>@Relation</code> a footgun for aggregates?</summary>
+        <p class="quiz-answer">It can lazily load child rows after the parent, leaving the aggregate half-loaded when domain methods access it. Always load the whole aggregate or nothing. If the aggregate is too big to load whole, it's too big &mdash; revisit aggregate sizing.</p>
+      </details>
+      <details>
+        <summary>What's the cheapest way KMP discipline pays off even without an iOS app?</summary>
+        <p class="quiz-answer">Tests run in milliseconds (no Robolectric), the same domain works on Wear/Auto/desktop/CLI, and the day someone says "we should ship on iOS" the migration is a build-script change instead of a rewrite. Optionality, not portability, is the real win.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item"><code>:domain</code> is pure Kotlin and depends on nothing Android. Compiler-enforced via <code>kotlin-jvm</code>, not <code>com.android.library</code>.</li>
+        <li class="map-summary-item">One bounded context per <code>:domain</code>/<code>:data</code>/<code>:feature</code> trio. Cross-context talk goes through events or explicit ACLs.</li>
+        <li class="map-summary-item">Dependency arrows point inward. <code>:data</code> → <code>:domain</code>. <code>:feature</code> → <code>:domain</code>. Never the reverse, never <code>:feature</code> → <code>:data</code>.</li>
+        <li class="map-summary-item">Domain state machines and UI state machines are different types. Don't conflate <code>Cart.Active</code> with <code>CheckoutUiState.Showing</code>.</li>
+        <li class="map-summary-item">ViewModels orchestrate; they don't enforce. Every business rule belongs in a value object, aggregate, or domain service in <code>:domain</code>.</li>
+        <li class="map-summary-item">Repository interfaces may return <code>Flow</code>; aggregates and domain services don't. Threading lives in <code>:data</code>, not <code>:domain</code>.</li>
+        <li class="map-summary-item">Room rows are not aggregates &mdash; mappers in <code>:data</code> rebuild them. Aggregate writes are transactional. Lazy collections across boundaries are forbidden.</li>
+        <li class="map-summary-item">Retrofit DTOs are the API context's vocabulary. The mapper in <code>:data</code> is the ACL that protects your domain from backend churn.</li>
+        <li class="map-summary-item">KMP is one config away if <code>:domain</code> stayed Android-free. Test speed, Wear/Auto reuse, and iOS optionality all share the same discipline.</li>
+        <li class="map-summary-item">Lock the rules in mechanically: <code>kotlin-jvm</code> plugin + detekt <code>ForbiddenImport</code> + Konsist test. Belt, suspenders, parachute.</li>
+        <li class="map-summary-item">Anti-patterns to spot in PR review: domain logic in Activities, business rules in adapters/composables, <code>:common</code> magnet modules, ViewModel-as-god-object.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="09-repositories-and-services-map.html">
+        <span class="nav-direction">&#8592; Previous Map</span>
+        <span class="nav-chapter">Repositories &amp; Services</span>
+      </a>
+      <a href="../10-ddd-on-android-architecture.html">
+        <span class="nav-direction">📖 Read</span>
+        <span class="nav-chapter">Chapter 10</span>
+      </a>
+      <a href="11-ubiquitous-language-skill-map.html" class="next">
+        <span class="nav-direction">Next Map &#8594;</span>
+        <span class="nav-chapter">/ubiquitous-language Skill</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Hooks and Guardrails | AI-Ready Engineering For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Ready Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="04-skills-at-scale.html">&larr; Prev</a>
+      <a href="06-mcp-integration.html">Next &rarr;</a>
+      <a href="maps/05-hooks-guardrails-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Hooks and Guardrails: Automated Quality Gates</h1>
+    <p class="subtitle">Safety nets that run before and after every AI action — so mistakes get caught automatically</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>From Trust to Verify Automatically</h2>
+
+      <p>In <a href="04-skills-at-scale.html">Chapter 4</a>, you built a library of skills that encode your team's workflows. Skills tell AI <em>what to do</em>. Hooks tell AI <em>what it can't get away with</em>.</p>
+
+      <p>A hook is a shell command that Claude Code runs automatically at specific moments &mdash; before a tool is used, after a tool completes, or when a subagent finishes. If the hook exits with a non-zero code, the action is blocked or flagged. Think of hooks as CI/CD checks, but running locally on every AI action &mdash; not just on push.</p>
+
+      <p>Without hooks, your safety strategy is "review every AI change manually." With hooks, dangerous operations get blocked before they happen, formatting gets applied automatically, and tests run after every code change. The shift from manual review to automated guardrails is what makes AI development production-grade.</p>
+
+      <div class="highlight-box">
+        <strong>The Key Insight:</strong> Skills define what AI should do. Hooks enforce what AI must NOT do. Together, they form a complete quality system &mdash; proactive guidance (skills) plus reactive safety (hooks).
+      </div>
+    </section>
+
+    <section>
+      <h2>How Hooks Work</h2>
+
+      <p>Hooks are configured in your Claude Code settings file. Each hook specifies when it runs (the event), what it checks (the matcher), and what it does (the command):</p>
+
+      <div class="config-block">
+        <div class="config-path">.claude/settings.json &mdash; hook configuration structure</div>
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hook": "bash .claude/hooks/check-dangerous-commands.sh"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hook": "bash .claude/hooks/post-edit-lint.sh"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hook": "bash .claude/hooks/subagent-review.sh"
+      }
+    ]
+  }
+}</code></pre>
+      </div>
+
+      <p>Three hook events cover the full AI action lifecycle:</p>
+
+      <div class="workflow-steps">
+        <div class="step">PreToolUse<br><small>Before action</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">AI Action<br><small>Tool executes</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">PostToolUse<br><small>After action</small></div>
+      </div>
+
+      <p>The <strong>matcher</strong> field filters which tool triggers the hook. Use tool names like <code>Bash</code>, <code>Write</code>, <code>Edit</code>, <code>Read</code>, or pipe-separated combinations like <code>Write|Edit</code>. An empty matcher matches everything.</p>
+
+      <div class="tip-box">
+        <strong>How hooks receive context:</strong> Hooks receive the tool name and input as environment variables. The tool's input is passed via stdin as JSON. Your script reads it with <code>INPUT=$(cat)</code> and parses fields with <code>jq</code>. This is how hooks make intelligent decisions about whether to allow or block specific actions.
+      </div>
+    </section>
+
+    <section>
+      <h2>The Hook Matrix</h2>
+
+      <p>Not all hooks are created equal. Some prevent data loss. Others catch style issues. Organize your hooks by risk level to prioritize what to implement first:</p>
+
+      <table>
+        <thead>
+          <tr><th>Risk</th><th>Hook</th><th>Purpose</th><th>Priority</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Critical</strong></td><td>PreToolUse / Bash</td><td>Block destructive commands</td><td>Must-have</td></tr>
+          <tr><td><strong>Critical</strong></td><td>PreToolUse / Write</td><td>Prevent writes to protected files</td><td>Must-have</td></tr>
+          <tr><td><strong>High</strong></td><td>PostToolUse / Edit</td><td>Run linter after every code edit</td><td>Should-have</td></tr>
+          <tr><td><strong>High</strong></td><td>PostToolUse / Write</td><td>Run formatter on new files</td><td>Should-have</td></tr>
+          <tr><td><strong>Medium</strong></td><td>PostToolUse / Edit</td><td>Run unit tests for modified module</td><td>Nice-to-have</td></tr>
+          <tr><td><strong>Medium</strong></td><td>SubagentStop</td><td>Summary check for agent tasks</td><td>Nice-to-have</td></tr>
+        </tbody>
+      </table>
+
+      <div class="warning-box">
+        <strong>Rule of Thumb:</strong> Implement critical hooks first. A missing formatter hook means messy code that you can clean up. A missing destructive-command blocker means deleted databases that you can't recover. Prioritize by damage potential, not convenience.
+      </div>
+    </section>
+
+    <section>
+      <h2>PreToolUse Hooks: The Safety Gates</h2>
+
+      <p>PreToolUse hooks are your first line of defense. They run <em>before</em> AI executes a tool, giving you a chance to block dangerous operations entirely.</p>
+
+      <h3>Blocking Destructive Bash Commands</h3>
+
+      <p>This is the single most important hook in any project. It prevents AI from running commands that could cause irreversible damage:</p>
+
+      <div class="config-block">
+        <div class="config-path">.claude/hooks/check-dangerous-commands.sh</div>
+<pre><code>#!/bin/bash
+# PreToolUse hook: Block dangerous bash commands
+# Reads tool input from stdin as JSON
+
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.command // empty')
+
+# List of dangerous patterns
+DANGEROUS_PATTERNS=(
+  "rm -rf /"
+  "rm -rf ~"
+  "rm -rf \."
+  "DROP TABLE"
+  "DROP DATABASE"
+  "git push.*--force.*main"
+  "git push.*--force.*master"
+  "git reset --hard"
+  "chmod -R 777"
+)
+
+for pattern in "${DANGEROUS_PATTERNS[@]}"; do
+  if echo "$COMMAND" | grep -qiE "$pattern"; then
+    echo "BLOCKED: Command matches dangerous pattern: $pattern" &gt;&amp;2
+    echo "Command was: $COMMAND" &gt;&amp;2
+    exit 1
+  fi
+done
+
+exit 0</code></pre>
+      </div>
+
+      <p>When this hook detects a dangerous pattern, it exits with code 1, which blocks the tool from executing. The error message goes to stderr and is shown to both AI and the developer, explaining why the action was blocked.</p>
+
+      <h3>Protecting Sensitive Files</h3>
+
+      <p>Some files should never be modified by AI &mdash; environment files, credentials, CI configurations, or production database configs:</p>
+
+      <div class="config-block">
+        <div class="config-path">.claude/hooks/protect-sensitive-files.sh</div>
+<pre><code>#!/bin/bash
+# PreToolUse hook: Prevent writes to sensitive files
+# Applies to Write and Edit tools
+
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.file_path // empty')
+
+PROTECTED_PATTERNS=(
+  "\.env$"
+  "\.env\."
+  "credentials"
+  "secret"
+  "\.pem$"
+  "\.key$"
+  "google-services\.json"
+  "\.github/workflows/"
+)
+
+for pattern in "${PROTECTED_PATTERNS[@]}"; do
+  if echo "$FILE_PATH" | grep -qiE "$pattern"; then
+    echo "BLOCKED: Cannot modify protected file: $FILE_PATH" &gt;&amp;2
+    echo "Matches protection pattern: $pattern" &gt;&amp;2
+    echo "Modify this file manually if changes are needed." &gt;&amp;2
+    exit 1
+  fi
+done
+
+exit 0</code></pre>
+      </div>
+
+      <div class="team-tip">
+        <strong>For Tech Leads:</strong> The protected files list should be reviewed quarterly. As your project evolves, new sensitive files appear &mdash; new CI configs, new credential stores, signing keystores. Add them to the hook before they get accidentally modified. One team learned this the hard way when AI helpfully "fixed" their CI pipeline and broke the release process.
+      </div>
+    </section>
+
+    <section>
+      <h2>PostToolUse Hooks: Automatic Quality Enforcement</h2>
+
+      <p>PostToolUse hooks run <em>after</em> AI completes an action. They're your automatic quality layer &mdash; formatting, linting, and testing happen without anyone remembering to run them.</p>
+
+      <h3>Auto-Format After Every Edit</h3>
+
+      <div class="config-block">
+        <div class="config-path">.claude/hooks/post-edit-lint.sh</div>
+<pre><code>#!/bin/bash
+# PostToolUse hook: Format and lint after code edits
+# Runs after Write and Edit tools
+
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.file_path // empty')
+
+# Only process code files
+case "$FILE_PATH" in
+  *.kt)
+    ktlint --format "$FILE_PATH" 2>/dev/null
+    ;;
+  *.java)
+    google-java-format --replace "$FILE_PATH" 2>/dev/null
+    ;;
+  *.ts|*.tsx|*.js|*.jsx)
+    npx prettier --write "$FILE_PATH" 2>/dev/null
+    ;;
+  *.py)
+    black "$FILE_PATH" 2>/dev/null
+    ;;
+  *.swift)
+    swiftformat "$FILE_PATH" 2>/dev/null
+    ;;
+esac
+
+# Exit 0 — formatting issues shouldn't block the action
+exit 0</code></pre>
+      </div>
+
+      <p>Notice that this hook always exits with code 0. The action has already completed &mdash; there's nothing to block. PostToolUse hooks that exit with non-zero surface the error as feedback to AI, which can use that information to self-correct. Use non-zero exits for warnings, not blocking.</p>
+
+      <h3>Run Tests After Module Changes</h3>
+
+      <div class="config-block">
+        <div class="config-path">.claude/hooks/post-edit-test.sh</div>
+<pre><code>#!/bin/bash
+# PostToolUse hook: Run relevant tests after code edits
+# Only runs for source files in feature/ or core/ directories
+
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.file_path // empty')
+
+# Skip test files themselves to avoid infinite loops
+if echo "$FILE_PATH" | grep -qE "Test\.kt$|_test\.go$|\.test\.(ts|js)$"; then
+  exit 0
+fi
+
+# Extract module from file path (e.g., feature/recipes → :feature:recipes)
+if echo "$FILE_PATH" | grep -qE "^(feature|core)/"; then
+  MODULE=$(echo "$FILE_PATH" | sed -E 's|^(feature|core)/([^/]+)/.*|:\1:\2|')
+
+  echo "Running tests for module $MODULE..." &gt;&amp;2
+  ./gradlew "${MODULE}:testDebugUnitTest" --quiet 2>&amp;1
+
+  if [ $? -ne 0 ]; then
+    echo "WARNING: Tests failed for $MODULE after edit" &gt;&amp;2
+    echo "File changed: $FILE_PATH" &gt;&amp;2
+    exit 1  # Non-zero signals the issue back to AI
+  fi
+fi
+
+exit 0</code></pre>
+      </div>
+
+      <div class="before-after-config">
+        <div class="before-config">
+          <strong>Without Post-Edit Hooks</strong>
+          <ul>
+            <li>AI edits files, developer reviews</li>
+            <li>Manually runs formatter &mdash; finds issues</li>
+            <li>Manually runs tests &mdash; 2 failures</li>
+            <li>Back to AI for fixes, another review round</li>
+          </ul>
+        </div>
+        <div class="after-config">
+          <strong>With Post-Edit Hooks</strong>
+          <ul>
+            <li>AI edits files, hooks run automatically</li>
+            <li>Formatter and tests execute per file/module</li>
+            <li>AI sees failures, fixes in same session</li>
+            <li>Developer reviews clean, tested output</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>SubagentStop Hooks: Watching the Watchers</h2>
+
+      <p>When you use Claude Code's agent capabilities for long-running tasks &mdash; like a background agent refactoring across modules &mdash; SubagentStop hooks run when the agent completes. They provide oversight for work you weren't watching in real time.</p>
+
+      <div class="config-block">
+        <div class="config-path">.claude/hooks/subagent-review.sh</div>
+<pre><code>#!/bin/bash
+# SubagentStop hook: Summarize what a subagent changed
+
+# Count changed files
+CHANGED=$(git diff --name-only | wc -l)
+ADDED=$(git diff --name-only --diff-filter=A | wc -l)
+DELETED=$(git diff --name-only --diff-filter=D | wc -l)
+
+echo "=== Subagent Completion Report ===" &gt;&amp;2
+echo "Files modified: $CHANGED" &gt;&amp;2
+echo "Files added: $ADDED" &gt;&amp;2
+echo "Files deleted: $DELETED" &gt;&amp;2
+
+# Flag large changes for manual review
+if [ "$CHANGED" -gt 20 ]; then
+  echo "WARNING: Large change set (${CHANGED} files). Review recommended." &gt;&amp;2
+  exit 1
+fi
+
+# Check for changes to protected directories
+if git diff --name-only | grep -qE "^(\.github|\.claude/settings|build\.gradle)"; then
+  echo "WARNING: Infrastructure files were modified. Review carefully." &gt;&amp;2
+  exit 1
+fi
+
+exit 0</code></pre>
+      </div>
+
+      <p>SubagentStop hooks are especially valuable when you run agents with <code>--background</code> or in headless CI mode. They provide the oversight layer that makes autonomous agent work safe for production codebases. You can also pipe the report to a shared log (<code>.claude/agent-activity.log</code>) for team-wide audit trails.</p>
+    </section>
+
+    <section>
+      <h2>Combining Hooks with CI/CD</h2>
+
+      <p>Hooks and CI/CD are complementary, not competing. Hooks catch issues at development time (fast, local). CI/CD catches issues at integration time (thorough, remote). The best strategy layers both:</p>
+
+      <table>
+        <thead>
+          <tr><th>Check</th><th>Hook (Local)</th><th>CI/CD (Remote)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Dangerous commands</td><td>PreToolUse &mdash; block immediately</td><td>N/A &mdash; never reaches CI</td></tr>
+          <tr><td>Code formatting</td><td>PostToolUse &mdash; auto-fix</td><td>Lint check &mdash; fail if unformatted</td></tr>
+          <tr><td>Unit tests</td><td>PostToolUse &mdash; affected module</td><td>Full test suite &mdash; all modules</td></tr>
+          <tr><td>Architecture rules</td><td>Not practical per-edit</td><td>Full scan on PR</td></tr>
+          <tr><td>Security scan</td><td>PreToolUse &mdash; obvious patterns</td><td>SAST/DAST &mdash; deep analysis</td></tr>
+        </tbody>
+      </table>
+
+      <div class="highlight-box">
+        <strong>The Layered Defense Model:</strong> Hooks are your fast, local first responder. CI/CD is your thorough, comprehensive inspector. Together, they create a quality system where issues are caught at the earliest possible moment &mdash; and nothing slips through to production.
+      </div>
+
+      <p>Document your hooks in CLAUDE.md so AI knows about the safety net and can work within it:</p>
+
+      <div class="config-block">
+        <div class="config-path">CLAUDE.md &mdash; hooks documentation section</div>
+<pre><code>## Quality Hooks
+The project uses Claude Code hooks for automatic quality enforcement:
+- **PreToolUse/Bash**: Blocks destructive commands (rm -rf, DROP TABLE, force push)
+- **PreToolUse/Write|Edit**: Blocks writes to .env, credentials, CI configs
+- **PostToolUse/Write|Edit**: Auto-formats code (ktlint for Kotlin, prettier for TS)
+- **PostToolUse/Edit**: Runs unit tests for the affected module
+- **SubagentStop**: Reports change summary, flags large change sets
+
+If a hook blocks your action, do NOT try to work around it.
+Adjust your approach instead.</code></pre>
+      </div>
+
+      <div class="team-tip">
+        <strong>For Tech Leads:</strong> Documenting hooks in CLAUDE.md isn't just for your team &mdash; it's for AI. When AI reads "blocks destructive commands," it proactively avoids triggering them. The hook documentation becomes a teaching tool, not just enforcement.
+      </div>
+    </section>
+
+    <section>
+      <h2>Hook Debugging: When Things Go Wrong</h2>
+
+      <p>Hooks can fail silently, misconfigure subtly, or block legitimate actions. Here's the debugging toolkit:</p>
+
+      <p>The four most common hook failures, in order of frequency:</p>
+
+      <ol>
+        <li><strong>Missing execute permission</strong> &mdash; fix with <code>chmod +x .claude/hooks/*.sh</code></li>
+        <li><strong>Wrong jq path for input parsing</strong> &mdash; test with <code>echo '{}' | jq -r '.field'</code></li>
+        <li><strong>Matcher doesn't match tool name</strong> &mdash; use exact names: <code>Bash</code>, <code>Write</code>, <code>Edit</code></li>
+        <li><strong>Overly broad pattern matching</strong> &mdash; hook blocks legitimate operations</li>
+      </ol>
+
+      <h3>The Hook Debugging Workflow</h3>
+
+      <ol>
+        <li><strong>Check registration:</strong> Open <code>.claude/settings.json</code> and verify the event, matcher, and path.</li>
+        <li><strong>Check permissions:</strong> Run <code>ls -la .claude/hooks/</code> &mdash; all scripts need execute permission.</li>
+        <li><strong>Test in isolation:</strong> Pipe simulated JSON input to your hook and check the exit code: <code>echo '{"command":"rm -rf /"}' | bash .claude/hooks/check-dangerous-commands.sh; echo $?</code></li>
+        <li><strong>Check stderr output:</strong> Hook messages must go to stderr (<code>&gt;&amp;2</code>). If you see no output, the echo is going to stdout.</li>
+        <li><strong>Narrow the matcher:</strong> If a hook triggers too broadly, make it more specific. Use <code>Write</code> instead of <code>Write|Edit</code> if only writes need checking.</li>
+      </ol>
+
+      <div class="warning-box">
+        <strong>Warning:</strong> Never disable all hooks to "get past" a blocking issue. If a hook blocks a legitimate action, fix the hook's pattern &mdash; don't remove the safety net. Disabling hooks for one task and forgetting to re-enable them is how databases get dropped.
+      </div>
+    </section>
+
+    <section>
+      <h2>Performance Considerations</h2>
+
+      <p>Hooks run on every matching tool use. A slow hook on <code>Edit</code> means every code change takes longer. Design hooks with performance in mind:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Hook Type</th>
+            <th>Acceptable Latency</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PreToolUse pattern check</td>
+            <td>&lt; 100ms</td>
+            <td>Pure text matching &mdash; should be instant</td>
+          </tr>
+          <tr>
+            <td>PostToolUse formatter</td>
+            <td>&lt; 2s</td>
+            <td>Single-file formatting is fast enough</td>
+          </tr>
+          <tr>
+            <td>PostToolUse unit tests</td>
+            <td>5&ndash;30s</td>
+            <td>Only run for affected module, not full suite</td>
+          </tr>
+          <tr>
+            <td>SubagentStop summary</td>
+            <td>1&ndash;5s</td>
+            <td>Git commands are fast &mdash; keep reports brief</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The biggest performance trap is running full test suites on every edit. Scope your test hook to the modified module only. Running <code>:feature:recipes:testDebugUnitTest</code> takes 10 seconds. Running the entire project's test suite takes 3 minutes. One is acceptable per-edit latency. The other kills your workflow. If hooks slow you down during exploratory work, add a conditional <code>CLAUDE_SKIP_TESTS=1</code> environment variable &mdash; but be disciplined about re-enabling it.</p>
+    </section>
+
+    <section>
+      <h2>The Essential Hook Starter Kit</h2>
+
+      <p>Every AI-ready project should have these five hooks:</p>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>Hook</th><th>Event</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><strong>Dangerous Command Blocker</strong></td><td>PreToolUse / Bash</td><td>Blocks rm -rf, DROP TABLE, force push, git reset --hard</td></tr>
+          <tr><td>2</td><td><strong>Sensitive File Protector</strong></td><td>PreToolUse / Write|Edit</td><td>Blocks writes to .env, credentials, CI configs, signing keys</td></tr>
+          <tr><td>3</td><td><strong>Auto-Formatter</strong></td><td>PostToolUse / Write|Edit</td><td>Runs project formatter (ktlint, prettier, black) per file</td></tr>
+          <tr><td>4</td><td><strong>Module Test Runner</strong></td><td>PostToolUse / Edit</td><td>Runs unit tests for affected module, catches regressions</td></tr>
+          <tr><td>5</td><td><strong>Subagent Change Reporter</strong></td><td>SubagentStop</td><td>Summarizes changes, flags large change sets (&gt;20 files)</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Hooks &amp; Guardrails Readiness Assessment</h2>
+
+      <div class="audit-box">
+        <strong>Pillar 3b Assessment: Hooks Quality</strong>
+        <table>
+          <thead>
+            <tr>
+              <th>Score</th>
+              <th>Criteria</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>0 &mdash; Absent</strong></td>
+              <td>No hooks configured. AI operates without any automated safety checks.</td>
+            </tr>
+            <tr>
+              <td><strong>1 &mdash; Minimal</strong></td>
+              <td>One or two hooks exist but aren't comprehensive. Critical gaps remain (e.g., no destructive command blocker).</td>
+            </tr>
+            <tr>
+              <td><strong>2 &mdash; Basic</strong></td>
+              <td>PreToolUse hooks block dangerous operations. No PostToolUse automation yet.</td>
+            </tr>
+            <tr>
+              <td><strong>3 &mdash; Solid</strong></td>
+              <td>Full PreToolUse safety (commands + files). PostToolUse formatting and testing. Hooks documented in CLAUDE.md.</td>
+            </tr>
+            <tr>
+              <td><strong>4 &mdash; Excellent</strong></td>
+              <td>All 5 essential hooks active. SubagentStop oversight configured. Performance-optimized (scoped tests). Hook debugging workflow documented. Team-wide consistency via shared settings.json.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Combined with <a href="04-skills-at-scale.html">Chapter 4</a>'s skills assessment, your Pillar 3 (Skills &amp; Hooks) score is the minimum of your 3a and 3b scores.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Your Chapter Exercise</h2>
+
+      <div class="exercise-box">
+        <strong>Exercise: Build Your Essential Hook Kit</strong>
+        <p>Implement the 5 essential hooks for your project. Start with the critical safety hooks, then add quality automation.</p>
+        <ol>
+          <li><strong>Create the hooks directory:</strong> <code>mkdir -p .claude/hooks</code></li>
+          <li><strong>Build the 5 hooks</strong> &mdash; adapt the scripts from this chapter: dangerous command blocker, sensitive file protector, auto-formatter, module test runner, and subagent reporter. Customize patterns for your project.</li>
+          <li><strong>Make all scripts executable:</strong> <code>chmod +x .claude/hooks/*.sh</code></li>
+          <li><strong>Register all hooks</strong> in <code>.claude/settings.json</code> following the configuration structure from this chapter.</li>
+          <li><strong>Test each hook</strong> &mdash; simulate dangerous inputs and verify they're blocked. Simulate safe inputs and verify they pass.</li>
+          <li><strong>Update CLAUDE.md</strong> &mdash; add a "Quality Hooks" section documenting what each hook does.</li>
+        </ol>
+        <p><strong>Acceptance criteria:</strong> 5 hook scripts in <code>.claude/hooks/</code>, registered in <code>.claude/settings.json</code>, all executable, each tested with at least one simulated input. CLAUDE.md updated with hook documentation.</p>
+        <p>Commit everything and update your <code>AI_READINESS_BASELINE.md</code> with your Pillar 3b score.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>You now have a complete local quality system: skills that guide AI (<a href="04-skills-at-scale.html">Chapter 4</a>) and hooks that enforce standards (this chapter). But AI's power isn't limited to reading and writing code in your editor. What if it could query your database, search your issue tracker, or check your monitoring dashboards?</p>
+
+      <p>In <a href="06-mcp-integration.html">Chapter 6: MCP Servers</a>, you'll connect AI to the rest of your development world &mdash; databases, project management tools, documentation systems, and more. MCP (Model Context Protocol) servers extend AI's reach beyond the codebase into the tools your team uses every day.</p>
+
+      <div class="tip-box">
+        <strong>Deep Dive:</strong> For an introduction to hooks and their role in AI workflows, see <a href="../../AI-Workflow/chapters/index.html">Automating Your Dev Workflow</a> Chapter 4. This chapter provides the production hook playbook &mdash; safety-first, performance-aware, team-ready.
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="04-skills-at-scale.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Skills That Scale: Your Team's Command Library</span>
+    </a>
+    <a href="06-mcp-integration.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">MCP Servers: Connecting AI to Your World</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

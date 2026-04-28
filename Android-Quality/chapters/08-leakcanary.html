@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8 &mdash; LeakCanary | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="07-strictmode.html">&larr; Prev</a>
+      <a href="09-debug-build-inspectors.html">Next &rarr;</a>
+      <a href="maps/08-leakcanary-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>LeakCanary: Memory Leaks Made Visible</h1>
+    <p class="subtitle">Two lines of Gradle config and your app starts auto-detecting Activity, Fragment, and View leaks. Then it tells you the exact reference chain holding them, in plain English, on a notification.</p>
+  </header>
+
+  <main>
+
+    <h2>The leaks StrictMode can't catch</h2>
+
+    <p>Chapter 7 turned on StrictMode. It catches the obvious: a leak that fires on every Activity creation, a closeable left open in the same scope. But Android leaks are sneakier than that. The classic pattern: an Activity is rotated, a static field <em>still holds it</em>, garbage collection runs and runs, and the leak grows quietly. By hour two of usage, the heap is 40MB heavier than it should be. Hour three, the OOM. Your user blames the app. You blame the device.</p>
+
+    <p>LeakCanary catches these. It runs in your debug build, watches every Activity and Fragment for the moment they should be GC-able, waits 5 seconds, and if they're still in memory, captures a heap snapshot. Then it walks the reference chain from a GC root all the way to the leaked object and tells you, in plain English, which line of which class is the culprit.</p>
+
+    <p>It is the single highest-leverage debug-build dependency in the entire Android ecosystem. Two lines, lifetime memory-leak insurance.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">2</span>
+        <div class="stat-label">lines of Gradle to install</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5 sec</span>
+        <div class="stat-label">grace window before LeakCanary suspects a leak</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">1&ndash;3</span>
+        <div class="stat-label">leaks the average existing Android codebase has on Day 1</div>
+      </div>
+    </div>
+
+    <div class="tool-profile-box">
+      <div class="tool-name">LeakCanary</div>
+      <p>Square's automatic memory-leak detector. Wraps a heap analyzer (Shark) and an Activity/Fragment lifecycle watcher into a debug-only library that surfaces leaks as notifications and an in-app screen.</p>
+      <dl>
+        <dt>What it catches</dt>
+        <dd>Leaked Activities, Fragments, Views, ViewModels, and any object you explicitly tell it to watch. Identifies the retention chain (which reference is keeping it alive) and the GC root.</dd>
+        <dt>Install</dt>
+        <dd>One line in <code>app/build.gradle.kts</code>: <code>debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")</code>. No code changes. No Application setup. It auto-installs on debug builds.</dd>
+        <dt>Runtime cost</dt>
+        <dd>Negligible until a leak is suspected. Heap analysis runs on a background thread when triggered &mdash; takes 10&ndash;30 seconds, no impact on UI thread, only on debug builds.</dd>
+        <dt>When to skip it</dt>
+        <dd>Never in debug. Always in release (the <code>debugImplementation</code> scope already enforces this). For instrumented tests on CI, opt in deliberately &mdash; the heap analysis adds time.</dd>
+      </dl>
+    </div>
+
+    <h2>The two-line install</h2>
+
+    <p>It really is two lines. Add the dependency, sync Gradle, install the debug APK. LeakCanary auto-initializes via a <code>ContentProvider</code>, no Application code required.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/build.gradle.kts</div>
+<pre><code>dependencies {
+    // ... your other deps
+
+    // LeakCanary &mdash; debug only, never ships in release.
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+
+    // Optional: enable on release-debug builds for QA testing
+    // (do NOT use 'implementation' &mdash; that ships to users).
+    // releaseImplementation("com.squareup.leakcanary:leakcanary-android-release:2.14")
+}</code></pre>
+      <div class="recipe-note">The <code>debugImplementation</code> scope is what guarantees LeakCanary never reaches a release APK &mdash; it's only compiled into your <code>debug</code> build variant. Verify after install with <code>./gradlew :app:dependencies --configuration releaseRuntimeClasspath | grep leakcanary</code> &mdash; should return nothing.</div>
+    </div>
+
+    <h2>How it works (in 60 seconds)</h2>
+
+    <p>Three pieces, working together.</p>
+
+    <div class="workflow-steps">
+      <span class="step">ObjectWatcher</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">5-second window</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Heap dump</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Shark analyzer</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Leak trace</span>
+    </div>
+
+    <ol>
+      <li><strong>ObjectWatcher</strong> hooks Android's lifecycle callbacks. When an Activity reaches <code>onDestroy</code>, a Fragment its <code>onDestroyView</code>, a ViewModel its <code>onCleared</code>, or a destroyed View, it adds the object to a watched-set with a weak reference.</li>
+      <li><strong>5-second grace.</strong> If the object is GC'd within 5 seconds (the normal case), LeakCanary clears the watch and moves on.</li>
+      <li><strong>Heap dump.</strong> If the object is <em>still</em> in memory after 5 seconds and a forced GC, LeakCanary takes an HPROF heap snapshot of the entire process. This takes a couple of seconds.</li>
+      <li><strong>Shark analyzes.</strong> Square's Shark engine walks the heap from every GC root looking for the shortest reference path to the leaked object.</li>
+      <li><strong>Leak trace.</strong> The path is rendered as a chain: GC root &rarr; static field &rarr; collection &rarr; the leaked Activity. Each link gets a per-line "this is leaking?" annotation: yes / no / unknown.</li>
+    </ol>
+
+    <h2>Reading a leak trace</h2>
+
+    <p>You install LeakCanary, use the app, get a notification: "Tap to see leak." The screen shows something like this.</p>
+
+    <pre><code>┬───
+│ GC Root: System class
+│
+├─ android.app.ActivityThread instance
+│    Leaking: NO (Activity not destroyed)
+│    ↓ ActivityThread.mInstrumentation
+├─ com.example.MyInstrumentation instance
+│    Leaking: NO
+│    ↓ MyInstrumentation.cachedActivityRef
+│           ~~~~~~~~~~~~~~~~~~~
+├─ com.example.MainActivity instance
+│    Leaking: YES (Activity#mDestroyed is true)
+│
+═════════════════════
+Retained heap: 14.3 MB</code></pre>
+
+    <p>Read it top to bottom. The GC root is alive (always). It holds <code>MyInstrumentation</code>, which has a field called <code>cachedActivityRef</code> &mdash; the squiggle (<code>~~~</code>) under it is LeakCanary's call-out: "this is the suspicious link." That field references a <code>MainActivity</code> that is destroyed (<code>mDestroyed = true</code>). So the leak is: someone is caching the Activity in <code>MyInstrumentation</code> and never clearing it on destroy.</p>
+
+    <p>14.3 MB is the <strong>retained heap</strong> &mdash; the total memory that would be freed if you fixed this one leak. That number is what you triage on. A 14MB leak is a fire; a 40KB leak is a paper cut.</p>
+
+    <div class="tip-box">
+      <strong>The fix is upstream of the squiggle.</strong> The <code>~~~</code> tells you the field that's holding the leaked object. The <em>fix</em> is wherever that field is set. Search the code for the field name, find every assignment, and either null it out at the right lifecycle moment, or change the reference to a weak one.
+    </div>
+
+    <h2>The classic Android leaks</h2>
+
+    <p>After running LeakCanary across a few projects, you see the same patterns. Knowing them by sight makes the leak trace much faster to read.</p>
+
+    <table>
+      <thead>
+        <tr><th>Pattern</th><th>Symptom in the trace</th><th>Fix</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Static field holds Activity</td><td>GC root &rarr; <code>SomeManager.INSTANCE</code> &rarr; <code>activity</code></td><td>Use Application context; or weak ref; or clear on <code>onDestroy</code></td></tr>
+        <tr><td>Inner class with implicit outer</td><td><code>OuterActivity$1.this$0</code> link in the trace</td><td>Make the inner class <code>static</code> (Java) or top-level (Kotlin)</td></tr>
+        <tr><td>Handler with delayed message</td><td>Looper queue &rarr; Message &rarr; Handler &rarr; Activity</td><td>Cancel pending messages in <code>onDestroy</code>; use weak-ref Handler</td></tr>
+        <tr><td>Unregistered listener</td><td>EventBus / Singleton &rarr; listenerList &rarr; Activity</td><td>Pair every register with an unregister</td></tr>
+        <tr><td>ViewBinding leak</td><td>Fragment &rarr; <code>_binding</code> &rarr; root view</td><td>Set <code>_binding = null</code> in <code>onDestroyView</code></td></tr>
+        <tr><td>Bitmap in static cache</td><td>Static <code>BitmapCache</code> &rarr; Bitmap &rarr; ImageView &rarr; Activity</td><td>Use Application context for cache; LRU with weak refs</td></tr>
+        <tr><td>LiveData without LifecycleOwner</td><td>LiveData &rarr; ObserverWrapper &rarr; Activity</td><td>Always pass a <code>LifecycleOwner</code>, never observe forever</td></tr>
+      </tbody>
+    </table>
+
+    <h2>The Fragment + ViewBinding canonical leak</h2>
+
+    <p>This one deserves its own section because it's the single most common Android leak in 2025. The pattern:</p>
+
+    <pre><code>// LEAKING:
+class ProfileFragment : Fragment() {
+    private var _binding: FragmentProfileBinding? = null
+    private val binding get() = _binding!!
+
+    override fun onCreateView(...): View {
+        _binding = FragmentProfileBinding.inflate(inflater, container, false)
+        return binding.root
+    }
+    // Missing onDestroyView!
+}</code></pre>
+
+    <p>Fragment views live shorter than Fragment instances. When the Fragment goes to the back stack, its view is destroyed but the Fragment isn't. If <code>_binding</code> isn't nulled, the entire view hierarchy (and any data it holds) is kept alive until the Fragment itself dies &mdash; sometimes minutes later, sometimes never.</p>
+
+    <p>The fix is one line.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">ProfileFragment.kt (correct)</div>
+<pre><code>class ProfileFragment : Fragment() {
+    private var _binding: FragmentProfileBinding? = null
+    private val binding get() = _binding!!
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        _binding = FragmentProfileBinding.inflate(inflater, container, false)
+        return binding.root
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null  // The whole game is this one line.
+    }
+}</code></pre>
+      <div class="recipe-note">You can enforce this team-wide with a Konsist test (Chapter 4): "every class extending Fragment with a non-null <code>_binding</code> field must override <code>onDestroyView</code>." Catches it once, in CI, forever.</div>
+    </div>
+
+    <h2>Compose-era considerations</h2>
+
+    <p>Compose generally leaks less than the View system &mdash; <code>remember</code> is tied to composition lifecycle, <code>LaunchedEffect</code> is automatically cancelled, <code>rememberCoroutineScope</code> is scoped to the composable. But "less" is not "never."</p>
+
+    <ul>
+      <li><strong>Captured Activity context.</strong> If a Composable captures <code>LocalContext.current</code> in a <code>remember</code> and that <code>remember</code> ends up referenced by something longer-lived (a static cache, a singleton), you've leaked the Activity.</li>
+      <li><strong>Manually-created scopes.</strong> A <code>CoroutineScope(Job() + Dispatchers.Main)</code> created in a <code>remember</code> is yours to cancel. Forget to cancel it on <code>onDispose</code>, and the coroutine keeps running &mdash; with whatever it captured.</li>
+      <li><strong>Side-effect navigation libraries.</strong> Some Compose navigation graphs cache backstack entries longer than expected; if your screen ViewModel pulls in an Activity-scoped repository, you can leak the Activity through that chain.</li>
+    </ul>
+
+    <p>LeakCanary works the same way on Compose &mdash; it watches the underlying Activity and any objects you explicitly add. If you want it to watch a Composable's specific state, use <code>AppWatcher.objectWatcher.expectWeaklyReachable(yourObject, "description")</code> in a <code>DisposableEffect</code>'s cleanup block.</p>
+
+    <h2>Suppressing legitimate non-leaks</h2>
+
+    <p>Sometimes a "leak" isn't yours. A third-party SDK holds a reference it shouldn't, the OEM ROM has a bug, an Android framework class on a specific API level genuinely retains your Activity. LeakCanary ships with a list of known issues (see <code>AndroidReferenceMatchers</code>), but you'll occasionally hit a new one.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/src/debug/.../DebugApp.kt</div>
+<pre><code>// Only runs in debug builds.
+class DebugApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        configureLeakCanary()
+    }
+}
+
+private fun configureLeakCanary() {
+    LeakCanary.config = LeakCanary.config.copy(
+        referenceMatchers = AndroidReferenceMatchers.appDefaults +
+            listOf(
+                // Known leak in BadVendor SDK 2.3 &mdash; remove when 2.4 lands.
+                IgnoredReferenceMatcher(
+                    pattern = InstanceFieldPattern(
+                        className = "com.badvendor.SdkSingleton",
+                        fieldName = "lastActivity"
+                    )
+                )
+            )
+    )
+}</code></pre>
+      <div class="recipe-note">Suppressions go in <code>app/src/debug/</code> &mdash; never in main, never in release. Each one needs a comment explaining why and when to remove it. Audit suppressions every quarter; expired ones (the SDK was updated, the bug is gone) become noise that hides real leaks.</div>
+    </div>
+
+    <h2>LeakCanary in instrumented tests</h2>
+
+    <p>The notification is for developers. CI needs structured signal. LeakCanary publishes a <em>test</em> mode that runs heap analysis after each test and fails if a leak occurred.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/build.gradle.kts (additional dep)</div>
+<pre><code>dependencies {
+    // ...
+
+    // Instrumented-test integration: fails any test that leaks.
+    androidTestImplementation("com.squareup.leakcanary:leakcanary-android-instrumentation:2.14")
+}</code></pre>
+      <div class="recipe-note">Add a <code>@Rule</code> or <code>RunListener</code> that calls <code>LeakAssertions.assertNoLeaks()</code>. Wrap your top user flows (login, navigation, checkout) in instrumented tests; any leak introduced by a future PR fails the build.</div>
+    </div>
+
+    <h2>AI-Assisted Setup &mdash; the <code>/explain-leak-trace</code> skill</h2>
+
+    <p>LeakCanary's traces are clear once you've read 20 of them. The first 5, you'll squint. Claude Code is great at the squinting phase &mdash; paste the trace, get a one-paragraph explanation plus the smallest fix.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Skill: /explain-leak-trace</div>
+      <div class="prompt-text">I'll paste a LeakCanary trace below. Diagnose it as follows:
+
+1. Identify the leaked object type (Activity, Fragment, View, ViewModel,
+   ad-hoc) and the retained heap size. The heap size tells me whether
+   to triage this as a fire (>10MB) or a paper cut (<100KB).
+2. Walk the reference chain from GC root to the leaked object. Note
+   the squiggle (~~~) annotations &mdash; that's the suspicious link.
+3. Match against the classic Android leak patterns:
+   - Static field holding Activity
+   - Inner class with implicit outer reference
+   - Handler with pending messages
+   - Unregistered listener / receiver
+   - Fragment + ViewBinding (missing _binding = null)
+   - Bitmap in static cache
+   - LiveData without LifecycleOwner
+4. State which pattern this matches (or note "novel" if none fit).
+5. Give the smallest fix. Show the before/after diff for the offending
+   class if you have enough context. If the leak is in a third-party
+   SDK, give me the IgnoredReferenceMatcher snippet for LeakCanary
+   config and flag it for follow-up.
+
+Here's the trace: [paste]</div>
+      <div class="prompt-explanation">Save to <code>.claude/commands/explain-leak-trace.md</code>. Use it on every new leak for the first month. After ~20 runs, you'll recognize the patterns at a glance and the skill becomes optional &mdash; but it stays useful for novel leaks.</div>
+    </div>
+
+    <p>A second skill worth standing up: <code>/draft-leakcanary-suppression</code>. When you've decided a leak is third-party and not actionable, generate the <code>IgnoredReferenceMatcher</code> with the right pattern type (<code>InstanceFieldPattern</code>, <code>StaticFieldPattern</code>, <code>JavaLocalPattern</code>) and a comment block explaining the decision and the expected resolution date.</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Skill: /explain-leak-trace (don't do this)</div>
+      <div class="prompt-text">My app is leaking memory. Help.</div>
+      <div class="prompt-explanation">No trace, no retained heap size, no clue what type of object is leaking. Claude can't run LeakCanary for you &mdash; the trace it produces <em>is</em> the input. Always paste the full trace (GC root through to the leaked object, with the squiggle annotations); skipping the trace turns this from a 30-second answer into a guessing game.</div>
+    </div>
+
+    <h2>What you'll see on Day 1</h2>
+
+    <p>Most apps have 1&ndash;3 leaks they didn't know about. The first run will surface them in the first 10 minutes of regular use. The two most common results:</p>
+
+    <ol>
+      <li>A Fragment + ViewBinding leak in code written before <code>_binding = null</code> was a known pattern.</li>
+      <li>A custom singleton or DI-scoped class that's caching an Activity context "for convenience."</li>
+    </ol>
+
+    <p>Both are genuine bugs. Both have small fixes. Don't panic: this is what every Android codebase looks like before LeakCanary runs. The fact that you found them is good news.</p>
+
+    <div class="tip-box">
+      <strong>Triage by retained heap size.</strong> Sort the leaks by the "Retained heap" number at the bottom of each trace. A 14MB leak fixed first buys you more headroom than five 200KB leaks fixed first &mdash; even if the small ones are easier. Spend an hour on the biggest leak before you spend ten minutes on the smallest.
+    </div>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        Add the <code>debugImplementation</code> dependency. Install the debug APK. Use the app for 10 minutes of real flow. Tap each leak notification, copy the trace into <code>/explain-leak-trace</code>, fix the top 1.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        Fix all currently-surfaced leaks. Add Konsist tests for the Fragment + ViewBinding pattern. Configure suppressions for any third-party leaks you can't act on (with comments and follow-up dates).
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        Add the <code>androidTestImplementation</code> instrumentation library. Wire <code>LeakAssertions.assertNoLeaks()</code> into your top 3 user-flow instrumented tests. Run them on every PR &mdash; any new leak fails the build.
+      </div>
+    </div>
+
+    <h2>False positives &mdash; what to genuinely ignore</h2>
+
+    <p>Most LeakCanary findings are real. A few aren't, and the difference matters because chasing a false positive is hours you don't have.</p>
+
+    <ul>
+      <li><strong>OEM-specific framework leaks.</strong> Some Samsung / Huawei ROMs have known framework bugs that retain Activities. LeakCanary's defaults already filter the well-known ones; if you hit a new one, file in their tracker and add a suppression.</li>
+      <li><strong>"Leaks" during config changes.</strong> An Activity may briefly appear leaked during rotation because the new instance is alive while the old hasn't been GC'd yet. LeakCanary's 5-second window usually catches this; if it doesn't, force a GC and re-test.</li>
+      <li><strong>WebView native leaks.</strong> WebView occasionally retains native references LeakCanary can see but can't clean up. Confirmed WebView leaks tied to Android version are usually filed upstream; suppress with a follow-up date.</li>
+    </ul>
+
+    <p>The default rule: assume the leak is real until you've spent at least 15 minutes confirming it isn't. Most "false positives" turn out to be real on inspection.</p>
+
+    <h2>Common pitfalls</h2>
+
+    <ul>
+      <li><strong>Using <code>implementation</code> instead of <code>debugImplementation</code>.</strong> LeakCanary ends up in your release APK &mdash; it adds size and exposes internal class names. Always use <code>debugImplementation</code>.</li>
+      <li><strong>Ignoring leaks under 1MB.</strong> Tempting, but those add up. A 200KB leak that fires per-screen-visit becomes a 50MB leak by hour two.</li>
+      <li><strong>Suppressing without a reason.</strong> Every suppression should have a comment explaining the third-party SDK and an expected-resolution date. Without it, you'll never re-evaluate.</li>
+      <li><strong>Not running on instrumented CI.</strong> The notification only fires for the developer who tripped the leak. Without CI checks, leaks shipped by other team members slip through. The instrumentation library is the regression net.</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>Why this is the highest-leverage debug-build dep</h3>
+      <p>Two lines of Gradle. Zero code changes. Auto-installs. Catches the most expensive class of bugs (memory leaks &rarr; OOMs &rarr; 1-star reviews). Tells you the exact line to fix in plain English. Works on every Android codebase regardless of architecture, regardless of legacy. There is no other tool in the ecosystem with this ratio of effort to payoff. If you only adopt one runtime tool from this course, adopt LeakCanary.</p>
+    </div>
+
+    <div class="exercise-box">
+      <strong>Your turn.</strong>
+      <ol>
+        <li>Add the <code>debugImplementation</code> LeakCanary line to <code>app/build.gradle.kts</code>. Sync Gradle.</li>
+        <li>Install the debug APK (<code>./gradlew installDebug</code>). Confirm a "LeakCanary" notification appears once on first launch.</li>
+        <li>Use the app for 10 minutes of real flow: launch, sign in, navigate to 3 screens, rotate the device once, sign out.</li>
+        <li>If a leak is surfaced, tap the notification. Copy the full leak trace.</li>
+        <li>Run the <code>/explain-leak-trace</code> skill on the trace. Read the diagnosis.</li>
+        <li>Apply the fix (probably <code>_binding = null</code> in <code>onDestroyView</code>, or a static field that needs clearing). Re-run the app, confirm the leak no longer fires.</li>
+        <li>Verify no LeakCanary class is in the release APK: <code>./gradlew :app:dependencies --configuration releaseRuntimeClasspath | grep -i leakcanary</code>. Should print nothing.</li>
+      </ol>
+      <p>Stretch goal: add the <code>androidTestImplementation</code> instrumentation lib. Wrap your login flow's instrumented test with <code>LeakAssertions.assertNoLeaks()</code>. Run it. Note how that's now a permanent regression check.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>LeakCanary covers leaks. StrictMode covers main-thread offenders. There's still a category of bugs you find by <em>looking inside the running app</em> &mdash; what HTTP requests is it making, what feature flags are on, what does the network response actually contain. Chapter 9 brings in Chucker (an in-app HTTP inspector), the debug-menu pattern, and debug-only feature flags &mdash; all gated so they never ship to release. The runtime-safety pillar gets its third leg.</p>
+
+    <footer class="chapter-nav">
+      <a href="07-strictmode.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">StrictMode</span>
+      </a>
+      <a href="09-debug-build-inspectors.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Debug-Build Inspectors</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

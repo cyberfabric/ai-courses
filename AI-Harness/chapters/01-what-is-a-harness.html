@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 1: What Is a Harness? — AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-anatomy-of-a-harness.html">Next Chapter</a>
+      <a href="maps/01-what-is-a-harness-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 1</span>
+    <h1>What Is a Harness?</h1>
+    <p class="subtitle">The invisible layer between you and the LLM &mdash; and why it matters more than the model itself</p>
+  </header>
+
+  <main>
+
+    <!-- S1: You Already Use Harnesses Every Day -->
+    <h2>You Already Use Harnesses Every Day</h2>
+
+    <p>
+      You open Claude Code, type <code>refactor this function to use async/await</code>, and hit Enter. A few seconds later, the tool reads your file, thinks about the change, edits the code, and runs your tests to make sure nothing broke. Feels like magic, right?
+    </p>
+
+    <p>
+      Here's the thing: <strong>that magic isn't the LLM.</strong>
+    </p>
+
+    <p>
+      The LLM &mdash; the large language model at the center of it all &mdash; is the part that generates text. That's it. It reads text in, it writes text out. Everything else &mdash; the file reading, the code editing, the test running, the permission asking, the awareness of your project structure &mdash; that's something else entirely.
+    </p>
+
+    <p>
+      That "something else" is called a <strong>harness</strong>. And you've been using one every single time you've touched Claude Code, ChatGPT, Cursor, Codex, or Windsurf. You just never noticed it, because a good harness is invisible.
+    </p>
+
+    <p>
+      By the end of this chapter, you'll never look at these tools the same way again.
+    </p>
+
+    <!-- S2: The Raw LLM -->
+    <h2>The Raw LLM &mdash; It's Underwhelming</h2>
+
+    <p>
+      To understand what a harness does, you first need to see what life is like <em>without</em> one. Let's call a model API directly &mdash; no tools, no system prompt, no harness at all. Just raw text in, raw text out.
+    </p>
+
+<pre><code>curl https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "content-type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "What files are in my project and which ones need refactoring?"}
+    ]
+  }'</code></pre>
+
+    <p>
+      What do you get back? Text. Just text. The model will politely explain that it can't see your files, doesn't know what project you're working on, and would be happy to help if you paste some code. No file reading. No code execution. No memory of what you said five minutes ago. No awareness of your project.
+    </p>
+
+    <div class="prompt-example bad">
+      <p class="prompt-label">Raw API response (no harness)</p>
+      <div class="prompt-text">I don't have access to your filesystem or project directory, so I can't see what files you have. However, if you share the code or file structure, I'd be happy to suggest refactoring opportunities...</div>
+      <p class="prompt-explanation">The model is smart, but it's blind. No files, no tools, no context. It can only work with the text you send it.</p>
+    </div>
+
+    <p>
+      The raw model is like a brilliant consultant locked in a windowless room. Smart? Absolutely. Useful on its own? Barely. You'd have to manually copy-paste every file, re-explain your project from scratch in every conversation, and then manually apply every suggested change yourself.
+    </p>
+
+    <p>
+      So what turns this windowless-room consultant into the tool that reads your files, edits your code, and runs your tests?
+    </p>
+
+    <p>
+      The harness.
+    </p>
+
+    <!-- S3: The Harness Defined -->
+    <h2>The Harness, Defined</h2>
+
+    <div class="highlight-box">
+      <h3>The Key Idea</h3>
+      <p>
+        A <strong>harness</strong> is the complete software infrastructure that wraps an LLM &mdash; everything between the user's input and the model's raw output. It decides what the model sees, what tools it can use, what it remembers, and what it's allowed to do.
+      </p>
+    </div>
+
+    <p>
+      LangChain put it in a neat equation: <strong>Agent = Model + Harness</strong>. The model provides the intelligence. The harness makes that intelligence useful and autonomous.
+    </p>
+
+    <p>
+      When Anthropic engineers talk about Claude Code, when OpenAI describes Codex, when Cursor blogs about their agent &mdash; they're all talking about their harness. The model is a shared ingredient (sometimes literally the same model). The harness is what makes each tool different.
+    </p>
+
+    <p>
+      This is the thing nobody told you: <strong>most of what you experience when using an AI tool is the harness, not the model.</strong>
+    </p>
+
+    <!-- S4: The OS Analogy -->
+    <h3>The Harness Is the Operating System</h3>
+
+    <p>
+      Think about a CPU. It does raw math &mdash; billions of calculations per second. Incredibly powerful. But have you ever tried to use a CPU without an operating system? No filesystem, no memory management, no device drivers, no user interface. Just a very fast, very useless chip.
+    </p>
+
+    <p>
+      The operating system is what turns a CPU into a computer. It provides the filesystem so programs can read and write data. It manages memory so things don't crash. It handles permissions so one program can't wreck another. It gives you a screen and a keyboard so you can actually interact with the thing.
+    </p>
+
+    <p>
+      The harness does the same thing for an LLM:
+    </p>
+
+    <ul>
+      <li><strong>CPU</strong> = LLM (raw intelligence, generates text)</li>
+      <li><strong>Filesystem</strong> = Tools (file read/write, terminal access)</li>
+      <li><strong>Memory management</strong> = Context engineering (what fits in the window)</li>
+      <li><strong>Permissions</strong> = Guardrails (what the model is allowed to do)</li>
+      <li><strong>Device drivers</strong> = Tool integrations (MCP servers, APIs)</li>
+      <li><strong>User interface</strong> = The CLI or chat experience you see</li>
+    </ul>
+
+    <div class="tip-box">
+      When someone says "Claude is so good at coding," what they really mean is "Claude Code's harness is so good at making Claude useful for coding." The same model through a raw API call would struggle with the same task &mdash; not because it's dumber, but because it has no tools, no context, and no awareness of your project.
+    </div>
+
+    <!-- S5: The Race Car Analogy -->
+    <h3>The Race Car Driver and the Pit Crew</h3>
+
+    <p>
+      Here's another way to think about it. The LLM is a Formula 1 driver &mdash; fast reflexes, incredible skill, makes split-second decisions about where to steer next.
+    </p>
+
+    <p>
+      But a driver alone doesn't win races. You need:
+    </p>
+
+    <ul>
+      <li>A <strong>pit crew</strong> (tools) &mdash; they change tires, refuel, make repairs</li>
+      <li>A <strong>track layout</strong> (context) &mdash; the driver needs to know where the turns are</li>
+      <li><strong>Race rules</strong> (guardrails) &mdash; speed limits in the pit lane, penalties for dangerous moves</li>
+      <li>A <strong>radio</strong> (memory) &mdash; the team relays tire condition, weather changes, strategy updates</li>
+      <li><strong>Telemetry data</strong> (persistence) &mdash; recorded from past laps so the next session starts informed</li>
+    </ul>
+
+    <p>
+      A Formula 1 driver in a go-kart, with no pit crew, no radio, and no strategy, is just a talented person going in circles. That's your LLM without a harness.
+    </p>
+
+    <!-- S6: Prompt Engineering Is Only One Piece -->
+    <h2>Why Prompt Engineering Is Only One Small Piece</h2>
+
+    <p>
+      If you've spent the last couple of years learning to write better prompts &mdash; "be specific," "give examples," "use chain of thought" &mdash; that's great. But you've been optimizing one room in a house with six rooms.
+    </p>
+
+    <p>
+      The prompt is what <em>you</em> type. The harness controls everything else the model sees and does. Watch the difference:
+    </p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Prompt Engineering Only</p>
+        <div class="prompt-text">You are an expert software engineer. Please carefully analyze the file src/auth.ts and refactor the login function to use async/await instead of callbacks. Be thorough and consider edge cases. Return the complete updated file.</div>
+        <p class="prompt-explanation">A carefully crafted prompt &mdash; but the model still can't read src/auth.ts, doesn't know your project structure, and can't test the result.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Harness Engineering</p>
+        <div class="prompt-text">refactor the login function to use async/await</div>
+        <p class="prompt-explanation">A simple prompt &mdash; but the harness provides: a system prompt with project context, file reading tools, code editing tools, test execution, and permission guardrails. The harness does the heavy lifting.</p>
+      </div>
+    </div>
+
+    <p>
+      See the irony? The <em>worse</em> prompt gets <em>better</em> results &mdash; because the harness provides the context, tools, and guardrails that no amount of prompt crafting can replace.
+    </p>
+
+    <p>
+      This connects to something Martin Fowler observed: harness engineering is a shift from "generate anything" to <strong>deliberate constraint</strong>. You don't need a perfect prompt when the harness gives the model the right context, the right tools, and the right boundaries. You constrain the problem space so the model can focus on what it does best &mdash; reasoning and generating.
+    </p>
+
+    <!-- S7: The 2025-2026 Realization -->
+    <h2>The 2025&ndash;2026 Realization</h2>
+
+    <p>
+      Here's the industry's biggest insight of the past year: <strong>improving the harness often delivers more improvement than improving the model.</strong> Same model, better wrapping, dramatically better results.
+    </p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">30%</span>
+        <span class="stat-label">Performance gain Cursor achieved through harness tweaks alone &mdash; same model, better instructions and tools</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">#30 &rarr; #5</span>
+        <span class="stat-label">LangChain's Deep Agents jumped on Terminal Bench through harness engineering, not model upgrades</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Same LLM</span>
+        <span class="stat-label">Codex, Claude Code, and Cursor often use the same frontier models &mdash; the harness is what differentiates them</span>
+      </div>
+    </div>
+
+    <p>
+      This is the most exciting thing about harness engineering: <strong>you don't need to wait for the next model release to get dramatically better results.</strong> You can improve the harness today &mdash; right now &mdash; by writing better project instructions, configuring tools, and tuning context.
+    </p>
+
+    <div class="warning-box">
+      This doesn't mean the model doesn't matter. A great harness can't fix a weak model. But a mediocre harness absolutely can waste a great model. Most developers today are running great models through mediocre harnesses &mdash; and that's where the opportunity is.
+    </div>
+
+    <!-- S8: The Six Components -->
+    <h2>The Six Components &mdash; A Quick Preview</h2>
+
+    <p>
+      Every harness is built from some combination of six components. Not all harnesses use all six, but every serious AI coding tool uses most of them. Here's the map:
+    </p>
+
+    <div class="workflow-steps">
+      <span class="step">System Prompt</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Tools</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Context</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Memory</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Guardrails</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Persistence</span>
+    </div>
+
+    <h3>1. System Prompt</h3>
+    <p>
+      Hidden instructions that shape the model's behavior before you say a word. Claude Code's system prompt is thousands of tokens long &mdash; you never see it, but it tells the model how to behave, what tone to use, and what rules to follow.
+    </p>
+
+    <h3>2. Tools</h3>
+    <p>
+      File reading, code editing, terminal access, web search &mdash; the model's hands. Without tools, an LLM can only talk <em>about</em> code. With tools, it can actually <em>work</em> with code.
+    </p>
+
+    <h3>3. Context Engineering</h3>
+    <p>
+      Your codebase might be 500,000 lines. The model's context window might hold 200,000 tokens. Context engineering is the art of picking the right information for <em>this</em> specific task &mdash; like packing a suitcase for a trip.
+    </p>
+
+    <h3>4. Memory &amp; State</h3>
+    <p>
+      LLMs have zero memory &mdash; every API call starts from scratch. The harness fakes continuity by tracking conversation history, session state, and sometimes writing persistent notes to disk.
+    </p>
+
+    <h3>5. Guardrails</h3>
+    <p>
+      Permission boundaries, output validation, safety rails. The harness decides what the model is <em>allowed</em> to do &mdash; can it delete files? Run arbitrary commands? Push to production?
+    </p>
+
+    <h3>6. Persistence</h3>
+    <p>
+      Saving progress, resuming sessions, handing off between conversations. When you close Claude Code and reopen it tomorrow, persistence is what lets the next session pick up where you left off.
+    </p>
+
+    <p>
+      Chapter 2 breaks all six of these wide open. For now, just know the map.
+    </p>
+
+    <!-- S9: Where You'll See Harnesses -->
+    <h2>Where You'll See Harnesses</h2>
+
+    <p>
+      Every AI tool you use daily is a harness around a model. Here's a quick roll call:
+    </p>
+
+    <ul>
+      <li><strong>Claude Code</strong> &mdash; CLI agent harness with file tools, bash execution, MCP integrations, and a granular permission system</li>
+      <li><strong>ChatGPT</strong> &mdash; Browser harness with web search, code interpreter, DALL-E, file upload, and a memory feature</li>
+      <li><strong>Cursor</strong> &mdash; IDE-integrated harness with 15+ specialized tools, subagents, and model-specific tuning</li>
+      <li><strong>Codex</strong> &mdash; Cloud-based harness with sandboxed execution, AGENTS.md context, and a JSON-RPC architecture</li>
+      <li><strong>Windsurf</strong> &mdash; Persistent agentic harness with a Cascade architecture that carries context forward across sessions</li>
+    </ul>
+
+    <p>
+      Same frontier LLMs under the hood. Very different harnesses. That's why the same question gets different results in different tools &mdash; and why you prefer one tool for one task and another tool for a different task.
+    </p>
+
+    <!-- S10: Inside the Harness -->
+    <h2>What Happens When You Press Enter</h2>
+
+    <p>
+      Let's make this concrete. You type a message in Claude Code and hit Enter. Here's what happens before the model sees a single word of your prompt &mdash; and after it responds.
+    </p>
+
+    <div class="inside-look-box">
+      <ol>
+        <li><strong>Your message is captured</strong> by the CLI interface and added to the conversation history.</li>
+        <li>The harness <strong>loads the system prompt</strong> &mdash; thousands of tokens of hidden instructions that tell the model how to behave, what tools are available, and what rules to follow.</li>
+        <li>The harness <strong>checks for CLAUDE.md files</strong> &mdash; project-level instructions you've written that get injected as additional context.</li>
+        <li><strong>Conversation history is assembled.</strong> If the conversation is long, older turns may be compacted (summarized) to free up space.</li>
+        <li><strong>Available tools are registered</strong> &mdash; file read, file write, bash, grep, glob, web search, plus any MCP tools you've configured.</li>
+        <li>All of this is packaged into <strong>a single API request.</strong> Your prompt is maybe 5% of what the model actually sees. The other 95% is harness-provided context.</li>
+        <li>The model responds &mdash; possibly with a <strong>tool call request</strong> like "I need to read the file <code>src/auth.ts</code>."</li>
+        <li>The harness <strong>checks permissions</strong>, executes the tool, and sends the result back to the model.</li>
+        <li>The model processes the tool result and may <strong>request another tool call</strong> &mdash; "now edit lines 42&ndash;58." This loop continues until the model has a final answer.</li>
+        <li>The harness <strong>formats and displays</strong> the final response in your terminal.</li>
+      </ol>
+      <p>
+        That "simple" Enter keypress triggered system prompt loading, context assembly, tool registration, permission checks, and a multi-turn tool loop. The model did the thinking. <strong>The harness did everything else.</strong>
+      </p>
+    </div>
+
+    <!-- S11: Exercise -->
+    <h2>Try It Yourself</h2>
+
+    <div class="exercise-box">
+      <p><strong>Call a Raw API vs. Use an AI Tool &mdash; Spot the Harness</strong></p>
+      <p>
+        <strong>Step 1:</strong> Call a model API directly using the command below (or use the Anthropic Console / OpenAI Playground in "raw" mode). Ask: <em>"What files are in my current project and which ones need refactoring?"</em>
+      </p>
+<pre><code>curl https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "content-type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 1024,
+    "messages": [{"role": "user",
+      "content": "What files are in my current project and which ones need refactoring?"}]
+  }'</code></pre>
+      <p>
+        <strong>Step 2:</strong> Ask Claude Code (or ChatGPT, or Cursor) the exact same question.
+      </p>
+      <p>
+        <strong>Step 3:</strong> Compare the two experiences. Make a list of everything the tool-based version does that the raw API cannot:
+      </p>
+      <ul>
+        <li>Did it read your files?</li>
+        <li>Did it remember your previous messages?</li>
+        <li>Did it ask for permission before acting?</li>
+        <li>Did it use tools (web search, file reading, code execution)?</li>
+        <li>Did it format the output in a special way?</li>
+      </ul>
+      <p>
+        Every item on your list is something the <strong>harness</strong> provides &mdash; not the model.
+      </p>
+    </div>
+
+    <!-- S12: What's Next -->
+    <h2>What's Next</h2>
+
+    <p>
+      Now you know the harness exists, and you have a rough map of its six components. But knowing the map isn't the same as understanding the terrain.
+    </p>
+
+    <p>
+      In <strong>Chapter 2: The Anatomy of a Harness</strong>, we'll crack open each component and see how they actually work together &mdash; with a complete walkthrough of what happens when you tell Claude Code to "refactor this function." We'll use a restaurant kitchen analogy to make all six parts click into place.
+    </p>
+
+    <p>
+      The curtain is about to come off.
+    </p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <span></span>
+      <a href="02-anatomy-of-a-harness.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">2. The Anatomy of a Harness</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

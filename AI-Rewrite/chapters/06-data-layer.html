@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Building the Data Layer With AI | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="05-domain-layer.html">&larr; Prev</a>
+      <a href="07-presentation-layer.html">Next &rarr;</a>
+      <a href="maps/06-data-layer-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Building the Data Layer With AI</h1>
+    <p class="subtitle">Room entities, DAOs, mappers, and repository implementations</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Running the Plumbing</h2>
+
+      <p>The foundation is poured. In Chapter 5, you defined <em>what</em> the app needs &mdash; domain models, repository interfaces, use cases. Now it's time to define <em>how</em> the data actually flows.</p>
+
+      <p>In renovation terms, the data layer is the plumbing. Nobody sees it &mdash; until it leaks. Room entities, DAOs, mappers, and repository implementations are the pipes connecting your domain to the database. Two modules get filled: <code>:data:local</code> (Room database, entities, DAOs) and <code>:data:repository</code> (implementations, mappers).</p>
+    </section>
+
+    <section>
+      <h2>The Data Layer Rules</h2>
+
+      <p>Before AI generates a single entity, load the data rules from Chapter 2. These prevent the most common Room mistakes AI makes.</p>
+
+      <div class="rule-callout">
+        <h4>Rule DATA-001: Explicit @ColumnInfo</h4>
+        <p>Every Room entity field MUST have an explicit <code>@ColumnInfo(name = "...")</code> annotation. Never rely on Kotlin property names for column names. Column names use snake_case. This prevents silent column name changes when refactoring.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DATA-002: Enums as Strings</h4>
+        <p>Store enums as <code>String</code> in Room, not as ordinals. Use <code>@TypeConverter</code> with <code>enum.name</code> / <code>enumValueOf()</code>. Ordinal storage breaks silently when someone reorders the enum.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DATA-003: @Transaction on @Relation</h4>
+        <p>Any DAO method that returns a type with <code>@Relation</code> MUST be annotated with <code>@Transaction</code>. Without it, Room can return inconsistent data if a write happens mid-query.</p>
+      </div>
+
+      <div class="tip-box">
+        <h4>Load All Three Into Every Prompt</h4>
+        <p>AI consistently forgets DATA-001 (implicit column names) and DATA-003 (@Transaction). Include these rules verbatim in every data layer prompt. It takes 5 seconds and saves 30 minutes of debugging.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>From Raw SQLite to Room Entities</h2>
+
+      <p>The monolith uses <code>SQLiteOpenHelper</code> with raw SQL. AI needs to see the original table creation to produce correct Room entities.</p>
+
+      <div class="migration-step">
+        <h4>Migration: Raw SQLite &rarr; Room Entities</h4>
+
+        <div class="before-code">
+          <h5>Before: Raw SQL in DatabaseHelper.kt</h5>
+          <pre><code>// DatabaseHelper.kt — the monolith's data layer
+class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, "recipes.db", null, 1) {
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                difficulty INTEGER DEFAULT 0,
+                servings INTEGER DEFAULT 1,
+                is_favorite INTEGER DEFAULT 0,
+                cookbook_id INTEGER,
+                created_at INTEGER
+            )
+        """)
+        db.execSQL("""
+            CREATE TABLE ingredients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recipe_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                amount REAL,
+                unit TEXT,
+                FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+            )
+        """)
+    }
+}</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: Room entities in :data:local</h5>
+          <pre><code>// com.example.recipes.data.local.entity.RecipeEntity
+@Entity(tableName = "recipes")
+data class RecipeEntity(
+    @PrimaryKey(autoGenerate = true)
+    @ColumnInfo(name = "id") val id: Long = 0,
+    @ColumnInfo(name = "title") val title: String,
+    @ColumnInfo(name = "description") val description: String?,
+    @ColumnInfo(name = "difficulty") val difficulty: String,
+    @ColumnInfo(name = "servings") val servings: Int,
+    @ColumnInfo(name = "is_favorite") val isFavorite: Boolean,
+    @ColumnInfo(name = "cookbook_id") val cookbookId: Long?,
+    @ColumnInfo(name = "created_at") val createdAt: Long
+)
+
+@Entity(
+    tableName = "ingredients",
+    foreignKeys = [ForeignKey(
+        entity = RecipeEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["recipe_id"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class IngredientEntity(
+    @PrimaryKey(autoGenerate = true)
+    @ColumnInfo(name = "id") val id: Long = 0,
+    @ColumnInfo(name = "recipe_id") val recipeId: Long,
+    @ColumnInfo(name = "name") val name: String,
+    @ColumnInfo(name = "amount") val amount: Double,
+    @ColumnInfo(name = "unit") val unit: String
+)</code></pre>
+        </div>
+      </div>
+
+      <p>Notice: <code>difficulty</code> is stored as <code>String</code> (not <code>Int</code>), matching DATA-002. Every field has explicit <code>@ColumnInfo</code>, matching DATA-001. The foreign key constraint is preserved from the original SQL.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Entity Generation Prompt</h4>
+        <pre>Generate Room entities for :data:local from this SQL schema:
+[paste CREATE TABLE statements]
+RULES: Explicit @ColumnInfo(name="snake_case"), enums as String,
+preserve foreign keys, KSP (not KAPT).
+Package: com.example.recipes.data.local.entity</pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Generating DAOs</h2>
+
+      <p>DAOs are where AI shines &mdash; the CRUD patterns are predictable and the Room annotation API is well-documented in AI training data. But you still need constraints to prevent common mistakes.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: DAO Generation Prompt</h4>
+        <pre>Generate Room DAOs for :data:local. One DAO per entity.
+RULES: suspend for one-shot, Flow for observable, @Transaction on @Relation,
+@Insert(onConflict = REPLACE). Package: .data.local.dao
+
+RecipeDao: getAll(Flow), getById, search(Flow), insert, update, delete,
+  toggleFavorite, getWithIngredients(@Relation+@Transaction)
+IngredientDao: getByRecipeId, insertAll, deleteByRecipeId</pre>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Generated RecipeDao</h4>
+        <pre><code>@Dao
+interface RecipeDao {
+    @Query("SELECT * FROM recipes ORDER BY created_at DESC")
+    fun getAll(): Flow&lt;List&lt;RecipeEntity&gt;&gt;
+
+    @Query("SELECT * FROM recipes WHERE id = :id")
+    suspend fun getById(id: Long): RecipeEntity?
+
+    @Query("SELECT * FROM recipes WHERE title LIKE '%' || :query || '%'")
+    fun search(query: String): Flow&lt;List&lt;RecipeEntity&gt;&gt;
+
+    @Transaction
+    @Query("SELECT * FROM recipes WHERE id = :id")
+    suspend fun getWithIngredients(id: Long): RecipeWithIngredients?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(recipe: RecipeEntity): Long
+
+    @Update
+    suspend fun update(recipe: RecipeEntity)
+
+    @Query("DELETE FROM recipes WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("UPDATE recipes SET is_favorite = NOT is_favorite WHERE id = :id")
+    suspend fun toggleFavorite(id: Long)
+}</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>Watch: Missing @Transaction</h4>
+        <p>AI frequently generates <code>getWithIngredients()</code> without <code>@Transaction</code>. This is the DATA-003 rule. Without it, a concurrent write between the parent query and the relation query can return a recipe with someone else's ingredients. Always check @Relation methods.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The @Relation Pattern</h2>
+
+      <p>For the "recipe with ingredients" query, Room uses the <code>@Relation</code> annotation on a data class that embeds the parent and children.</p>
+
+      <div class="highlight-box">
+        <h4>RecipeWithIngredients</h4>
+        <pre><code>// com.example.recipes.data.local.entity.RecipeWithIngredients
+data class RecipeWithIngredients(
+    @Embedded val recipe: RecipeEntity,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "recipe_id"
+    )
+    val ingredients: List&lt;IngredientEntity&gt;
+)</code></pre>
+      </div>
+
+      <p>This is a <em>data layer</em> type &mdash; it lives in <code>:data:local</code>, never in <code>:core:domain</code>. The mapper will convert this to a domain <code>Recipe</code> with its ingredients list.</p>
+    </section>
+
+    <section>
+      <h2>Type Converters and Database Class</h2>
+
+      <p>Room needs <code>@TypeConverter</code> for enums. Following DATA-002, store as strings. Register converters on the database class:</p>
+
+      <div class="highlight-box">
+        <h4>Database + Converters</h4>
+        <pre><code>@Database(entities = [RecipeEntity::class, IngredientEntity::class], version = 1)
+@TypeConverters(Converters::class)
+abstract class RecipesDatabase : RoomDatabase() {
+    abstract fun recipeDao(): RecipeDao
+    abstract fun ingredientDao(): IngredientDao
+}
+
+class Converters {
+    @TypeConverter fun fromDifficulty(value: String): String = value
+    @TypeConverter fun toDifficulty(value: String): String = value
+}</code></pre>
+      </div>
+
+      <p>Why strings? If someone adds <code>BEGINNER</code> at ordinal 0, all existing rows shift. <code>"EASY"</code> as a string is immune to reordering. AI defaults to ordinals &mdash; always enforce DATA-002.</p>
+    </section>
+
+    <section>
+      <h2>Going to Room 3.0 (Optional, KMP)</h2>
+
+      <div class="tip-box">
+        <h4>Sidebar: Room 3.0 — Multiplatform-First, Coroutine-First</h4>
+        <p>Room 3.0 shipped its first alpha in March 2026 (<code>3.0.0-alpha03</code> as of April). It's a breaking version: the package moves from <code>androidx.room</code> to <code>androidx.room3</code>, the runtime artifact becomes <code>androidx.room3:room3-runtime</code>, KSP is the only supported processor (no KAPT), and DAO functions must be <code>suspend</code> unless they return reactive types like <code>Flow</code>. <code>SupportSQLite</code> is replaced by <code>androidx.sqlite</code> driver APIs. The payoff: full Kotlin Multiplatform support &mdash; Android, iOS, JVM, JS, WasmJS &mdash; so your <code>:data:local</code> module becomes reusable in a future KMP rewrite.</p>
+        <p>For this chapter, the good news: <code>@Entity</code>, <code>@Dao</code>, <code>@Relation</code>, and <code>@Transaction</code> patterns are unchanged in 3.0. For an Android-only Clean Architecture rewrite in 2026, stay on Room 2.x stable (<code>2.8.4</code>+, as pinned in Ch 4 and Ch 9). Re-evaluate Room 3.0 once it goes stable &mdash; especially if KMP is on your roadmap.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Data Mappers: The Boundary Layer</h2>
+
+      <p>Room entities are <em>not</em> domain models. They exist in <code>:data:local</code>. Domain models exist in <code>:core:domain</code>. Mappers convert between them at the boundary, living in <code>:data:repository</code>.</p>
+
+      <div class="migration-step">
+        <h4>Migration: Direct Entity Usage &rarr; Mapper Pattern</h4>
+
+        <div class="before-code">
+          <h5>Before: Entity types leak into the UI</h5>
+          <pre><code>// In a bad rewrite — entity used directly in ViewModel
+class RecipeViewModel : ViewModel() {
+    val recipes: LiveData&lt;List&lt;RecipeEntity&gt;&gt; = recipeDao.getAll()
+    //                         ^^^^^^^^^^^^
+    // Room type in presentation layer = architecture violation
+}</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: Mapper converts at the repository boundary</h5>
+          <pre><code>// com.example.recipes.data.repository.mapper.RecipeMapper
+object RecipeMapper {
+    fun RecipeEntity.toDomain(): Recipe = Recipe(
+        id = id,
+        title = title,
+        description = description ?: "",
+        difficulty = DifficultyLevel.valueOf(difficulty),
+        servings = servings,
+        isFavorite = isFavorite,
+        cookBookId = cookbookId,
+        createdAt = createdAt
+    )
+
+    fun Recipe.toEntity(): RecipeEntity = RecipeEntity(
+        id = id,
+        title = title,
+        description = description,
+        difficulty = difficulty.name,
+        servings = servings,
+        isFavorite = isFavorite,
+        cookbookId = cookBookId,
+        createdAt = createdAt
+    )
+
+    fun RecipeWithIngredients.toDomain(): Recipe = recipe.toDomain().copy(
+        ingredients = ingredients.map { it.toDomain() }
+    )
+}
+
+object IngredientMapper {
+    fun IngredientEntity.toDomain(): Ingredient = Ingredient(
+        id = id, name = name,
+        amount = amount,
+        unit = UnitOfMeasure.valueOf(unit)
+    )
+
+    fun Ingredient.toEntity(recipeId: Long): IngredientEntity = IngredientEntity(
+        id = id, recipeId = recipeId,
+        name = name, amount = amount, unit = unit.name
+    )
+}</code></pre>
+        </div>
+      </div>
+
+      <p>The mapper is pure conversion logic &mdash; no business rules, no side effects. It's the translator standing at the border between two countries that speak different languages.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Mapper Generation Prompt</h4>
+        <pre>Generate data mappers in :data:repository. Extension functions:
+Entity.toDomain() and DomainModel.toEntity(). Enums via .name/.valueOf().
+Nullable fields: provide defaults. Stateless objects, no dependencies.
+Package: .data.repository.mapper
+Types: RecipeEntity↔Recipe, IngredientEntity↔Ingredient</pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Repository Implementations</h2>
+
+      <p>The repository implementation is the bridge. It takes the domain interface from Chapter 5 and fulfills the contract using Room DAOs and mappers. This is where dependency inversion becomes concrete.</p>
+
+      <div class="highlight-box">
+        <h4>RecipeRepositoryImpl</h4>
+        <pre><code>class RecipeRepositoryImpl(
+    private val recipeDao: RecipeDao,
+    private val ingredientDao: IngredientDao
+) : RecipeRepository {
+
+    override suspend fun getAll(): Result&lt;List&lt;Recipe&gt;&gt; = try {
+        val entities = recipeDao.getAll().first()
+        Result.Success(entities.map { it.toDomain() })
+    } catch (e: Exception) { Result.Error("Failed to load recipes", e) }
+
+    override suspend fun getById(id: Long): Result&lt;Recipe&gt; = try {
+        val entity = recipeDao.getWithIngredients(id)
+            ?: return Result.Error("Recipe not found")
+        Result.Success(entity.toDomain())
+    } catch (e: Exception) { Result.Error("Failed to load recipe", e) }
+
+    override suspend fun save(recipe: Recipe): Result&lt;Long&gt; = try {
+        val id = recipeDao.insert(recipe.toEntity())
+        recipe.ingredients.forEach { ingredientDao.insert(it.toEntity(id)) }
+        Result.Success(id)
+    } catch (e: Exception) { Result.Error("Failed to save recipe", e) }
+
+    override suspend fun delete(id: Long): Result&lt;Unit&gt; = try {
+        recipeDao.deleteById(id)
+        Result.Success(Unit)
+    } catch (e: Exception) { Result.Error("Failed to delete recipe", e) }
+}</code></pre>
+      </div>
+
+      <p>Every method follows the same pattern: call DAO, map to domain, wrap in Result. Errors are caught at the boundary and converted to <code>Result.Error</code>. No exceptions escape the data layer.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Repository Implementation Prompt</h4>
+        <pre>Implement RecipeRepository from :core:domain in :data:repository.
+CONTEXT: [paste RecipeRepository interface, RecipeDao, RecipeMapper]
+RULES: Every method try/catch → Result. Use mapper extensions.
+No entity types in return values. Constructor inject: RecipeDao, IngredientDao.
+Package: com.example.recipes.data.repository</pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Room Database Migration</h2>
+
+      <p>If replacing <code>SQLiteOpenHelper</code> with Room, you may need a migration. For the recipes app the schema matches exactly &mdash; Room takes over the existing file. But if columns change:</p>
+
+      <div class="highlight-box">
+        <h4>Explicit Migration</h4>
+        <pre><code>val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE recipes ADD COLUMN prep_time INTEGER DEFAULT 0")
+    }
+}</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>AI Migration Pitfall</h4>
+        <p>AI loves to generate <code>fallbackToDestructiveMigration()</code> because it "works." This silently deletes all user data. Never allow it. Always write explicit migrations. Add <code>// FORBIDDEN: fallbackToDestructiveMigration()</code> to CLAUDE.md.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Error Handling at the Data Boundary</h2>
+
+      <p>The data layer is where raw exceptions from Room, SQLite, and the filesystem get translated into domain-friendly <code>Result.Error</code> values.</p>
+
+      <div class="highlight-box">
+        <h4>Error Translation Pattern</h4>
+        <pre><code>override suspend fun save(recipe: Recipe): Result&lt;Long&gt; = try {
+    val id = recipeDao.insert(recipe.toEntity())
+    ingredientDao.insertAll(recipe.ingredients.map { it.toEntity(id) })
+    Result.Success(id)
+} catch (e: SQLiteConstraintException) {
+    Result.Error("Recipe with this title already exists", e)
+} catch (e: SQLiteFullException) {
+    Result.Error("Storage full — cannot save recipe", e)
+} catch (e: Exception) {
+    Result.Error("Failed to save recipe", e)
+}</code></pre>
+      </div>
+
+      <p>Specific exceptions get specific messages. The domain layer never sees <code>SQLiteConstraintException</code> &mdash; it sees a <code>Result.Error</code> with a human-readable message.</p>
+    </section>
+
+    <section>
+      <h2>AI Review: Data Layer Compliance</h2>
+
+      <div class="ai-review-box">
+        <h4>Data Layer Review Checklist</h4>
+        <pre>Review generated data layer code:
+
+✅ PASS: All @ColumnInfo explicit | Enums stored as String | @Transaction
+on @Relation | All repo methods return Result&lt;T&gt; | Mappers at boundary
+| No entities in domain or presentation | No fallbackToDestructiveMigration
+
+❌ FAIL: Implicit column names | Ordinal enum storage | Missing @Transaction
+| Raw exceptions escaping data layer | Entity types in ViewModel/UI
+| fallbackToDestructiveMigration | Business logic in repository</pre>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">2</div>
+          <div class="stat-label">Room entities</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">2</div>
+          <div class="stat-label">DAOs</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">2</div>
+          <div class="stat-label">Mappers</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">Repository impls</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Testing the Data Layer</h2>
+
+      <p>Data layer tests come in two flavors: fake repositories for consumers, and instrumented tests for Room itself.</p>
+
+      <div class="highlight-box">
+        <h4>Fake Repository for Consumers</h4>
+        <pre><code>// :core:testing — shared by all test sourceSets
+class FakeRecipeRepository : RecipeRepository {
+    private val recipes = mutableListOf&lt;Recipe&gt;()
+    var shouldReturnError = false
+
+    override suspend fun getAll(): Result&lt;List&lt;Recipe&gt;&gt; {
+        if (shouldReturnError) return Result.Error("Test error")
+        return Result.Success(recipes.toList())
+    }
+
+    override suspend fun save(recipe: Recipe): Result&lt;Long&gt; {
+        if (shouldReturnError) return Result.Error("Test error")
+        recipes.add(recipe.copy(id = (recipes.size + 1).toLong()))
+        return Result.Success(recipes.last().id)
+    }
+    // ... other methods follow same pattern
+    fun addRecipe(recipe: Recipe) { recipes.add(recipe) }
+}</code></pre>
+      </div>
+
+      <p>Have AI generate one fake per repository interface. For Room DAO tests, you need instrumented tests (device/emulator), but fake repositories cover more test surface faster. Focus AI effort on fakes first.</p>
+    </section>
+
+    <section>
+      <h2>Common AI Mistakes in the Data Layer</h2>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Mistake</th>
+            <th>What AI Does</th>
+            <th>Rule / Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Implicit column names</td>
+            <td>Omits <code>@ColumnInfo</code>, relies on property name</td>
+            <td>DATA-001: always explicit</td>
+          </tr>
+          <tr>
+            <td>Ordinal enum storage</td>
+            <td>Stores <code>DifficultyLevel.ordinal</code> as Int</td>
+            <td>DATA-002: store as String via .name</td>
+          </tr>
+          <tr>
+            <td>Missing @Transaction</td>
+            <td>@Relation query without @Transaction</td>
+            <td>DATA-003: always @Transaction on @Relation</td>
+          </tr>
+          <tr>
+            <td>Entity leak</td>
+            <td>Returns <code>RecipeEntity</code> from repository to ViewModel</td>
+            <td>Mapper at boundary. Domain types only in return values.</td>
+          </tr>
+          <tr>
+            <td>Destructive migration</td>
+            <td><code>fallbackToDestructiveMigration()</code></td>
+            <td>FORBIDDEN. Write explicit migrations.</td>
+          </tr>
+          <tr>
+            <td>Business logic in repo</td>
+            <td>Puts validation in repository instead of use case</td>
+            <td>Repository = data access only. Logic in domain.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>The Package Structure</h2>
+
+      <div class="module-map">
+        <h4>:data:local + :data:repository Structure</h4>
+        <pre>data/local/
+├── entity/        RecipeEntity, IngredientEntity, RecipeWithIngredients
+├── dao/           RecipeDao, IngredientDao
+├── converter/     Converters (enum TypeConverters)
+└── RecipesDatabase.kt
+
+data/repository/
+├── mapper/        RecipeMapper, IngredientMapper
+└── impl/          RecipeRepositoryImpl, CookBookRepositoryImpl,
+                   GroceryRepositoryImpl</pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Try It: Build Your Data Layer</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: From Raw SQL to Room + Repository</h3>
+
+        <ol>
+          <li><strong>Feed AI the raw SQL schema:</strong> Paste your <code>SQLiteOpenHelper.onCreate()</code> or schema dump. Ask for Room entities with DATA-001, DATA-002, DATA-003 rules.</li>
+          <li><strong>Generate DAOs:</strong> One per entity. Verify: <code>@Transaction</code> on all <code>@Relation</code> methods, <code>Flow</code> for observable queries, <code>suspend</code> for one-shot queries.</li>
+          <li><strong>Generate the database class:</strong> <code>@Database</code> with entities, <code>@TypeConverters</code>, abstract DAO accessors. No <code>fallbackToDestructiveMigration()</code>.</li>
+          <li><strong>Generate mappers:</strong> Entity.toDomain() and DomainModel.toEntity() as extension functions. Verify: enum conversion uses <code>.name</code> / <code>.valueOf()</code>.</li>
+          <li><strong>Generate repository implementations:</strong> Implement domain interfaces. Every method: try/catch → Result. Mapper at every boundary.</li>
+          <li><strong>Generate fake repositories:</strong> In <code>:core:testing</code>. In-memory, deterministic, with error toggle.</li>
+          <li><strong>Run the review checklist:</strong> Check DATA-001, DATA-002, DATA-003, no entity leaks, no destructive migration.</li>
+        </ol>
+
+        <p><strong>Deliverable:</strong> <code>:data:local</code> with Room entities, DAOs, database class. <code>:data:repository</code> with mappers and repository implementations. Fake repositories in <code>:core:testing</code>. All compiling against domain interfaces from Chapter 5.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The plumbing is in. Data flows from Room through mappers, through repositories, into the domain &mdash; all as <code>Result&lt;T&gt;</code>. No leaks, no raw SQL, no entity types escaping their module.</p>
+
+      <p>In <a href="07-presentation-layer.html">Chapter 7: The Presentation Layer: MVI With AI</a>, you'll build the walls and paint the rooms &mdash; ViewModels with the Contract pattern, Compose screens, and the reducer pattern. Foundation, plumbing, done. Time for the visible parts.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="05-domain-layer.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Extracting the Domain Layer</span>
+    </a>
+    <a href="07-presentation-layer.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">The Presentation Layer: MVI With AI</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

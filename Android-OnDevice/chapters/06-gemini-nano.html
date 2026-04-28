@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Gemini Nano — On-Device Generative AI — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-ml-kit.html">&larr; Prev</a>
+      <a href="07-hardware-acceleration.html">Next &rarr;</a>
+      <a href="maps/06-gemini-nano-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Gemini Nano &mdash; On-Device Generative AI</h1>
+    <p class="subtitle">Summarize, rewrite, and generate text — entirely on the user's phone</p>
+  </header>
+
+  <main>
+
+    <h2>From Recognition to Generation</h2>
+
+    <p>Everything we've built so far — classifying images, detecting objects, reading text, scanning barcodes — is <strong>recognition</strong>. The model looks at input and tells you what it sees. Useful, but limited.</p>
+
+    <p><strong>Gemini Nano changes the game.</strong> It's a small large language model (LLM) that runs directly on the phone and can <em>generate</em> text. Summarize an article. Rewrite a paragraph in a different tone. Suggest contextually aware replies. Create content that didn't exist before — all without a single network request.</p>
+
+    <p>This is the same technology behind ChatGPT and Claude, shrunk down to fit on a phone. It's not as capable as the cloud models — but for focused, single-task generation, it's surprisingly good.</p>
+
+    <h2>What Gemini Nano Is (and Isn't)</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">~3.25B</span>
+        <span class="stat-label">Parameters (estimated)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~30</span>
+        <span class="stat-label">Tokens per second on-device</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">$0</span>
+        <span class="stat-label">Per-request cost</span>
+      </div>
+    </div>
+
+    <p>Gemini Nano is a distilled version of Google's Gemini model family, optimized to run on mobile hardware. Unlike the TFLite models we've used (2-25MB), Gemini Nano is around 2GB — but you don't manage it. The Android OS downloads, stores, updates, and serves the model through a system service called <strong>AICore</strong>.</p>
+
+    <p>Think of it like Google Play Services: it's there, it's shared across apps, and you just call the API.</p>
+
+    <h2>Device Compatibility</h2>
+
+    <div class="hardware-note">
+      <p><strong>Gemini Nano requires specific hardware and software:</strong></p>
+      <ul>
+        <li><strong>Google Pixel 8 Pro, Pixel 9 series</strong> — Tensor G3/G4 with dedicated TPU. First-class support.</li>
+        <li><strong>Samsung Galaxy S24 series and newer</strong> — Snapdragon 8 Gen 3 with Hexagon NPU. Full support via Samsung's AICore integration.</li>
+        <li><strong>Other flagships with 8GB+ RAM</strong> — expanding support through Android 15+ and OEM partnerships. Check at runtime.</li>
+        <li><strong>Android 14+ required</strong> — AICore system service is available starting with Android 14.</li>
+        <li><strong>Not available on:</strong> mid-range phones (insufficient RAM/NPU), older flagships, emulators.</li>
+      </ul>
+      <p>The supported device list is expanding with each Android release. Always check availability at runtime — never assume.</p>
+    </div>
+
+    <h2>The AICore System Service</h2>
+
+    <p>Unlike TFLite models that live inside your APK, Gemini Nano is managed by the <strong>AICore</strong> system service. Here's how it works:</p>
+
+    <ul>
+      <li>The <strong>model is shared</strong> across all apps — one copy on the device, not one per app</li>
+      <li>The <strong>OS handles downloading</strong> — the model is fetched via Google Play Services, not by your app</li>
+      <li>The <strong>OS handles updates</strong> — improved models arrive through system updates, not app updates</li>
+      <li><strong>Memory is managed</strong> — AICore loads and unloads the model based on demand and available resources</li>
+    </ul>
+
+    <p>From your app's perspective, you just ask "is the model available?" and if yes, send prompts and receive generated text. You never touch a model file.</p>
+
+    <h2>Setting Up Gemini Nano</h2>
+
+    <p>Add the AI Edge dependency:</p>
+
+<pre><code>dependencies {
+    implementation("com.google.ai.edge.aicore:aicore:0.0.4")
+}</code></pre>
+
+    <p>Declare AICore capability in your <code>AndroidManifest.xml</code>:</p>
+
+<pre><code>&lt;application ...&gt;
+    &lt;meta-data
+        android:name="com.google.ai.edge.aicore.FEATURE"
+        android:value="text_generation" /&gt;
+&lt;/application&gt;</code></pre>
+
+    <p>Check availability and create the model:</p>
+
+<pre><code>// Check if Gemini Nano is available on this device
+val isAvailable = GenerativeModel.isAvailable(context)
+
+if (isAvailable) {
+    val generativeModel = GenerativeModel(
+        generationConfig = GenerationConfig.builder()
+            .setTemperature(0.7f)
+            .setTopK(40)
+            .setMaxOutputTokens(256)
+            .build()
+    )
+    // Ready to generate!
+} else {
+    // Fall back to cloud API or disable the feature
+    showUnsupportedMessage()
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Always check <code>isAvailable()</code> before creating a <code>GenerativeModel</code>.</strong> On unsupported devices, attempting to create the model will throw an exception. Even on supported hardware, the model might not be downloaded yet (first boot, after a factory reset). Handle both cases gracefully.
+    </div>
+
+    <h2>Text Generation — Building a "Rewrite This" Feature</h2>
+
+    <p>Let's build a practical feature: a text rewriter that transforms user input into different tones. The user writes something, taps a button, and sees it rewritten — all on-device.</p>
+
+    <div class="model-pipeline">
+      <p><strong>On-device text generation pipeline:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">User Text</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Prompt Template</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Gemini Nano</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Token Stream</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Compose UI</span>
+      </div>
+    </div>
+
+<pre><code>suspend fun rewriteText(
+    model: GenerativeModel,
+    text: String,
+    tone: String  // "formal", "casual", "shorter", "simpler"
+): Flow&lt;String&gt; = flow {
+    val prompt = "Rewrite the following text in a $tone tone. " +
+        "Output only the rewritten text, nothing else.\n\n$text"
+
+    val response = model.generateContentStream(prompt)
+    response.collect { chunk ->
+        chunk.text?.let { emit(it) }
+    }
+}</code></pre>
+
+    <h3>Streaming Tokens for Responsive UX</h3>
+
+    <p>Gemini Nano generates text token by token. Instead of waiting for the complete response (which could take 2-5 seconds), stream tokens to the UI as they arrive — just like ChatGPT does:</p>
+
+<pre><code>@Composable
+fun RewriteScreen(model: GenerativeModel) {
+    var inputText by remember { mutableStateOf("") }
+    var outputText by remember { mutableStateOf("") }
+    var isGenerating by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        OutlinedTextField(
+            value = inputText,
+            onValueChange = { inputText = it },
+            label = { Text("Your text") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Formal", "Casual", "Shorter", "Simpler").forEach { tone ->
+                Button(
+                    onClick = {
+                        isGenerating = true
+                        outputText = ""
+                        scope.launch {
+                            rewriteText(model, inputText, tone.lowercase())
+                                .collect { token -> outputText += token }
+                            isGenerating = false
+                        }
+                    },
+                    enabled = !isGenerating
+                ) { Text(tone) }
+            }
+        }
+
+        Text(text = outputText, modifier = Modifier.padding(top = 16.dp))
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Streaming is essential for perceived performance.</strong> Generating 100 tokens at ~30 tokens/sec takes ~3.3 seconds. If you wait for the full response, the user stares at a spinner for 3 seconds. With streaming, the first token appears in ~200ms and text fills in progressively — the feature feels instant.
+    </div>
+
+    <h2>Summarization — The "TL;DR" Button</h2>
+
+    <p>Summarization is one of Gemini Nano's strongest on-device use cases. The model is good at compressing text into key points:</p>
+
+<pre><code>suspend fun summarize(model: GenerativeModel, article: String): String {
+    // Keep the prompt short and direct for tiny models
+    val prompt = "Summarize this in 3 bullet points:\n\n$article"
+
+    val response = model.generateContent(prompt)
+    return response.text ?: "Unable to summarize"
+}</code></pre>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Good prompts for Gemini Nano</p>
+        <div class="prompt-text">"Summarize this in 3 bullet points: {text}"
+"Rewrite this in a formal tone: {text}"
+"List the key dates mentioned: {text}"
+"Is this review positive or negative? Answer in one word: {text}"</div>
+        <p class="prompt-explanation">Short, single-task prompts with clear output format. One instruction, one expected result.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Prompts that overwhelm Nano</p>
+        <div class="prompt-text">"You are a senior editor. First analyze the writing style, then identify the thesis, then summarize in exactly 5 bullet points of no more than 20 words each, and finally suggest 3 improvements."
+"Compare these two articles and write a balanced synthesis that..."
+"Generate a 500-word blog post about..."</div>
+        <p class="prompt-explanation">Multi-step reasoning, complex instructions, and long-form generation exceed Nano's capabilities. These need a cloud model.</p>
+      </div>
+    </div>
+
+    <h2>Smart Reply Generation</h2>
+
+    <p>Unlike ML Kit's pattern-matching Smart Reply (Chapter 5), Gemini Nano can generate contextually rich replies that understand conversation nuance:</p>
+
+<pre><code>suspend fun generateReplies(
+    model: GenerativeModel,
+    conversation: List&lt;Message&gt;
+): List&lt;String&gt; {
+    val context = conversation.takeLast(5).joinToString("\n") {
+        "${it.sender}: ${it.text}"
+    }
+
+    val prompt = "Given this conversation:\n$context\n\n" +
+        "Suggest 3 short reply options for me. " +
+        "Output only the replies, one per line."
+
+    val response = model.generateContent(prompt)
+    return response.text?.lines()
+        ?.filter { it.isNotBlank() }
+        ?.take(3)
+        ?: emptyList()
+}</code></pre>
+
+    <h2>The MediaPipe LLM Inference API — Beyond Gemini Nano</h2>
+
+    <p>What if you want to run a different LLM on-device? Or target devices that don't support Gemini Nano? MediaPipe's LLM Inference API lets you run open-source models like Gemma, Phi, and StableLM directly on Android.</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">G</div>
+      <div class="tool-info">
+        <div class="tool-name">Gemma 2B</div>
+        <div class="tool-desc">Google's open-source small LLM. 2B parameters, ~1.5GB quantized. Runs on 6GB+ RAM devices. Good for summarization and simple generation. Available from Kaggle.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">P</div>
+      <div class="tool-info">
+        <div class="tool-name">Phi-2 / Phi-3 Mini</div>
+        <div class="tool-desc">Microsoft's efficient small LLMs. Strong reasoning for their size. Phi-3 Mini (3.8B) fits on 8GB+ devices. Good alternative when Gemma struggles with reasoning tasks.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">S</div>
+      <div class="tool-info">
+        <div class="tool-name">StableLM 2</div>
+        <div class="tool-desc">Stability AI's compact LLM. 1.6B parameters, very fast inference. Works on 4GB+ devices. Best for simple text generation and completion tasks.</div>
+      </div>
+    </div>
+
+<pre><code>// MediaPipe LLM Inference API setup
+dependencies {
+    implementation("com.google.mediapipe:tasks-genai:0.10.22")
+}
+
+// Load a Gemma 2B model
+val llmInference = LlmInference.createFromOptions(context,
+    LlmInference.LlmInferenceOptions.builder()
+        .setModelPath("/path/to/gemma-2b-it-q4.bin")
+        .setMaxTokens(512)
+        .setTemperature(0.8f)
+        .build()
+)
+
+// Generate text
+val result = llmInference.generateResponse("Summarize: $text")
+Log.d("LLM", result)</code></pre>
+
+    <div class="tip-box">
+      <strong>Gemini Nano vs. MediaPipe LLM Inference:</strong> Use Gemini Nano when available — it's faster, better optimized, and OS-managed. Use MediaPipe LLM Inference when you need a specific open-source model, want broader device compatibility, or need to run offline on devices without AICore.
+    </div>
+
+    <h2>Prompt Engineering for Tiny Models</h2>
+
+    <p>Prompts that work beautifully on GPT-4 or Claude will often fail on Gemini Nano. Here's why and what to do about it:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Cloud Model Habit</th>
+          <th>Why It Fails on Nano</th>
+          <th>What to Do Instead</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Long system prompts (200+ words)</td>
+          <td>Eats into the small context window</td>
+          <td>Keep prompts under 50 words</td>
+        </tr>
+        <tr>
+          <td>Multi-step instructions</td>
+          <td>Model loses track after step 2</td>
+          <td>One task per prompt</td>
+        </tr>
+        <tr>
+          <td>"Think step by step"</td>
+          <td>Generates rambling filler text</td>
+          <td>Ask for direct output only</td>
+        </tr>
+        <tr>
+          <td>Complex output formats (JSON, XML)</td>
+          <td>Frequently produces malformed output</td>
+          <td>Use plain text, one item per line</td>
+        </tr>
+        <tr>
+          <td>Nuanced tone instructions</td>
+          <td>"Witty yet professional" is too subtle</td>
+          <td>Use one clear adjective: "formal" or "casual"</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Limitations and Guardrails</h2>
+
+    <div class="warning-box">
+      <strong>Be honest with your users about what on-device AI can and can't do.</strong> Gemini Nano is impressive for its size, but it has real limits:
+      <ul style="margin-top: 0.5rem;">
+        <li><strong>No long-form generation</strong> — anything over 200-300 words degrades in quality</li>
+        <li><strong>No complex reasoning</strong> — multi-step logic, math, or code generation is unreliable</li>
+        <li><strong>Small context window</strong> — can't process documents longer than ~4,000 tokens</li>
+        <li><strong>No image understanding</strong> — text only (no multimodal input on-device yet)</li>
+        <li><strong>Occasional hallucinations</strong> — may generate plausible-sounding but incorrect information</li>
+        <li><strong>Limited languages</strong> — best in English, reasonable in major languages, poor in minority languages</li>
+      </ul>
+    </div>
+
+    <h2>Fallback Strategies — On-Device First, Cloud Second</h2>
+
+    <p>The best user experience combines on-device speed with cloud capability. Try Gemini Nano first; if the device doesn't support it, fall back to a cloud model:</p>
+
+<pre><code>class SmartTextGenerator(private val context: Context) {
+
+    private var onDeviceModel: GenerativeModel? = null
+
+    suspend fun initialize() {
+        if (GenerativeModel.isAvailable(context)) {
+            onDeviceModel = GenerativeModel(
+                generationConfig = GenerationConfig.builder()
+                    .setMaxOutputTokens(256)
+                    .build()
+            )
+        }
+    }
+
+    suspend fun generate(prompt: String): String {
+        // Try on-device first
+        onDeviceModel?.let { model ->
+            return try {
+                model.generateContent(prompt).text ?: fallbackToCloud(prompt)
+            } catch (e: Exception) {
+                fallbackToCloud(prompt)
+            }
+        }
+        // No on-device model available
+        return fallbackToCloud(prompt)
+    }
+
+    private suspend fun fallbackToCloud(prompt: String): String {
+        // Use Gemini Pro/Flash via the Generative AI SDK
+        val cloudModel = com.google.ai.client.generativeai.GenerativeModel(
+            modelName = "gemini-2.0-flash",
+            apiKey = BuildConfig.GEMINI_API_KEY
+        )
+        return cloudModel.generateContent(prompt).text ?: "Generation failed"
+    }
+}</code></pre>
+
+    <div class="highlight-box">
+      <h3>The Hybrid Pattern</h3>
+      <p>The most robust approach: <strong>on-device for speed and privacy, cloud for capability and coverage.</strong> Use Gemini Nano when available (instant, free, private). Fall back to Gemini Flash when not (fast cloud, cheap, wider device support). Escalate to Gemini Pro only for complex tasks. The user gets the best experience on every device — and you pay cloud costs only when truly needed.</p>
+    </div>
+
+    <div class="device-benchmark">
+      <p><strong>Text generation performance — on-device vs. cloud:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Location</th>
+            <th>Time to First Token</th>
+            <th>Generation Speed</th>
+            <th>Cost per 1K Requests</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemini Nano</td>
+            <td>On-device (Pixel 9 Pro)</td>
+            <td>~150 ms</td>
+            <td>~30 tokens/sec</td>
+            <td>$0</td>
+          </tr>
+          <tr>
+            <td>Gemini Nano</td>
+            <td>On-device (Galaxy S24)</td>
+            <td>~200 ms</td>
+            <td>~25 tokens/sec</td>
+            <td>$0</td>
+          </tr>
+          <tr>
+            <td>Gemini 2.0 Flash</td>
+            <td>Cloud</td>
+            <td>~400 ms</td>
+            <td>~150 tokens/sec</td>
+            <td>~$0.10</td>
+          </tr>
+          <tr>
+            <td>Gemini 1.5 Pro</td>
+            <td>Cloud</td>
+            <td>~800 ms</td>
+            <td>~80 tokens/sec</td>
+            <td>~$3.50</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">Gemini Nano's time-to-first-token is 2-5x faster than cloud models because there's no network latency. For short generations (50-100 tokens), on-device feels nearly instant. Cloud models catch up on longer responses where their faster token rate compensates for network overhead.</p>
+    </div>
+
+    <h2>Try It: Build an AI Writing Assistant</h2>
+
+    <div class="exercise-box">
+      <p><strong>Build an "AI Writing Assistant" with 4 text transformations running on-device.</strong></p>
+      <ol>
+        <li>Set up the AI Edge SDK with Gemini Nano (or MediaPipe LLM Inference with Gemma as fallback)</li>
+        <li>Create a Compose UI with a text input field and 4 action buttons:
+          <ul>
+            <li><strong>Summarize</strong> — condense the text to 2-3 key points</li>
+            <li><strong>Formalize</strong> — rewrite in professional/business tone</li>
+            <li><strong>Simplify</strong> — rewrite for a general audience, plain language</li>
+            <li><strong>Expand</strong> — add more detail and explanation</li>
+          </ul>
+        </li>
+        <li>Stream generated tokens to the UI for responsive feedback</li>
+        <li>Add a cloud fallback (Gemini Flash) for unsupported devices</li>
+        <li>Measure and display: time-to-first-token, total generation time, token count</li>
+      </ol>
+      <p><strong>Compare:</strong> Run the same text through both on-device and cloud. Note the differences in quality, speed, and tone accuracy. Where does Nano match the cloud? Where does it fall short?</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've now covered the full spectrum of on-device AI frameworks: TFLite for custom models, MediaPipe for real-time vision, ML Kit for common tasks, and Gemini Nano for text generation. But we've been running everything on the CPU — the slowest processor in your phone for ML work.</p>
+
+    <p>In <strong>Chapter 7: Hardware Acceleration — NPU, GPU, and DSP</strong>, we'll unlock the dedicated AI hardware that every modern phone ships with. The same models you've been running at 15-50ms will drop to 3-8ms — making the difference between "works" and "feels magical." Same models, same accuracy, 5-10x faster.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-ml-kit.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">ML Kit — Google's Plug-and-Play AI</span>
+      </a>
+      <a href="07-hardware-acceleration.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Hardware Acceleration — NPU, GPU, and DSP</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

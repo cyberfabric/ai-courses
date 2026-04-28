@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: The Integration Sprint | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="10-testing-rewrite.html">&larr; Prev</a>
+      <a href="12-lessons-playbook.html">Next &rarr;</a>
+      <a href="maps/11-integration-sprint-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>The Integration Sprint</h1>
+    <p class="subtitle">Connecting all layers, behavior comparison, performance validation, and the final build</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Moving Day</h2>
+
+      <p>The house is built and inspected. Every room is finished, every circuit tested. Now comes moving day &mdash; the moment when furniture goes in, doors open, and real people walk through the hallways for the first time.</p>
+
+      <p>Integration is where theory meets reality. Individual layers worked in isolation. Now they must work together. The ViewModel calls the use case which calls the repository which queries Room which returns data that flows through mappers back to the Composable. Every handoff is a potential break point.</p>
+
+      <p>This chapter is a sprint: integrate → test → fix → repeat. Daily. Until the rewritten app matches the monolith's behavior exactly &mdash; then surpasses it.</p>
+    </section>
+
+    <!-- Layer Integration Checklist -->
+    <section>
+      <h2>The Layer Integration Checklist</h2>
+
+      <div class="checklist">
+        <h4>Connect the Layers &mdash; In Order</h4>
+        <ul>
+          <li><strong>Domain ← Data:</strong> Repository implementations inject DAOs, return domain models via mappers. Verify: use case calls work end-to-end with real Room database.</li>
+          <li><strong>Presentation ← Domain:</strong> ViewModels inject use cases via Hilt. Verify: events trigger state changes with real data flow.</li>
+          <li><strong>Navigation ← Presentation:</strong> NavHost connects screens. Effects trigger navigation callbacks. Verify: full user flows work (list → detail → edit → back).</li>
+          <li><strong>DI ← All:</strong> Hilt compiles all modules. Every @Inject resolved. No missing bindings. Verify: app starts without crash.</li>
+          <li><strong>App ← Everything:</strong> :app module assembles NavHost, applies theme, handles deep links. Verify: the app does what the monolith did.</li>
+        </ul>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule INT-001: Integrate Bottom-Up</h4>
+        <p>Connect layers from the bottom: data → domain → presentation → navigation → app. Never start from the UI and work down. Bottom-up integration catches boundary mismatches early &mdash; a mapper that returns the wrong type surfaces immediately, not after three layers of debugging.</p>
+      </div>
+    </section>
+
+    <!-- The Integration Prompt -->
+    <section>
+      <h2>The Integration Prompt</h2>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Diagnose Integration Failures</h5>
+        <pre><code>Context: Multi-module Android app. All modules compile independently.
+When assembled in :app, the build fails.
+
+Error log:
+[paste the full Gradle/compiler error here]
+
+Module dependency graph:
+  :app → :feature:recipe, :feature:books, :feature:grocery
+  :feature:* → :core:domain, :core:common, :core:design-system
+  :data:repository → :data:local, :core:domain, :core:common
+  :data:local → :core:domain, :core:common
+
+Rules: Each module compiled independently. The errors appear only when
+:app assembles everything. Diagnose: missing Hilt bindings, visibility
+issues, or dependency mismatches. For each error, state which module
+needs the fix and what the fix is.</code></pre>
+      </div>
+
+      <div class="tip-box">
+        <h4>Tip: Always Paste the Full Error</h4>
+        <p>AI can't diagnose "it doesn't compile." Paste the complete error output &mdash; the module, the file, the line, the message. The more precise the error, the more precise the fix. Vague input yields vague suggestions.</p>
+      </div>
+    </section>
+
+    <!-- Common Integration Failures -->
+    <section>
+      <h2>The Five Most Common Integration Failures</h2>
+
+      <div class="migration-step">
+        <h4>Migration: Isolated Modules &rarr; Working App</h4>
+        <div class="before-code">
+          <h5>Before: Compile Errors on Assembly</h5>
+          <pre><code>// Error 1: Missing Hilt binding
+error: [Dagger/MissingBinding] RecipeRepository cannot be provided
+  without an @Provides or @Binds method.
+  public abstract static class SingletonC implements App_GeneratedInjector
+
+// Error 2: Visibility issue
+error: Cannot access 'RecipeEntity': it is internal in ':data:local'
+
+// Error 3: Mapper mismatch
+error: Type mismatch. Required: Recipe  Found: RecipeEntity
+
+// Error 4: Missing @HiltAndroidApp
+error: Expected @HiltAndroidApp annotation on Application class
+
+// Error 5: Navigation route not found
+java.lang.IllegalArgumentException: Navigation destination
+  RecipeDetail is not found in the navigation graph</code></pre>
+        </div>
+        <div class="after-code">
+          <h5>After: Fixes</h5>
+          <pre><code>// Fix 1: DataRepositoryModule was missing @InstallIn
+@Module
+@InstallIn(SingletonComponent::class)  // ← was missing
+abstract class DataRepositoryModule {
+    @Binds abstract fun bindRecipeRepo(impl: RecipeRepositoryImpl): RecipeRepository
+}
+
+// Fix 2: Entity class was internal, should be public
+// In :data:local — change: internal data class RecipeEntity → data class RecipeEntity
+
+// Fix 3: Repository returning entity instead of domain model
+// In RecipeRepositoryImpl: return dao.getAll().map { it.toDomain() }  // ← add mapper
+
+// Fix 4: Add @HiltAndroidApp to Application class
+@HiltAndroidApp class RecipesApp : Application()
+
+// Fix 5: Route not registered in NavHost
+// In :app NavHost: composable&lt;RecipeDetail&gt; { ... }  // ← was missing</code></pre>
+        </div>
+      </div>
+
+      <p>Every one of these is something AI generated correctly in isolation but failed at the boundary. The missing <code>@InstallIn</code> only surfaces when Hilt tries to assemble the full dependency graph. The mapper mismatch only appears when the repository and ViewModel are in the same build.</p>
+    </section>
+
+    <!-- AI-Assisted Error Resolution -->
+    <section>
+      <h2>AI-Assisted Error Resolution Cycle</h2>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">1</span>
+          <div class="step-content">
+            <h4>Build</h4>
+            <p>Run <code>./gradlew :app:assembleDebug</code>. Collect all errors.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">2</span>
+          <div class="step-content">
+            <h4>Diagnose</h4>
+            <p>Paste errors to AI with module graph and architecture rules. AI identifies which module needs the fix.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">3</span>
+          <div class="step-content">
+            <h4>Fix</h4>
+            <p>Apply fixes in the correct module. Never fix a data layer issue in the presentation layer.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">4</span>
+          <div class="step-content">
+            <h4>Test</h4>
+            <p>Run <code>./gradlew test</code>. If any existing test breaks, the fix introduced a regression. Revert and try again.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">5</span>
+          <div class="step-content">
+            <h4>Repeat</h4>
+            <p>Go to step 1. Each cycle should reduce errors. If error count increases, the fix was wrong.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="warning-box">
+        <h4>Warning: Don't Let AI "Fix" Errors by Breaking Architecture</h4>
+        <p>AI's fastest fix for a missing binding is often to dump everything in <code>:app</code>. For a visibility issue, it makes everything <code>public</code>. For a mapper mismatch, it skips the mapper. Every "fix" must be validated against your architecture rules. A fast fix that violates DI-001 or PKG-001 is not a fix &mdash; it's debt.</p>
+      </div>
+    </section>
+
+    <!-- Full Test Suite -->
+    <section>
+      <h2>Running the Full Test Suite</h2>
+
+      <div class="highlight-box">
+        <h4>The Integration Test Sequence</h4>
+        <pre><code># Step 1: Unit tests (should be green from Chapter 10)
+./gradlew test
+
+# Step 2: Android instrumented tests (Room, Compose UI)
+./gradlew connectedAndroidTest
+
+# Step 3: Lint and static analysis
+./gradlew lint detekt
+
+# Step 4: Full build
+./gradlew :app:assembleRelease</code></pre>
+      </div>
+
+      <p>If unit tests fail, the fix is in the layer that owns the test. If instrumented tests fail, the fix is usually in the data layer (Room schema) or navigation (missing routes). If lint fails, check for unused imports or deprecated APIs that AI introduced.</p>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Fix Failing Tests After Integration</h5>
+        <pre><code>Context: Multi-module recipes app. All tests passed when modules were
+tested independently. After assembling in :app, 7 tests fail.
+
+Failing tests and their errors:
+[paste test output here]
+
+Rules:
+- TEST-002: fakes over mocks
+- Fixes must stay in the correct module — never fix a domain test
+  failure by changing the presentation layer
+- If a test fails because behavior changed, update the test
+- If a test fails because a bug was introduced, fix the bug
+
+For each failure: state the root cause, which module to fix, and the fix.</code></pre>
+      </div>
+    </section>
+
+    <!-- Behavior Comparison -->
+    <section>
+      <h2>Behavior Comparison: Monolith vs Rewrite</h2>
+
+      <p>The rewritten app must do everything the monolith did. No dropped features, no behavior differences. Feature parity is the minimum bar.</p>
+
+      <div class="checklist">
+        <h4>Feature Parity Checklist: Recipes App</h4>
+        <ul>
+          <li><strong>Recipe list:</strong> Shows all recipes, sorted by title. Pull-to-refresh works. Empty state shown when no recipes.</li>
+          <li><strong>Recipe detail:</strong> Shows title, ingredients, instructions, servings. Edit button navigates to edit screen.</li>
+          <li><strong>Recipe edit:</strong> Create new recipe, edit existing. Validation (title required, servings &gt; 0). Save persists to database.</li>
+          <li><strong>Cookbook list:</strong> Shows cookbooks with recipe count. Create new cookbook.</li>
+          <li><strong>Grocery list:</strong> Auto-generated from selected recipes. Check off items. Persists across app restarts.</li>
+          <li><strong>Search:</strong> Filters recipes by title. Updates in real-time as user types.</li>
+          <li><strong>Favorites:</strong> Toggle favorite on recipe. Filter by favorites.</li>
+          <li><strong>Delete:</strong> Swipe to delete recipe. Undo via snackbar.</li>
+        </ul>
+      </div>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Compare Behavior</h5>
+        <pre><code>Context: I've rewritten a recipes Android app from a monolith to
+multi-module Clean Architecture. I need to verify feature parity.
+
+Original monolith features:
+[paste the feature list above]
+
+Rewrite modules: :feature:recipe (list, detail, edit), :feature:books
+(cookbook list, detail), :feature:grocery (grocery list)
+
+For each feature:
+1. Which module/screen implements it in the rewrite?
+2. What user flow triggers it? (sequence of events)
+3. What state changes should occur? (MVI contract states)
+4. Generate a manual test script I can follow to verify parity.</code></pre>
+      </div>
+    </section>
+
+    <!-- Performance Comparison -->
+    <section>
+      <h2>Performance Comparison</h2>
+
+      <p>The rewrite should be at least as fast as the monolith. In practice, Clean Architecture + Compose + Room is typically faster because state management is more efficient and unnecessary recompositions are eliminated.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">1.8s</div>
+          <div class="stat-label">Monolith cold start</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">1.2s</div>
+          <div class="stat-label">Rewrite cold start</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~200ms</div>
+          <div class="stat-label">Monolith screen transition</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~80ms</div>
+          <div class="stat-label">Rewrite screen transition</div>
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Performance Validation Checklist</h4>
+        <table>
+          <thead><tr><th>Metric</th><th>How to Measure</th><th>Target</th></tr></thead>
+          <tbody>
+            <tr><td>Cold start</td><td>adb shell am start-activity + logcat timestamp</td><td>≤ monolith time</td></tr>
+            <tr><td>Screen transitions</td><td>Compose metrics: recomposition count</td><td>≤ 1 recomposition per transition</td></tr>
+            <tr><td>Memory usage</td><td>Android Studio Profiler</td><td>≤ monolith + 10%</td></tr>
+            <tr><td>Database queries</td><td>Room query logging</td><td>No N+1 queries</td></tr>
+            <tr><td>APK size</td><td>./gradlew :app:assembleRelease → APK Analyzer</td><td>≤ monolith + 15%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="tip-box">
+        <h4>Tip: Compose Recomposition Tracking</h4>
+        <p>Enable recomposition highlighting in Android Studio (Layout Inspector → Show Recomposition Counts). If a Composable recomposes on every frame, the state isn't stable. Common cause: creating new lambda instances in the Composable body instead of using <code>remember</code> or passing stable references.</p>
+      </div>
+    </section>
+
+    <!-- Edge Cases AI Missed -->
+    <section>
+      <h2>Edge Cases AI Missed</h2>
+
+      <p>AI generates the happy path well. But real apps live in the edge cases. The manual review pass catches what AI didn't think about.</p>
+
+      <table class="comparison">
+        <thead><tr><th>Edge Case</th><th>What Breaks</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Empty database on first launch</td>
+            <td>List shows loading forever</td>
+            <td>Handle empty state in ViewModel: if list is empty + no error → show empty state</td>
+          </tr>
+          <tr>
+            <td>Configuration change during save</td>
+            <td>Save operation lost</td>
+            <td>SaveRecipeUseCase runs in viewModelScope — survives config change</td>
+          </tr>
+          <tr>
+            <td>Network timeout during sync</td>
+            <td>Infinite loading spinner</td>
+            <td>OkHttpClient timeout configured. CallAdapter returns ApiResult.NetworkError</td>
+          </tr>
+          <tr>
+            <td>Deep link to deleted recipe</td>
+            <td>Crash: RecipeNotFoundException</td>
+            <td>ViewModel handles Result.Error(NotFound) → shows "Recipe not found" screen</td>
+          </tr>
+          <tr>
+            <td>Rapid back button presses</td>
+            <td>Navigation crash: destination not found</td>
+            <td>NavController.popBackStack() with currentDestination null check</td>
+          </tr>
+          <tr>
+            <td>Process death and restore</td>
+            <td>Lost ViewModel state</td>
+            <td>SavedStateHandle for critical state. Room persists everything else</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Find Edge Cases</h5>
+        <pre><code>Context: Recipes app with MVI architecture. 3 features: recipe (list,
+detail, edit), books (cookbook list, detail), grocery (grocery list).
+
+I've verified the happy paths. Now find edge cases I might have missed.
+For each screen, consider:
+- Empty states (no data, first launch)
+- Error states (network, database, not found)
+- Lifecycle events (config change, process death, background → foreground)
+- Navigation edge cases (deep links, back stack, rapid navigation)
+- Input edge cases (very long text, special characters, zero values)
+- Concurrent operations (save while navigating, delete while loading)
+
+For each edge case: describe the scenario, what currently breaks, and
+what the fix should be (which module, which component).</code></pre>
+      </div>
+    </section>
+
+    <!-- The Daily Sprint Cycle -->
+    <section>
+      <h2>The Daily Integration Cycle</h2>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <span class="step-number">AM</span>
+          <div class="step-content">
+            <h4>Build + Smoke Test</h4>
+            <p>Assemble the app. Launch on device. Walk through every screen. Does it crash? Does data appear? Do transitions work?</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">MID</span>
+          <div class="step-content">
+            <h4>Feature Parity Check</h4>
+            <p>Run the feature parity checklist. Compare monolith and rewrite side-by-side. Note any differences in behavior.</p>
+          </div>
+        </div>
+        <div class="workflow-step">
+          <span class="step-number">PM</span>
+          <div class="step-content">
+            <h4>Fix + Test + Commit</h4>
+            <p>Fix integration issues. Run full test suite. Commit working state. Never end the day with a broken build.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- The Final Build -->
+    <section>
+      <h2>The Final Build</h2>
+
+      <div class="rule-callout">
+        <h4>Rule INT-002: Release Build Validation</h4>
+        <p>The integration sprint is not done until you've produced a signed release APK, installed it on a real device, and verified all features work. Debug builds hide ProGuard issues, missing keep rules, and performance problems. Release is the only truth.</p>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Release Build Checklist</h4>
+        <pre><code># 1. ProGuard/R8 rules
+# AI-generated modules may need keep rules for:
+-keep class com.recipes.core.domain.model.** { *; }  # Serialized models
+-keep class * extends androidx.room.RoomDatabase      # Room
+
+# 2. Build the release APK
+./gradlew :app:assembleRelease
+
+# 3. Install on real device
+adb install -r app/build/outputs/apk/release/app-release.apk
+
+# 4. Test every feature on the real device
+# ProGuard can strip code that worked in debug!
+
+# 5. Compare APK sizes
+ls -la app/build/outputs/apk/release/   # rewrite
+ls -la monolith/app/build/outputs/apk/  # original</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>Warning: ProGuard Strips AI-Generated Code</h4>
+        <p>AI generates data classes with <code>@Serializable</code> for navigation routes. ProGuard strips the serialization metadata unless you add keep rules. If navigation crashes only in release builds, missing keep rules are the culprit. Test every navigation route in the release APK.</p>
+      </div>
+    </section>
+
+    <!-- Before/After Stats -->
+    <section>
+      <h2>The Rewrite by the Numbers</h2>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">1</div>
+          <div class="stat-label">Module (monolith)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">10</div>
+          <div class="stat-label">Modules (rewrite)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Tests (monolith)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">128+</div>
+          <div class="stat-label">Tests (rewrite)</div>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">God Activities (monolith)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">6</div>
+          <div class="stat-label">MVI Screens (rewrite)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Architecture rules (monolith)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">50+</div>
+          <div class="stat-label">Architecture rules (rewrite)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Exercise: Your Integration Sprint</h2>
+
+      <div class="exercise-box">
+        <h4>Exercise 11: Ship the Integration</h4>
+        <ol>
+          <li><strong>Assemble:</strong> Run <code>./gradlew :app:assembleDebug</code>. Fix all compile errors using the AI-assisted error resolution cycle from this chapter. Don't break architecture rules to fix errors.</li>
+          <li><strong>Test suite:</strong> Run <code>./gradlew test</code>. All 128+ tests must pass. For failures, use AI to diagnose — paste the full error with module context.</li>
+          <li><strong>Feature parity:</strong> Walk through every feature in the monolith. Does the rewrite do the same thing? Use the feature parity checklist. Note any gaps.</li>
+          <li><strong>Edge cases:</strong> Run the edge case prompt from this chapter. Fix the top 5 most critical edge cases (process death, deep links, empty states, config changes, timeouts).</li>
+          <li><strong>Release build:</strong> Build the signed release APK. Install on a real device. Verify every feature works with ProGuard enabled.</li>
+        </ol>
+        <p><strong>Success criteria:</strong> Clean release build. All tests green. Feature parity verified. Top edge cases handled. APK size within 15% of monolith.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The app ships. The rewrite is complete. What you've built is more than one app &mdash; it's a repeatable process. Chapter 12 extracts the lessons: what worked, what didn't, what surprised you. The rewrite becomes a playbook you can apply to any codebase. And from there &mdash; <em>AI-Factory</em> shows you how to build from zero.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="10-testing-rewrite.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Testing the Rewrite</span>
+    </a>
+    <a href="12-lessons-playbook.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Lessons From the Rewrite: Your Playbook</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

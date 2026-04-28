@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Flaky Test Diagnosis | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-ai-assisted-profiling.html">&larr; Prev</a>
+      <a href="11-production-monitoring.html">Next &rarr;</a>
+      <a href="maps/10-flaky-tests-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Flaky Test Diagnosis</h1>
+    <p class="subtitle">Systematically diagnosing tests that pass sometimes and fail other times</p>
+  </header>
+
+  <main>
+
+    <h2>The Retry-and-Ignore Culture</h2>
+
+    <p>Chapter 9 gave you profiling superpowers for runtime performance. This chapter tackles a different kind of performance problem: your test suite&rsquo;s reliability. Because an unreliable test suite is worse than no test suite at all.</p>
+
+    <p>You know the pattern. CI goes red. You check the failure. It&rsquo;s <em>that</em> test again &mdash; the one that fails once every 5 runs. You click &ldquo;Retry.&rdquo; It passes. You merge. And slowly, your team stops trusting the test suite entirely.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">15&ndash;25%</span>
+        <span class="stat-label">of test suites in Android projects contain at least one flaky test</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">4.2 hrs</span>
+        <span class="stat-label">average weekly developer time wasted on flaky test investigation</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3 retries</span>
+        <span class="stat-label">typical CI configuration to &ldquo;work around&rdquo; flaky tests</span>
+      </div>
+    </div>
+
+    <p>Every retry costs CI minutes. Every ignored failure is a real bug waiting to slip through. AI can break this cycle by categorizing the flakiness pattern and pointing to the root cause.</p>
+
+    <h2>The Four Categories of Flaky Tests</h2>
+
+    <p>Flaky tests aren&rsquo;t random. They fall into categories, and each category has a different fix:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Symptom</th>
+          <th>Typical Cause</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Timing-dependent</strong></td>
+          <td>Fails on slow machines, passes on fast ones</td>
+          <td>Missing <code>advanceUntilIdle()</code>, hardcoded delays, race conditions</td>
+        </tr>
+        <tr>
+          <td><strong>Order-dependent</strong></td>
+          <td>Fails when run after a specific other test</td>
+          <td>Shared mutable state between tests, missing cleanup</td>
+        </tr>
+        <tr>
+          <td><strong>Environment-dependent</strong></td>
+          <td>Passes locally, fails on CI</td>
+          <td>Timezone, locale, emulator speed, screen density differences</td>
+        </tr>
+        <tr>
+          <td><strong>Resource-dependent</strong></td>
+          <td>Fails intermittently under load</td>
+          <td>Database locks, file handles, network ports, memory pressure</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      When you feed a flaky test failure to Claude Code, always include: the test name, the assertion that failed, the stacktrace, <em>and</em> how often it fails (e.g., &ldquo;fails 1 in 5 runs&rdquo;). The failure frequency is a strong signal for which category it falls into.
+    </div>
+
+    <h2>Timing Flakiness: Coroutine Tests</h2>
+
+    <p>This is the #1 source of flaky Android unit tests. Coroutines are asynchronous, but tests often expect synchronous results.</p>
+
+    <div class="debug-trace">
+      <h4>Flaky Test Failure Log</h4>
+<pre><code>CartViewModelTest > addToCart_updatesCartCount FAILED
+    java.lang.AssertionError:
+    Expected: 1
+    Actual:   0
+    at com.example.shopapp.ui.cart.CartViewModelTest
+        .addToCart_updatesCartCount(CartViewModelTest.kt:47)
+
+    // This test passes ~80% of the time locally,
+    // but fails ~40% on CI.</code></pre>
+      <h4>The Test Code</h4>
+<pre><code>@Test
+fun addToCart_updatesCartCount() = runTest {
+    val viewModel = CartViewModel(fakeRepository)
+
+    viewModel.addToCart(testProduct)
+
+    // FLAKY: The coroutine inside addToCart might not
+    // have completed by the time we assert
+    assertEquals(1, viewModel.cartCount.value)
+}</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>Category:</strong> Timing-dependent. <strong>Problem:</strong> <code>addToCart()</code> launches a coroutine internally, but the test asserts immediately after calling it. On a fast machine, the coroutine completes before the assertion. On a slow CI emulator, it doesn&rsquo;t. <strong>The 80%/40% split</strong> between local and CI is the classic signature of a timing-dependent flaky test.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Missing <code>advanceUntilIdle()</code> After Coroutine Launch</h4>
+      <p><code>runTest</code> provides a <code>TestCoroutineScheduler</code> that controls coroutine execution, but only if the coroutines use the test dispatcher. When <code>CartViewModel.addToCart()</code> launches a coroutine in <code>viewModelScope</code>, that coroutine runs on <code>Dispatchers.Main</code>, which <code>runTest</code> overrides &mdash; but the test still needs to explicitly advance the scheduler to let the coroutine complete.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Properly Advance the Test Dispatcher</h4>
+<pre><code>// Option 1: advanceUntilIdle() — let all pending coroutines complete
+@Test
+fun addToCart_updatesCartCount() = runTest {
+    val viewModel = CartViewModel(fakeRepository)
+
+    viewModel.addToCart(testProduct)
+    advanceUntilIdle()  // Wait for all coroutines to finish
+
+    assertEquals(1, viewModel.cartCount.value)
+}
+
+// Option 2: Turbine for Flow testing (more precise)
+@Test
+fun addToCart_updatesCartCount() = runTest {
+    val viewModel = CartViewModel(fakeRepository)
+
+    viewModel.cartCount.test {
+        assertEquals(0, awaitItem())        // Initial state
+        viewModel.addToCart(testProduct)
+        assertEquals(1, awaitItem())        // After add
+    }
+}
+
+// IMPORTANT: Set up the test dispatcher in your test class:
+@OptIn(ExperimentalCoroutinesApi::class)
+class CartViewModelTest {
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule()
+    // MainDispatcherRule replaces Dispatchers.Main with a TestDispatcher
+}</code></pre>
+      <p><strong>The MainDispatcherRule</strong> is critical. Without it, <code>viewModelScope</code> uses the real <code>Dispatchers.Main</code>, which doesn&rsquo;t exist in unit tests. Here&rsquo;s the rule:</p>
+<pre><code>class MainDispatcherRule(
+    val dispatcher: TestDispatcher = UnconfinedTestDispatcher()
+) : TestWatcher() {
+    override fun starting(description: Description) {
+        Dispatchers.setMain(dispatcher)
+    }
+    override fun finished(description: Description) {
+        Dispatchers.resetMain()
+    }
+}</code></pre>
+    </div>
+
+    <h2>Building a <code>/diagnose-flaky</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/diagnose-flaky.md</code>:</p>
+
+    <pre><code># /diagnose-flaky — Flaky Test Diagnosis
+
+Analyze a flaky test failure and identify the root cause.
+
+## Input
+The user will provide:
+- Test name and file
+- Assertion failure message and stacktrace
+- Failure frequency (e.g., "fails 1 in 5 runs")
+- Whether it fails locally, on CI, or both
+- The test source code (if available)
+
+## Analysis Steps
+
+1. **Categorize the flakiness:**
+   - Timing: fails more on slow machines → coroutine/delay issue
+   - Order: fails only when run with other tests → shared state
+   - Environment: fails only on CI → timezone/locale/emulator
+   - Resource: fails under load → DB/file/network contention
+
+2. **For timing issues, check:**
+   - Is runTest used? Is advanceUntilIdle() called?
+   - Is MainDispatcherRule set up?
+   - Are there hardcoded delays (Thread.sleep, delay)?
+   - Are Flows collected properly (Turbine)?
+
+3. **For order issues, check:**
+   - Static/companion object state between tests
+   - Database not cleared between tests
+   - Shared CoroutineScope or TestDispatcher
+
+4. **For environment issues, check:**
+   - Date/time assertions sensitive to timezone
+   - String comparisons sensitive to locale
+   - Pixel-based UI assertions sensitive to screen density
+   - Animation timing on slow emulators
+
+5. **For resource issues, check:**
+   - Database accessed from multiple test threads
+   - File locks not released
+   - In-memory test database vs persistent
+
+## Output Format
+
+### Flakiness Category
+[Timing / Order / Environment / Resource]
+
+### Root Cause
+[Specific explanation]
+
+### Fix
+```kotlin
+[Code]
+```
+
+### Confidence
+[High/Medium/Low — based on how well the symptoms match]</code></pre>
+
+    <h2>Compose UI Test Flakiness</h2>
+
+    <p>Compose UI tests have their own synchronization model. The test framework waits for composition to settle, but it can&rsquo;t always know when your async data loading is done.</p>
+
+    <pre><code>// FLAKY: Assert immediately — data might not be loaded yet
+@Test
+fun productList_showsProducts() {
+    composeTestRule.setContent {
+        ProductListScreen(viewModel = testViewModel)
+    }
+    // If the ViewModel loads data asynchronously,
+    // this might run before the list renders:
+    composeTestRule.onNodeWithText("Running Shoes").assertExists()
+}
+
+// FIXED: Wait for the content to appear
+@Test
+fun productList_showsProducts() {
+    composeTestRule.setContent {
+        ProductListScreen(viewModel = testViewModel)
+    }
+    composeTestRule.waitUntilExactlyOneExists(
+        hasText("Running Shoes"),
+        timeoutMillis = 5_000
+    )
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Never use <code>Thread.sleep()</code> in UI tests.</strong> It&rsquo;s the most common source of flakiness. If you need 2 seconds today, you&rsquo;ll need 5 on a slow CI emulator, and 10 when the server is slow. Use <code>waitUntil</code>, <code>waitUntilExactlyOneExists</code>, or <code>IdlingResource</code> instead.
+    </div>
+
+    <h2>Espresso Test Flakiness</h2>
+
+    <p>If you still have Espresso tests (View-based UI), the most common flakiness source is missing <code>IdlingResource</code> registration.</p>
+
+    <pre><code>// The problem: Espresso doesn't know about your custom async work
+// It thinks the UI is idle when it's actually loading data
+
+// The fix: Register an IdlingResource for your async operations
+class OkHttpIdlingResource(private val client: OkHttpClient) : IdlingResource {
+    private var callback: IdlingResource.ResourceCallback? = null
+
+    override fun getName() = "OkHttp"
+
+    override fun isIdleNow(): Boolean {
+        val idle = client.dispatcher.runningCallsCount() == 0
+        if (idle) callback?.onTransitionToIdle()
+        return idle
+    }
+
+    override fun registerIdleTransitionCallback(callback: ResourceCallback) {
+        this.callback = callback
+    }
+}
+
+// In your test setup:
+@Before
+fun setup() {
+    val resource = OkHttpIdlingResource(okHttpClient)
+    IdlingRegistry.getInstance().register(resource)
+}
+
+@After
+fun teardown() {
+    IdlingRegistry.getInstance().unregister(resource)
+}</code></pre>
+
+    <h2>Order-Dependent Tests: Shared State</h2>
+
+    <p>When tests share mutable state, they work in isolation but fail when run together. AI is excellent at spotting this because it can scan the test class for static state.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">This test passes when run alone but fails when the full test suite runs. It seems to fail specifically after UserRepositoryTest runs. Here's the test:
+
+[paste test code]
+
+And here's the test class setup:
+
+[paste @Before/@After and companion object]
+
+The test uses an in-memory Room database.</div>
+      <div class="prompt-explanation">AI will check: is the database instance shared via a companion object? Is @After clearing all data? Is the TestDispatcher shared between test classes?</div>
+    </div>
+
+    <pre><code>// COMMON BUG: Database shared between tests via singleton
+companion object {
+    val db = Room.inMemoryDatabaseBuilder(
+        ApplicationProvider.getApplicationContext(),
+        AppDatabase::class.java
+    ).build()  // Same instance used by ALL tests in this class!
+}
+
+// FIX: New database per test
+@get:Rule
+val instantTaskRule = InstantTaskExecutorRule()
+
+private lateinit var db: AppDatabase
+
+@Before
+fun setup() {
+    db = Room.inMemoryDatabaseBuilder(
+        ApplicationProvider.getApplicationContext(),
+        AppDatabase::class.java
+    ).allowMainThreadQueries()  // OK for tests
+     .build()
+}
+
+@After
+fun teardown() {
+    db.close()  // Critical: release the database
+}</code></pre>
+
+    <h2>CI-Specific Failures</h2>
+
+    <p>Tests passing locally but failing on CI is infuriating. The differences are usually subtle:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Difference</th>
+          <th>How It Causes Flakiness</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Emulator speed</strong></td>
+          <td>Animations and async operations take longer</td>
+          <td>Disable animations: <code>adb shell settings put global window_animation_scale 0</code></td>
+        </tr>
+        <tr>
+          <td><strong>Timezone</strong></td>
+          <td>Date assertions fail (CI is UTC, you&rsquo;re UTC+2)</td>
+          <td>Use <code>Clock</code> abstraction, test with fixed timezone</td>
+        </tr>
+        <tr>
+          <td><strong>Locale</strong></td>
+          <td>Number/date formatting differs (comma vs period decimal)</td>
+          <td>Set locale explicitly in tests: <code>Locale.setDefault(Locale.US)</code></td>
+        </tr>
+        <tr>
+          <td><strong>Screen density</strong></td>
+          <td>Screenshot tests or pixel-based assertions fail</td>
+          <td>Use semantic matchers (<code>hasText</code>) not pixel positions</td>
+        </tr>
+        <tr>
+          <td><strong>Parallel execution</strong></td>
+          <td>Tests compete for shared resources (DB, files, ports)</td>
+          <td>Use unique names per test (<code>testName.methodName</code>)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      Add this to your CI emulator setup script to eliminate the most common CI-specific flakiness sources:
+      <pre><code>adb shell settings put global window_animation_scale 0
+adb shell settings put global transition_animation_scale 0
+adb shell settings put global animator_duration_scale 0
+adb shell settings put system time_12_24 24
+adb shell settings put system date_format "yyyy-MM-dd"</code></pre>
+    </div>
+
+    <h2>Measuring Test Reliability</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Undiagnosed Flaky Tests</h4>
+        <p><strong>Test suite pass rate:</strong> 74% (first try)</p>
+        <p><strong>Flaky tests identified:</strong> 0 (all treated as &ldquo;CI weirdness&rdquo;)</p>
+        <p><strong>Average CI retries:</strong> 2.3 per PR</p>
+        <p><strong>CI time wasted on retries:</strong> 38 min/day</p>
+        <p><strong>Developer trust in tests:</strong> Low</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: Systematic Flaky Test Fixes</h4>
+        <p><strong>Test suite pass rate:</strong> 98.5% (first try)</p>
+        <p><strong>Flaky tests identified &amp; fixed:</strong> 12</p>
+        <p><strong>Average CI retries:</strong> 0.1 per PR</p>
+        <p><strong>CI time wasted on retries:</strong> 2 min/day</p>
+        <p><strong>Developer trust in tests:</strong> High</p>
+      </div>
+    </div>
+
+    <h2>Your Flaky Test Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Every coroutine test uses <code>runTest</code> with <code>advanceUntilIdle()</code></li>
+      <li class="checked"><code>MainDispatcherRule</code> is set up in all ViewModel test classes</li>
+      <li class="checked">No <code>Thread.sleep()</code> in UI tests &mdash; use <code>waitUntil</code> or <code>IdlingResource</code></li>
+      <li class="checked">Each test creates its own database instance, closed in <code>@After</code></li>
+      <li class="checked">No mutable state in <code>companion object</code> blocks shared between tests</li>
+      <li class="checked">CI emulator has animations disabled</li>
+      <li class="checked">Date/time tests use a fixed <code>Clock</code>, not <code>System.currentTimeMillis()</code></li>
+      <li class="checked">Locale-sensitive tests set <code>Locale</code> explicitly</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Flaky Test Mindset</h3>
+      <p>A flaky test is not &ldquo;random.&rdquo; It is a deterministic bug in your test that only manifests under certain conditions. Treat it like any other bug: categorize it, find the root cause, and fix it. Never retry your way past a flaky test &mdash; every retry is a ticking time bomb. Feed the failure log and test code to Claude Code, let AI categorize the flakiness, and apply the appropriate fix pattern.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Find and Fix Your Team&rsquo;s Flakiest Test</h4>
+      <ol>
+        <li><strong>Identify the culprit:</strong> Check your CI dashboard for the test with the most retries or failures in the last month. If your CI doesn&rsquo;t track this, run your test suite 10 times and note which tests fail inconsistently.</li>
+        <li><strong>Collect the evidence:</strong> Get the failure log (assertion message + stacktrace), the test source code, and note the failure frequency and whether it&rsquo;s local, CI, or both.</li>
+        <li><strong>Run <code>/diagnose-flaky</code>:</strong> Paste everything into Claude Code. Let AI categorize the flakiness and suggest a fix.</li>
+        <li><strong>Apply the fix:</strong> Implement Claude Code&rsquo;s suggestion. The fix will likely be one of: add <code>advanceUntilIdle()</code>, replace <code>Thread.sleep</code> with <code>waitUntil</code>, isolate shared state, or fix a timezone assumption.</li>
+        <li><strong>Verify:</strong> Run the test 20 times locally (<code>./gradlew test --tests "YourTest" --rerun</code>) and confirm it passes every time.</li>
+        <li><strong>Bonus:</strong> Scan all your test classes for <code>Thread.sleep</code>, <code>companion object</code> with mutable state, and missing <code>@After</code> cleanup. Feed the results to Claude Code for a bulk flakiness audit.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>We&rsquo;ve debugged development-time issues from crashes to flaky tests. But the most impactful bugs are the ones that reach <em>production</em>. Thousands of users hitting a crash you&rsquo;ve never seen, on devices you don&rsquo;t own, in conditions you can&rsquo;t reproduce.</p>
+
+    <p>In <strong>Chapter 11: Production Monitoring &amp; Crash Reporting</strong>, we&rsquo;ll connect Firebase Crashlytics to Claude Code, build a <code>/triage-crash</code> skill for production incidents, and learn to prioritize fixes based on user impact rather than developer anxiety.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-ai-assisted-profiling.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">AI-Assisted Profiling</span>
+      </a>
+      <a href="11-production-monitoring.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Production Monitoring &amp; Crash Reporting</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

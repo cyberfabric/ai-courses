@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Production Monitoring &amp; Crash Reporting | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-flaky-tests.html">&#8592; Prev</a>
+      <a href="12-performance-playbook.html">Next &#8594;</a>
+      <a href="maps/11-production-monitoring-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Production Monitoring &amp; Crash Reporting</h1>
+    <p class="subtitle">No debugger. No LLDB. No Instruments. Just telemetry, crash reports, and AI to make sense of it all.</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <section>
+      <h2>The Production Debugging Challenge</h2>
+
+      <p>Everything you&rsquo;ve learned so far happens in development &mdash; Xcode attached, simulator running, LLDB waiting for your commands. Production is a different planet. Your app is on 50,000 devices running iOS versions you didn&rsquo;t test, on hardware you don&rsquo;t own, in network conditions you can&rsquo;t replicate. When it crashes, you get a report. When it&rsquo;s slow, you get a metric. That&rsquo;s it.</p>
+
+      <p>The good news: production data is <em>structured</em>. Crash reports, MetricKit payloads, Crashlytics clusters &mdash; all machine-readable, all perfect for AI analysis. The pattern is always the same: extract the data, feed it to AI, get back prioritized fixes.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">80%</div>
+          <div class="stat-label">of crashes come from 3-5 unique issues (the long tail is noise)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">24 hrs</div>
+          <div class="stat-label">MetricKit reporting cadence &mdash; daily health check from real users</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">10x</div>
+          <div class="stat-label">faster triage with AI analyzing crash clusters vs. manual review</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Firebase Crashlytics -->
+    <section>
+      <h2>Firebase Crashlytics for iOS</h2>
+
+      <p>Crashlytics is the most popular crash reporting tool for iOS. It captures crashes automatically, groups them into clusters by root cause, and shows you which crashes affect the most users. The data it produces is exactly what AI analyzes best.</p>
+
+      <h3>What Crashlytics Captures</h3>
+
+      <div class="checklist">
+        <ul>
+          <li><strong>Crash stacktraces</strong> &mdash; symbolicated with dSYMs you upload (automatic via Xcode build phase)</li>
+          <li><strong>Non-fatal exceptions</strong> &mdash; caught errors you report with <code>Crashlytics.crashlytics().record(error:)</code></li>
+          <li><strong>Breadcrumbs</strong> &mdash; automatic screen_view events (via Google Analytics SDK) showing what the user did before the crash</li>
+          <li><strong>Custom keys</strong> &mdash; key-value pairs you set to track state: <code>Crashlytics.crashlytics().setCustomValue(userId, forKey: "user_id")</code></li>
+          <li><strong>Device metadata</strong> &mdash; iOS version, device model, free disk space, free RAM, battery level</li>
+          <li><strong>Crash clusters</strong> &mdash; grouped by root cause so you see &ldquo;500 users hit this force-unwrap&rdquo; not &ldquo;500 individual crashes&rdquo;</li>
+        </ul>
+      </div>
+
+      <h3>Adding Context for AI Analysis</h3>
+
+<pre><code>// Add breadcrumb context that AI can analyze later
+func configureForProductionDebugging() {
+    let crashlytics = Crashlytics.crashlytics()
+
+    // User context
+    crashlytics.setUserID(currentUser.anonymizedId)
+    crashlytics.setCustomValue(currentUser.subscriptionTier, forKey: "tier")
+
+    // App state context
+    crashlytics.setCustomValue(AppState.current.rawValue, forKey: "app_state")
+    crashlytics.setCustomValue("\(ProcessInfo.processInfo.thermalState.rawValue)",
+                               forKey: "thermal_state")
+
+    // Feature flags
+    crashlytics.setCustomValue(FeatureFlags.newCheckoutEnabled, forKey: "new_checkout")
+}
+
+// Log non-fatal errors that indicate degraded experience
+func fetchProducts() async {
+    do {
+        products = try await api.getProducts()
+    } catch {
+        // Don't crash, but report the degradation
+        Crashlytics.crashlytics().record(error: error)
+        products = cachedProducts  // fallback
+    }
+}</code></pre>
+
+      <div class="tip-box">
+        <strong>Non-fatals are gold for AI:</strong> Crashes get all the attention, but non-fatal exceptions reveal <em>degraded experiences</em> &mdash; fallback code paths, retry storms, stale caches. Feed your top 10 non-fatal exceptions to Claude Code. Often they indicate bugs that haven&rsquo;t crashed yet but will.
+      </div>
+    </section>
+
+    <!-- Crashlytics + AI -->
+    <section>
+      <h2>Feeding Crashlytics to AI</h2>
+
+      <div class="debug-trace">
+        <div class="trace-header">Crashlytics Crash Cluster &mdash; #1 Issue (487 users, 1,203 events)</div>
+<pre>
+Fatal Exception: Swift runtime error
+0  MyApp        ProductDetailViewModel.swift:67
+               ProductDetailViewModel.loadProduct() -> ()
+1  MyApp        ProductDetailViewModel.swift:67
+               closure #1 in ProductDetailViewModel.loadProduct()
+2  libswiftCore Swift runtime: force unwrap of nil optional
+3  MyApp        ProductDetailViewModel.swift:67
+               ProductDetailViewModel.loadProduct()
+
+Custom Keys:
+  app_state: foreground
+  tier: free
+  new_checkout: true
+  thermal_state: 0
+
+Device Breakdown:
+  iOS 18.4: 312 events | iOS 17.6: 891 events
+  iPhone 15: 203 | iPhone 14: 340 | iPhone 13: 410 | iPhone SE: 250
+
+Breadcrumbs:
+  screen_view: ProductListView
+  screen_view: ProductDetailView  (crash occurs here)
+  tap: "Add to Cart" button
+</pre>
+        <div class="trace-analysis">
+          <strong>AI Analysis:</strong> Force-unwrap of nil at <code>ProductDetailViewModel.swift:67</code>.
+          <strong>(1)</strong> Disproportionately affects iOS 17.6 (74% of events) vs iOS 18.4 (26%) &mdash; likely an API response field that&rsquo;s nil on older API versions or a Codable change.
+          <strong>(2)</strong> Occurs after &ldquo;Add to Cart&rdquo; tap on ProductDetailView &mdash; the force-unwrap is likely on a product property accessed during cart addition.
+          <strong>(3)</strong> All tiers affected but 100% of users have <code>new_checkout: true</code> &mdash; this is a regression in the new checkout feature flag.
+          <strong>Recommendation:</strong> Check line 67 for a force-unwrap. Replace with optional binding. Investigate why the field is nil on iOS 17 &mdash; likely a backend API version difference or Codable optional mismatch.
+        </div>
+      </div>
+
+      <div class="root-cause">
+        <h4>Root Cause: Force-Unwrap on Optional API Field in New Checkout Flow</h4>
+        <p><strong>Evidence:</strong> 100% of crashes have <code>new_checkout: true</code>. 74% are on iOS 17.6. Crash is at line 67 during &ldquo;Add to Cart.&rdquo;</p>
+        <p><strong>Why:</strong> The new checkout flow accesses <code>product.cartConfiguration!</code> &mdash; a field added in API v3. Users on iOS 17.6 hit an older cached API response (v2) where this field is nil.</p>
+        <p><strong>Fix:</strong> Replace force-unwrap with <code>guard let</code>. Add a fallback for missing <code>cartConfiguration</code>.</p>
+      </div>
+    </section>
+
+    <!-- Building the /triage-crash Skill -->
+    <section>
+      <h2>Building a <code>/triage-crash</code> Skill</h2>
+
+      <div class="fix-pattern">
+        <h4>The /triage-crash Skill</h4>
+<pre><code># .claude/commands/triage-crash.md
+
+Triage this production crash report and provide an action plan.
+
+## Input:
+I'll provide crash data from Crashlytics, MetricKit, or Xcode Organizer:
+- Crash stacktrace (symbolicated)
+- Device and iOS version distribution
+- Custom keys and breadcrumbs
+- Event count and affected user count
+
+## Analysis:
+1. **Severity assessment:**
+   - Critical: >1% of DAU affected, data loss risk
+   - High: >0.1% of DAU, core flow blocked
+   - Medium: <0.1% of DAU, workaround exists
+   - Low: edge case, cosmetic impact
+
+2. **User impact estimate:**
+   - How many users are affected?
+   - Is the crash in a core flow (launch, purchase, content)?
+   - Is it growing or stable over time?
+
+3. **Root cause hypothesis:**
+   - What's the immediate cause (nil unwrap, OOB, etc.)?
+   - What's the underlying cause (API change, race, state)?
+   - Does device/OS distribution suggest a platform bug?
+
+4. **Fix priority and plan:**
+   - Immediate: hotfix needed within 24 hours
+   - Next release: include in current sprint
+   - Backlog: track but not urgent
+   - Provide the fix with Swift code
+
+$ARGUMENTS</code></pre>
+      </div>
+    </section>
+
+    <!-- MetricKit -->
+    <section>
+      <h2>MetricKit: Your Daily Production Health Check</h2>
+
+      <p>While Crashlytics focuses on crashes, MetricKit gives you the <em>full health picture</em> &mdash; CPU, memory, disk I/O, network, launch time, hang diagnostics, and energy metrics. Apple delivers these payloads daily from consenting users. Think of it as a daily blood test for your app.</p>
+
+      <h3>Setting Up MetricKit</h3>
+
+<pre><code>import MetricKit
+
+class MetricSubscriber: NSObject, MXMetricManagerSubscriber {
+    static let shared = MetricSubscriber()
+
+    func startReceiving() {
+        MXMetricManager.shared.add(self)
+    }
+
+    // Daily metric payloads
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for payload in payloads {
+            let json = payload.jsonRepresentation()
+            // Upload to your backend for AI analysis
+            AnalyticsService.upload(metricPayload: json)
+        }
+    }
+
+    // Diagnostic payloads (crashes, hangs, disk writes)
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            let json = payload.jsonRepresentation()
+            AnalyticsService.upload(diagnosticPayload: json)
+        }
+    }
+}</code></pre>
+
+      <h3>What MetricKit Delivers</h3>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Payload Type</th>
+            <th>Key Metrics</th>
+            <th>What AI Looks For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>MXMetricPayload</strong></td>
+            <td>CPU time, GPU time, memory peak, disk writes, network bytes, launch time, hang rate</td>
+            <td>Regressions between versions. Sudden spikes in CPU or memory.</td>
+          </tr>
+          <tr>
+            <td><strong>MXDiagnosticPayload</strong></td>
+            <td>Crash logs, hang call stacks, disk write exceptions, CPU exceptions</td>
+            <td>New crash patterns, hang hotspots, excessive disk writes.</td>
+          </tr>
+          <tr>
+            <td><strong>MXAppLaunchMetric</strong></td>
+            <td>Cold, warm, and hot launch times with histograms</td>
+            <td>Launch time regressions. P95 vs P50 spread.</td>
+          </tr>
+          <tr>
+            <td><strong>MXHangDiagnostic</strong></td>
+            <td>Hang duration, call stack at hang point</td>
+            <td>Main-thread blocking operations in production.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Prompt</div>
+        <div class="prompt-text">Here are MetricKit payloads from the last 3 days (before and after deploying v2.4.0):
+
+Day 1 (v2.3.1): CPU time avg 42s, memory peak 180MB, launch P50 1.1s, hang rate 0.3%
+Day 2 (v2.4.0): CPU time avg 68s, memory peak 240MB, launch P50 1.8s, hang rate 1.2%
+Day 3 (v2.4.0): CPU time avg 71s, memory peak 245MB, launch P50 1.9s, hang rate 1.4%
+
+v2.4.0 changes: added image caching layer, switched from URLSession to Alamofire, added SwiftUI onboarding flow.
+
+Which change most likely caused each regression?</div>
+      </div>
+    </section>
+
+    <!-- MetricKit Performance Metric -->
+    <section>
+      <h2>Detecting Regressions with AI</h2>
+
+      <div class="performance-metric">
+        <div class="metric-before">
+          <h4>v2.3.1 (Baseline)</h4>
+          <ul>
+            <li>Launch P50: 1.1s / P95: 2.3s</li>
+            <li>Hang rate: 0.3%</li>
+            <li>Memory peak: 180 MB</li>
+            <li>CPU time: 42s avg/session</li>
+          </ul>
+        </div>
+        <div class="metric-after">
+          <h4>v2.4.0 (Regression)</h4>
+          <ul>
+            <li>Launch P50: 1.8s / P95: 3.9s</li>
+            <li>Hang rate: 1.4%</li>
+            <li>Memory peak: 245 MB</li>
+            <li>CPU time: 71s avg/session</li>
+          </ul>
+        </div>
+      </div>
+
+      <p>AI correlates the changes in v2.4.0 with the metric shifts: the image caching layer likely caused the 65 MB memory increase (caching full-resolution images), the Alamofire migration may explain the CPU increase (different threading model), and the SwiftUI onboarding flow probably caused the launch regression (eager view initialization).</p>
+    </section>
+
+    <!-- Xcode Organizer -->
+    <section>
+      <h2>Xcode Organizer Insights</h2>
+
+      <p>Xcode Organizer aggregates production data from App Store users (who opted into sharing). It&rsquo;s less detailed than MetricKit but gives you <em>trends across versions</em> without any code changes.</p>
+
+      <h3>The Five Tabs That Matter</h3>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Crashes Tab</h4>
+          <ul>
+            <li>Top crash clusters with frequency</li>
+            <li>Symbolicated stacktraces</li>
+            <li>iOS version and device distribution</li>
+            <li>Trend lines across app versions</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Hangs Tab</h4>
+          <ul>
+            <li>Main-thread hang call stacks</li>
+            <li>Duration distribution</li>
+            <li>Affected iOS versions</li>
+            <li>Useful when MetricKit isn&rsquo;t set up</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Energy &amp; Launch Tabs</h4>
+          <ul>
+            <li>Energy impact trends per version</li>
+            <li>Launch time histograms (cold/warm)</li>
+            <li>Compare your app vs. category average</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Disk Writes Tab</h4>
+          <ul>
+            <li>Excessive write exceptions</li>
+            <li>Call stacks of write-heavy operations</li>
+            <li>Often reveals logging or caching bugs</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Organizer + AI workflow:</strong> Open Xcode Organizer, select the Crashes tab, click a crash cluster, and click &ldquo;Open in Project&rdquo; to jump to the code. If the fix isn&rsquo;t obvious, copy the full stacktrace and paste it into Claude Code with your source file for a root cause analysis.
+      </div>
+    </section>
+
+    <!-- TestFlight + On-Device Logs -->
+    <section>
+      <h2>TestFlight and On-Device Crash Logs</h2>
+
+      <h3>TestFlight Beta Feedback</h3>
+
+      <p>TestFlight crash reports are available in App Store Connect within minutes. The killer feature: beta testers can submit <em>feedback</em> alongside crash reports, telling you what they were doing when it crashed. Feed the crash report + user description to AI for much richer context.</p>
+
+      <h3>On-Device .ips Files</h3>
+
+      <p>When you can&rsquo;t reproduce a crash and need the raw data, users can export crash logs: <em>Settings &gt; Privacy &amp; Security &gt; Analytics &amp; Improvements &gt; Analytics Data</em>. Look for files matching your app name with <code>.ips</code> extension. These are the same format as Xcode Organizer crash reports.</p>
+
+      <div class="warning-box">
+        <strong>Symbolication reminder:</strong> On-device .ips files are <em>not</em> symbolicated. You need the matching dSYM (same build UUID) to make them readable. Always archive your builds and keep dSYMs. Without them, you just see memory addresses.
+      </div>
+    </section>
+
+    <!-- Crash Trends -->
+    <section>
+      <h2>Crash Trend Analysis with AI</h2>
+
+      <p>Individual crashes tell you what broke. <em>Trends</em> tell you when and why. Feed AI crash rate data across versions and it spots regressions instantly.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Prompt</div>
+        <div class="prompt-text">Here are crash-free rates from Crashlytics for our last 5 releases:
+
+v2.1.0: 99.2% crash-free (baseline)
+v2.2.0: 99.1% crash-free (minor drop)
+v2.3.0: 98.4% crash-free (significant drop)
+v2.3.1: 98.8% crash-free (partial recovery)
+v2.4.0: 97.1% crash-free (worst ever)
+
+v2.3.0 introduced Core Data migration.
+v2.3.1 was a hotfix for migration crash on empty databases.
+v2.4.0 added new checkout flow + switched networking library.
+
+What pattern do you see? Where should we focus?</div>
+      </div>
+
+      <div class="highlight-box">
+        <h4>The Version Comparison Pattern</h4>
+        <p>When feeding crash data to AI, always include <strong>what changed in each version</strong>. AI can&rsquo;t diagnose a regression from numbers alone &mdash; it needs the context of which code shipped. Changelog + crash rate + top crash clusters = AI can pinpoint which change caused the regression.</p>
+      </div>
+    </section>
+
+    <!-- Xcode 26 AI + Claude Code -->
+    <section>
+      <h2>Xcode 26 AI vs. Claude Code for Production Issues</h2>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Use Xcode 26 AI When...</h4>
+          <ul>
+            <li>You&rsquo;re in Organizer and want a quick crash explanation</li>
+            <li>You need to jump from crash to code fix inline</li>
+            <li>The crash is in your code and the fix is straightforward</li>
+            <li>You want AI to explain a MetricKit hang call stack</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Use Claude Code When...</h4>
+          <ul>
+            <li>You need to triage 20+ crash clusters and prioritize</li>
+            <li>You want to correlate crashes with MetricKit metrics</li>
+            <li>The crash involves complex state across multiple files</li>
+            <li>You need to generate a fix plan with code for the team</li>
+            <li>You want automated regression detection via XcodeBuildMCP</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🔧</div>
+        <div class="tool-name">XcodeBuildMCP for Production Monitoring Automation</div>
+        <div class="tool-desc">Set up XcodeBuildMCP to pull Crashlytics data via Firebase CLI, export MetricKit payloads from your backend, and feed both to Claude Code on a schedule. Get a weekly &ldquo;production health report&rdquo; generated automatically with prioritized issues and suggested fixes.</div>
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Triage Your Top 3 Production Crashes</h3>
+
+        <p><strong>Goal:</strong> Export crash data from Crashlytics or Xcode Organizer, feed it to AI, and produce a prioritized fix plan.</p>
+
+        <ol>
+          <li><strong>Export crash data:</strong> From Crashlytics dashboard, note the top 3 crash clusters: stacktrace, event count, affected users, iOS version breakdown, and any custom keys.</li>
+          <li><strong>Export MetricKit trends:</strong> If available, pull the last 7 days of MXMetricPayload data (launch time, hang rate, memory peak).</li>
+          <li><strong>Feed to Claude Code:</strong></li>
+        </ol>
+
+<pre><code>/triage-crash
+Here are our top 3 crash clusters from the last 7 days:
+
+Crash #1 (487 users, 1,203 events):
+[paste stacktrace, device breakdown, custom keys]
+
+Crash #2 (231 users, 589 events):
+[paste stacktrace, device breakdown, custom keys]
+
+Crash #3 (156 users, 312 events):
+[paste stacktrace, device breakdown, custom keys]
+
+MetricKit trends (last 7 days):
+[paste daily metrics if available]
+
+Current app version: 2.4.0
+Recent changes: [describe what shipped]
+
+Prioritize fixes and estimate user impact for each.</code></pre>
+
+        <p><strong>Expected output:</strong> A ranked list with severity, estimated user impact, root cause hypothesis, and concrete fix for each crash. Use this as your sprint planning input.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What&rsquo;s Next</h2>
+
+      <p>You now have the full toolkit: debugging in development (Chapters 1-10) and monitoring in production (this chapter). In Chapter 12, we&rsquo;ll bring it all together into a <strong>performance playbook</strong> &mdash; setting measurable budgets for launch time, frame rate, memory, and app size, enforcing them in CI with XCTest performance metrics, and organizing all 12 skills you&rsquo;ve built into a cohesive AI-debugging system your whole team can use.</p>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-flaky-tests.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Flaky Test Diagnosis</span>
+      </a>
+      <a href="12-performance-playbook.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Performance Budgets &amp; Your Debugging Playbook</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

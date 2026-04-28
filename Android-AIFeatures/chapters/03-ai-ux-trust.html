@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Designing AI UX That Users Trust | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-choosing-ai-approach.html">&larr; Prev</a>
+      <a href="04-smart-search.html">Next &rarr;</a>
+      <a href="maps/03-ai-ux-trust-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Designing AI UX That Users Trust</h1>
+    <p class="subtitle">Loading states, confidence, error handling, and user control &mdash; the patterns that earn trust</p>
+  </header>
+
+  <main>
+
+    <h2>Trust Is Earned, Never Assumed</h2>
+
+    <p>You've picked your AI approach. You've got an API key. You're ready to build. But here's the thing: the <em>technical</em> implementation is maybe 40% of shipping a great AI feature. The other 60% is UX.</p>
+
+    <p>Think about it like meeting a new colleague. You don't trust their recommendations on day one &mdash; they have to earn it by being right consistently, being transparent when they're unsure, and admitting when they're wrong. AI features work the same way.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1</span>
+        <span class="stat-label">Bad hallucination to destroy trust in a feature forever</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5-10</span>
+        <span class="stat-label">Correct results needed to build initial trust</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">73%</span>
+        <span class="stat-label">Of users abandon an AI feature after 3 bad experiences</span>
+      </div>
+    </div>
+
+    <p>This chapter gives you the complete UX toolkit for AI features &mdash; every state, every edge case, every pattern you need to make users feel safe and in control.</p>
+
+    <h2>Loading States: The Three Phases</h2>
+
+    <p>When a user triggers an AI feature, there's a gap between "I asked" and "I got an answer." How you fill that gap determines whether the user feels patient or frustrated.</p>
+
+    <p>Never, ever show a bare spinner. Users staring at a spinner with no context think the app is frozen. Instead, use <strong>three-phase loading</strong>:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Initiating</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Processing</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Completing</div>
+    </div>
+
+    <h3>Phase 1: Initiating</h3>
+    <p>Tell the user what's happening. "Analyzing your photo..." "Summarizing the article..." "Finding similar items..." This sets expectations and proves the app isn't frozen.</p>
+
+    <h3>Phase 2: Processing</h3>
+    <p>Show progress. For streaming LLM responses, show text as it arrives. For image analysis, show a skeleton screen or pulsing placeholder. For multi-step processes, show which step you're on: "Reading the document... Extracting key points... Generating summary..."</p>
+
+    <h3>Phase 3: Completing</h3>
+    <p>Reveal the result with a smooth transition &mdash; not a jarring pop. A subtle fade-in or slide-up animation tells the user "this is the answer" without being distracting.</p>
+
+    <div class="product-pattern">
+      <h3>The Contextual Loading Pattern</h3>
+      <p>The best AI loading states are <strong>contextual</strong> &mdash; they tell the user what the AI is doing, not just that it's busy. Compare:</p>
+      <ul>
+        <li><strong>Bad:</strong> A spinning circle. (What's happening? Is it broken? Should I tap again?)</li>
+        <li><strong>Better:</strong> "Loading..." (OK, something is happening, but what?)</li>
+        <li><strong>Good:</strong> "Analyzing your receipt..." (I know what it's doing.)</li>
+        <li><strong>Great:</strong> "Reading the text... Found merchant name... Extracting total..." (I can see it working step by step.)</li>
+      </ul>
+      <p><strong>Real-world example:</strong> ChatGPT shows the streaming text as it generates. Gemini shows "Thinking..." with animated dots before the response starts. Both set expectations and keep the user engaged during the wait.</p>
+    </div>
+
+    <h2>Streaming Responses in Compose</h2>
+
+    <p>For LLM features (summarization, chat, content generation), streaming the response token by token is the gold standard. It feels faster than waiting for the full response, and it sets realistic expectations for generation time.</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Streaming AI Text in Compose</h3>
+      <p><strong>Goal:</strong> Show a Gemini response word by word as it arrives, like the ChatGPT typing effect.</p>
+      <p><strong>Step 1:</strong> Create a ViewModel that collects the stream:</p>
+<pre><code>class SummaryViewModel(private val model: GenerativeModel) : ViewModel() {
+    private val _text = MutableStateFlow("")
+    val text: StateFlow&lt;String&gt; = _text
+
+    private val _isGenerating = MutableStateFlow(false)
+    val isGenerating: StateFlow&lt;Boolean&gt; = _isGenerating
+
+    fun summarize(input: String) {
+        viewModelScope.launch {
+            _isGenerating.value = true
+            _text.value = ""
+            model.generateContentStream("Summarize in 3 bullets:\n$input")
+                .collect { chunk -&gt;
+                    _text.value += chunk.text.orEmpty()
+                }
+            _isGenerating.value = false
+        }
+    }
+}</code></pre>
+      <p><strong>Step 2:</strong> Build the streaming UI in Compose:</p>
+<pre><code>@Composable
+fun StreamingSummary(viewModel: SummaryViewModel) {
+    val text by viewModel.text.collectAsStateWithLifecycle()
+    val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        if (text.isNotEmpty()) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+        }
+        if (isGenerating) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Generating...",
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}</code></pre>
+      <p>The user sees text appearing in real time, with a small spinner at the bottom while generation continues. It feels responsive even if the full response takes 3 seconds.</p>
+    </div>
+
+    <h2>Communicating Confidence</h2>
+
+    <p>In Chapter 1, we introduced the confidence spectrum. Now let's implement it. The core rule: <strong>translate confidence into behavior, not numbers.</strong></p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Exposing Raw Confidence</p>
+        <p class="prompt-text">"This is a receipt (67.3% confidence)"
+
+Users think: Is 67% good? Should I trust this? What happens at 66%?</p>
+        <p class="prompt-explanation">Raw numbers create anxiety. Users don't have a mental model for what "67% confidence" means.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Confidence as Behavior</p>
+        <p class="prompt-text">High: "Receipt detected" — just show the result
+Medium: "This looks like a receipt" — softer language
+Low: "Is this a receipt?" — ask the user to confirm</p>
+        <p class="prompt-explanation">The AI's uncertainty is expressed through language and interaction, not numbers. Users naturally understand the difference.</p>
+      </div>
+    </div>
+
+    <p>Here's how to implement confidence tiers in your code:</p>
+
+<pre><code>sealed class AiResult&lt;T&gt; {
+    data class HighConfidence&lt;T&gt;(val value: T) : AiResult&lt;T&gt;()
+    data class MediumConfidence&lt;T&gt;(val value: T) : AiResult&lt;T&gt;()
+    data class LowConfidence&lt;T&gt;(val options: List&lt;T&gt;) : AiResult&lt;T&gt;()
+    data class NoResult&lt;T&gt;(val reason: String) : AiResult&lt;T&gt;()
+}
+
+// In your ViewModel, map API confidence to UX tiers
+fun classifyConfidence(score: Float, result: String): AiResult&lt;String&gt; = when {
+    score &gt; 0.9f  -&gt; AiResult.HighConfidence(result)
+    score &gt; 0.7f  -&gt; AiResult.MediumConfidence(result)
+    score &gt; 0.5f  -&gt; AiResult.LowConfidence(topResults)
+    else           -&gt; AiResult.NoResult("Couldn't determine the content")
+}</code></pre>
+
+    <div class="tip-box">
+      <p>The thresholds (0.9, 0.7, 0.5) aren't magic numbers &mdash; tune them based on user testing. If users are frequently correcting "high confidence" results, your threshold is too low. If they're rarely seeing results because everything falls into "no result," it's too high.</p>
+    </div>
+
+    <h2>The "AI Suggested" Badge</h2>
+
+    <p>When AI generates or suggests content, users need to know. Not because they'll distrust it &mdash; but because they need to know they can change it.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Diego opens his email app and starts replying to a message. The app shows three suggested quick replies: "Sounds good!", "Thanks, I'll look into it", and "Let me get back to you on that." Each suggestion has a subtle "AI" chip next to it.</p>
+      <p>Diego taps "Thanks, I'll look into it" &mdash; the text fills into the compose field, editable. He changes "look into it" to "check with the team" and sends. The AI got him 80% there; he did the last 20%.</p>
+      <p>Without the "AI" badge, Diego might wonder: did the app read my mind? Is it canned text? Is it being sent automatically? The badge removes ambiguity and gives him confidence to edit.</p>
+    </div>
+
+    <p>Implementation in Compose is simple &mdash; a small chip or label:</p>
+
+<pre><code>@Composable
+fun AiSuggestionChip(text: String, onClick: () -&gt; Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text(text) },
+        leadingIcon = {
+            Icon(
+                Icons.Outlined.AutoAwesome,
+                contentDescription = "AI suggestion",
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    )
+}</code></pre>
+
+    <p>The <code>AutoAwesome</code> sparkle icon has become the universal symbol for "AI did this." Google uses it, Samsung uses it, most apps use it. Stick with the convention &mdash; users already know what it means.</p>
+
+    <h2>User Control and Override</h2>
+
+    <p>This is the single most important UX principle for AI features: <strong>the user must always feel in control.</strong> Every AI suggestion, generation, or action needs an escape hatch.</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Dismiss:</strong> "Not now" / swipe away / tap outside to close</li>
+      <li class="checked"><strong>Edit:</strong> Modify the AI's suggestion before accepting it</li>
+      <li class="checked"><strong>Undo:</strong> Reverse an AI action after accepting it</li>
+      <li class="checked"><strong>Feedback:</strong> "Not helpful" / thumbs down / "wrong answer"</li>
+      <li class="checked"><strong>Disable:</strong> Turn off AI suggestions for this feature entirely</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>Never auto-apply AI results without user confirmation.</strong> An AI that auto-corrects your text, auto-sends a message, or auto-deletes a photo will terrify users. AI should suggest, not act. The user confirms, the app executes.</p>
+    </div>
+
+    <h3>The Suggestion-Confirmation Pattern</h3>
+    <p>The safest pattern for most AI features follows three steps:</p>
+    <ol>
+      <li><strong>AI suggests</strong> &mdash; Show the AI's output in a clearly labeled, non-destructive way</li>
+      <li><strong>User reviews</strong> &mdash; The user can see, edit, or dismiss the suggestion</li>
+      <li><strong>User confirms</strong> &mdash; Only after explicit user action does the suggestion become real</li>
+    </ol>
+
+    <p>Gmail Smart Compose nails this: gray text appears ahead of your cursor (suggestion), you keep typing to ignore it or press Tab to accept (confirmation). At no point does the AI take control.</p>
+
+    <h2>Error Communication</h2>
+
+    <p>AI errors are different from regular app errors. A network error is binary &mdash; it worked or it didn't. An AI error is a spectrum &mdash; the result might be slightly wrong, confidently wrong, or completely nonsensical.</p>
+
+    <h3>The AI Error Taxonomy</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Error Type</th>
+          <th>What Happened</th>
+          <th>What to Show</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Infrastructure failure</td>
+          <td>API down, timeout, no network</td>
+          <td>"AI is temporarily unavailable. Try again in a moment."</td>
+        </tr>
+        <tr>
+          <td>Low confidence</td>
+          <td>AI can't determine the answer</td>
+          <td>"I'm not sure about this. Here are some possibilities..." or show nothing</td>
+        </tr>
+        <tr>
+          <td>Content filtered</td>
+          <td>Safety filter triggered</td>
+          <td>"I can't help with that request." (No details about why &mdash; prevents gaming)</td>
+        </tr>
+        <tr>
+          <td>Rate limited</td>
+          <td>User hit usage cap</td>
+          <td>"You've reached today's AI limit. Resets at midnight." with manual fallback</td>
+        </tr>
+        <tr>
+          <td>Wrong result</td>
+          <td>AI is confidently incorrect</td>
+          <td>This is the hardest &mdash; the AI doesn't know it's wrong. You need feedback mechanisms.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The Golden Rule of AI Errors</h3>
+      <p>"I'm not sure" is always better than a wrong answer presented with confidence. If your model's confidence is below your threshold, show nothing, ask for clarification, or present multiple options. A confident hallucination damages trust far more than an honest "I don't know."</p>
+    </div>
+
+    <h2>Feedback Loops</h2>
+
+    <p>Feedback is how your AI feature gets better over time &mdash; and how users feel heard when things go wrong. But feedback collection has its own UX challenge: you need data without annoying users.</p>
+
+    <h3>Explicit Feedback</h3>
+    <p>Thumbs up/down buttons, "Was this helpful?" prompts, star ratings. Use sparingly &mdash; showing this after every AI interaction causes survey fatigue. Good rules of thumb:</p>
+    <ul>
+      <li>Show feedback buttons <strong>inline</strong>, not in a popup</li>
+      <li>Ask <strong>after critical interactions</strong> (long summaries, important classifications) but not routine ones (autocomplete, quick suggestions)</li>
+      <li>Make it <strong>one tap</strong> &mdash; thumbs up/down, not a 5-star scale with a text field</li>
+    </ul>
+
+    <h3>Implicit Feedback</h3>
+    <p>The most powerful feedback doesn't require the user to do anything extra:</p>
+    <ul>
+      <li><strong>Accepted vs dismissed</strong> &mdash; Did the user tap the AI suggestion or swipe it away?</li>
+      <li><strong>Edit distance</strong> &mdash; The user accepted the draft but rewrote 80% of it? The AI didn't do a great job.</li>
+      <li><strong>Time to action</strong> &mdash; Did the user accept the suggestion immediately (high quality) or stare at it for 10 seconds before accepting (uncertain)?</li>
+      <li><strong>Re-queries</strong> &mdash; Did the user search again right after seeing results? The first results were probably bad.</li>
+    </ul>
+
+    <div class="tip-box">
+      <p>Log implicit signals from day one, even if you don't use them yet. When you want to improve your AI feature in three months, this data will be gold. Chapter 11 covers measurement and A/B testing in detail.</p>
+    </div>
+
+    <h2>Accessibility for AI Features</h2>
+
+    <p>AI features introduce unique accessibility challenges. Dynamic content, streaming text, and visual overlays need special attention.</p>
+
+    <h3>Screen Readers and Dynamic Content</h3>
+    <p>When AI results load, screen readers need to know. Use <code>LiveRegion</code> in Compose to announce new content:</p>
+
+<pre><code>Text(
+    text = aiResult,
+    modifier = Modifier.semantics {
+        liveRegion = LiveRegionMode.Polite
+    }
+)</code></pre>
+
+    <p><code>Polite</code> waits for the current announcement to finish before reading the AI result. Use <code>Assertive</code> only for critical AI results (like error messages).</p>
+
+    <h3>Other Accessibility Considerations</h3>
+    <ul>
+      <li><strong>Streaming text:</strong> Don't announce every token &mdash; wait for a sentence boundary or announce the complete result when streaming finishes</li>
+      <li><strong>AI-generated images:</strong> Always provide alt text. If AI generates an image, have the AI also generate a description</li>
+      <li><strong>Motion:</strong> Respect <code>prefers-reduced-motion</code> &mdash; skip streaming animations for users who find them disorienting</li>
+      <li><strong>Confidence indicators:</strong> If you use color to show confidence (green/yellow/red), also use text or icons for color-blind users</li>
+    </ul>
+
+    <h2>Progressive Disclosure</h2>
+
+    <p>Don't dump every AI capability on the user at once. Layer it:</p>
+
+    <div class="product-pattern">
+      <h3>The Three-Layer AI Disclosure Pattern</h3>
+      <ol>
+        <li><strong>Layer 1 &mdash; Simple action:</strong> A single button or auto-triggered suggestion. "Summarize" button, autocomplete text, smart sort. One tap, instant value, no configuration.</li>
+        <li><strong>Layer 2 &mdash; Customization:</strong> After the user has used and trusted the basic feature, reveal options. "Summarize as bullet points / paragraph / key takeaways." "Search in: all notes / this folder / last 7 days."</li>
+        <li><strong>Layer 3 &mdash; Power user:</strong> Advanced settings for users who want control. Prompt customization, model selection, temperature adjustment, output format. Hidden behind a "gear" icon or advanced settings.</li>
+      </ol>
+      <p><strong>Key insight:</strong> Most users will live on Layer 1 forever, and that's fine. Design Layer 1 to work beautifully with zero configuration. The other layers exist for the 15% who want more control.</p>
+    </div>
+
+    <h2>Dark Patterns to Avoid</h2>
+
+    <p>AI features create new opportunities for manipulative UX. Don't be that app.</p>
+
+    <h3>Fake Urgency</h3>
+    <p>"AI detected that this deal expires soon!" &mdash; when the AI didn't actually analyze anything and the "urgency" is manufactured to drive clicks.</p>
+
+    <h3>Manufactured Authority</h3>
+    <p>"Our AI recommends this product" &mdash; when the recommendation is actually a paid placement. AI should never be a disguise for advertising.</p>
+
+    <h3>Engagement Traps</h3>
+    <p>"You asked the AI 3 questions today. Upgrade to ask more!" &mdash; when the free limit is artificially low to frustrate users into paying. Limits should reflect real costs, not manipulation.</p>
+
+    <h3>Invisible AI</h3>
+    <p>Using AI to filter, sort, or prioritize content without telling the user. If AI is shaping what the user sees, they should know &mdash; and be able to switch to chronological or manual sorting.</p>
+
+    <div class="warning-box">
+      <p><strong>The test:</strong> Would you be embarrassed if a journalist wrote about how your AI feature works? If the answer is yes, redesign it. Transparency builds long-term trust; manipulation destroys it.</p>
+    </div>
+
+    <h2>Putting It All Together: A Complete UX Flow</h2>
+
+    <p>Let's trace the complete user experience for an "AI Summarize" button on an article reader app:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>What the User Sees</th>
+          <th>Implementation Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Idle</strong></td>
+          <td>Sparkle icon + "Summarize" button at the top of the article</td>
+          <td>Only show if article length &gt; 500 words</td>
+        </tr>
+        <tr>
+          <td><strong>Initiating</strong></td>
+          <td>Button dims, text changes to "Reading article..."</td>
+          <td>Disable button to prevent double-tap</td>
+        </tr>
+        <tr>
+          <td><strong>Processing</strong></td>
+          <td>Summary card appears with streaming bullet points</td>
+          <td><code>generateContentStream()</code> with Flow collection</td>
+        </tr>
+        <tr>
+          <td><strong>Complete</strong></td>
+          <td>Full summary with "AI Summary" badge + thumbs up/down</td>
+          <td>Cache the result; show feedback buttons inline</td>
+        </tr>
+        <tr>
+          <td><strong>Error</strong></td>
+          <td>"Couldn't summarize. Tap to retry." with a retry icon</td>
+          <td>Log the error type; show manual fallback if repeated failure</td>
+        </tr>
+        <tr>
+          <td><strong>Dismissed</strong></td>
+          <td>Summary card collapses; "Summarize" button returns</td>
+          <td>Log dismissal as implicit feedback</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Every state is covered. The user is never confused, never stuck, and always in control.</p>
+
+    <h2>Your Turn: Design the Full Flow</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Design an "AI Email Reply" Feature</h3>
+      <p>You're building an email app. When the user opens an email, they see an "AI Reply" button that generates three suggested replies. Design the complete UX flow:</p>
+      <ol>
+        <li><strong>Sketch every state:</strong> Idle, loading, results, error, user edit, and feedback</li>
+        <li><strong>Define confidence behavior:</strong> What does the AI show when it's very confident vs. unsure?</li>
+        <li><strong>Plan error cases:</strong> What if the API is down? What if the email is in a language the AI doesn't support? What if the email content triggers a safety filter?</li>
+        <li><strong>Add user control:</strong> How does the user dismiss, edit, regenerate, or provide feedback?</li>
+        <li><strong>Consider accessibility:</strong> How does a screen reader user experience the suggested replies?</li>
+      </ol>
+      <p>Bonus: For each suggested reply, decide &mdash; should it auto-fill the compose field on tap, or show a preview first? What's the tradeoff?</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now have the complete UX toolkit for AI features &mdash; loading states, confidence communication, error handling, feedback loops, accessibility, and progressive disclosure. These patterns apply to every AI feature you'll build.</p>
+
+    <p>Time to put them to work. <strong>Chapter 4: Smart Search &amp; Autocomplete</strong> is your first hands-on feature build &mdash; we'll create intelligent search that understands what users mean, not just what they type. Semantic search, real-time suggestions, and ranking that gets smarter over time.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="02-choosing-ai-approach.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Choosing the Right AI Approach</span>
+        </a>
+        <a href="04-smart-search.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Smart Search &amp; Autocomplete</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

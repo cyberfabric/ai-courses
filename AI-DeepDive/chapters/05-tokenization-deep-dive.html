@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Tokenization Deep Dive | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-training-step-by-step.html">&larr; Prev</a>
+      <a href="06-attention-mechanism.html">Next &rarr;</a>
+      <a href="maps/05-tokenization-deep-dive-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Tokenization Deep Dive</h1>
+    <p class="chapter-subtitle">How text becomes numbers &mdash; the BPE algorithm traced step by step</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/04-tokens.html">AI-Intro Ch 4: Tokens</a>. There you learned that AI reads tokens, not words. Now you&rsquo;ll build a tokenizer from scratch.
+    </div>
+
+    <p>In Chapters 1&ndash;4, we built an entire neural network that takes numbers in and pushes numbers out. But language models work with <em>text</em>. So how does &ldquo;The cat sat on the mat&rdquo; become a list of numbers a network can process?</p>
+
+    <p>The answer is <strong>tokenization</strong> &mdash; and the dominant algorithm behind it is called <strong>Byte Pair Encoding (BPE)</strong>. In this chapter, you&rsquo;ll trace every step of BPE with real text, build a vocabulary from scratch, and understand why some words are trickier than they look.</p>
+
+    <!-- ============================================== -->
+    <h2>The Problem: Text In, Numbers Out</h2>
+    <!-- ============================================== -->
+
+    <p>A neural network can&rsquo;t read the string <code>"hello"</code>. It needs numbers. So we need a system that:</p>
+
+    <ol>
+      <li><strong>Breaks text into pieces</strong> (tokens)</li>
+      <li><strong>Maps each piece to a number</strong> (token ID)</li>
+      <li>Does this <strong>consistently</strong> &mdash; the same text always produces the same token IDs</li>
+    </ol>
+
+    <p>The question is: what should those pieces be?</p>
+
+    <!-- ============================================== -->
+    <h2>Three Approaches to Splitting Text</h2>
+    <!-- ============================================== -->
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th>Splits &ldquo;unhappiness&rdquo; as</th>
+            <th>Vocab Size</th>
+            <th>Problem</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Character-level</strong></td>
+            <td><code>u, n, h, a, p, p, i, n, e, s, s</code></td>
+            <td>~256</td>
+            <td>11 tokens for one word &mdash; sequences get very long</td>
+          </tr>
+          <tr>
+            <td><strong>Word-level</strong></td>
+            <td><code>unhappiness</code></td>
+            <td>~500,000+</td>
+            <td>Rare words missing; &ldquo;unhappier&rdquo; is unknown</td>
+          </tr>
+          <tr>
+            <td><strong>Subword (BPE)</strong></td>
+            <td><code>un, happiness</code></td>
+            <td>~32,000&ndash;100,000</td>
+            <td>Best of both &mdash; compact AND handles rare words</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why subwords win</h4>
+      <p>Character-level is too granular &mdash; the model has to figure out that <code>c, a, t</code> means &ldquo;cat&rdquo; from scratch. Word-level is too rigid &mdash; any word not in the dictionary is a dead end. Subwords hit the sweet spot: common words stay whole (<code>the</code>, <code>cat</code>), while rare words get split into recognizable pieces (<code>un</code> + <code>happiness</code>).</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>BPE: The Algorithm That Builds a Vocabulary</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>Byte Pair Encoding (BPE)</h4>
+      <p>Start with individual characters. Count how often each pair of adjacent characters appears. Merge the most frequent pair into a new token. Repeat until you reach your target vocabulary size.</p>
+      <p>That&rsquo;s it. The entire algorithm is: <strong>count pairs &rarr; merge the winner &rarr; repeat</strong>.</p>
+    </div>
+
+    <p>Let&rsquo;s trace this with real text. We&rsquo;ll use a tiny corpus:</p>
+
+    <pre><code>low  low  low  low  low
+lower  lower
+newest  newest  newest
+widest  widest</code></pre>
+
+    <p>That gives us these word frequencies:</p>
+
+    <table>
+      <thead>
+        <tr><th>Word</th><th>Frequency</th><th>As characters</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>low</td><td>5</td><td><code>l o w _</code></td></tr>
+        <tr><td>lower</td><td>2</td><td><code>l o w e r _</code></td></tr>
+        <tr><td>newest</td><td>3</td><td><code>n e w e s t _</code></td></tr>
+        <tr><td>widest</td><td>2</td><td><code>w i d e s t _</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>The <code>_</code> marks the end of a word (it&rsquo;s an actual token &mdash; BPE needs to know where words end). Our starting vocabulary is every unique character: <code>{l, o, w, _, e, r, n, s, t, i, d}</code> &mdash; 11 tokens.</p>
+
+    <!-- ============================================== -->
+    <h2>BPE Step by Step: 5 Merges</h2>
+    <!-- ============================================== -->
+
+    <div class="math-walkthrough">
+      <h4>Merge 1: Find the most frequent pair</h4>
+      <p>Count every adjacent character pair across all words (weighted by frequency):</p>
+
+      <table>
+        <thead>
+          <tr><th>Pair</th><th>Count</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>l o</code></td><td>5 + 2 = <strong>7</strong></td></tr>
+          <tr><td><code>o w</code></td><td>5 + 2 = <strong>7</strong></td></tr>
+          <tr><td><code>w _</code></td><td>5</td></tr>
+          <tr><td><code>e s</code></td><td>3 + 2 = 5</td></tr>
+          <tr><td><code>s t</code></td><td>3 + 2 = 5</td></tr>
+          <tr><td><code>t _</code></td><td>3 + 2 = 5</td></tr>
+          <tr><td><code>e w</code></td><td>3</td></tr>
+          <tr><td><code>n e</code></td><td>3</td></tr>
+          <tr><td><code>w e</code></td><td>2 + 2 = 4</td></tr>
+          <tr><td><code>e r</code></td><td>2</td></tr>
+          <tr><td><code>r _</code></td><td>2</td></tr>
+          <tr><td><code>w i</code></td><td>2</td></tr>
+          <tr><td><code>i d</code></td><td>2</td></tr>
+          <tr><td><code>d e</code></td><td>2</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Winner: <code>l o</code></strong> (count: 7, tied with <code>o w</code> &mdash; we pick the first one found).</p>
+      <p>Merge <code>l</code> + <code>o</code> into the new token <code>lo</code>.</p>
+      <p>Vocabulary: <code>{l, o, w, _, e, r, n, s, t, i, d, <strong>lo</strong>}</code> &mdash; 12 tokens.</p>
+
+      <p>Updated words:</p>
+      <table>
+        <thead><tr><th>Word</th><th>After merge 1</th></tr></thead>
+        <tbody>
+          <tr><td>low (5)</td><td><code>lo w _</code></td></tr>
+          <tr><td>lower (2)</td><td><code>lo w e r _</code></td></tr>
+          <tr><td>newest (3)</td><td><code>n e w e s t _</code></td></tr>
+          <tr><td>widest (2)</td><td><code>w i d e s t _</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Merge 2: Recount pairs</h4>
+      <p>Now the top pair is <code>lo w</code> (count: 5 + 2 = <strong>7</strong>). Merge into <code>low</code>.</p>
+      <p>Vocabulary: 13 tokens (added <code>low</code>).</p>
+      <table>
+        <thead><tr><th>Word</th><th>After merge 2</th></tr></thead>
+        <tbody>
+          <tr><td>low (5)</td><td><code>low _</code></td></tr>
+          <tr><td>lower (2)</td><td><code>low e r _</code></td></tr>
+          <tr><td>newest (3)</td><td><code>n e w e s t _</code></td></tr>
+          <tr><td>widest (2)</td><td><code>w i d e s t _</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Merge 3: Next most frequent</h4>
+      <p>Top pairs: <code>e s</code> (3 + 2 = <strong>5</strong>), <code>low _</code> (5), <code>s t</code> (5), <code>t _</code> (5). Pick <code>e s</code>. Merge into <code>es</code>.</p>
+      <p>Vocabulary: 14 tokens (added <code>es</code>).</p>
+      <table>
+        <thead><tr><th>Word</th><th>After merge 3</th></tr></thead>
+        <tbody>
+          <tr><td>low (5)</td><td><code>low _</code></td></tr>
+          <tr><td>lower (2)</td><td><code>low e r _</code></td></tr>
+          <tr><td>newest (3)</td><td><code>n e w es t _</code></td></tr>
+          <tr><td>widest (2)</td><td><code>w i d es t _</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Merge 4: Keep going</h4>
+      <p>Top pair: <code>es t</code> (3 + 2 = <strong>5</strong>). Merge into <code>est</code>.</p>
+      <p>Vocabulary: 15 tokens (added <code>est</code>).</p>
+      <table>
+        <thead><tr><th>Word</th><th>After merge 4</th></tr></thead>
+        <tbody>
+          <tr><td>low (5)</td><td><code>low _</code></td></tr>
+          <tr><td>lower (2)</td><td><code>low e r _</code></td></tr>
+          <tr><td>newest (3)</td><td><code>n e w est _</code></td></tr>
+          <tr><td>widest (2)</td><td><code>w i d est _</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Merge 5: And again</h4>
+      <p>Top pair: <code>low _</code> (count: <strong>5</strong>). Merge into <code>low_</code>.</p>
+      <p>Vocabulary: 16 tokens (added <code>low_</code>).</p>
+      <table>
+        <thead><tr><th>Word</th><th>After merge 5</th></tr></thead>
+        <tbody>
+          <tr><td>low (5)</td><td><code>low_</code> &larr; <em>one token!</em></td></tr>
+          <tr><td>lower (2)</td><td><code>low e r _</code></td></tr>
+          <tr><td>newest (3)</td><td><code>n e w est _</code></td></tr>
+          <tr><td>widest (2)</td><td><code>w i d est _</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What just happened?</h4>
+      <p>After just 5 merges, the most common word (&ldquo;low&rdquo;) became a single token, and the common suffix &ldquo;-est&rdquo; was also captured. That&rsquo;s exactly the goal: <strong>frequent patterns get their own tokens</strong>, while rare patterns stay split into smaller, still-recognizable pieces. If we kept going, <code>low e r _</code> would eventually merge into <code>lower_</code> too.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Checkpoint</h4>
+      <p>After merge 5, the word &ldquo;newest&rdquo; is represented as <code>n e w est _</code> &mdash; four tokens. If we did a 6th merge and <code>est _</code> won, what would &ldquo;newest&rdquo; look like?</p>
+      <p><em>Answer: <code>n e w est_</code> &mdash; three tokens. Each merge compresses the representation.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Merge Table: Your Tokenizer&rsquo;s Recipe</h2>
+    <!-- ============================================== -->
+
+    <p>The output of BPE training isn&rsquo;t a program &mdash; it&rsquo;s a <strong>list of merge rules</strong> in priority order:</p>
+
+    <table>
+      <thead>
+        <tr><th>Priority</th><th>Merge Rule</th><th>New Token</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td><code>l</code> + <code>o</code></td><td><code>lo</code></td></tr>
+        <tr><td>2</td><td><code>lo</code> + <code>w</code></td><td><code>low</code></td></tr>
+        <tr><td>3</td><td><code>e</code> + <code>s</code></td><td><code>es</code></td></tr>
+        <tr><td>4</td><td><code>es</code> + <code>t</code></td><td><code>est</code></td></tr>
+        <tr><td>5</td><td><code>low</code> + <code>_</code></td><td><code>low_</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>This table is stored alongside the model. When you want to tokenize new text, you apply these merges in order.</p>
+
+    <!-- ============================================== -->
+    <h2>Encoding New Text</h2>
+    <!-- ============================================== -->
+
+    <p>Let&rsquo;s tokenize the word <code>"lowest"</code> using our 5-rule merge table. This word was <em>not</em> in our training corpus.</p>
+
+    <div class="math-walkthrough">
+      <h4>Encoding &ldquo;lowest&rdquo; step by step</h4>
+
+      <p><strong>Start:</strong> Split into characters: <code>l o w e s t _</code></p>
+
+      <p><strong>Apply rule 1</strong> (<code>l</code> + <code>o</code> &rarr; <code>lo</code>):</p>
+      <p><code>lo w e s t _</code></p>
+
+      <p><strong>Apply rule 2</strong> (<code>lo</code> + <code>w</code> &rarr; <code>low</code>):</p>
+      <p><code>low e s t _</code></p>
+
+      <p><strong>Apply rule 3</strong> (<code>e</code> + <code>s</code> &rarr; <code>es</code>):</p>
+      <p><code>low es t _</code></p>
+
+      <p><strong>Apply rule 4</strong> (<code>es</code> + <code>t</code> &rarr; <code>est</code>):</p>
+      <p><code>low est _</code></p>
+
+      <p><strong>Apply rule 5</strong> (<code>low</code> + <code>_</code>): Can&rsquo;t apply &mdash; <code>low</code> and <code>_</code> aren&rsquo;t adjacent.</p>
+
+      <p><strong>Result:</strong> <code>[low, est, _]</code> &mdash; 3 tokens.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The power of subwords</h4>
+      <p>The tokenizer never saw &ldquo;lowest&rdquo; during training, but it handled it perfectly by combining <code>low</code> (a common word) with <code>est</code> (a common suffix). This is why subword tokenization is so powerful &mdash; it can encode <strong>any text</strong>, even words it has never seen, by composing known pieces.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Token IDs: The Final Translation</h2>
+    <!-- ============================================== -->
+
+    <p>After tokenization, each token is mapped to a number from the vocabulary table:</p>
+
+    <table>
+      <thead>
+        <tr><th>Token</th><th>ID</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>l</code></td><td>0</td></tr>
+        <tr><td><code>o</code></td><td>1</td></tr>
+        <tr><td><code>w</code></td><td>2</td></tr>
+        <tr><td><code>_</code></td><td>3</td></tr>
+        <tr><td><code>e</code></td><td>4</td></tr>
+        <tr><td><code>r</code></td><td>5</td></tr>
+        <tr><td><code>n</code></td><td>6</td></tr>
+        <tr><td><code>s</code></td><td>7</td></tr>
+        <tr><td><code>t</code></td><td>8</td></tr>
+        <tr><td><code>i</code></td><td>9</td></tr>
+        <tr><td><code>d</code></td><td>10</td></tr>
+        <tr><td><code>lo</code></td><td>11</td></tr>
+        <tr><td><code>low</code></td><td>12</td></tr>
+        <tr><td><code>es</code></td><td>13</td></tr>
+        <tr><td><code>est</code></td><td>14</td></tr>
+        <tr><td><code>low_</code></td><td>15</td></tr>
+      </tbody>
+    </table>
+
+    <p>So <code>"lowest"</code> &rarr; <code>[low, est, _]</code> &rarr; <code>[12, 14, 3]</code>. <strong>That&rsquo;s what the model sees.</strong> Not letters, not words &mdash; just numbers.</p>
+
+    <p>Real models work the same way, just with much larger vocabularies. When you type <code>"hello"</code> into ChatGPT, it might become token <code>[15339]</code>. The word <code>"indescribable"</code> might split into <code>[ind, esc, rib, able]</code> &rarr; <code>[521, 3978, 822, 481]</code>.</p>
+
+    <!-- ============================================== -->
+    <h2>Special Tokens: The Control Signals</h2>
+    <!-- ============================================== -->
+
+    <p>Beyond regular text tokens, every model uses special tokens that act as control signals:</p>
+
+    <table>
+      <thead>
+        <tr><th>Token</th><th>Name</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>&lt;BOS&gt;</code></td><td>Beginning of Sequence</td><td>Marks the start of a text. The model knows &ldquo;this is where the input begins.&rdquo;</td></tr>
+        <tr><td><code>&lt;EOS&gt;</code></td><td>End of Sequence</td><td>Marks the end. When the model generates this token, it stops.</td></tr>
+        <tr><td><code>&lt;PAD&gt;</code></td><td>Padding</td><td>Fills empty space when batching sequences of different lengths.</td></tr>
+        <tr><td><code>&lt;UNK&gt;</code></td><td>Unknown</td><td>Placeholder for tokens not in the vocabulary (rare with BPE).</td></tr>
+      </tbody>
+    </table>
+
+    <p>When you chat with Claude, your actual input might look like this internally:</p>
+
+    <pre><code>&lt;BOS&gt; [system prompt tokens] [user message tokens] &lt;EOS&gt;</code></pre>
+
+    <p>The model generates tokens until it produces <code>&lt;EOS&gt;</code>, which signals &ldquo;I&rsquo;m done talking.&rdquo;</p>
+
+    <!-- ============================================== -->
+    <h2>Why &ldquo;Strawberry&rdquo; Is Hard</h2>
+    <!-- ============================================== -->
+
+    <p>You may have heard that language models struggle to count the letters in &ldquo;strawberry.&rdquo; Now you can understand why.</p>
+
+    <p>A real tokenizer might split &ldquo;strawberry&rdquo; like this:</p>
+
+    <pre><code>"strawberry" &rarr; ["str", "aw", "berry"]</code></pre>
+
+    <p>The model sees <strong>3 tokens</strong>, not 10 letters. It has no direct access to the individual characters <code>s, t, r, a, w, b, e, r, r, y</code>. When you ask &ldquo;how many r&rsquo;s are in strawberry?&rdquo;, the model would need to:</p>
+
+    <ol>
+      <li>Know that token <code>"str"</code> contains the letters s, t, r</li>
+      <li>Know that <code>"aw"</code> contains a, w</li>
+      <li>Know that <code>"berry"</code> contains b, e, r, r, y</li>
+      <li>Count: 1 + 0 + 2 = 3 r&rsquo;s</li>
+    </ol>
+
+    <p>But the model was trained on tokens, not characters. It never explicitly learned the character composition of each token. It&rsquo;s like asking you to count the number of times the letter &ldquo;a&rdquo; appears in a paragraph &mdash; while only being allowed to look at it one word at a time, through frosted glass.</p>
+
+    <div class="warning-box">
+      <h4>The character blindness trap</h4>
+      <p>This isn&rsquo;t a bug in any particular model &mdash; it&rsquo;s a fundamental consequence of subword tokenization. <strong>Models reason about tokens, not characters.</strong> Tasks that require character-level awareness (letter counting, anagrams, rhyming) are inherently harder because the model has to reverse-engineer information that was discarded during tokenization.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Vocabulary Size: The Tradeoff</h2>
+    <!-- ============================================== -->
+
+    <p>How many tokens should a vocabulary have? It&rsquo;s a balancing act:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Vocab Size</th><th>Tokens per Text</th><th>Embedding Table</th><th>Who Uses This</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Small (~8K)</strong></td>
+            <td>More tokens (text is split finely)</td>
+            <td>Small (8K &times; embed_dim)</td>
+            <td>Early models</td>
+          </tr>
+          <tr>
+            <td><strong>Medium (~32K)</strong></td>
+            <td>Balanced</td>
+            <td>Moderate</td>
+            <td>GPT-2, many open-source models</td>
+          </tr>
+          <tr>
+            <td><strong>Large (~100K+)</strong></td>
+            <td>Fewer tokens (common words are single tokens)</td>
+            <td>Large (100K &times; embed_dim)</td>
+            <td>GPT-4, Claude</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Why does this matter? Two reasons:</p>
+
+    <ol>
+      <li><strong>Speed:</strong> Fewer tokens = fewer forward passes during generation. If &ldquo;artificial intelligence&rdquo; is 1 token instead of 4, generation is 4&times; faster for that phrase.</li>
+      <li><strong>Context window:</strong> A 128K-token context window fits more actual text if the vocabulary is large (each token carries more meaning).</li>
+    </ol>
+
+    <p>But a larger vocabulary means a bigger embedding table. With 100K tokens and 4096-dimensional embeddings, that&rsquo;s 100,000 &times; 4,096 = <strong>409 million parameters</strong> just for the embedding layer.</p>
+
+    <div class="checkpoint-box">
+      <h4>Checkpoint</h4>
+      <p>A model with a 50K vocabulary and 2048-dimensional embeddings has how many parameters in its embedding table?</p>
+      <p><em>Answer: 50,000 &times; 2,048 = 102,400,000 (about 102 million parameters).</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Multilingual Tax</h2>
+    <!-- ============================================== -->
+
+    <p>BPE vocabularies are built from training data. If most of that data is English, English text gets very efficient tokenization &mdash; common words like &ldquo;the,&rdquo; &ldquo;and,&rdquo; and &ldquo;is&rdquo; are single tokens.</p>
+
+    <p>But what about Japanese, Korean, or Arabic? These languages had fewer examples in the training data, so their characters got merged less. The result:</p>
+
+    <div class="math-walkthrough">
+      <h4>Tokenization efficiency by language</h4>
+      <p>The same meaning expressed in different languages:</p>
+      <table>
+        <thead>
+          <tr><th>Language</th><th>Text</th><th>Approximate Tokens</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>English</td><td>&ldquo;Artificial intelligence is changing the world&rdquo;</td><td>~6 tokens</td></tr>
+          <tr><td>Spanish</td><td>&ldquo;La inteligencia artificial est&aacute; cambiando el mundo&rdquo;</td><td>~9 tokens</td></tr>
+          <tr><td>Japanese</td><td>&ldquo;&#20154;&#24037;&#30693;&#33021;&#12399;&#19990;&#30028;&#12434;&#22793;&#12360;&#12390;&#12356;&#12427;&rdquo;</td><td>~15 tokens</td></tr>
+          <tr><td>Korean</td><td>&ldquo;&#51064;&#44277;&#51648;&#45733;&#51060; &#49464;&#49345;&#51012; &#48148;&#44984;&#44256; &#51080;&#45796;&rdquo;</td><td>~14 tokens</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What this means in practice</h4>
+      <p>If Japanese takes 2.5&times; more tokens than English for the same meaning, then a Japanese user&rsquo;s 128K context window effectively holds only about 51K tokens worth of meaning compared to English. It&rsquo;s also 2.5&times; slower to generate and 2.5&times; more expensive per API call (since APIs charge per token). This is the <strong>multilingual tax</strong> &mdash; and it&rsquo;s why newer models invest heavily in multilingual training data to improve tokenization efficiency for non-English languages.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Real-World Tokenizers</h2>
+    <!-- ============================================== -->
+
+    <p>Modern models use variations of BPE, each with slight twists:</p>
+
+    <table>
+      <thead>
+        <tr><th>Tokenizer</th><th>Used By</th><th>Vocab Size</th><th>Key Feature</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GPT-2 BPE</td><td>GPT-2</td><td>50,257</td><td>The classic. Byte-level base (no <code>&lt;UNK&gt;</code> needed)</td></tr>
+        <tr><td>tiktoken (cl100k)</td><td>GPT-4</td><td>100,256</td><td>Larger vocab, better multilingual coverage</td></tr>
+        <tr><td>SentencePiece</td><td>LLaMA, T5</td><td>32,000</td><td>Language-agnostic, works on raw text</td></tr>
+        <tr><td>Claude tokenizer</td><td>Claude</td><td>~100K</td><td>Optimized for code and multilingual text</td></tr>
+      </tbody>
+    </table>
+
+    <p>All of them share the same core idea: learn which byte/character sequences appear most often, merge them, and build a vocabulary from the bottom up.</p>
+
+    <div class="tip-box">
+      <strong>Byte-level BPE:</strong> Modern tokenizers start with 256 bytes (not characters) as the base vocabulary. This means they can handle <em>any</em> input &mdash; including emojis, code, and binary data &mdash; without ever producing an <code>&lt;UNK&gt;</code> token. Every possible byte sequence can be represented.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The BPE Shorthand Analogy</h2>
+    <!-- ============================================== -->
+
+    <p>Imagine you&rsquo;re a medieval scribe copying books by hand. Writing &ldquo;artificial intelligence&rdquo; a thousand times is exhausting, so you invent the shorthand &ldquo;AI.&rdquo; Then you notice you write &ldquo;the&rdquo; constantly, so you create a squiggle for it. Over time, you develop hundreds of abbreviations &mdash; the most common phrases get the shortest symbols.</p>
+
+    <p>BPE does exactly this, but automatically. It looks at billions of words and creates shorthand for the most common patterns. The difference is that a BPE tokenizer does this in <strong>minutes</strong> instead of a scribe&rsquo;s lifetime, and its &ldquo;shorthand symbols&rdquo; become the vocabulary the model uses forever after.</p>
+
+    <!-- ============================================== -->
+    <h2>Tokenization Gotchas</h2>
+    <!-- ============================================== -->
+
+    <p>Understanding tokenization helps explain several quirks of language models:</p>
+
+    <div class="highlight-box">
+      <h4>Why leading spaces matter</h4>
+      <p><code>" hello"</code> (with a space) and <code>"hello"</code> (without) may be <em>different tokens</em>. Many tokenizers encode the space as part of the token. This is why prompt formatting matters &mdash; invisible whitespace differences can change the token sequence.</p>
+    </div>
+
+    <div class="highlight-box">
+      <h4>Why code is expensive</h4>
+      <p>Code has lots of unusual character patterns: <code>===</code>, <code>&lt;/div&gt;</code>, <code>__init__</code>. These may not merge well, producing many small tokens. A 100-line Python function might use more tokens than a 100-line English paragraph.</p>
+    </div>
+
+    <div class="highlight-box">
+      <h4>Why token limits feel inconsistent</h4>
+      <p>A &ldquo;4,096-token limit&rdquo; doesn&rsquo;t mean 4,096 words. Common English averages about <strong>1.3 tokens per word</strong>, but technical text, code, or non-English languages can be 2&ndash;4 tokens per word. That 4K limit might be 3,000 English words or 1,200 Japanese words.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Full Pipeline: From Text to Numbers</h2>
+    <!-- ============================================== -->
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Raw Text</h4>
+        <p>&ldquo;The cat sat&rdquo;</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Tokenize</h4>
+        <p>[The, _cat, _sat]</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. Token IDs</h4>
+        <p>[464, 3797, 3332]</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Embeddings</h4>
+        <p>[0.2, -0.1, ...] per token</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>5. Neural Network</h4>
+        <p>Transformer layers</p>
+      </div>
+    </div>
+
+    <p>Tokenization is step 2 &mdash; the bridge between human-readable text and the numbers that the neural network processes. Everything after this point is pure math (which we covered in Chapters 2&ndash;4, and will extend to transformers in Chapters 6&ndash;7).</p>
+
+    <!-- ============================================== -->
+    <h2>Exercise: BPE Encoding by Hand</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your turn: encode &ldquo;newer&rdquo;</h4>
+      <p>Using our 5-rule merge table from earlier, tokenize the word <code>"newer"</code>. The word ends with <code>_</code>.</p>
+
+      <p><strong>Merge rules:</strong></p>
+      <ol>
+        <li><code>l</code> + <code>o</code> &rarr; <code>lo</code></li>
+        <li><code>lo</code> + <code>w</code> &rarr; <code>low</code></li>
+        <li><code>e</code> + <code>s</code> &rarr; <code>es</code></li>
+        <li><code>es</code> + <code>t</code> &rarr; <code>est</code></li>
+        <li><code>low</code> + <code>_</code> &rarr; <code>low_</code></li>
+      </ol>
+
+      <p><strong>Steps:</strong></p>
+      <ol>
+        <li>Start with characters: <code>n e w e r _</code></li>
+        <li>Check rule 1 (<code>l</code> + <code>o</code>): no <code>l o</code> pair &rarr; skip</li>
+        <li>Check rule 2: skip (no <code>lo</code>)</li>
+        <li>Check rule 3 (<code>e</code> + <code>s</code>): no <code>e s</code> pair &rarr; skip</li>
+        <li>Check rules 4 and 5: skip</li>
+        <li><strong>Result:</strong> <code>[n, e, w, e, r, _]</code> &mdash; 6 tokens. None of our merge rules applied!</li>
+      </ol>
+
+      <p>This shows a key insight: a word that&rsquo;s rare in the training data stays split into small pieces. <code>"newer"</code> didn&rsquo;t appear in our corpus, and its character pairs didn&rsquo;t match any learned merges. With a larger vocabulary (more merges), <code>er</code> would likely become a token, reducing this to <code>[n, e, w, er, _]</code> &mdash; 5 tokens.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Bonus exercise: what would a 6th merge do?</h4>
+      <p>Look at the state after merge 5. What pair is most likely to be merged next, and how would it change the tokenization of <code>"newest"</code>?</p>
+
+      <p><em>Hint: After merge 5, the remaining top pairs include <code>est _</code> (count: 3 + 2 = 5). If merged, &ldquo;newest&rdquo; would go from <code>[n, e, w, est, _]</code> to <code>[n, e, w, est_]</code> &mdash; just 4 tokens.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Key Takeaways</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <ul>
+        <li><strong>Tokenization</strong> converts text to numbers. The model never sees raw text &mdash; only token IDs.</li>
+        <li><strong>BPE</strong> builds a vocabulary by repeatedly merging the most frequent character pairs. Count &rarr; merge &rarr; repeat.</li>
+        <li><strong>Subword tokens</strong> are the sweet spot: common words stay whole, rare words split into known pieces.</li>
+        <li><strong>The merge table</strong> is the tokenizer&rsquo;s recipe &mdash; apply merges in order to encode any text.</li>
+        <li><strong>Character blindness:</strong> Models reason about tokens, not letters. That&rsquo;s why counting letters in &ldquo;strawberry&rdquo; is surprisingly hard.</li>
+        <li><strong>Vocabulary size</strong> is a tradeoff between efficiency (fewer tokens) and embedding table size.</li>
+        <li><strong>Multilingual tax:</strong> Languages underrepresented in training data get less efficient tokenization.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>Now you know how text becomes tokens, and how tokens become numbers. In Chapters 2&ndash;4, you learned how a neural network processes numbers. But the networks we built were simple &mdash; they didn&rsquo;t know which tokens should &ldquo;pay attention to&rdquo; which other tokens.</p>
+
+    <p>In <a href="06-attention-mechanism.html">Chapter 6: Attention Is All You Need</a>, we&rsquo;ll tackle the mechanism that makes transformers so powerful. You&rsquo;ll compute queries, keys, and values with real numbers, and see exactly how a model decides that &ldquo;it&rdquo; in &ldquo;the cat sat on the mat because it was tired&rdquo; should pay attention to &ldquo;cat.&rdquo;</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="04-training-step-by-step.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Training Step by Step</span>
+    </a>
+    <a href="06-attention-mechanism.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Attention Is All You Need</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

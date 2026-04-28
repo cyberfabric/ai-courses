@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Refactoring Toward DDD with AI — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="11-ubiquitous-language-skill.html">← Prev</a>
+      <a href="maps/12-refactoring-toward-ddd-with-ai-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Refactoring Toward DDD with AI</h1>
+    <p class="subtitle">An end-to-end, six-step AI-assisted refactor of a legacy Android codebase &mdash; with the human still owning the strategic decisions</p>
+  </header>
+
+  <main>
+
+    <p>You have the DDD vocabulary, the Android module shape from chapter 10, and the <code>/ubiquitous-language</code> skill from chapter 11. Now we put them together. This chapter walks through a realistic six-step AI-assisted refactor of a legacy Android codebase toward a DDD-shaped architecture &mdash; the kind of codebase you almost certainly already have, with anemic data classes, god-ViewModels, and a <code>:common</code> module nobody can defend.</p>
+
+    <p>The point isn't to demonstrate AI virtuosity; it's to show where AI is genuinely the right tool for the job and where it absolutely is not. DDD's strategic decisions &mdash; what's a bounded context, what's the core domain, where the seams should go &mdash; are still yours. AI shines on the high-throughput, low-creativity work that fills the rest of the refactor: codebase-wide renames, extraction of value objects, generation of repository interfaces, scaffolding tests. Use it for what it's good at; keep your hands on the wheel for the rest.</p>
+
+    <h2>The starting codebase</h2>
+
+    <p>Picture a typical Android app you've inherited. Five or six years old. About 60K lines of Kotlin, sprinkled with Java leftovers. One <code>:app</code> module, one <code>:common</code>, one <code>:network</code>, and a handful of <code>:feature-*</code> modules with overlapping concerns. The model layer is anemic; logic is scattered across ViewModels, "use case" classes, and helpers; primitives like <code>String</code> and <code>Long</code> are everywhere.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// Where we're starting &mdash; representative pain
+data class User(
+  val id: Long,
+  val email: String,
+  val name: String,
+  val phone: String?,
+  val tier: String,             // "free" | "pro" | "enterprise" &mdash; stringly typed
+  val isActive: Boolean,
+)
+
+class UserManager @Inject constructor(
+  private val api: UserApi,
+  private val db: AppDatabase,
+  private val analytics: Analytics,
+) {
+  // 600 lines. Validates emails. Caches users.
+  // Decides eligibility. Writes events. Mocks
+  // its own dependencies in tests with Mockito.
+}
+
+class CheckoutViewModel : ViewModel() {
+  // 800 lines. Computes totals. Validates the
+  // address. Decides if the user can submit.
+  // Talks directly to UserApi, OrderApi, Room,
+  // analytics, feature-flag service, and a
+  // singleton SessionHolder.
+}</div>
+    </div>
+
+    <p>None of this is unique to your app. It is the universal Android starting point after a few years of growth. The good news: every problem in that snippet is fixable with the patterns from chapters 7&ndash;10, and a meaningful chunk of the mechanical work can be delegated to AI.</p>
+
+    <h2>The six-step refactor (and what AI does in each)</h2>
+
+    <p>The order matters. Steps 1&ndash;3 are exploratory and human-led; steps 4&ndash;6 are mechanical and AI-led. Doing them out of order &mdash; especially mechanizing renames before you've named the domain &mdash; is the most common failure mode for AI-assisted refactors.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Context map</strong><br>
+        Have Claude scan the repo and produce a candidate <code>CONTEXT_MAP.md</code>. Human refines.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>2. Ubiquitous language</strong><br>
+        Run <code>/ubiquitous-language</code> per context. Human curates.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>3. Aggregate boundaries</strong><br>
+        Claude proposes; human decides which invariants matter and where the consistency boundaries go.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>4. Value objects</strong><br>
+        Codebase-wide renames: <code>String email</code> → <code>EmailAddress</code>. Claude does the grunt work.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>5. Pull logic into <code>:domain</code></strong><br>
+        Move business rules out of ViewModels and managers into aggregates and domain services.
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <strong>6. Repositories &amp; <code>:data</code></strong><br>
+        Extract repository interfaces; move Room/Retrofit code into <code>:data</code> module implementations.
+      </div>
+    </div>
+
+    <h2>Step 1: Generate a context map</h2>
+
+    <p>Open Claude Code at the repo root. Ask for a candidate context map based on the build graph and the domain types it can find. Claude is good at this because it can read all the files in parallel; you're good at this because you know which boundaries are organizational truth versus accidental.</p>
+
+    <div class="android-box">
+      <div class="android-code">// Prompt
+&gt; Read settings.gradle.kts and every :feature-* / :*-data module. List
+&gt; the candidate bounded contexts based on (a) module names, (b) the
+&gt; aggregates each module owns, and (c) the domain events crossing
+&gt; module edges. For each candidate context, name 3-5 core concepts.
+&gt; Output as CONTEXT_MAP.md draft. Do not invent contexts; if a module
+&gt; is unclear, mark it "unclear" and explain.
+
+// Output (excerpt)
+## Candidate context: Onboarding
+- Aggregates: SignupSession, EmailVerification
+- Crosses to: Identity (passes a verified UserId)
+
+## Candidate context: Identity
+- Aggregates: User, Profile
+- Cross-cutting: every other context reads UserId
+
+## Candidate context: Checkout
+- Aggregates: Cart, Order, Payment (?)
+- Cross-cutting: emits OrderPlaced
+
+## Unclear: :common
+Contains UserManager, AnalyticsHelper, NetworkUtils, DateFormatter,
+AvatarLoader, SessionHolder. No coherent context.</div>
+    </div>
+
+    <p>Read the output. Argue with it. Move <code>SessionHolder</code> from <code>:common</code> into Identity; argue whether <code>Payment</code> is its own context or part of Checkout; flag the modules that have no business being in <code>:common</code>. The human-in-the-loop step turns Claude's structural read into a real strategic map.</p>
+
+    <h2>Step 2: Generate the glossary</h2>
+
+    <p>Now invoke <code>/ubiquitous-language</code> from chapter 11, once per bounded context. Run it on Identity first, since that's the context every other one touches. The output is a glossary with code anchors; the curation pass is short because Claude has already done the bulk reading.</p>
+
+    <div class="tip-box">
+      <strong>Curate before you commit.</strong> Read the glossary end-to-end before merging. Two or three terms will read like Wikipedia ("a User is a person who uses the application") &mdash; tighten them to your team's actual usage. One or two terms will be wrong (Claude included a DTO; Claude missed a value object). Fix those by hand. Commit the result. The first version doesn't have to be perfect; it has to be <em>real</em>.
+    </div>
+
+    <h2>Step 3: Identify aggregates</h2>
+
+    <p>This is the most strategic step in the whole refactor. AI can <em>propose</em> aggregates by looking for invariants in the code, but the final boundary is a human call. Get Claude's read; argue with it; commit your decisions to a short doc per context.</p>
+
+    <div class="android-box">
+      <div class="android-code">// Prompt
+&gt; In the Checkout context, propose aggregate boundaries. For each
+&gt; candidate aggregate:
+&gt; - name the root entity
+&gt; - list invariants currently enforced anywhere in the code (search
+&gt;   ViewModels, use cases, "Manager" classes, validators)
+&gt; - estimate aggregate size (entities + value objects)
+&gt; - flag invariants currently NOT enforced anywhere &mdash; those are bugs
+&gt;
+&gt; Do not propose aggregates that span more than one current Gradle
+&gt; module. If two modules co-own a candidate aggregate, list the split
+&gt; and recommend which module the aggregate should live in.
+
+// Output (excerpt)
+### Candidate aggregate: Cart
+- Root: Cart
+- Invariants enforced (in CheckoutViewModel.kt:213-260):
+  - Cart cannot have negative quantities
+  - Cart cannot exceed 50 line items
+  - Coupon must match cart subtotal threshold
+- Invariants NOT enforced anywhere:
+  - Cart for inactive users should fail to add items (only validated
+    in :feature-checkout/AddItemUseCase, missed in :api/CartController)
+
+### Candidate aggregate: Order
+- Root: Order
+- Invariants enforced: payment must be authorized before shipment
+- Size: Order + List&lt;LineItem&gt; + Address (~3 entities + 2 VOs)
+- Note: LineItem is a VALUE OBJECT (chapter 8); not its own aggregate</div>
+    </div>
+
+    <p>Notice the by-product: a list of invariants that aren't enforced anywhere. Those are latent bugs. The refactor is also a free audit; treat each unenforced invariant as a ticket and fix it as you move logic into the aggregate.</p>
+
+    <h2>Step 4: Extract value objects with codebase-wide renames</h2>
+
+    <p>This is where AI earns its keep. Replacing <code>String email</code> with <code>EmailAddress</code> across 60K lines is a soul-crushing manual edit; for Claude it's an afternoon. The trick is doing it safely, one value object at a time, with the test suite as your safety net.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain:identity/EmailAddress.kt &mdash; the new value object
+@JvmInline
+value class EmailAddress private constructor(val value: String) {
+  companion object {
+    private val regex = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+    fun of(raw: String): Result&lt;EmailAddress&gt; =
+      if (regex.matches(raw)) Result.success(EmailAddress(raw))
+      else Result.failure(IllegalArgumentException("invalid email: $raw"))
+  }
+}
+
+// What you ask Claude to do, one rename at a time:
+&gt; Replace every `email: String` parameter and field with
+&gt; `email: EmailAddress` across the repo. For each call site that
+&gt; passes a raw String, wrap it with EmailAddress.of(it).getOrThrow()
+&gt; AT THE BOUNDARY ONLY (Retrofit DTO mappers, Room mappers, user input).
+&gt; Do not wrap inside :domain; types should already be EmailAddress
+&gt; once the boundary mappers are updated. Run :domain tests after
+&gt; each module. Stop and ask if any test fails or if you encounter
+&gt; ambiguity (e.g., a String field named "email" that holds a search
+&gt; query, not a real email).</div>
+    </div>
+
+    <p>The discipline that matters: <strong>"AT THE BOUNDARY ONLY."</strong> If you let Claude wrap raw strings inside <code>:domain</code>, you've just moved the problem. Wrapping happens in mappers (chapter 4 ACL pattern), and from that point inward everything is typed. Same recipe for <code>UserId</code>, <code>Money</code>, <code>OrderId</code>, <code>Iban</code>, and any other primitive-disguised-as-domain-type.</p>
+
+    <div class="warning-box">
+      <strong>The "rename without test run" disaster.</strong> The single biggest way this step goes wrong is letting Claude rename across the whole repo in one PR with no intermediate verification. The compiler catches type errors but doesn't catch <em>semantic</em> mistakes &mdash; e.g., a <code>String email</code> field that actually holds a search query. Force Claude to run tests after each module-scoped rename and stop on the first failure. The cost of an extra PR is nothing; the cost of a silent semantic bug shipping is enormous.
+    </div>
+
+    <h2>Step 5: Pull logic out of ViewModels and managers</h2>
+
+    <p>Now you have value objects flowing inside <code>:domain</code> and crisp aggregates with named invariants. Time to move business rules out of <code>UserManager</code>, <code>CheckoutViewModel</code>, and the rest of the kitchen-sink classes from step 1's snapshot. The mechanic Claude is best at: identify a method, classify it (aggregate behavior vs domain service vs application service vs UI concern), and propose where it should move.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Before &mdash; logic in ViewModel</div>
+        <div class="prompt-text">class CheckoutViewModel {
+  fun submit() {
+    val cart = cartRepo.get(cartId)
+    if (cart.lines.isEmpty()) {
+      _state.value = Error("empty cart")
+      return
+    }
+    if (!user.isActive) {
+      _state.value = Error("inactive user")
+      return
+    }
+    val total = cart.subtotal + shippingFee
+    if (total &gt; user.creditLimit) {
+      _state.value = Error("over limit")
+      return
+    }
+    cartRepo.markSubmitted(cartId)
+    analytics.log("submit", total)
+  }
+}</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">After &mdash; rules in domain</div>
+        <div class="prompt-text">// :domain
+class Cart {
+  fun submit(
+    user: User,
+    fee: Money,
+    clock: Clock,
+  ): Result&lt;OrderPlaced&gt; { /* invariants */ }
+}
+
+// :feature-checkout
+class CheckoutViewModel {
+  fun submit() = viewModelScope.launch {
+    placeOrder(cartId).fold(
+      onSuccess = { /* state via flow */ },
+      onFailure = { e -&gt;
+        _state.update { Error(e.message) }
+      },
+    )
+  }
+}</div>
+      </div>
+    </div>
+
+    <p>Notice what disappeared from the ViewModel: every <code>if</code> that encoded a business rule. The rules now live on the <code>Cart</code> aggregate where they can be tested against a single object instead of mocked across five dependencies. The ViewModel's job shrank to "call use case, map result to UI state" &mdash; exactly what chapter 10 said it should be.</p>
+
+    <h2>Step 6: Introduce repository interfaces and split <code>:data</code></h2>
+
+    <p>By this point your <code>:domain</code> module has aggregates, value objects, and domain services. The last structural move is to introduce repository <em>interfaces</em> in <code>:domain</code>, move every Room and Retrofit type to a new <code>:data</code> module that implements them, and wire them up with Hilt in <code>:app</code>. Claude can scaffold this almost entirely.</p>
+
+    <div class="android-box">
+      <div class="android-code">// Prompt
+&gt; In :feature-checkout, find every direct call to OrderApi (Retrofit)
+&gt; and OrderDao (Room). For each:
+&gt; 1. Define an OrderRepository interface in :domain:checkout if it
+&gt;    doesn't already exist, with collection-shaped methods.
+&gt; 2. Move the Retrofit/Room call into :data:checkout, behind a class
+&gt;    RoomRetrofitOrderRepository : OrderRepository.
+&gt; 3. Replace the call site to use the interface.
+&gt; 4. Add a @Binds in DataModule.kt.
+&gt; 5. Add a FakeOrderRepository in :domain:checkout/testFixtures.
+&gt; Run the test suite after each call site is migrated. Stop on red.</div>
+    </div>
+
+    <p>One PR per repository, one repository per aggregate, with the test suite as the canary. By the end of the step, <code>:feature-*</code> modules import only from <code>:domain</code>; the Hilt graph wires <code>:data</code> implementations into <code>:domain</code> interfaces; and the legacy <code>:common</code> module has shrunk by 80&ndash;90%. The remainder of <code>:common</code> is genuinely cross-cutting infrastructure (logging, theming) that you'll redistribute into <code>:platform:*</code> modules in a small follow-up PR.</p>
+
+    <h2>Verifying the refactor</h2>
+
+    <p>Tests are the safety net. Two layers matter:</p>
+
+    <div class="checklist">
+      <li><strong>Existing tests</strong> &mdash; the <em>signal that nothing broke.</em> If your test suite goes red after a step, stop, diff, and revert if you can't pinpoint the cause within 15 minutes.</li>
+      <li><strong>New tests, generated by Claude</strong> &mdash; the <em>signal that new behavior is captured.</em> For each aggregate method moved into <code>:domain</code>, ask Claude to generate a test class against the public method using the test fakes (not mocks) you established in chapter 9.</li>
+    </div>
+
+    <div class="tip-box">
+      <strong>Run tests <em>between</em> every Claude action, not at the end of the day.</strong> Granular test runs convert silent disasters into loud, easy-to-fix small failures. If your CI is slow, run only the affected modules locally; <code>./gradlew :domain:checkout:test :feature:checkout:test</code> is fast even on big repos.
+    </div>
+
+    <h2>Limits of AI-driven DDD</h2>
+
+    <p>Three things AI is genuinely bad at, and where you have to stay in the seat:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">🧭</span>
+        <div class="stat-label"><strong>Strategic boundary calls.</strong> What is and isn't a bounded context. What is core vs supporting vs generic. AI will helpfully suggest answers; the suggestions are often plausible, sometimes wrong.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🤝</span>
+        <div class="stat-label"><strong>Talking to domain experts.</strong> The PM and the support team know things the codebase doesn't. AI can't sit in those meetings; it can only encode what you bring back.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">⚖️</span>
+        <div class="stat-label"><strong>Trade-off calls.</strong> "Should this be a separate aggregate or a value object?" depends on team size, deployment cadence, and domain stability. Those are judgment calls only humans have the context for.</div>
+      </div>
+    </div>
+
+    <p>Conversely: AI is excellent at codebase-wide consistency, mechanical refactors, generating boilerplate, drafting tests, and producing documentation that's anchored on code. The split of labor is clear &mdash; you decide what <em>should</em> happen; Claude does the high-volume work of making it happen.</p>
+
+    <h2>Workflow tactics that keep the refactor safe</h2>
+
+    <div class="checklist">
+      <li><strong>One aggregate per PR.</strong> A 50-file PR that touches three contexts is a horror to review. A 6-file PR that extracts <code>EmailAddress</code> across the Identity context is reviewable in 10 minutes.</li>
+      <li><strong>Never let Claude touch two contexts in one PR.</strong> Mixing contexts hides cross-context coupling that a single-context PR would surface as a missing import.</li>
+      <li><strong>Diff every change.</strong> Read the diff &mdash; not Claude's summary, not the test result. The diff is the truth; everything else is interpretation.</li>
+      <li><strong>Commit small, often.</strong> Each commit is a checkpoint Claude can roll back to. <code>git reset --hard HEAD~1</code> is your friend on bad runs.</li>
+      <li><strong>Use the glossary as a guard.</strong> If Claude proposes a class named <code>UserManager</code>, your <code>UBIQUITOUS_LANGUAGE.md</code> already says "Do not say: Manager" &mdash; reject the suggestion.</li>
+      <li><strong>Pause and reflect every five PRs.</strong> Are you converging on the target architecture or making lateral moves? If lateral, stop the AI and re-read your context map before continuing.</li>
+    </div>
+
+    <h2>The Identity context: a real before/after sketch</h2>
+
+    <div class="context-box">
+      Inside the <span class="context-name">Identity</span> context, the refactor moved roughly: <code>UserManager</code> (600 lines, 11 dependencies) became <code>User</code> aggregate (140 lines), <code>UserRepository</code> interface (4 methods), <code>RoomRetrofitUserRepository</code> implementation (90 lines), <code>EmailVerifier</code> domain service (25 lines), and <code>SignupUseCase</code> + <code>SignInUseCase</code> application services (35 lines each). Net line count: similar. Structure: night and day. Tests: 3&times; the count, all using fakes, all running in milliseconds.
+    </div>
+
+    <h2>Common pitfalls</h2>
+
+    <h3>Blindly applying patterns</h3>
+
+    <p>"Every entity needs a repository." No. Reference data, in-memory wizards, and small finite sets don't need the ceremony (chapter 9). Don't let Claude apply the pattern uniformly &mdash; review every introduction and ask "what is this hiding?" If the answer is "nothing complex," delete the abstraction.</p>
+
+    <h3>Refactoring without a test safety net</h3>
+
+    <p>If your test coverage is thin, the very first task isn't refactoring &mdash; it's writing characterization tests against the current behavior. Pin the behavior down before you change anything, then refactor under the safety net. Claude can scaffold characterization tests too; that's a perfectly valid first PR.</p>
+
+    <h3>Ignoring legacy constraints</h3>
+
+    <p>Sometimes a piece of code is shaped strangely because of a constraint you don't know about &mdash; an API that only accepts certain payloads, a deprecated SDK that breaks under coroutines, a data model the backend owns. Before refactoring, ask Claude to <em>summarize</em> the strange code in plain English. If your summary makes no sense, find the human who knows the constraint before changing anything.</p>
+
+    <h2>Exercise: refactor one feature this week</h2>
+
+    <div class="exercise-box">
+      <p><strong>One feature. One week. Six PRs.</strong></p>
+      <ol>
+        <li><strong>Day 1 &mdash; Map.</strong> Pick one feature in your app (one screen, one flow). Run step 1 (context map prompt) scoped to that feature's modules. Commit the resulting <code>CONTEXT_MAP.md</code> draft.</li>
+        <li><strong>Day 2 &mdash; Glossary.</strong> Run <code>/ubiquitous-language</code> on the feature's context. Curate. Commit.</li>
+        <li><strong>Day 3 &mdash; Aggregates.</strong> Run step 3 (aggregate proposal). Read it carefully. Decide the boundary; write a 5-line note in the context's README.</li>
+        <li><strong>Day 4 &mdash; Value objects.</strong> Pick the most-used primitive in this feature (probably an ID or a money type). Run step 4 to extract it. One PR.</li>
+        <li><strong>Day 5 &mdash; Logic move.</strong> Pick the largest method in this feature's ViewModel. Have Claude classify it and propose where it should live. Move it. One PR.</li>
+        <li><strong>Day 6 &mdash; Repository.</strong> Extract the repository interface for the feature's main aggregate. Move Room/Retrofit calls behind it. One PR.</li>
+        <li><strong>Day 7 &mdash; Reflect.</strong> Read the six diffs back-to-back. What got better? What's still ugly? Write a one-page retro and share it with the team. The retro is what makes the next refactor easier.</li>
+      </ol>
+      <p>You will not finish the whole codebase in a week. That's not the point. The point is to walk through the entire workflow once, end-to-end, on one feature &mdash; so the next feature is easier, and the third is muscle memory.</p>
+    </div>
+
+    <h2>Closing thoughts: DDD + AI is more than the sum</h2>
+
+    <div class="highlight-box">
+      <strong>DDD gives you the vocabulary; AI gives you the throughput.</strong> Without DDD, AI helpfully renames things in three different vocabularies and adds another layer of god-classes. Without AI, DDD takes a quarter to introduce because every refactor is a manual edit across thousands of files. Together, the discipline of DDD constrains what AI does and the speed of AI makes the discipline applicable to a real codebase on a real schedule. The team that combines both ships an architecture that is small, named, tested, and consistent &mdash; in months, not years.
+    </div>
+
+    <p>Two practices to take with you out of this chapter, if nothing else:</p>
+
+    <p><strong>One:</strong> AI is a power tool, not a colleague. It does the high-throughput work and surfaces options; the strategic calls are still yours. The split of labor isn't optional; mistaking AI suggestions for AI decisions is the most expensive way to use it.</p>
+
+    <p><strong>Two:</strong> The artifacts persist. The <code>UBIQUITOUS_LANGUAGE.md</code>, the <code>CONTEXT_MAP.md</code>, the slash commands in <code>.claude/commands/</code> &mdash; these outlive any individual refactor session. The first time you run them you pay for them; for the rest of the project's life they pay you back, every time anyone (human or AI) opens the repo and asks "what does this word mean here?"</p>
+
+    <h2>What's next: this is the end of the course</h2>
+
+    <p>You started chapter 1 staring at anemic data classes and god-ViewModels, possibly skeptical that a 1990s book about banking software had anything to teach you about Compose and coroutines. You've now got the strategic vocabulary (bounded contexts, subdomains, context maps), the tactical patterns (entities, value objects, aggregates, repositories, domain services), the Android-specific mapping onto Gradle modules, and a pair of AI skills that mechanize the parts of DDD that used to make it impractical. Take one feature, walk it through the six-step refactor, and the rest follows. Welcome to the part of your career where the codebase actually says what it means.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="11-ubiquitous-language-skill.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">The /ubiquitous-language Skill</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">📚 Done!</span>
+        <span class="nav-chapter">Back to Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

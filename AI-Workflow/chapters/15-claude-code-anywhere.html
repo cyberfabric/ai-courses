@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 15: Claude Code on the Web and Mobile | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="14-subagents.html">&larr; Prev</a>
+      <a href="maps/15-claude-code-anywhere-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 15</span>
+    <h1>Claude Code on the Web and Mobile</h1>
+    <p class="subtitle">Your automations don&rsquo;t have to live on the laptop you&rsquo;re typing on &mdash; sandboxed cloud sessions, mobile dashboards, and surfaces that survive a lid close.</p>
+  </header>
+
+  <main>
+
+    <h2>The Surface Was the Limitation</h2>
+
+    <p>Every chapter so far has quietly assumed the same setup: you, sitting at a laptop, running <code>claude</code> in a terminal. That&rsquo;s the canonical Claude Code surface, and it&rsquo;s great. But it&rsquo;s also the bottleneck for a lot of automation patterns we covered: the weekly maintenance agent (Ch 11) only runs while your machine is awake; the build-failure diagnoser (Ch 7) needs CI infrastructure separate from Claude itself; the morning-digest skill (Ch 9) is useless on the train when your laptop is closed.</p>
+
+    <p>Claude Code now runs in three places, and they&rsquo;re designed to interoperate. This chapter is about <em>where</em> your automations run &mdash; and how that choice changes the design space.</p>
+
+    <h2>The Three Surfaces</h2>
+
+    <div class="tool-card">
+      <div class="tool-icon">💻</div>
+      <div class="tool-info">
+        <div class="tool-name">Terminal (the original)</div>
+        <div class="tool-desc">The <code>claude</code> CLI on your machine. Full filesystem access. Best for active development, hooks, and anything that needs to read or modify files outside the repo. Subagents, skills, and plugins all started here.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🌐</div>
+      <div class="tool-info">
+        <div class="tool-name">Web &mdash; claude.ai/code</div>
+        <div class="tool-desc">Anthropic-managed sandboxed cloud. Each session runs in a fresh VM with your repo cloned, common toolchains pre-installed (Python, Node, Java, Go, Rust, Ruby, PHP, C++, Docker, Postgres, Redis), and persistent state across browser closes. In research preview for Pro, Max, Team, and Enterprise users.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">📱</div>
+      <div class="tool-info">
+        <div class="tool-name">Mobile (Anthropic app)</div>
+        <div class="tool-desc">Monitor cloud sessions, kick off new ones, and approve PR fixes from your phone. Pairs with Remote Control to monitor a local session running on your machine. Closing your laptop doesn&rsquo;t kill anything &mdash; you just check it from the bus.</div>
+      </div>
+    </div>
+
+    <p>The surfaces aren&rsquo;t silos. Sessions move between them with two distinct primitives that are easy to confuse.</p>
+
+    <h2><code>--remote</code> vs. <code>--teleport</code> vs. Remote Control</h2>
+
+    <p>These three names sound interchangeable. They aren&rsquo;t. Read this table once and you&rsquo;ll save yourself an hour of confusion.</p>
+
+    <table>
+      <thead>
+        <tr><th>Primitive</th><th>Direction</th><th>Use it when</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>claude --remote "..."</code></td>
+          <td>Terminal &rarr; cloud (creates a new cloud session)</td>
+          <td>You want to fire-and-forget a task. Push first, then <code>claude --remote "fix the failing tests"</code>. The cloud VM clones your branch, runs the work, you check progress with <code>/tasks</code>.</td>
+        </tr>
+        <tr>
+          <td><code>claude --teleport</code> / <code>/teleport</code></td>
+          <td>Cloud &rarr; terminal (pulls an existing cloud session local)</td>
+          <td>A cloud session has done good work and you want to continue locally. Picks the session, fetches its branch, loads conversation history. One-way: you can&rsquo;t push a terminal session back to the cloud.</td>
+        </tr>
+        <tr>
+          <td><code>/remote-control</code></td>
+          <td>Local CLI &rarr; phone/web (read-only mirror)</td>
+          <td>You started a local session and want to monitor it from your phone or claude.ai. The work still runs on your laptop &mdash; you just see and steer it remotely. Auto-reconnects if the network drops.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <p><strong>The trap to avoid.</strong> <code>--remote</code> creates a new cloud session; <code>--remote-control</code> exposes a local session. They share six letters and do opposite things. If you only remember one rule: <strong>"remote = cloud, remote-control = phone."</strong></p>
+    </div>
+
+    <h2>Sessions Survive Surfaces</h2>
+
+    <p>Cloud sessions persist independently of the device that started them. Close your browser, switch laptops, hand off to a teammate &mdash; the session is still there. This is genuinely new behavior; pre-2026, &ldquo;closing the lid&rdquo; meant &ldquo;killing the agent.&rdquo;</p>
+
+    <p>Two distinct &ldquo;resume&rdquo; verbs to know:</p>
+
+    <ul>
+      <li><strong><code>claude --resume</code></strong> &mdash; reopens a conversation from <em>this machine&rsquo;s</em> local history. Cloud sessions don&rsquo;t appear here.</li>
+      <li><strong><code>claude --teleport</code></strong> &mdash; pulls a <em>cloud</em> session into your terminal. Local history isn&rsquo;t listed.</li>
+    </ul>
+
+    <p>Inside an existing CLI session, <code>/teleport</code> (or the alias <code>/tp</code>) opens the same picker without restarting Claude Code. <code>/tasks</code> lists every running cloud session you own and lets you press <code>t</code> to teleport into one directly.</p>
+
+    <h2>What the Cloud VM Has &mdash; and Doesn&rsquo;t</h2>
+
+    <p>Every cloud session starts in a fresh VM. The repo is cloned; common runtimes are pre-installed. Configuration that lives in the repo carries over. Configuration that lives on your machine doesn&rsquo;t.</p>
+
+    <table>
+      <thead>
+        <tr><th>Comes along</th><th>Stays home</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>CLAUDE.md</code> (in repo)</td>
+          <td><code>~/.claude/CLAUDE.md</code> (your user-level)</td>
+        </tr>
+        <tr>
+          <td><code>.claude/settings.json</code> hooks</td>
+          <td>User-level hooks in <code>~/.claude/settings.json</code></td>
+        </tr>
+        <tr>
+          <td><code>.claude/skills/</code>, <code>.claude/agents/</code>, <code>.claude/commands/</code></td>
+          <td>User-scoped plugins, MCP servers added with <code>claude mcp add</code></td>
+        </tr>
+        <tr>
+          <td><code>.mcp.json</code> at repo root</td>
+          <td>Static API tokens (no secrets store yet)</td>
+        </tr>
+        <tr>
+          <td>Plugins declared in <code>.claude/settings.json</code></td>
+          <td>Interactive auth flows (AWS SSO, etc.)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Every primitive you spent the last 14 chapters learning about &mdash; skills, hooks, subagents, plugins, MCP servers &mdash; works in the cloud <strong>as long as it&rsquo;s committed to the repo</strong>. The cloud sandbox is a strong forcing function: if your automation lives in <code>~/.claude/</code>, it&rsquo;s yours alone; if it lives in <code>.claude/</code> in the repo, the whole team gets it everywhere.</p>
+
+    <div class="automation-box">
+      <p><strong>The cloud is the team-sharing test.</strong> If your team&rsquo;s most important automation doesn&rsquo;t work in a fresh cloud session, it doesn&rsquo;t really work for new hires either. Run a cloud session occasionally as a sanity check &mdash; if your reviewer subagent fires correctly there, it&rsquo;ll fire correctly for the engineer who joined yesterday.</p>
+    </div>
+
+    <h2>The Sandbox: What&rsquo;s Isolated, What&rsquo;s Allowed</h2>
+
+    <p>Sandboxing is the headline security feature, and it changes how you design hooks and tool-using automations.</p>
+
+    <p>The sandbox is built on OS-level primitives: Linux <strong>bubblewrap</strong>, macOS <strong>seatbelt</strong>. It enforces two boundaries:</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Filesystem.</strong> Default writes go only to the current working directory and its subdirectories. Reads are broader by default. You can tighten or loosen via <code>/sandbox</code> in the CLI.</li>
+      <li class="checked"><strong>Network.</strong> Outbound traffic flows through a proxy with one of four levels &mdash; <em>None</em>, <em>Trusted</em> (curated allowlist of package registries, GitHub, cloud SDKs &mdash; the default), <em>Full</em>, or <em>Custom</em> (your own list).</li>
+      <li class="checked"><strong>Permission prompts.</strong> Anthropic reports an 84% reduction in permission interruptions in their internal usage. Hooks that previously fired a confirmation per shell command now batch into a single &ldquo;OK to proceed in this sandbox?&rdquo;</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>Sandboxes are not bulletproof.</strong> CVE-2026-39861 (March 2026) demonstrated a sandbox escape via symlinks; a separate write-up showed Claude Code&rsquo;s own denylist could be bypassed with path tricks like <code>/proc/self/root/usr/bin/npx</code>. The team patched both, and the sandbox is genuinely safer than running everything raw &mdash; but it&rsquo;s a <em>defense in depth</em> layer, not a substitute for not running untrusted code. Treat it like AppArmor: useful, not magic.</p>
+    </div>
+
+    <h2>When Cloud, When Local</h2>
+
+    <p>Both surfaces work for most tasks. The decision is pragmatic:</p>
+
+    <table>
+      <thead>
+        <tr><th>Choose cloud when&hellip;</th><th>Choose local when&hellip;</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>The task is long-running and you want to close your laptop.</td>
+          <td>You&rsquo;re in active development and need fast iteration on the same files.</td>
+        </tr>
+        <tr>
+          <td>The work needs CPU/RAM your laptop hates (4 vCPU, 16 GB RAM, 30 GB disk per cloud session).</td>
+          <td>You need access to local files outside the repo, or to apps your laptop has installed (Xcode, Android Studio).</td>
+        </tr>
+        <tr>
+          <td>You&rsquo;re running multiple parallel tasks (each <code>--remote</code> spawns its own VM).</td>
+          <td>You need interactive auth (AWS SSO, browser-based vendor login).</td>
+        </tr>
+        <tr>
+          <td>You want a clean reproducible environment that the rest of the team will get too.</td>
+          <td>You&rsquo;re iterating on hook scripts that need to be tested with your local file watcher.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>You don&rsquo;t pick once and stick with it. The two surfaces compose: plan locally, execute remotely; investigate remotely, fix locally.</p>
+
+    <h2>Setup Scripts vs. SessionStart Hooks</h2>
+
+    <p>There&rsquo;s a subtle distinction worth getting right because it bites people the first time. Both run when a session starts; they belong to different layers.</p>
+
+    <table>
+      <thead>
+        <tr><th></th><th>Setup script</th><th>SessionStart hook</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Lives in</strong></td>
+          <td>Cloud environment UI (claude.ai)</td>
+          <td><code>.claude/settings.json</code> in your repo</td>
+        </tr>
+        <tr>
+          <td><strong>Runs in</strong></td>
+          <td>Cloud sessions only</td>
+          <td>Both local and cloud</td>
+        </tr>
+        <tr>
+          <td><strong>Cached?</strong></td>
+          <td>Yes &mdash; setup script result is snapshotted for ~7 days</td>
+          <td>No &mdash; runs every session start and resume</td>
+        </tr>
+        <tr>
+          <td><strong>Use for</strong></td>
+          <td><code>apt install gh</code>, fetching cloud-specific tools</td>
+          <td><code>npm install</code>, project-level setup for everyone</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>For cloud-only behavior in a SessionStart hook, gate on the <code>$CLAUDE_CODE_REMOTE</code> env var:</p>
+
+    <pre><code>#!/bin/bash
+if [ "$CLAUDE_CODE_REMOTE" != "true" ]; then
+  exit 0
+fi
+npm install
+pip install -r requirements.txt</code></pre>
+
+    <h2>Mobile Use Cases</h2>
+
+    <p>You don&rsquo;t need a phone keyboard for serious coding work. What you need is a phone view into things that are running elsewhere.</p>
+
+    <ul>
+      <li><strong>Monitor cloud sessions.</strong> The Anthropic app lists every running session, with status and recent output. Tap one to step through Claude&rsquo;s reasoning, leave a comment, or approve the next step.</li>
+      <li><strong>Approve auto-fix actions.</strong> If a cloud session is auto-fixing a PR (more on this in a moment) and Claude wants to make a non-trivial change, you can approve from the phone instead of waiting until you&rsquo;re back at your laptop.</li>
+      <li><strong>Kick off long-running work.</strong> &ldquo;Start a cloud session that runs the full migration; tell me when it&rsquo;s done.&rdquo; The session runs while you&rsquo;re in a meeting; the notification arrives when it lands.</li>
+      <li><strong>Remote Control your laptop.</strong> The session runs on your machine but you steer from the phone &mdash; useful for kicking a stuck workflow without finding a desk.</li>
+    </ul>
+
+    <h2>Routines: Cron Without Your Laptop</h2>
+
+    <p>The hardest part of Chapter 11&rsquo;s scheduled-agent pattern was keeping the laptop awake. Routines move the cron loop into the cloud. Define a prompt, attach it to a repo and an environment, set a schedule &mdash; and a fresh cloud session fires that prompt on cadence, with full toolchain access, no laptop required.</p>
+
+    <pre><code># In your terminal, while inside Claude Code
+/schedule
+
+# Or define a routine that fires on a GitHub event:
+# - new PR opened &rarr; spawn a /review session
+# - issue labeled "claude-investigate" &rarr; spawn a research session
+# - daily at 9am UTC &rarr; spawn the morning-digest session</code></pre>
+
+    <p>Routines are the cloud equivalent of every &ldquo;weekly maintenance script&rdquo; you wrote in Chapter 11, except they run on Anthropic&rsquo;s infrastructure and report back via mobile notifications. They&rsquo;re the answer to &ldquo;how do I run automation that doesn&rsquo;t depend on whether my MacBook is plugged in?&rdquo;</p>
+
+    <h2>Auto-Fix: PR Maintenance Without You</h2>
+
+    <p>Auto-fix is the cloud feature most worth knowing for a course about automation. It lets a cloud session subscribe to a PR&rsquo;s GitHub events &mdash; CI failures, review comments &mdash; and respond automatically.</p>
+
+    <ul>
+      <li>Reviewer leaves a comment with a clear suggestion: Claude makes the change, pushes, replies on the comment.</li>
+      <li>CI fails on the new branch: Claude reads the logs, attempts a fix, pushes again.</li>
+      <li>Comment is ambiguous or architectural: Claude asks before acting.</li>
+    </ul>
+
+    <p>Turn it on three ways: (1) on a PR created in the web UI, click the CI status bar &rarr; <strong>Auto-fix</strong>; (2) from your terminal on a PR&rsquo;s branch, run <code>/autofix-pr</code>; (3) from the mobile app, just tell Claude &ldquo;watch this PR and fix any CI failures or review comments.&rdquo;</p>
+
+    <div class="warning-box">
+      <p><strong>Caution with comment-triggered automation.</strong> If your repo uses Atlantis, Terraform Cloud, or a similar bot that runs on <code>issue_comment</code> events, Claude&rsquo;s auto-replies <em>can trigger your downstream automation</em>. Review what your <code>issue_comment</code> workflows actually do before enabling auto-fix on infra repos. The integration is convenient; the blast radius is real.</p>
+    </div>
+
+    <h2>Combining Cloud Claude Code With the GitHub Action</h2>
+
+    <p>You met <code>anthropics/claude-code-action@v1</code> in Chapter 7. It runs Claude Code inside GitHub Actions runners. Cloud Claude Code is similar but different: it runs on Anthropic-managed infrastructure with a richer toolchain pre-installed.</p>
+
+    <table>
+      <thead>
+        <tr><th>Use the GitHub Action when&hellip;</th><th>Use Cloud Claude Code when&hellip;</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>The work is part of your CI pipeline (changelog, AI review, PR description).</td>
+          <td>The work is one-off or interactive (auto-fix, ultraplan, exploratory tasks).</td>
+        </tr>
+        <tr>
+          <td>You need GitHub-native triggers (push, PR open, schedule).</td>
+          <td>You want a chat-driven session you can monitor from anywhere.</td>
+        </tr>
+        <tr>
+          <td>You&rsquo;re on a free GitHub Actions tier and prefer to use those minutes.</td>
+          <td>You&rsquo;re on Pro/Max/Team/Enterprise and your laptop can&rsquo;t spare the cycles.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>They&rsquo;re complementary. Many teams use both: Action for routine CI work, Cloud Claude Code for ad-hoc heavy lifting.</p>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Before: laptop-bound automation</h4>
+        <ol>
+          <li>Reviewer leaves a comment on your PR while you&rsquo;re commuting.</li>
+          <li>CI starts failing twenty minutes later.</li>
+          <li>You see both at your desk three hours from now.</li>
+          <li>You spend the first 90 minutes back catching up to the PR you thought was nearly done.</li>
+        </ol>
+        <p><strong>Workflow paused. Context lost. Day spoiled.</strong></p>
+      </div>
+      <div class="after">
+        <h4>After: cloud + auto-fix + mobile</h4>
+        <ol>
+          <li>Auto-fix is enabled on the PR (one click, before you left the desk).</li>
+          <li>Comment arrives: cloud session reads it, makes the suggested change, pushes.</li>
+          <li>CI fails on a flaky test: cloud session retries, fix doesn&rsquo;t land, leaves a note.</li>
+          <li>You arrive home, glance at the phone, see &ldquo;5 of 6 issues resolved; 1 needs your call.&rdquo;</li>
+        </ol>
+        <p><strong>Workflow continued without you.</strong></p>
+      </div>
+    </div>
+
+    <h2>What Doesn&rsquo;t Work in the Cloud</h2>
+
+    <p>The cloud is great. It is not magical. Things that genuinely don&rsquo;t work or work badly:</p>
+
+    <ul>
+      <li><strong>Interactive auth flows</strong> &mdash; AWS SSO, browser-based vendor logins. The VM has no browser to redirect to. Use static tokens via env vars instead, with the visibility caveat (env vars aren&rsquo;t a real secrets store yet).</li>
+      <li><strong>Memory-heavy builds</strong> &mdash; 16 GB RAM and 4 vCPUs is plenty for most projects but not for a Bazel-on-monorepo job. For workloads beyond cloud limits, run via Remote Control on your own hardware.</li>
+      <li><strong>Custom Docker base images</strong> &mdash; you can&rsquo;t replace the cloud VM&rsquo;s base image. Use a setup script to install on top, or run your image as a sidecar with <code>docker compose</code>.</li>
+      <li><strong>User-only configuration</strong> &mdash; if it&rsquo;s in <code>~/.claude/</code> instead of the repo, the cloud doesn&rsquo;t see it. Move things to <code>.claude/</code> in the repo to bring them along.</li>
+      <li><strong>Bun</strong> &mdash; known proxy compatibility issues for package fetching. Other Node tooling works fine; Bun specifically struggles with the security proxy.</li>
+    </ul>
+
+    <h2>Recipe: Move Your Weekly Maintenance Agent to the Cloud</h2>
+
+    <div class="recipe-box">
+      <h3>From cron-on-laptop to scheduled cloud session</h3>
+      <ol>
+        <li><strong>Audit what&rsquo;s in <code>~/.claude/</code>.</strong> Anything your weekly maintenance script depends on &mdash; CLAUDE.md rules, hooks, MCP servers &mdash; needs to live in the repo, not your home dir.</li>
+        <li><strong>Commit it.</strong> Move user-level CLAUDE.md content to repo CLAUDE.md (or a <code>.claude/rules/</code> file). Re-declare MCP servers in <code>.mcp.json</code>. Re-declare plugins in <code>.claude/settings.json</code>&rsquo;s <code>enabledPlugins</code>.</li>
+        <li><strong>Configure the cloud environment.</strong> On claude.ai/code, add an environment named &ldquo;maintenance.&rdquo; Set the network access level to <em>Trusted</em> (the default) plus any custom domains your scripts need. Add a setup script if you need anything beyond pre-installed tooling.</li>
+        <li><strong>Set up a routine.</strong> Use <code>/schedule</code> in the terminal (or the routines UI on claude.ai) to schedule the maintenance prompt to run weekly against your repo. This is the cloud equivalent of cron-on-laptop &mdash; only the laptop isn&rsquo;t involved.</li>
+        <li><strong>Test once interactively.</strong> Run <code>claude --remote "run the weekly maintenance routine on this repo"</code>. Watch progress with <code>/tasks</code>. Fix anything that breaks because of the cloud / local difference (paths, missing local-only deps).</li>
+        <li><strong>Switch off the laptop cron.</strong> Once the cloud routine has run cleanly twice, retire the local cron job. Your laptop no longer has to be awake on Sundays.</li>
+        <li><strong>Add mobile monitoring.</strong> Open the Anthropic app, tap the maintenance session whenever you remember. If it ever stops succeeding silently, you&rsquo;ll see it during a 10-second phone glance.</li>
+      </ol>
+    </div>
+
+    <div class="exercise-box">
+      <h3>Exercise: One Cloud Session, Three Surfaces</h3>
+      <p>The point of this exercise is to feel session continuity across surfaces. 30 minutes.</p>
+      <ol>
+        <li><strong>Start in the terminal.</strong> Pick a real-but-low-stakes task (&ldquo;modernize this README,&rdquo; &ldquo;add JSDoc to <code>utils/</code>&rdquo;). Push your branch first. Run <code>claude --remote "&lt;the task&gt;"</code>.</li>
+        <li><strong>Check progress on web.</strong> Open <code>claude.ai/code</code>. Find your session in the sidebar. Watch a few steps of reasoning. Leave one inline comment on the diff.</li>
+        <li><strong>Check from mobile.</strong> Open the Anthropic app. Find the same session. Read the latest message. Verify it matches what you saw on web.</li>
+        <li><strong>Pull it home.</strong> When the session is in a good state, run <code>claude --teleport</code> from your terminal. Pick the session. Confirm Claude fetched the branch, loaded conversation history, and is ready for local work.</li>
+        <li><strong>Continue locally.</strong> Make one small follow-up edit interactively. Push. Mark the PR ready for review.</li>
+        <li><strong>Bonus:</strong> turn on auto-fix on the PR. Leave a deliberate review comment that asks for a clear, narrow change. Watch the cloud session pick it up and push the fix.</li>
+      </ol>
+    </div>
+
+    <div class="highlight-box">
+      <h3>The Big Idea</h3>
+      <p>Three surfaces, one session model. <code>--remote</code> creates cloud sessions; <code>--teleport</code> pulls them home; Remote Control mirrors a local session to your phone. Everything you committed to <code>.claude/</code> in the repo &mdash; skills, hooks, subagents, plugins, MCP servers &mdash; runs identically across surfaces. The cloud isn&rsquo;t a different kind of Claude Code; it&rsquo;s the same Claude Code somewhere else, with a sandbox and 4 vCPUs and a phone-shaped window into it.</p>
+    </div>
+
+    <h2>The End of the Course (and the Start of Your Stack)</h2>
+
+    <p>Fifteen chapters in, you&rsquo;ve built every layer of the modern Claude Code automation stack: rules in CLAUDE.md, on-demand skills, event-driven hooks, AI-augmented code review, AI-generated tests, CI/CD that thinks, self-writing docs, personal productivity agents, MCP servers for your team, multi-step orchestration, a written automation playbook, plugins for distribution, subagents for specialization, and now the surfaces that let it all run wherever you happen to be.</p>
+
+    <p>The course ends. Your automation backlog doesn&rsquo;t. Open the playbook from Chapter 12, run the audit, and pick the next thing &mdash; the best automation you&rsquo;ll build is the one you start tomorrow when you catch yourself doing something twice. Build the third one as an installable plugin (Ch 13), give it a focused subagent (Ch 14), and ship it to the cloud (Ch 15). The infrastructure is finally ready for you.</p>
+
+    <p class="footnote-line"><small><em>Sources verified 2026-04-26:</em> <a href="https://code.claude.com/docs/en/claude-code-on-the-web">code.claude.com/docs/en/claude-code-on-the-web</a>, <a href="https://code.claude.com/docs/en/sandboxing">code.claude.com/docs/en/sandboxing</a>, <a href="https://www.anthropic.com/engineering/claude-code-sandboxing">anthropic.com/engineering/claude-code-sandboxing</a>, <a href="https://code.claude.com/docs/en/remote-control">code.claude.com/docs/en/remote-control</a>.</small></p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="14-subagents.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Subagents</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to Contents</span>
+        <span class="nav-chapter">Automating Your Dev Workflow with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

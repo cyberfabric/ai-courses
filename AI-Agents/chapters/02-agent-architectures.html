@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Agent Architectures | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-what-are-agents.html">&larr; Prev</a>
+      <a href="03-tool-design.html">Next &rarr;</a>
+      <a href="maps/02-agent-architectures-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Agent Architectures</h1>
+    <p class="subtitle">The blueprints that determine how your agent thinks, plans, and acts</p>
+  </header>
+
+  <main>
+
+    <h2>Why Architecture Matters</h2>
+
+    <p>In Chapter 1, you saw the simple <code>while True</code> loop that powers every agent. That loop is the engine &mdash; but the architecture is the <em>driving style</em>. The same LLM, given the same tools and the same task, will behave completely differently depending on how you structure the loop around it.</p>
+
+    <p>Think of it this way: if you asked three managers to get a project done, one might micromanage every step, another would delegate tasks and check in periodically, and the third would create a full project plan before anyone writes a line of code. Same goal, same team, wildly different outcomes depending on the management style.</p>
+
+    <p>Agent architectures are those management styles. In this chapter, you&rsquo;ll learn the five major patterns, understand when to use each one, and implement the most important one &mdash; ReAct &mdash; from scratch.</p>
+
+    <h2>Architecture 1: The Simple Tool-Use Loop</h2>
+
+    <p>This is what you saw in Chapter 1. It&rsquo;s the simplest possible agent architecture:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Call LLM</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Tool call?</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Execute tool</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Feed result back</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Repeat</span>
+    </div>
+
+    <p>The LLM decides on its own what to do. You don&rsquo;t give it a strategy or ask it to plan. You just let it call tools until it produces a final answer. This is what most API tool-use examples demonstrate.</p>
+
+    <p><strong>When to use it:</strong> Simple, well-defined tasks with 1&ndash;3 steps. Looking up information, formatting data, answering a factual question with one search.</p>
+
+    <p><strong>When it fails:</strong> Complex tasks where the LLM needs to reason through multiple steps. Without explicit reasoning, the model tends to jump to action too fast and miss important context.</p>
+
+    <div class="pitfall-box">
+      <strong>The &ldquo;just let it figure it out&rdquo; trap.</strong> The simple tool-use loop works great for demos but falls apart on real tasks. Without any reasoning structure, the agent tends to: (1) call the first tool that seems relevant without thinking, (2) get confused by ambiguous results, (3) loop endlessly when it doesn&rsquo;t know what to do. For anything beyond trivial tasks, you need a pattern that encourages the model to <em>think before it acts</em>.
+    </div>
+
+    <h2>Architecture 2: ReAct (Reasoning + Acting)</h2>
+
+    <p>ReAct is the workhorse of the agent world. Introduced in a 2022 research paper, it&rsquo;s become the default architecture for production agents in 2025&ndash;2026. The core idea is beautifully simple: <strong>force the agent to think out loud before every action</strong>.</p>
+
+    <div class="architecture-box">
+      <h3>The ReAct Loop</h3>
+      <p>ReAct interleaves reasoning and acting in an explicit cycle:</p>
+      <ol>
+        <li><strong>Thought</strong> &mdash; the agent reasons about the current state, what it knows, and what it should do next</li>
+        <li><strong>Action</strong> &mdash; the agent calls a tool based on its reasoning</li>
+        <li><strong>Observation</strong> &mdash; the agent sees the result of the tool call</li>
+        <li><strong>Repeat</strong> &mdash; back to Thought, incorporating the observation</li>
+      </ol>
+      <p>The key difference from the simple loop: the <strong>Thought step is explicit</strong>. The agent doesn&rsquo;t just silently decide to call a tool &mdash; it writes out its reasoning first. This creates an audit trail, improves decision quality, and makes debugging possible. In regulated industries (finance, healthcare), this reasoning trace is often a compliance requirement.</p>
+    </div>
+
+    <p>Here&rsquo;s what a ReAct trace looks like for a research question:</p>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Thought</span>
+        <span>The user wants to know the current market cap of NVIDIA. I should search for the latest financial data. Let me use a web search.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Action</span>
+        <span><code>search_web("NVIDIA market cap April 2026")</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Observation</span>
+        <span>Results show NVIDIA market cap is approximately $3.2 trillion as of Q1 2026, but some sources show different dates. Let me verify with a more specific source.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Thought</span>
+        <span>The search results are from different dates. I should check a financial data source directly to get the most current number.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Action</span>
+        <span><code>search_web("NVIDIA NVDA market cap today site:finance.yahoo.com")</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Observation</span>
+        <span>Yahoo Finance shows NVIDIA (NVDA) market cap at $3.18T.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Thought</span>
+        <span>I now have a reliable source with a current number. I can give the user a confident answer with the source.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Respond</span>
+        <span>NVIDIA&rsquo;s market cap is approximately $3.18 trillion (source: Yahoo Finance).</span>
+      </div>
+    </div>
+
+    <p>Notice how the Thought steps add crucial value: the agent <em>notices</em> the conflicting dates, <em>decides</em> to verify, and <em>explains</em> its reasoning. Without ReAct, it might have just returned the first number it found.</p>
+
+    <h3>Implementing ReAct: The System Prompt Is the Architecture</h3>
+
+    <p>Here&rsquo;s the key insight: <strong>ReAct is not a framework feature &mdash; it&rsquo;s a system prompt pattern</strong>. You implement it by telling the model <em>how</em> to think. With modern models that support extended thinking (like Claude&rsquo;s thinking blocks), the reasoning happens naturally within the model&rsquo;s response. But you can also enforce it explicitly:</p>
+
+<pre><code>SYSTEM_PROMPT = """You are a research assistant with access to tools.
+
+For every task, follow this process:
+1. THOUGHT: Reason about what you know, what you need, and what to do next.
+2. ACTION: Call the appropriate tool.
+3. OBSERVATION: Analyze the result.
+4. Repeat until you have enough information to give a complete answer.
+
+Always think before acting. Never call a tool without first explaining
+why you're calling it and what you expect to learn."""
+</code></pre>
+
+    <p>That&rsquo;s it. The system prompt <em>is</em> the architecture. Modern models like Claude Opus and Sonnet follow these instructions reliably enough that this simple prompt turns a basic tool-use loop into a ReAct agent.</p>
+
+    <div class="tip-box">
+      With Claude&rsquo;s extended thinking feature, the &ldquo;Thought&rdquo; step happens inside a dedicated thinking block that you can inspect but that doesn&rsquo;t count against the output token limit. This gives you the audit trail of ReAct without the token cost of writing thoughts into the main output.
+    </div>
+
+    <h2>Architecture 3: Plan-and-Execute</h2>
+
+    <p>ReAct is great for tasks where you can figure things out as you go. But some tasks benefit from <strong>making a plan first</strong>:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Analyze Task</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Create Plan</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Execute Step 1</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Execute Step 2</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">...</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Re-plan if needed</span>
+    </div>
+
+    <p>The key difference: the agent creates a <strong>full plan before executing anything</strong>. Then it works through the plan step by step, potentially re-planning when things don&rsquo;t go as expected.</p>
+
+    <h3>A Modern Twist: Planning as a Tool</h3>
+
+    <p>Here&rsquo;s a pattern that emerged from production agent systems in 2025: <strong>make the plan itself a tool call</strong>. Instead of a separate planning phase, the agent has a &ldquo;create_plan&rdquo; tool that it can call at any point:</p>
+
+<pre><code>tools = [
+    {
+        "name": "create_plan",
+        "description": "Create or update a task plan. Call this before starting "
+                       "complex multi-step work. List the steps needed, their "
+                       "order, and expected outputs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string", "description": "The overall goal"},
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "step": {"type": "string"},
+                            "status": {"type": "string", "enum": ["pending", "done", "failed"]}
+                        }
+                    },
+                    "description": "Ordered list of steps to achieve the goal"
+                }
+            },
+            "required": ["goal", "steps"]
+        }
+    },
+    # ... other tools like search_web, read_file, etc.
+]
+</code></pre>
+
+    <p>The clever part: <strong>the plan tool doesn&rsquo;t actually do anything</strong>. It&rsquo;s a no-op &mdash; it just stores the plan in the conversation context. But that&rsquo;s the point. By writing out a plan, the agent commits to a structure, and the plan stays in the context window where the model can reference it at every subsequent step. This is a form of <em>context engineering</em>: shaping what&rsquo;s in the model&rsquo;s context to improve its behavior.</p>
+
+    <p>Claude Code uses exactly this approach internally &mdash; a &ldquo;TodoList&rdquo; tool that keeps the agent focused on the current task and prevents it from wandering off-track.</p>
+
+    <div class="pattern-box">
+      <h3>Planning as a Tool</h3>
+      <p><strong>Problem:</strong> The agent loses track of what it&rsquo;s doing on complex, multi-step tasks.</p>
+      <p><strong>Solution:</strong> Give the agent a &ldquo;plan&rdquo; tool that writes a structured task list into the conversation context. The tool itself does nothing &mdash; its value is purely as context engineering.</p>
+      <p><strong>When to use:</strong> Any task that takes more than 5&ndash;7 tool calls to complete. Tasks where the agent needs to remember what it already tried. Multi-file edits, research with multiple sources, complex debugging sessions.</p>
+      <p><strong>Trade-off:</strong> Uses extra tokens for the plan, but dramatically reduces wasted cycles from the agent repeating work or forgetting its progress.</p>
+    </div>
+
+    <h2>Architecture 4: Reflexion (Self-Correction)</h2>
+
+    <p>What if the agent could review its own work and fix mistakes? That&rsquo;s Reflexion &mdash; an architecture where the agent adds a <strong>critique step</strong> after producing output:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Act</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Produce output</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Critique output</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Fix issues</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Final output</span>
+    </div>
+
+    <p>You&rsquo;ve probably done this yourself: write code, run it, see the error, fix it, run again. Reflexion formalizes this natural debugging cycle. Modern LLMs show <strong>emergent self-correction</strong> &mdash; they can write code, see it fail, and adjust without explicit prompting. But you can also make it explicit:</p>
+
+<pre><code>def reflexion_loop(agent, task, max_attempts=3):
+    for attempt in range(max_attempts):
+        # Generate a solution
+        result = agent.run(task)
+
+        # Ask the agent to critique its own output
+        critique = agent.run(
+            f"Review this output critically. Is it correct? Complete? "
+            f"Are there edge cases missed?\n\nOutput:\n{result}"
+        )
+
+        # If the critique finds no issues, we're done
+        if "no issues" in critique.lower() or "looks correct" in critique.lower():
+            return result
+
+        # Otherwise, have the agent fix the issues
+        task = f"Fix these issues with the previous output:\n{critique}\n\nOriginal output:\n{result}"
+
+    return result  # Return best effort after max attempts
+</code></pre>
+
+    <p>This is simple but powerful. Research shows that even basic reflection prompts (&ldquo;did I make a mistake?&rdquo;) noticeably improve agent output quality.</p>
+
+    <div class="warning-box">
+      <strong>Reflexion doubles your token cost.</strong> Every critique step is another full LLM call. For simple tasks, the extra cost isn&rsquo;t worth it. Use Reflexion for high-stakes outputs where correctness matters: code generation, data analysis, content that will be published. Skip it for quick lookups or one-off tasks.
+    </div>
+
+    <h2>Architecture 5: Tree of Thoughts</h2>
+
+    <p>What if, instead of following one path, the agent explored <em>multiple paths</em> simultaneously?</p>
+
+    <p>Tree of Thoughts (ToT) generates several possible next steps, evaluates each one, and pursues the most promising path. Think of it like a chess engine that considers multiple moves before choosing the best one.</p>
+
+<pre><code>def tree_of_thoughts(agent, problem, branches=3, depth=3):
+    """Explore multiple reasoning paths and pick the best one."""
+    candidates = []
+
+    for _ in range(branches):
+        # Generate a different approach to the problem
+        approach = agent.run(
+            f"Propose ONE unique approach to solve this. "
+            f"Be creative and different from obvious solutions.\n\n{problem}"
+        )
+        candidates.append(approach)
+
+    # Evaluate all approaches
+    evaluation = agent.run(
+        f"Compare these {branches} approaches. Score each 1-10 "
+        f"for feasibility, correctness, and efficiency. "
+        f"Pick the best one and explain why.\n\n"
+        + "\n\n".join(f"Approach {i+1}: {c}" for i, c in enumerate(candidates))
+    )
+
+    return evaluation
+</code></pre>
+
+    <p><strong>When to use it:</strong> Brainstorming, creative problem solving, puzzles with non-obvious solutions. Design tasks where you want to compare alternatives.</p>
+
+    <p><strong>When to skip it:</strong> Most practical agent tasks. ToT is expensive (N branches &times; depth LLM calls) and overkill for well-defined problems. If you know the general approach and just need execution, ReAct or Plan-and-Execute is better.</p>
+
+    <h2>Architecture 6: The Router Pattern</h2>
+
+    <p>As tasks get complex, a single agent with 50 tools becomes unwieldy. The router pattern solves this with <strong>specialization</strong>: a lightweight &ldquo;router&rdquo; agent decides which specialist agent should handle the task.</p>
+
+    <div class="architecture-box">
+      <h3>The Router Architecture</h3>
+      <p>A manager agent receives the user&rsquo;s request and routes it to the appropriate specialist:</p>
+      <div class="workflow-steps">
+        <span class="step">User Request</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Router Agent</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Specialist Agent</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Response</span>
+      </div>
+      <p>The router is typically a fast, cheap model (like Claude Haiku) with a simple job: read the request, decide which specialist to call. Each specialist is a full agent with its own tools, system prompt, and expertise. This is how OpenAI&rsquo;s Agents SDK implements <strong>handoffs</strong>: routing is represented as a tool call (<code>transfer_to_refund_agent</code>), making it native to the tool-use loop.</p>
+    </div>
+
+    <p>Two flavors of the router pattern exist in modern frameworks:</p>
+
+    <ul>
+      <li><strong>Handoff</strong> &mdash; the specialist takes over the conversation. The router steps aside. Used in OpenAI Agents SDK: <code>handoffs=[refund_agent, billing_agent]</code></li>
+      <li><strong>Agent-as-tool</strong> &mdash; the specialist handles a subtask and returns results to the router, which keeps control. Used in Claude Agent SDK via sub-agent spawning with context isolation.</li>
+    </ul>
+
+    <p>We&rsquo;ll go deep on multi-agent patterns in Chapter 7. For now, just know that the router is the gateway drug to multi-agent systems.</p>
+
+    <h2>Comparing Architectures</h2>
+
+    <p>Here&rsquo;s the cheat sheet for picking the right architecture:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Architecture</th>
+          <th>Best For</th>
+          <th>Token Cost</th>
+          <th>Reliability</th>
+          <th>Complexity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Simple Loop</strong></td>
+          <td>1&ndash;3 step tasks</td>
+          <td>Low</td>
+          <td>Medium</td>
+          <td>Trivial</td>
+        </tr>
+        <tr>
+          <td><strong>ReAct</strong></td>
+          <td>Research, debugging, open-ended tasks</td>
+          <td>Medium</td>
+          <td>High</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td><strong>Plan-and-Execute</strong></td>
+          <td>Complex, multi-step projects</td>
+          <td>Medium-High</td>
+          <td>High</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td><strong>Reflexion</strong></td>
+          <td>High-stakes outputs, code gen</td>
+          <td>High (2x)</td>
+          <td>Very High</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td><strong>Tree of Thoughts</strong></td>
+          <td>Creative/design problems</td>
+          <td>Very High (Nx)</td>
+          <td>Variable</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td><strong>Router</strong></td>
+          <td>Multi-domain, many tools</td>
+          <td>Medium</td>
+          <td>High</td>
+          <td>Medium-High</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>The Trade-Off Triangle</h3>
+
+    <p>Every agent architecture trades between three things:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Autonomy</span>
+        <span class="stat-label">How much can the agent do on its own without human input?</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Reliability</span>
+        <span class="stat-label">How often does the agent produce the correct result?</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Cost</span>
+        <span class="stat-label">How many tokens and API calls does it consume?</span>
+      </div>
+    </div>
+
+    <p><strong>Pick two.</strong> High autonomy + high reliability = expensive (more reasoning, self-correction, multiple paths). High autonomy + low cost = unreliable (the model just guesses). High reliability + low cost = low autonomy (more human oversight, less agent freedom). The production consensus in 2026: <strong>start simple, add complexity only when the simpler approach fails</strong>.</p>
+
+    <h2>The System Prompt: Your Agent&rsquo;s Operating System</h2>
+
+    <p>Across all these architectures, one thing has more impact on agent behavior than any other design choice: the <strong>system prompt</strong>.</p>
+
+    <p>The system prompt is not just &ldquo;instructions.&rdquo; It&rsquo;s the lens through which the model sees everything. It defines the agent&rsquo;s personality, decision-making style, tool preferences, and failure modes. Two agents with identical code and tools but different system prompts will behave like completely different systems.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Effective system prompt</div>
+        <div class="prompt-text">You are a code reviewer. For each file:
+1. Check for security vulnerabilities first
+2. Then check correctness
+3. Then check style
+If you find a critical security issue, STOP and report it immediately.
+Never suggest changes you aren't confident about.</div>
+        <div class="prompt-explanation">Clear priorities, specific behavior rules, defined stopping conditions.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Vague system prompt</div>
+        <div class="prompt-text">You are a helpful assistant that reviews code. Be thorough and careful. Use the tools available to you.</div>
+        <div class="prompt-explanation">No priorities, no strategy, no guardrails. The agent will wander aimlessly.</div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      Your system prompt should answer three questions: (1) <strong>What is the agent&rsquo;s goal?</strong> (2) <strong>How should it approach the task?</strong> (the architecture, in natural language) (3) <strong>What should it NOT do?</strong> (guardrails, boundaries, escalation rules). If your system prompt doesn&rsquo;t answer all three, your agent will surprise you &mdash; and not in a good way.
+    </div>
+
+    <h2>Putting It All Together: A ReAct Agent from Scratch</h2>
+
+    <p>Let&rsquo;s build a complete ReAct agent in Python. This agent can search the web and answer research questions. We&rsquo;ll use the Anthropic SDK, but the pattern works with any LLM API:</p>
+
+<pre><code>import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# Define tools the agent can use
+tools = [
+    {
+        "name": "search_web",
+        "description": "Search the web for current information. Use this when "
+                       "you need facts, data, or recent events.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query. Be specific."
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_page",
+        "description": "Read the contents of a web page. Use this when you "
+                       "have a URL and need the full text.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to read"
+                }
+            },
+            "required": ["url"]
+        }
+    }
+]
+
+SYSTEM_PROMPT = """You are a research agent. Your job is to answer questions
+accurately by searching the web and reading sources.
+
+PROCESS:
+1. Think about what information you need.
+2. Search for it using search_web.
+3. If needed, read specific pages with read_page for more detail.
+4. Once you have enough information, provide a clear, sourced answer.
+
+RULES:
+- Always cite your sources.
+- If sources conflict, note the disagreement.
+- If you can't find reliable information, say so honestly.
+- Maximum 5 search queries per question — be efficient."""
+
+def execute_tool(name, inputs):
+    """Execute a tool and return its result."""
+    if name == "search_web":
+        # In production, call a real search API
+        return f"[Search results for: {inputs['query']}]"
+    elif name == "read_page":
+        return f"[Contents of: {inputs['url']}]"
+    return "Unknown tool"
+
+def run_agent(question, max_steps=10):
+    """Run a ReAct agent to answer a question."""
+    messages = [{"role": "user", "content": question}]
+
+    for step in range(max_steps):
+        response = client.messages.create(
+            model="claude-sonnet-4-6-20250514",
+            max_tokens=2048,
+            system=SYSTEM_PROMPT,
+            tools=tools,
+            messages=messages
+        )
+
+        # Check if the agent wants to use tools
+        if response.stop_reason == "tool_use":
+            # Process all tool calls in the response
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    print(f"  [Step {step+1}] Tool: {block.name}({block.input})")
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            # Agent is done — return the final answer
+            final = next(b.text for b in response.content if b.type == "text")
+            print(f"  [Done in {step+1} steps]")
+            return final
+
+    return "Agent hit step limit without finishing."
+
+# Run it!
+answer = run_agent("What are the top 3 AI agent frameworks in 2026?")
+print(answer)
+</code></pre>
+
+    <p>This is a <strong>real, runnable ReAct agent</strong> in about 80 lines. Swap in actual search/read implementations and you have a working research assistant. Chapter 4 will build a more complete version with error handling and user interaction.</p>
+
+    <h2>Hybrid Architectures: The Production Reality</h2>
+
+    <p>In practice, production agent systems in 2026 rarely use a single pure architecture. They use <strong>hybrids</strong>: a Plan-and-Execute outer loop with ReAct inside each step. Or a Router that dispatches to specialists, each using Reflexion on their output.</p>
+
+    <p>The winning pattern for production is: <strong>deterministic workflows with embedded AI decision points</strong>. Not pure autonomous agents, but structured pipelines where the LLM handles the judgment calls and regular code handles the predictable parts.</p>
+
+    <div class="highlight-box">
+      <h3>The Production Rule of Thumb</h3>
+      <p>Start with the simplest architecture that could work. Add complexity only when you have evidence the simple version fails. Most agents in production use ReAct or simple tool-use loops. Plan-and-Execute for complex tasks. Multi-agent for specialized domains. Tree of Thoughts almost never.</p>
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Build a ReAct Search Agent</h3>
+      <p>Take the ReAct code above and extend it into a working agent:</p>
+      <ol>
+        <li><strong>Add a real search tool</strong> &mdash; use a free API like SerpAPI, Tavily, or even scrape DuckDuckGo results</li>
+        <li><strong>Add a real page reader</strong> &mdash; use the <code>requests</code> library to fetch a URL and extract text with <code>BeautifulSoup</code></li>
+        <li><strong>Test it with 3 questions:</strong>
+          <ul>
+            <li>A factual question (&ldquo;What is the current population of Tokyo?&rdquo;)</li>
+            <li>A comparison (&ldquo;Compare React and Vue.js for new projects in 2026&rdquo;)</li>
+            <li>A research question (&ldquo;What are the main criticisms of microservices architecture?&rdquo;)</li>
+          </ul>
+        </li>
+        <li><strong>Log every step</strong> &mdash; print each Thought, Action, and Observation so you can see the ReAct loop in action</li>
+      </ol>
+      <p>Bonus: add a step counter and a maximum step limit. What happens when the agent hits the limit? How does it handle incomplete research?</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now have a map of all the major agent architectures. But the architecture is only half the story. The <strong>tools</strong> you give your agent determine what it can actually do &mdash; and bad tool design is the #1 reason agents fail in practice.</p>
+
+    <p>In <a href="03-tool-design.html">Chapter 3: Tool Design for Agents</a>, we&rsquo;ll learn how to design tools that agents can use reliably. You&rsquo;ll see why a tool&rsquo;s description matters more than its implementation, why granularity is the hardest design choice, and how to build tools that make agents <em>smarter</em> instead of more confused.</p>
+
+    <nav class="chapter-nav">
+      <a href="01-what-are-agents.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">What Are AI Agents, Really?</span>
+      </a>
+      <a href="03-tool-design.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Tool Design for Agents</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

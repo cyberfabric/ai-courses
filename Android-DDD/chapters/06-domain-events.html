@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Domain Events — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="05-subdomains.html">← Prev</a>
+      <a href="07-entities-and-value-objects.html">Next →</a>
+      <a href="maps/06-domain-events-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Domain Events</h1>
+    <p class="subtitle">From "what is" to "what happens" &mdash; modeling change as a first-class thing</p>
+  </header>
+
+  <main>
+
+    <p>So far this course has been about nouns. Bounded contexts contain entities. Subdomains contain models. Even chapter 4's context map was nouns connected by labeled lines. This chapter is about <em>verbs</em>.</p>
+
+    <p>Most Android codebases are over-built on nouns. There's a <code>User</code>, an <code>Order</code>, a <code>Payment</code>. There are tables for each, classes for each, repositories for each. What's missing &mdash; almost everywhere &mdash; is a clear, named, persisted record of <em>what just happened</em>. That gap is where domain events come in.</p>
+
+    <h2>The shift in perspective</h2>
+
+    <p>Look at any feature in your app and ask: "what is the most important thing that happens here?" In a checkout flow it's not "the cart exists" or "the order exists." It's <em>the order was placed</em>. In KYC it's not "the applicant has fields." It's <em>the applicant was approved</em>. In ride-hailing it's not "the ride exists." It's <em>the driver accepted</em>, then <em>the rider was picked up</em>, then <em>the ride completed</em>.</p>
+
+    <p>The verb-first lens is a different way to scope features. When you put events at the center of your model:</p>
+
+    <ul>
+      <li>Boundaries between contexts become obvious &mdash; events are exactly what crosses them.</li>
+      <li>Audit and replay become free &mdash; the events <em>are</em> the history.</li>
+      <li>UI becomes a projection &mdash; "show me what's happened so far" is now a query, not a join.</li>
+      <li>Bugs surface earlier &mdash; if you can't name the event that just happened, you don't understand the feature yet.</li>
+    </ul>
+
+    <h2>What a domain event actually is</h2>
+
+    <div class="language-box">
+      <span class="term">Domain Event</span> &mdash; an immutable, named record of something significant that happened in the domain, in the past tense, captured at the moment it occurred. It belongs to the ubiquitous language: PMs and engineers should both call it the same thing.
+      <div class="do-not-say">Do not say "update," "change," "notification," or "callback." An update is CRUD; a change is technical; a notification is a delivery mechanism; a callback is a hook. A domain event is a <em>fact</em> &mdash; specifically, a fact that the business cares about, named the way the business names it, captured forever.</div>
+    </div>
+
+    <p>Three rules separate a domain event from a generic message:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">⏪</span>
+        <div class="stat-label"><strong>Past tense.</strong> <code>OrderPlaced</code>, not <code>PlaceOrder</code>. <code>PaymentCaptured</code>, not <code>CapturePayment</code>.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🪨</span>
+        <div class="stat-label"><strong>Immutable.</strong> The fact already happened. It cannot be edited. Corrections are <em>new</em> events.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🗣️</span>
+        <div class="stat-label"><strong>Domain-named.</strong> A PM should recognize the name on a slack screenshot.</div>
+      </div>
+    </div>
+
+    <h2>Events vs commands: tense matters</h2>
+
+    <p>Events are facts. Commands are wishes. They are not the same thing, and conflating them is the most common modeling error in event-driven code.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Event &mdash; past tense, immutable</div>
+        <div class="prompt-text">data class OrderPlaced(
+  val id: OrderId,
+  val placedAt: Instant,
+  val total: Money
+)
+// "Yes, this happened. End of story."
+// Cannot be rejected. Cannot fail.
+// Already a historical fact.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Command &mdash; imperative, can fail</div>
+        <div class="prompt-text">data class PlaceOrder(
+  val cartId: CartId,
+  val paymentMethodId: PaymentMethodId
+)
+// "Please make this happen, if valid."
+// Can be rejected ("out of stock").
+// Produces zero, one, or many events.
+// Lives in the request layer.</div>
+      </div>
+    </div>
+
+    <p>The flow is always: command in &rarr; aggregate validates &rarr; event(s) out. The command may be rejected. The event, once emitted, is a fact you cannot undo. (You can compensate it with another event &mdash; <code>OrderCancelled</code> &mdash; but you can't pretend <code>OrderPlaced</code> never happened.)</p>
+
+    <h2>Event storming: the workshop format</h2>
+
+    <p>Event storming is a low-tech, high-bandwidth workshop format invented by Alberto Brandolini for discovering domain events with a whole team in one room. You do not need to be a DDD expert to run it. You need a long wall, a stack of orange sticky notes, and three hours.</p>
+
+    <p>The basic flow:</p>
+
+    <div class="workflow-steps">
+      <div class="step">📝 Events on orange stickies</div>
+      <div class="step-arrow">→</div>
+      <div class="step">📅 Timeline order</div>
+      <div class="step-arrow">→</div>
+      <div class="step">🟦 Commands on blue stickies</div>
+      <div class="step-arrow">→</div>
+      <div class="step">🟨 Aggregates emerge</div>
+      <div class="step-arrow">→</div>
+      <div class="step">🟪 Boundaries drawn</div>
+    </div>
+
+    <p>Stage one: everyone in the room writes domain events on orange sticky notes &mdash; past tense, one event per sticky &mdash; and slaps them on the wall in rough chronological order. The PM, the senior engineers, the QA lead, and ideally the support lead all participate. Quantity over quality. You will end up with 60-200 stickies.</p>
+
+    <p>Stage two: the team merges duplicates ("OrderShipped" and "ShippingNotificationSent" might be the same event, or two distinct ones &mdash; argue it out), reorders for true timeline, and identifies hot spots (clusters where everyone has questions or disagreements).</p>
+
+    <p>Stage three: blue sticky notes for commands ("PlaceOrder," "CancelOrder") and yellow ones for aggregates (the things that emit events &mdash; the "Order" itself). By the end, you have a complete event-storming canvas: every fact the system records, every command that might trigger one, every aggregate that owns each emission.</p>
+
+    <p>Stage four: you draw context boundaries through the wall. The seams almost always reveal themselves &mdash; clusters of events that share vocabulary cluster naturally; events that need translation (because the same noun has different meanings on either side) reveal a context boundary.</p>
+
+    <div class="tip-box">
+      <strong>Run an event-storming session before your next big feature.</strong> It costs three hours; it saves three months. The team alignment from "we all wrote on this wall together" is hard to overstate. You will leave with a shared vocabulary, an obvious feature scope, and a list of events you can paste directly into your sealed-class hierarchy.
+    </div>
+
+    <h2>Domain events in Kotlin</h2>
+
+    <p>Events as code: a sealed class with one data-class subtype per event, all immutable, all named in the past tense. This is one of the few places in DDD where Kotlin's type system makes the canonical pattern almost trivial.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :checkout:domain &mdash; pure Kotlin, no Android
+sealed class CheckoutEvent {
+  abstract val cartId: CartId
+  abstract val occurredAt: Instant
+  abstract val version: Int   // schema version, never 0
+
+  data class CartItemAdded(
+    override val cartId: CartId,
+    override val occurredAt: Instant,
+    override val version: Int = 1,
+    val item: LineItem
+  ) : CheckoutEvent()
+
+  data class OrderPlaced(
+    override val cartId: CartId,
+    override val occurredAt: Instant,
+    override val version: Int = 1,
+    val orderId: OrderId,
+    val total: Money,
+    val customerId: CustomerId
+  ) : CheckoutEvent()
+
+  data class PaymentCaptured(
+    override val cartId: CartId,
+    override val occurredAt: Instant,
+    override val version: Int = 1,
+    val orderId: OrderId,
+    val captured: Money,
+    val provider: PaymentProvider
+  ) : CheckoutEvent()
+
+  data class OrderShipped(
+    override val cartId: CartId,
+    override val occurredAt: Instant,
+    override val version: Int = 1,
+    val orderId: OrderId,
+    val carrier: Carrier,
+    val tracking: TrackingNumber
+  ) : CheckoutEvent()
+}</div>
+    </div>
+
+    <p>Notice the discipline: every event has an aggregate id (<code>cartId</code>), a timestamp, and a schema version. The version field looks like overhead until you have to migrate stored events six months later, at which point you'll wonder how anyone shipped events <em>without</em> a version field.</p>
+
+    <h2>Publishing events on Android: Flow and SharedFlow</h2>
+
+    <p>You do not need Kafka, RabbitMQ, or any broker to do domain-events well on Android. In-process events delivered via <code>SharedFlow</code> cover 95% of mobile use cases &mdash; and the other 5% is "this event needs to leave the device," which is what your backend is for.</p>
+
+    <div class="android-box">
+      <div class="android-code">// :checkout:domain &mdash; the publisher interface
+interface DomainEventBus {
+  val events: SharedFlow&lt;CheckoutEvent&gt;
+  suspend fun publish(event: CheckoutEvent)
+}
+
+// :checkout:data &mdash; the implementation
+@Singleton
+class InMemoryDomainEventBus @Inject constructor() : DomainEventBus {
+  private val _events = MutableSharedFlow&lt;CheckoutEvent&gt;(
+    replay = 0,
+    extraBufferCapacity = 64,
+    onBufferOverflow = BufferOverflow.SUSPEND
+  )
+  override val events: SharedFlow&lt;CheckoutEvent&gt; = _events.asSharedFlow()
+  override suspend fun publish(event: CheckoutEvent) = _events.emit(event)
+}
+
+// In an aggregate / use case
+class PlaceOrderUseCase @Inject constructor(
+  private val cartRepo: CartRepository,
+  private val bus: DomainEventBus,
+  private val clock: Clock
+) {
+  suspend operator fun invoke(cmd: PlaceOrder): Result&lt;OrderId&gt; {
+    val cart = cartRepo.findById(cmd.cartId) ?: return Result.failure(...)
+    val (order, event) = cart.place(clock.now())
+    cartRepo.save(cart)
+    bus.publish(event)            // emit OrderPlaced
+    return Result.success(order.id)
+  }
+}</div>
+    </div>
+
+    <p>Subscribers anywhere in the app collect from <code>bus.events</code>. The Statements ViewModel updates totals; the Notifications system schedules a delivery push; an Analytics observer logs to Mixpanel. None of them know about the others; all of them learn the same fact at the same moment.</p>
+
+    <h2>Persistence and replay</h2>
+
+    <p>Once events are immutable facts, you can persist them. Once you persist them, your event log <em>is</em> your audit log &mdash; and replaying them rebuilds your state from scratch. This is event sourcing in miniature, and it's a superpower for two scenarios on mobile:</p>
+
+    <ul>
+      <li><strong>Offline-first apps.</strong> Capture events locally as they happen, sync to the backend when online. The list of unsynced events is your queue. The backend simply replays them.</li>
+      <li><strong>Bug forensics.</strong> A user complains the order looks wrong. You pull the event log for that <code>cartId</code>, replay it, and see exactly what happened in what order. No guessing from log lines.</li>
+    </ul>
+
+    <div class="domain-box">
+      <div class="model-text">// :checkout:data &mdash; Room storage for events
+@Entity(tableName = "checkout_events")
+data class CheckoutEventRow(
+  @PrimaryKey val id: String,           // ULID for chronological ordering
+  val cartId: String,
+  val type: String,                     // "OrderPlaced", "PaymentCaptured", ...
+  val version: Int,
+  val occurredAt: Long,                 // epoch ms
+  val payload: String                   // JSON
+)
+
+@Dao
+interface CheckoutEventDao {
+  @Insert suspend fun insert(row: CheckoutEventRow)
+
+  @Query("SELECT * FROM checkout_events WHERE cartId = :cartId ORDER BY id ASC")
+  suspend fun forCart(cartId: String): List&lt;CheckoutEventRow&gt;
+}
+
+// Replay = read all rows for a cart, decode each, fold into state
+suspend fun rehydrate(cartId: CartId, dao: CheckoutEventDao): Cart =
+  dao.forCart(cartId.value).map { decode(it) }.fold(Cart.empty(cartId)) { c, e -&gt; c.apply(e) }</div>
+    </div>
+
+    <p>You don't have to go full event-sourcing &mdash; most apps shouldn't &mdash; but persisting events as a <em>secondary</em> structure (alongside the regular tables) gives you the audit and the replay without forcing you to rebuild every read query.</p>
+
+    <h2>Events crossing context boundaries</h2>
+
+    <p>Remember chapter 4's <em>Open Host Service</em> + <em>Published Language</em>? Domain events are the most natural Published Language. Each upstream context emits events on a schema; downstream contexts subscribe and translate at the boundary via an ACL.</p>
+
+    <div class="context-box">
+      <span class="context-name">Checkout</span> emits <code>CheckoutEvent.OrderPlaced</code>. The <span class="context-name">Statements</span> context subscribes via its own ACL and turns the event into <code>StatementLineRecorded</code>. The <span class="context-name">Notifications</span> context subscribes too and turns it into <code>OrderConfirmationScheduled</code>. Three contexts, one published event, zero direct coupling between consumers.
+    </div>
+
+    <p>Critically: each consumer translates the event into its own vocabulary. A <code>OrderPlaced</code> sitting in your Notifications domain code is a category error &mdash; it's vocabulary leak. The ACL converts the foreign event into a local concept the moment it crosses the boundary.</p>
+
+    <h2>Events as the contract between aggregates</h2>
+
+    <p>Within a single context, events are also the canonical way to keep two aggregates eventually consistent without violating the "one aggregate per transaction" rule (which we'll meet properly in chapter 8). When the <code>Cart</code> aggregate emits <code>OrderPlaced</code>, an event handler in the same context creates a fresh <code>Order</code> aggregate. Two aggregates, two transactions, one consistent flow.</p>
+
+    <p>This is a key DDD pattern: cross-aggregate consistency is <em>always</em> eventual, mediated by events. The temptation to load two aggregates into one transaction is exactly the temptation that produces aggregate sprawl. Events are the antidote.</p>
+
+    <h2>Common pitfalls</h2>
+
+    <h3>The "EntityChanged" disguise</h3>
+
+    <p>The most common anti-pattern: an event named <code>UserUpdated</code> with a payload of "the entire User object." That isn't a domain event &mdash; it's a CRUD update wearing a costume. Real domain events are specific: <code>UserEmailVerified</code>, <code>UserSubscriptionRenewed</code>, <code>UserNamedChanged</code>. They name the <em>thing that happened</em>, not "something changed somewhere in the user."</p>
+
+    <div class="warning-box">
+      <strong>If your event names all look like <code>XChanged</code>, <code>YUpdated</code>, <code>ZModified</code>, you're doing CRUD with an extra step.</strong> The whole point of domain events is to capture the meaningful, business-named transitions &mdash; not the fact that a row got a new value. Force the name to be specific. If you can't pick a specific past-tense verb, you don't have a domain event yet; you have a database write.
+    </div>
+
+    <h3>Fat events</h3>
+
+    <p>An event with 30 fields is a model leak. Events should carry the minimum payload needed for downstream consumers to act &mdash; usually an ID plus the deltas. If a consumer needs more, it queries the upstream context. Stuffing the entire <code>Order</code> into the <code>OrderPlaced</code> payload couples every consumer to every field of <code>Order</code>, which defeats the boundary.</p>
+
+    <h3>Events used for everything</h3>
+
+    <p>Not every interaction needs to be an event. If a ViewModel calls a use case and immediately uses the return value, that's just a function call. Events shine when:</p>
+
+    <ul>
+      <li>Multiple subscribers need to react to the same fact independently.</li>
+      <li>The producer doesn't know (and shouldn't know) about the consumers.</li>
+      <li>The interaction crosses a context boundary.</li>
+      <li>You want an audit trail or replayability.</li>
+    </ul>
+
+    <p>If none of those apply, a regular method call is clearer.</p>
+
+    <h2>A worked example: the checkout flow</h2>
+
+    <p>Let's trace one realistic interaction. The user taps "Pay now" in a Compose checkout screen. Here's the event chain that follows:</p>
+
+    <ol>
+      <li>ViewModel sends a <code>PlaceOrder</code> command to the use case.</li>
+      <li>The use case loads the <code>Cart</code> aggregate, calls <code>cart.place()</code>, gets back an <code>OrderPlaced</code> event.</li>
+      <li>The use case publishes <code>OrderPlaced</code> on the bus.</li>
+      <li>A handler in the Checkout context captures payment and emits <code>PaymentCaptured</code>.</li>
+      <li>A handler in the Notifications context schedules an order-confirmation push (via its ACL on the bus).</li>
+      <li>A handler in the Statements context records the line item.</li>
+      <li>The fulfillment context (downstream service) eventually emits <code>OrderShipped</code>.</li>
+      <li>The same notifications handler picks up <code>OrderShipped</code> and schedules a delivery push.</li>
+    </ol>
+
+    <p>Notice how thin the wiring is. Each handler subscribes to the events it cares about. Adding a new feature ("send a fraud-check job on every <code>OrderPlaced</code>") means adding one new subscriber. No existing code changes.</p>
+
+    <h2>When NOT to use domain events</h2>
+
+    <p>Events have a cost: indirection, harder debugging, eventual consistency, schema versioning. Don't pay that cost when:</p>
+
+    <ul class="checklist">
+      <li><strong>The flow is single-actor and synchronous.</strong> A login screen calling <code>AuthRepository.login(...)</code> and getting a <code>User</code> back doesn't need an event &mdash; it's a request/response.</li>
+      <li><strong>The interaction never crosses a context boundary.</strong> Inside one small context with one consumer, a method call is clearer.</li>
+      <li><strong>There's no business meaning to the change.</strong> "The user opened a screen" might be useful for analytics, but it's not a domain event &mdash; it's a UX signal.</li>
+      <li><strong>You need an immediate, transactional response.</strong> Don't fake synchronous flow on top of async events. If the caller blocks until the event is processed, you have a method call dressed up as architecture theater.</li>
+    </ul>
+
+    <h2>Tooling: in-process vs broker</h2>
+
+    <p>For Android apps, the spectrum is:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">⚡</div>
+      <div class="tool-info">
+        <div class="tool-name"><code>SharedFlow</code> &mdash; in-process, hot</div>
+        <div class="tool-desc">The default. Subscribers in the same process get events as they happen. No persistence. Loss-tolerant if your app dies. Use for UI reactivity and intra-app integration.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">📚</div>
+      <div class="tool-info">
+        <div class="tool-name">Room-backed event log</div>
+        <div class="tool-desc">SharedFlow plus persistence. Events go to a Room table; subscribers can replay from any point. Use for offline-first apps, audit, and bug forensics.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🌐</div>
+      <div class="tool-info">
+        <div class="tool-name">Backend broker (Kafka, NATS, SQS)</div>
+        <div class="tool-desc">When events need to leave the device. The Android side <em>publishes</em> via your normal API; the backend broker handles fanout to other services. From the app's perspective it's just one more downstream consumer of your local bus.</div>
+      </div>
+    </div>
+
+    <p>Most apps live in tier one with a touch of tier two. Tier three is rare on the device itself &mdash; you cross to the backend before reaching for a real broker.</p>
+
+    <h2>Naming events well</h2>
+
+    <p>Names matter more for events than almost anything else in DDD, because the events are what your PMs and customers will eventually see in dashboards, audit logs, and product specs. A few rules:</p>
+
+    <ul>
+      <li><strong>Past tense, always.</strong> <code>OrderPlaced</code>, not <code>OrderPlace</code> or <code>OrderPlacement</code>.</li>
+      <li><strong>Subject + verb.</strong> What thing? Did what? <code>InvoiceIssued</code>, <code>SubscriptionCancelled</code>.</li>
+      <li><strong>Specific, not generic.</strong> <code>UserEmailVerified</code> beats <code>UserUpdated</code> every time.</li>
+      <li><strong>Domain words, not technical.</strong> <code>PaymentCaptured</code> beats <code>StripeChargeSucceeded</code> &mdash; the second name leaks vendor.</li>
+      <li><strong>One verb per event.</strong> <code>OrderPlacedAndPaid</code> is two events: <code>OrderPlaced</code>, <code>PaymentCaptured</code>.</li>
+    </ul>
+
+    <h2>Exercise: list every event in one feature</h2>
+
+    <div class="exercise-box">
+      <p><strong>One hour. One feature you know well. A piece of paper.</strong></p>
+      <ol>
+        <li>Pick one feature in your app &mdash; checkout, onboarding, ride request, password reset, anything end-to-end.</li>
+        <li>Walk through the feature in your head from the user's first tap to the final outcome.</li>
+        <li>Write down every <em>significant business fact</em> that happens during the flow. Past tense, one per line. Aim for at least 8-12.</li>
+        <li>For each, ask: would a PM recognize this name? If not, rename it.</li>
+        <li>For each, ask: do we currently capture this fact anywhere &mdash; logs, analytics, audit table, push notification trigger? Mark "captured" or "lost forever."</li>
+        <li>Look at the "lost forever" rows. These are the events you're not currently modeling. Which ones would the support team kill for, the next time a customer complains?</li>
+        <li>Pick the one or two highest-value missing events and draft a sealed-class event for each. Show them to your team in the next stand-up.</li>
+      </ol>
+      <p>You will discover, almost without exception, that your app captures CRUD updates everywhere and domain events nowhere &mdash; even though your PMs talk in domain events all day. Closing that gap is what makes downstream features (analytics, audit, replay, eventual-consistency-across-contexts) tractable.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You've spent five chapters on strategy &mdash; contexts, maps, subdomains, events. The next four chapters shift to <em>tactical</em> design: the building blocks inside one context. Chapter 7 starts with the most fundamental tactical distinction: <strong>entities versus value objects</strong>. Identity vs equality. Why a Kotlin <code>data class</code> is not automatically a value object. Why <code>String email</code> is a smell that <code>EmailAddress</code> fixes. We'll spend the chapter making that line crisp, with idiomatic Kotlin examples for both sides.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-subdomains.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Subdomains</span>
+      </a>
+      <a href="07-entities-and-value-objects.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Entities and Value Objects</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

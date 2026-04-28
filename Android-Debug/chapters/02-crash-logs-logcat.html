@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Crash Logs, Logcat &amp; Stacktraces | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-ai-debugger-mindset.html">&larr; Prev</a>
+      <a href="03-anr-diagnosis.html">Next &rarr;</a>
+      <a href="maps/02-crash-logs-logcat-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Crash Logs, Logcat &amp; Stacktraces</h1>
+    <p class="subtitle">Master the art of feeding Android log output to AI and getting actionable analysis back</p>
+  </header>
+
+  <main>
+
+    <h2>From Mindset to Mechanics</h2>
+
+    <p>In Chapter 1, you learned <em>why</em> AI-assisted debugging works. Now we get into the <em>how</em>. This chapter is about the raw material of Android debugging: crash logs, logcat output, and stacktraces. These are the artifacts your app produces when something goes wrong &mdash; and they&rsquo;re exactly what AI is best at analyzing.</p>
+
+    <p>By the end of this chapter, you&rsquo;ll have a reusable <code>/analyze-crash</code> skill that takes messy logcat output and returns a structured diagnosis every time.</p>
+
+    <h2>Anatomy of an Android Stacktrace</h2>
+
+    <p>Before we feed anything to AI, let&rsquo;s make sure you know what each part of a stacktrace means. Think of a stacktrace as a snapshot of the call stack at the moment something exploded &mdash; like a freeze-frame of dominoes mid-fall.</p>
+
+    <pre><code>FATAL EXCEPTION: main
+Process: com.example.myapp, PID: 18432
+java.lang.IllegalStateException: Fragment ProfileFragment{a1b2c3d}
+  not attached to a context.
+    at androidx.fragment.app.Fragment.requireContext(Fragment.java:952)
+    at com.example.myapp.ui.profile.ProfileFragment.updateUI(ProfileFragment.kt:87)
+    at com.example.myapp.ui.profile.ProfileFragment$loadData$1.invokeSuspend(ProfileFragment.kt:54)
+    at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+    at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:108)
+    at android.os.Handler.handleCallback(Handler.java:958)
+    at android.os.Looper.loop(Looper.java:230)
+    at android.app.ActivityThread.main(ActivityThread.java:8232)</code></pre>
+
+    <p>Here&rsquo;s what each section tells you:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Part</th>
+          <th>What It Means</th>
+          <th>What AI Needs</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>FATAL EXCEPTION: main</code></td>
+          <td>Crash on the main (UI) thread</td>
+          <td>Thread context &mdash; main thread crashes have different causes than background thread crashes</td>
+        </tr>
+        <tr>
+          <td><code>Process: com.example.myapp</code></td>
+          <td>Your app&rsquo;s package name</td>
+          <td>Helps AI filter your code from framework code</td>
+        </tr>
+        <tr>
+          <td><code>IllegalStateException</code></td>
+          <td>The exception type</td>
+          <td>AI maps this to known Android patterns instantly</td>
+        </tr>
+        <tr>
+          <td><code>Fragment...not attached to a context</code></td>
+          <td>The specific error message</td>
+          <td>Critical for narrowing down the cause</td>
+        </tr>
+        <tr>
+          <td>The stack frames</td>
+          <td>Call chain from crash point to entry point</td>
+          <td>AI traces this to find where <em>your</em> code triggered the issue</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      Always paste the <strong>complete</strong> stacktrace, including the <code>FATAL EXCEPTION</code> header and the thread name. AI uses the thread name to determine if this is a lifecycle issue (main thread), a threading bug (background thread), or a system callback issue.
+    </div>
+
+    <h2>Logcat: Filtering the Noise</h2>
+
+    <p>Raw logcat is a firehose. On a busy device, you&rsquo;ll see hundreds of lines per second from system services, other apps, and garbage collection. You need to filter before you analyze.</p>
+
+    <h3>Essential Logcat Commands</h3>
+
+    <pre><code># Filter by your app's package (most common)
+adb logcat --pid=$(adb shell pidof com.example.myapp)
+
+# Filter FATAL crashes only
+adb logcat "*:E" | grep -A 20 "FATAL EXCEPTION"
+
+# Filter by tag (when you know the component)
+adb logcat -s "ProfileFragment" "ProfileViewModel"
+
+# Save to file for AI analysis
+adb logcat -d > crash_log.txt
+
+# Clear and start fresh before reproducing a bug
+adb logcat -c && adb logcat --pid=$(adb shell pidof com.example.myapp)</code></pre>
+
+    <p>The <code>-d</code> flag dumps the current log buffer and exits &mdash; perfect for capturing a snapshot to paste into Claude Code. The <code>--pid</code> filter is your best friend: it shows only your app&rsquo;s output, cutting out 95% of the noise.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Prompt</div>
+        <div class="prompt-text">Here's my logcat:
+[paste 2000 lines of unfiltered logcat including system logs, GC events, and other apps]</div>
+        <div class="prompt-explanation">Too much noise. AI will spend tokens parsing irrelevant system logs and may miss the actual crash.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Prompt</div>
+        <div class="prompt-text">App crashes when navigating to the profile screen after login. Here's the filtered crash log from logcat (PID-filtered for my app only):
+
+[paste 30-50 lines of relevant logcat around the crash]
+
+Using: Fragment navigation, Hilt, coroutines for data loading.</div>
+        <div class="prompt-explanation">Filtered output + context + reproduction steps = precise AI analysis.</div>
+      </div>
+    </div>
+
+    <h2>Reading FATAL EXCEPTION Blocks</h2>
+
+    <p>Not all crashes are simple single-exception affairs. Android loves to chain exceptions together with &ldquo;Caused by&rdquo; blocks. Here&rsquo;s where things get interesting &mdash; and where AI really shines.</p>
+
+    <div class="debug-trace">
+      <h4>Multi-Cause Crash: Chained Exceptions</h4>
+<pre><code>FATAL EXCEPTION: main
+Process: com.example.shopapp, PID: 21503
+java.lang.RuntimeException: Unable to start activity
+  ComponentInfo{com.example.shopapp/.ui.checkout.CheckoutActivity}:
+  android.database.sqlite.SQLiteException: no such table: cart_items
+  (code 1 SQLITE_ERROR)
+    at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:3782)
+    at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:3922)
+    at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:103)
+    ...
+Caused by: android.database.sqlite.SQLiteException: no such table:
+  cart_items (code 1 SQLITE_ERROR)
+    at android.database.sqlite.SQLiteConnection.nativeExecuteForCursorWindow(Native Method)
+    at android.database.sqlite.SQLiteSession.executeForCursorWindow(SQLiteSession.java:838)
+    at com.example.shopapp.data.db.CartDao_Impl$4.call(CartDao_Impl.java:112)
+    at com.example.shopapp.data.db.CartDao_Impl$4.call(CartDao_Impl.java:97)
+    at androidx.room.RoomDatabase.query(RoomDatabase.java:480)
+    at com.example.shopapp.data.db.CartDao_Impl.getCartItems(CartDao_Impl.java:103)
+    at com.example.shopapp.ui.checkout.CheckoutViewModel.&lt;init&gt;(CheckoutViewModel.kt:28)
+    at com.example.shopapp.ui.checkout.CheckoutActivity.onCreate(CheckoutActivity.kt:34)
+    ... 12 more</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p>Claude Code reads the chain bottom-up: <strong>(1)</strong> The real error is in the <code>Caused by</code> block &mdash; <code>SQLiteException: no such table: cart_items</code>. <strong>(2)</strong> This is called from <code>CartDao_Impl.getCartItems()</code>, which is a Room-generated DAO. <strong>(3)</strong> The table doesn&rsquo;t exist because a Room migration is missing &mdash; the <code>cart_items</code> table was added in a new version but the database wasn&rsquo;t migrated. <strong>(4)</strong> This happens at Activity launch, inside the ViewModel constructor.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Missing Room Database Migration</h4>
+      <p>The <code>cart_items</code> table was added to the Room <code>@Database</code> entity list, and the database version was bumped, but no <code>Migration</code> object was provided. Room tried to query a table that doesn&rsquo;t exist in the old database schema.</p>
+      <p>This is the #1 Room crash pattern. It only hits users who <strong>upgrade</strong> the app &mdash; fresh installs work fine because Room creates all tables from scratch.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Add the Missing Migration</h4>
+<pre><code>// In your AppDatabase companion object:
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `cart_items` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `product_id` TEXT NOT NULL,
+                `quantity` INTEGER NOT NULL DEFAULT 1,
+                `added_at` INTEGER NOT NULL
+            )
+        """)
+    }
+}
+
+// In your database builder:
+Room.databaseBuilder(context, AppDatabase::class.java, "shop.db")
+    .addMigrations(MIGRATION_3_4)
+    .build()</code></pre>
+      <p><strong>Pro tip:</strong> Also add <code>.fallbackToDestructiveMigration()</code> in debug builds so you don&rsquo;t crash during development, but <strong>never</strong> in release builds &mdash; it deletes all user data.</p>
+    </div>
+
+    <h3>The &ldquo;Caused by&rdquo; Rule</h3>
+
+    <p>When a stacktrace has multiple &ldquo;Caused by&rdquo; blocks, the <strong>last</strong> one is usually the real culprit. The ones above it are just wrappers that caught and re-threw the exception.</p>
+
+    <p>Think of it like a crime scene: the top of the stacktrace is where the body was found. The &ldquo;Caused by&rdquo; chain leads you back to where the crime actually happened.</p>
+
+    <div class="tip-box">
+      Tell Claude Code to &ldquo;focus on the deepest Caused by block&rdquo; when pasting multi-cause crashes. This directs AI to the root exception instead of the wrapper.
+    </div>
+
+    <h2>ProGuard/R8 Obfuscated Stacktraces</h2>
+
+    <p>Release builds run through R8 (Android&rsquo;s code shrinker), which renames your classes and methods to things like <code>a.b.c.d()</code>. A stacktrace from a release build looks like gibberish:</p>
+
+    <pre><code>java.lang.NullPointerException
+    at c.a.b.f.a(SourceFile:12)
+    at c.a.b.e.b(SourceFile:45)
+    at c.a.a.d.onClick(SourceFile:8)</code></pre>
+
+    <p>You <strong>must deobfuscate before feeding to AI</strong>. AI can&rsquo;t pattern-match on obfuscated names.</p>
+
+    <h3>Deobfuscation Steps</h3>
+
+    <pre><code># 1. Find your mapping file (generated at build time)
+# Location: app/build/outputs/mapping/release/mapping.txt
+
+# 2. Use the retrace tool (bundled with Android SDK)
+$ANDROID_HOME/cmdline-tools/latest/bin/retrace \
+    app/build/outputs/mapping/release/mapping.txt \
+    obfuscated_stacktrace.txt
+
+# 3. Or use the ProGuard retrace tool directly
+java -jar $ANDROID_HOME/tools/proguard/lib/retrace.jar \
+    mapping.txt stacktrace.txt</code></pre>
+
+    <div class="warning-box">
+      <strong>Keep your mapping files!</strong> Store <code>mapping.txt</code> for every release build. Upload them to Firebase Crashlytics, or archive them alongside your APK/AAB. Without the mapping file, obfuscated stacktraces from production are unreadable.
+    </div>
+
+    <p>Once you have the deobfuscated stacktrace, feed it to Claude Code exactly like any other crash log.</p>
+
+    <h2>Building the <code>/analyze-crash</code> Skill</h2>
+
+    <p>In Chapter 1, you built a general <code>/debug</code> skill. Now let&rsquo;s build a specialized one for Android crash logs. This skill understands logcat format, Caused-by chains, and Android-specific patterns.</p>
+
+    <p>Create <code>.claude/commands/analyze-crash.md</code>:</p>
+
+    <pre><code># /analyze-crash — Android Crash Log Analysis
+
+Analyze raw logcat output or a stacktrace from an Android app crash.
+
+## Input
+The user will paste one of:
+- A FATAL EXCEPTION block from logcat
+- A stacktrace from Crashlytics or Play Console
+- A section of logcat output containing errors
+
+## Analysis Steps
+
+1. **Identify all exceptions** in the Caused-by chain. Focus on the
+   deepest (last) Caused-by — that's usually the root exception.
+
+2. **Classify the crash type:**
+   - Lifecycle issue (Fragment not attached, Activity destroyed)
+   - Threading issue (CalledFromWrongThreadException, main thread IO)
+   - Data issue (NPE, SQLiteException, JsonSyntaxException)
+   - Resource issue (OOM, BadTokenException, WindowLeaked)
+   - Third-party library issue (crash inside OkHttp, Retrofit, Glide)
+
+3. **Trace to user code** — find the first stack frame that belongs
+   to the app (not androidx.*, kotlin.*, or java.*).
+
+4. **Identify the root cause** — WHY did this happen, not just WHAT.
+
+5. **Suggest a fix** with Kotlin code.
+
+6. **Rate the severity**: Critical (data loss/security), High (crash
+   for many users), Medium (crash for edge case), Low (cosmetic).
+
+## Output Format
+
+### Exception Chain
+[List each exception in the chain, deepest first]
+
+### Crash Classification
+[Lifecycle / Threading / Data / Resource / Library]
+
+### Your Code Entry Point
+[File:line where your code triggered this]
+
+### Root Cause
+[Why this happened]
+
+### Suggested Fix
+```kotlin
+[Code]
+```
+
+### Severity: [Critical/High/Medium/Low]
+
+### Prevention
+[How to prevent this class of bug in the future]</code></pre>
+
+    <div class="tip-box">
+      The crash classification step is what makes this skill powerful. By categorizing the crash type, AI can apply the right mental model: lifecycle bugs need lifecycle-aware fixes, threading bugs need dispatcher fixes, data bugs need null-safety fixes.
+    </div>
+
+    <h2>Multi-Device Crashes</h2>
+
+    <p>The same code can crash on a Samsung Galaxy S24 and work fine on a Pixel 8. Welcome to Android fragmentation. AI helps here because it knows about manufacturer-specific quirks and API-level differences.</p>
+
+    <p>When reporting a multi-device crash to Claude Code, include:</p>
+
+    <pre><code>This crash happens on Samsung devices running Android 13 but not
+on Pixel devices running Android 14. Here are both stacktraces:
+
+## Samsung Galaxy S24 (Android 13, One UI 6.0):
+[paste stacktrace]
+
+## Pixel 8 (Android 14):
+Works fine — no crash.
+
+Our minSdk is 24, targetSdk is 35.
+We use FLAG_IMMUTABLE for PendingIntents.</code></pre>
+
+    <p>Claude Code will look for manufacturer-specific behaviors: Samsung&rsquo;s aggressive battery optimization, Xiaomi&rsquo;s custom permission system, or API-level differences in how <code>PendingIntent</code> flags are handled.</p>
+
+    <h2>Third-Party Library Crashes</h2>
+
+    <p>Sometimes the stacktrace points entirely into library code. You see <code>okhttp3.internal.</code> or <code>retrofit2.adapter.</code> and none of your own code appears. These are tricky because you can&rsquo;t just &ldquo;fix the library.&rdquo;</p>
+
+    <p>The approach: ask AI to work backward from the library crash to your usage.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">This crash happens inside OkHttp and none of my code appears in the stacktrace. But it only happens when I call the /api/checkout endpoint. Here's the stacktrace:
+
+[paste stacktrace]
+
+Here's my Retrofit interface for this endpoint:
+[paste CheckoutApi.kt]
+
+And here's my OkHttp client configuration:
+[paste NetworkModule.kt]</div>
+      <div class="prompt-explanation">By providing your usage code alongside the library stacktrace, AI can spot the misconfiguration — maybe a wrong content type, a missing interceptor, or an incorrect timeout setting.</div>
+    </div>
+
+    <h2>The Crash Pattern Library</h2>
+
+    <p>AI recognizes certain Android crash patterns instantly because they&rsquo;re so common. Here are the ones you&rsquo;ll see most often:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Exception</th>
+          <th>Common Cause</th>
+          <th>AI&rsquo;s Usual Diagnosis</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>IllegalStateException: Fragment not attached</code></td>
+          <td>Coroutine completes after Fragment is destroyed</td>
+          <td>Use <code>viewLifecycleOwner.lifecycleScope</code> instead of <code>lifecycleScope</code></td>
+        </tr>
+        <tr>
+          <td><code>BadTokenException</code></td>
+          <td>Showing dialog after Activity is finishing</td>
+          <td>Check <code>isFinishing</code> and <code>isDestroyed</code> before showing dialogs</td>
+        </tr>
+        <tr>
+          <td><code>DeadObjectException</code></td>
+          <td>IPC to a process that died (often System UI)</td>
+          <td>Wrap in try-catch; usually transient and system-level</td>
+        </tr>
+        <tr>
+          <td><code>TransactionTooLargeException</code></td>
+          <td>Saving too much data in <code>onSaveInstanceState</code></td>
+          <td>Use ViewModel to hold data; save only IDs in Bundle</td>
+        </tr>
+        <tr>
+          <td><code>SQLiteException: no such table</code></td>
+          <td>Missing Room migration</td>
+          <td>Add the migration or export/verify schema</td>
+        </tr>
+        <tr>
+          <td><code>SecurityException: Permission denied</code></td>
+          <td>Missing runtime permission check on Android 6+</td>
+          <td>Add runtime permission request before the API call</td>
+        </tr>
+        <tr>
+          <td><code>InflateException</code></td>
+          <td>Missing attribute, wrong theme, or broken custom View</td>
+          <td>Check the nested Caused-by for the real layout error</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>When you feed any of these to Claude Code, it will typically nail the cause in seconds. These patterns are bread and butter for AI analysis.</p>
+
+    <h2>Real-World Walkthrough: Fragment Lifecycle Crash</h2>
+
+    <p>Let&rsquo;s trace a full debugging session from logcat to fix. This is the crash that haunts every Android dev who uses coroutines with Fragments.</p>
+
+    <div class="debug-trace">
+      <h4>The Crash</h4>
+<pre><code>FATAL EXCEPTION: main
+Process: com.example.newsapp, PID: 9821
+java.lang.IllegalStateException: Fragment ArticleFragment{e4f5a6b}
+  not attached to a context.
+    at androidx.fragment.app.Fragment.requireContext(Fragment.java:952)
+    at com.example.newsapp.ui.article.ArticleFragment.showArticle(ArticleFragment.kt:72)
+    at com.example.newsapp.ui.article.ArticleFragment$fetchArticle$1.invokeSuspend(ArticleFragment.kt:45)
+    at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+    at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:108)
+    at android.os.Handler.handleCallback(Handler.java:958)
+    at android.os.Looper.loop(Looper.java:230)
+    at android.app.ActivityThread.main(ActivityThread.java:8232)</code></pre>
+      <h4>Claude Code&rsquo;s Analysis</h4>
+      <p><strong>Exception:</strong> <code>IllegalStateException</code> &mdash; Fragment not attached to a context.</p>
+      <p><strong>Classification:</strong> Lifecycle issue.</p>
+      <p><strong>Entry point:</strong> <code>ArticleFragment.kt:45</code> &mdash; a coroutine launched in <code>fetchArticle()</code> that calls <code>showArticle()</code> after the Fragment is detached.</p>
+      <p><strong>Root cause:</strong> The coroutine was launched with <code>lifecycleScope</code> (Activity-scoped) instead of <code>viewLifecycleOwner.lifecycleScope</code> (view-scoped). When the user navigates away, the Fragment&rsquo;s view is destroyed but the coroutine keeps running. When it completes and calls <code>requireContext()</code>, the Fragment is already detached.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Use viewLifecycleOwner.lifecycleScope</h4>
+<pre><code>// BEFORE (crashes):
+class ArticleFragment : Fragment() {
+    private fun fetchArticle(id: String) {
+        lifecycleScope.launch {
+            val article = repository.getArticle(id)
+            showArticle(article)  // Fragment might be detached!
+        }
+    }
+}
+
+// AFTER (safe):
+class ArticleFragment : Fragment() {
+    private fun fetchArticle(id: String) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val article = repository.getArticle(id)
+            showArticle(article)  // Automatically cancelled when view is destroyed
+        }
+    }
+}</code></pre>
+      <p><code>viewLifecycleOwner.lifecycleScope</code> is tied to the Fragment&rsquo;s <em>view</em> lifecycle, not the Fragment itself. When the view is destroyed (on navigation), the coroutine is automatically cancelled. No more &ldquo;not attached to a context&rdquo; crashes.</p>
+    </div>
+
+    <h2>Measuring the Impact</h2>
+
+    <p>How much faster is crash analysis with AI? Here&rsquo;s a real comparison for a moderately complex chained-exception crash:</p>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Manual Crash Analysis</h4>
+        <p><strong>Read &amp; parse stacktrace:</strong> 5 min</p>
+        <p><strong>Follow Caused-by chain:</strong> 3 min</p>
+        <p><strong>Open relevant files:</strong> 4 min</p>
+        <p><strong>Cross-reference lifecycle:</strong> 6 min</p>
+        <p><strong>Search StackOverflow:</strong> 8 min</p>
+        <p><strong>Identify root cause:</strong> 5 min</p>
+        <p><strong>Total: ~31 minutes</strong></p>
+      </div>
+      <div class="metric-after">
+        <h4>AI-Assisted Crash Analysis</h4>
+        <p><strong>Filter logcat &amp; paste:</strong> 2 min</p>
+        <p><strong>AI analysis returned:</strong> &lt;1 min</p>
+        <p><strong>Verify AI&rsquo;s hypothesis:</strong> 4 min</p>
+        <p><strong>Follow-up question:</strong> 2 min</p>
+        <p><strong>Write &amp; test fix:</strong> 4 min</p>
+        <p>&nbsp;</p>
+        <p><strong>Total: ~13 minutes</strong></p>
+      </div>
+    </div>
+
+    <h2>Your Crash Analysis Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Filter logcat output before pasting &mdash; use <code>--pid</code> or tag filters</li>
+      <li class="checked">Always include the full <code>FATAL EXCEPTION</code> header with thread name</li>
+      <li class="checked">For chained exceptions, look at the <strong>deepest</strong> Caused-by block</li>
+      <li class="checked">Deobfuscate R8/ProGuard stacktraces <strong>before</strong> feeding to AI</li>
+      <li class="checked">Include context: device info, reproduction steps, and relevant code</li>
+      <li class="checked">For multi-device crashes, provide stacktraces from both passing and failing devices</li>
+      <li class="checked">Set up the <code>/analyze-crash</code> skill for repeatable, structured analysis</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Key Takeaway</h3>
+      <p>The quality of AI crash analysis is directly proportional to the quality of the input you give it. Filter your logcat. Deobfuscate your stacktraces. Include context. The 2 minutes you spend preparing the input saves 20 minutes of vague AI output and follow-up questions.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Build and Test Your /analyze-crash Skill</h4>
+      <ol>
+        <li><strong>Create the skill:</strong> Copy the <code>/analyze-crash</code> template from this chapter into <code>.claude/commands/analyze-crash.md</code> in your Android project.</li>
+        <li><strong>Capture a crash:</strong> Run your app, navigate to a screen, and either find an existing crash or trigger one. Use <code>adb logcat --pid=$(adb shell pidof your.package)</code> to capture only your app&rsquo;s output.</li>
+        <li><strong>Run the skill:</strong> In Claude Code, type <code>/analyze-crash</code> and paste the crash log. Review the structured output &mdash; did it correctly classify the crash type?</li>
+        <li><strong>Test with a chained exception:</strong> If you have a Room database, try bumping the version number without adding a migration. Capture the <code>SQLiteException</code> and feed it to Claude Code. The AI should identify the missing migration immediately.</li>
+        <li><strong>Bonus &mdash; obfuscated crash:</strong> If you have a release build, capture a crash from it, then deobfuscate with <code>retrace</code> and feed both the obfuscated and deobfuscated versions to AI. Compare the analysis quality.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Crashes are dramatic &mdash; the app stops, the user sees a dialog, you get a stacktrace. But there&rsquo;s something worse: <strong>ANRs</strong>. The app doesn&rsquo;t crash. It just&hellip; freezes. The user stares at an unresponsive screen for 5 seconds, taps the &ldquo;Wait&rdquo; button once, then uninstalls your app forever.</p>
+
+    <p>In <strong>Chapter 3: ANR Diagnosis and Prevention</strong>, we&rsquo;ll tackle Application Not Responding errors &mdash; how to read ANR traces, how to find the blocked thread, and how to build an <code>/analyze-anr</code> skill that turns the most frustrating Android debugging experience into a structured analysis.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="01-ai-debugger-mindset.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">The AI-Powered Debugger Mindset</span>
+      </a>
+      <a href="03-anr-diagnosis.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">ANR Diagnosis and Prevention</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

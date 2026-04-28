@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: The Anatomy of a Harness — AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-what-is-a-harness.html">Prev</a>
+      <a href="03-context-engineering.html">Next</a>
+      <a href="maps/02-anatomy-of-a-harness-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>The Anatomy of a Harness</h1>
+    <p class="subtitle">Six components that turn a text generator into a useful tool</p>
+  </header>
+
+  <main>
+
+    <p>
+      In Chapter 1, you learned that a harness exists &mdash; the invisible infrastructure between you and the LLM. You got the map: six components. Now it's time to walk the terrain.
+    </p>
+
+    <p>
+      This chapter breaks down each component, shows you what it does in real tools, and ends with a complete walkthrough of all six working together. By the end, you'll be able to look at any AI tool and immediately recognize the harness underneath.
+    </p>
+
+    <!-- The Kitchen Analogy -->
+    <h2>The Restaurant Kitchen</h2>
+
+    <p>
+      Before we dive into the components, let's set up an analogy that will carry us through the whole chapter. Think of an AI coding tool as a <strong>restaurant kitchen</strong>.
+    </p>
+
+    <ul>
+      <li>The <strong>chef</strong> is the LLM &mdash; skilled, creative, does the actual cooking</li>
+      <li>The <strong>recipe book</strong> is the system prompt &mdash; tells the chef how to behave and what rules to follow</li>
+      <li>The <strong>kitchen tools</strong> (knives, ovens, mixers) are the tool integrations &mdash; the chef can't cook without them</li>
+      <li>The <strong>ingredient prep station</strong> is context engineering &mdash; someone selects and preps the right ingredients before the chef sees them</li>
+      <li>The <strong>order history and kitchen notes</strong> are memory &mdash; "table 4 is allergic to nuts, the last batch of sauce was too salty"</li>
+      <li>The <strong>health inspector</strong> is the guardrails &mdash; enforces rules the chef can't override</li>
+      <li>The <strong>reservation book and shift log</strong> is persistence &mdash; so the next shift knows what happened today</li>
+    </ul>
+
+    <p>
+      A great chef in a kitchen with no tools, no prep, no recipes, and no health standards would produce chaos. A great chef in a well-run kitchen produces a Michelin-star meal. Same talent, different infrastructure. Let's look at each piece.
+    </p>
+
+    <!-- Component 1: System Prompt -->
+    <h2>Component 1: The System Prompt</h2>
+
+    <p>
+      Every time you send a message to an AI tool, the model doesn't just see your message. It sees a <strong>system prompt</strong> first &mdash; a long set of instructions that were loaded before you said anything. You never see this prompt. The model always does.
+    </p>
+
+    <p>
+      Think of it as the employee handbook that the chef reads before every shift. It covers tone ("be concise"), behavior ("never modify files without asking"), capabilities ("you have access to these tools"), and constraints ("don't generate secrets").
+    </p>
+
+    <div class="tip-box">
+      Claude Code's system prompt isn't a single static block of text. It's a <strong>modular, conditional architecture</strong> with over 110 distinct prompt fragments that activate based on context &mdash; your operating system, your permission settings, which tools are available, what mode you're in. The system prompt you get on macOS in plan mode is different from what you get on Linux in default mode.
+    </div>
+
+    <p>
+      Here's a simplified sketch of what a system prompt looks like in structure (not the actual prompt &mdash; these are proprietary):
+    </p>
+
+<pre><code># System prompt structure (simplified)
+- Identity and role definition
+- Tone and style rules
+- Available tools and their descriptions
+- Permission boundaries
+- Output format guidelines
+- Platform-specific instructions (OS, shell)
+- Project context (CLAUDE.md contents)
+- Safety and security constraints
+- Mode-specific behavior (plan mode, default, etc.)</code></pre>
+
+    <p>
+      The key insight: <strong>the system prompt is the single biggest lever a harness has.</strong> Change the system prompt, and the model behaves completely differently &mdash; even though the model itself hasn't changed at all. This is why Cursor found that tweaking their system prompt instructions for a specific model yielded a 30% performance difference.
+    </p>
+
+    <!-- Component 2: Tools -->
+    <h2>Component 2: The Tool Integration Layer</h2>
+
+    <p>
+      An LLM without tools can only <em>talk about</em> doing things. An LLM with tools can actually <em>do</em> things. Tools are the model's hands.
+    </p>
+
+    <p>
+      Here's how it works: the harness tells the model "you have these tools available," and each tool comes with a name, a description, and a schema describing what parameters it accepts. When the model decides it needs a tool, it outputs a structured request instead of regular text. The harness intercepts this, executes the tool, and feeds the result back.
+    </p>
+
+    <p>
+      Claude Code registers roughly 18 built-in tools. Here's a taste of what the tool registry looks like:
+    </p>
+
+<pre><code>Tools registered:
+  Read        — Read file contents (path, offset, limit)
+  Edit        — Replace text in a file (path, old, new)
+  Write       — Create or overwrite a file (path, content)
+  Bash        — Execute a shell command (command, timeout)
+  Glob        — Find files by pattern (pattern, path)
+  Grep        — Search file contents (pattern, path, type)
+  WebSearch   — Search the web (query)
+  WebFetch    — Fetch a URL (url)
+  Agent       — Spawn a sub-agent for parallel work (prompt)
+  + MCP tools — Any custom tools you've connected</code></pre>
+
+    <p>
+      The model doesn't execute any of these directly. It just says "I'd like to call Read with path <code>src/auth.ts</code>." The harness does the rest &mdash; permission check, execution, result formatting, and sending the result back for the model to process.
+    </p>
+
+    <div class="warning-box">
+      <strong>Tools are not unlimited.</strong> Every tool description consumes tokens in the context window. Claude Code uses lazy discovery for MCP tools &mdash; it only loads their descriptions when relevant, not all upfront. If you connect 200 MCP tools, the harness won't dump all 200 descriptions into every request. That would eat your context alive.
+    </div>
+
+    <p>
+      Cursor takes a different approach: they name their tools to match Unix commands the model already knows (like <code>rg</code> for ripgrep), which encourages the model to use them instead of shelling out to the command line. Tool design matters &mdash; the description and naming directly affect how often and how well the model uses each tool.
+    </p>
+
+    <!-- Component 3: Context Engineering -->
+    <h2>Component 3: Context Engineering</h2>
+
+    <p>
+      Context engineering is the art of deciding <strong>what information reaches the model</strong>. Remember: the model's context window is finite. A large one might hold 200,000 tokens (roughly 150,000 words). Your codebase might be millions of lines. You can't send everything.
+    </p>
+
+    <p>
+      Back to our kitchen: this is the ingredient prep station. The chef doesn't walk into a warehouse of 10,000 ingredients and start picking. A prep cook selects the right ingredients for today's menu and lays them out on the station. That's what context engineering does &mdash; it curates.
+    </p>
+
+    <p>
+      What goes into the context window for a typical Claude Code request:
+    </p>
+
+    <ol>
+      <li><strong>System prompt</strong> &mdash; the base instructions (could be 5,000+ tokens)</li>
+      <li><strong>CLAUDE.md content</strong> &mdash; your project instructions</li>
+      <li><strong>Conversation history</strong> &mdash; what you and the model have said so far</li>
+      <li><strong>Tool results</strong> &mdash; file contents, command outputs, search results from previous steps</li>
+      <li><strong>System reminders</strong> &mdash; periodic re-injections to combat "instruction fade"</li>
+    </ol>
+
+    <p>
+      That fifth item is interesting. Models tend to pay less attention to instructions buried in the middle of a long context. So Claude Code periodically re-injects key instructions as "system reminders" throughout the conversation. It's like the sous chef tapping the chef on the shoulder: "Hey, remember &mdash; table 4 is allergic to nuts."
+    </p>
+
+    <p>
+      When the context gets too full, the harness <strong>compacts</strong> it &mdash; summarizing older conversation turns so the important information stays but the token count shrinks. We'll explore this in depth in Chapter 3.
+    </p>
+
+    <!-- Component 4: Memory and State -->
+    <h2>Component 4: Memory and State Management</h2>
+
+    <p>
+      Here's the fundamental truth you need to internalize: <strong>LLMs have zero memory.</strong> Every single API call starts from a blank slate. The model doesn't remember your last message, your last session, or your name. Nothing.
+    </p>
+
+    <p>
+      Everything that feels like "memory" is the harness faking it. There are three layers:
+    </p>
+
+    <h3>Working Memory: The Context Window</h3>
+    <p>
+      This is the conversation you see. The harness appends your new message to the full history and sends it all to the model every time. It looks like the model "remembers" the conversation &mdash; but really, the harness is replaying it from scratch on every turn.
+    </p>
+
+    <h3>Session State: Harness-Level Tracking</h3>
+    <p>
+      The harness tracks things the model can't: which files have been modified, what tools have been called, how many tokens have been used, what permissions have been granted. This state lives in the harness process, not in the model.
+    </p>
+
+    <h3>Persistent Memory: Across Sessions</h3>
+    <p>
+      Some harnesses write notes to disk that survive between conversations. Claude Code uses CLAUDE.md files, memory files, and git history. Windsurf's Cascade autonomously generates "memories" about your codebase patterns and stores them between sessions. ChatGPT has an explicit memory feature that saves facts the model has learned about you.
+    </p>
+
+    <div class="tip-box">
+      Here's a practical implication: if your conversation gets long enough that the harness compacts it, the model literally doesn't have access to the early parts anymore. It has a summary. If you need the model to remember something specific across a long session, put it in a CLAUDE.md file &mdash; that gets re-loaded fresh on every turn.
+    </div>
+
+    <!-- Component 5: Guardrails -->
+    <h2>Component 5: Verification and Guardrails</h2>
+
+    <p>
+      The health inspector doesn't trust the chef to follow food safety rules on good faith alone. Guardrails work the same way &mdash; they're rules that the harness enforces <em>regardless</em> of what the model wants to do.
+    </p>
+
+    <p>
+      Claude Code implements a <strong>five-layer permission evaluation</strong> that runs before every tool call:
+    </p>
+
+    <div class="workflow-steps">
+      <span class="step">Hooks</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Deny Rules</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Permission Mode</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Allow Rules</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">User Approval</span>
+    </div>
+
+    <ol>
+      <li><strong>Hooks</strong> &mdash; Custom code you write that runs first. A hook can approve, deny, or pass through to the next layer.</li>
+      <li><strong>Deny rules</strong> &mdash; Things the model is never allowed to do, period. These can't be overridden, even in "auto-approve everything" mode.</li>
+      <li><strong>Permission mode</strong> &mdash; The overall trust level: <code>default</code> (asks you), <code>acceptEdits</code> (auto-approves file changes), <code>bypassPermissions</code> (auto-approves all).</li>
+      <li><strong>Allow rules</strong> &mdash; Pre-approved patterns, like "bash commands matching <code>npm test</code> are always OK."</li>
+      <li><strong>User approval</strong> &mdash; If nothing else matched, the harness asks you.</li>
+    </ol>
+
+    <p>
+      Here's what that looks like in configuration:
+    </p>
+
+<pre><code>// .claude/settings.json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test)",
+      "Bash(npm run lint)",
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force)"
+    ]
+  }
+}</code></pre>
+
+    <p>
+      The beauty of this system: you can start restrictive and gradually open up as you build trust. The model might be capable of running any bash command, but the harness controls which ones it's <em>allowed</em> to run. That's a harness decision, not a model decision.
+    </p>
+
+    <!-- Component 6: Session Persistence -->
+    <h2>Component 6: Session Persistence</h2>
+
+    <p>
+      The reservation book and shift log. When the current session ends, what survives?
+    </p>
+
+    <p>
+      This is the component most harnesses handle differently. Some approaches:
+    </p>
+
+    <ul>
+      <li><strong>Claude Code</strong> &mdash; Saves conversation history as JSON, uses git commits as checkpoints, writes progress to files like <code>claude-progress.txt</code> for multi-session projects, stores configuration in <code>.claude/settings.json</code></li>
+      <li><strong>Cursor</strong> &mdash; Background agents clone repos, work on separate git branches, and push changes. You can pick up where the agent left off.</li>
+      <li><strong>Windsurf</strong> &mdash; Cascade stores autonomous "memory artifacts" between sessions, so the next conversation starts with knowledge the previous one accumulated.</li>
+      <li><strong>ChatGPT</strong> &mdash; Conversation history lives on the server. The memory feature extracts and stores facts across conversations.</li>
+    </ul>
+
+    <p>
+      The most reliable persistence strategy for coding agents? <strong>The filesystem itself.</strong> Git commits, progress files, configuration files &mdash; these survive anything. If the process crashes, the context window is lost, but the files on disk remain. This is why Anthropic's guide for long-running agents emphasizes writing progress to files, not relying on in-memory state.
+    </p>
+
+    <!-- How They Work Together -->
+    <h2>How the Components Work Together</h2>
+
+    <p>
+      These six components aren't independent modules that happen to share a process. They're deeply interconnected. Here's how they flow together for a single request:
+    </p>
+
+    <div class="highlight-box">
+      <h3>The Request Lifecycle</h3>
+      <p>
+        1. <strong>You type a message</strong> &rarr; 2. The harness assembles <strong>context</strong> (system prompt + history + project files) &rarr; 3. <strong>Tools</strong> are registered &rarr; 4. The model reasons and requests a <strong>tool call</strong> &rarr; 5. <strong>Guardrails</strong> check permission &rarr; 6. The tool executes and the result enters <strong>memory</strong> &rarr; 7. The loop repeats until done &rarr; 8. The final state is <strong>persisted</strong>
+      </p>
+    </div>
+
+    <p>
+      Notice the interactions: context engineering decides what the model sees (including tool results from memory). Guardrails gate what tools can execute. Memory stores what happened for the next loop iteration. Persistence saves the whole session for next time. It's a cycle, not a pipeline.
+    </p>
+
+    <!-- Not All Harnesses Have All Six -->
+    <h2>Not Every Harness Needs All Six</h2>
+
+    <p>
+      A simple chatbot might only have a system prompt and context management (components 1 and 3). A browser-based AI assistant adds tools (component 2) and basic memory (component 4). A full coding agent like Claude Code uses all six.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>ChatGPT</th>
+          <th>Cursor</th>
+          <th>Claude Code</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>System Prompt</td>
+          <td>Yes</td>
+          <td>Yes (per-model)</td>
+          <td>Yes (110+ fragments)</td>
+        </tr>
+        <tr>
+          <td>Tools</td>
+          <td>4&ndash;5 tools</td>
+          <td>15+ tools</td>
+          <td>18+ tools + MCP</td>
+        </tr>
+        <tr>
+          <td>Context Engineering</td>
+          <td>Basic</td>
+          <td>Advanced</td>
+          <td>Advanced</td>
+        </tr>
+        <tr>
+          <td>Memory</td>
+          <td>Server-side</td>
+          <td>Git-based</td>
+          <td>File + Git + Memory</td>
+        </tr>
+        <tr>
+          <td>Guardrails</td>
+          <td>Built-in safety</td>
+          <td>Permission system</td>
+          <td>5-layer evaluation</td>
+        </tr>
+        <tr>
+          <td>Persistence</td>
+          <td>Chat history</td>
+          <td>Branches + worktrees</td>
+          <td>JSON + Git + Files</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      The sophistication of the harness correlates with the complexity of the tasks the tool handles. A chat interface needs less infrastructure than an autonomous coding agent that works on your repository for hours.
+    </p>
+
+    <!-- Inside the Harness -->
+    <h2>Inside the Harness: "Refactor This Function"</h2>
+
+    <p>
+      Let's trace all six components through a real task. You open Claude Code in a project and type: <code>refactor the login function to use async/await</code>.
+    </p>
+
+    <div class="inside-look-box">
+      <p><strong>Step 1 &mdash; System Prompt activates.</strong> The harness loads thousands of tokens of instructions: "You are Claude Code. You have access to file tools. Prefer editing existing files. Don't add features beyond what was asked. Be concise." The model now has its playbook.</p>
+
+      <p><strong>Step 2 &mdash; Context Engineering assembles the window.</strong> The harness reads your CLAUDE.md ("This is a Node.js project using Express"), loads recent conversation history, and injects system reminders. Your one-line request is now surrounded by rich project context.</p>
+
+      <p><strong>Step 3 &mdash; Tools are registered.</strong> The model knows it can Read, Edit, Write, Bash, Glob, Grep, and more. Each tool's description and parameter schema is included.</p>
+
+      <p><strong>Step 4 &mdash; The model reasons.</strong> "I need to find the login function first." It outputs a tool call: <code>Grep(pattern="function login", type="js")</code>.</p>
+
+      <p><strong>Step 5 &mdash; Guardrails check.</strong> Grep is a read-only tool &mdash; pre-approved. The harness executes it immediately. Result: <code>src/auth.js:42</code>.</p>
+
+      <p><strong>Step 6 &mdash; Memory updates.</strong> The tool result enters the conversation history. The model now knows where the function lives.</p>
+
+      <p><strong>Step 7 &mdash; The model calls another tool.</strong> <code>Read(file_path="src/auth.js", offset=35, limit=30)</code>. The harness checks permissions (read is allowed), executes, returns the file content.</p>
+
+      <p><strong>Step 8 &mdash; The model reasons again.</strong> It sees the callback-based code, plans the async/await refactor, and outputs: <code>Edit(file_path="src/auth.js", old_string="...", new_string="...")</code>.</p>
+
+      <p><strong>Step 9 &mdash; Guardrails engage.</strong> Edit modifies a file. Depending on your permission mode, the harness either auto-approves or asks you: "Claude wants to edit src/auth.js. Allow?" You approve.</p>
+
+      <p><strong>Step 10 &mdash; The model verifies.</strong> It calls <code>Bash(command="npm test")</code>. Guardrails check &mdash; if <code>npm test</code> is in your allow list, it runs immediately. Tests pass.</p>
+
+      <p><strong>Step 11 &mdash; Persistence kicks in.</strong> The conversation history (with all tool calls and results) is saved. The edited file is on disk. If you close Claude Code now and reopen it tomorrow, the file change persists (it's on your filesystem) and you can resume the conversation.</p>
+
+      <p><strong>The model did the thinking &mdash; deciding what to search for, how to refactor, what tests to run. The harness did everything else: loaded the context, registered the tools, checked permissions, executed actions, and saved the state.</strong></p>
+    </div>
+
+    <!-- Exercise -->
+    <h2>Try It Yourself</h2>
+
+    <div class="exercise-box">
+      <p><strong>Spot the Six Components in Your Favorite Tool</strong></p>
+      <p>
+        Pick an AI tool you use regularly &mdash; Claude Code, ChatGPT, Cursor, Copilot, Windsurf, or anything else. Use it for a real task (ask it to explain a file, fix a bug, or write a test). Then answer these questions:
+      </p>
+      <ol>
+        <li><strong>System Prompt:</strong> Can you detect hidden instructions? Try asking "What are your instructions?" or "What's in your system prompt?" Note how the tool responds (most will deflect).</li>
+        <li><strong>Tools:</strong> What actions did the tool take beyond generating text? Did it read files, search the web, execute code, create images?</li>
+        <li><strong>Context:</strong> Did the tool seem to know about your project? How much of your codebase did it appear to understand?</li>
+        <li><strong>Memory:</strong> Start a new conversation and reference something from the last one. Does it remember?</li>
+        <li><strong>Guardrails:</strong> Did the tool ask for permission before doing anything? Were there actions it refused to take?</li>
+        <li><strong>Persistence:</strong> Close the tool and reopen it. What survived? The conversation? The files it changed? Settings?</li>
+      </ol>
+      <p>
+        <strong>Bonus:</strong> Try the same task in two different tools. The differences you observe are almost entirely harness differences &mdash; the underlying models may be similar or even identical.
+      </p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What's Next</h2>
+
+    <p>
+      You now have a working understanding of all six harness components and how they interact. For the rest of Part II, we'll go deep on the three most impactful ones.
+    </p>
+
+    <p>
+      <strong>Chapter 3: Context Engineering</strong> tackles the hardest problem in harness design &mdash; how to fit the right information into a finite window. We'll cover the "suitcase packing" problem, compaction strategies, the "lost in the middle" phenomenon, and the Hashline technique that dramatically improved coding success just by changing how code is formatted.
+    </p>
+
+    <p>
+      If the system prompt is the recipe book, context engineering is the skill of choosing which ingredients make it onto the prep station. Get it wrong, and even the best chef produces a bad dish.
+    </p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="01-what-is-a-harness.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">1. What Is a Harness?</span>
+      </a>
+      <a href="03-context-engineering.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">3. Context Engineering</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Multi-Agent Orchestration | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-human-in-the-loop.html">&larr; Prev</a>
+      <a href="08-error-recovery.html">Next &rarr;</a>
+      <a href="maps/07-multi-agent-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Multi-Agent Orchestration</h1>
+    <p class="subtitle">When one agent isn&rsquo;t enough &mdash; patterns for agents that work together</p>
+  </header>
+
+  <main>
+
+    <h2>When One Agent Isn&rsquo;t Enough</h2>
+
+    <p>Your Chapter 4 agent is great at research. But what if you need it to also analyze data, write code, create a presentation, and review its own work? You could give one agent 30 tools and a 2,000-word system prompt, but that&rsquo;s like hiring one person to be the researcher, writer, designer, and QA tester. It&rsquo;s possible, but the quality suffers.</p>
+
+    <p>Multi-agent orchestration solves this with <strong>specialization</strong>: multiple agents, each with a focused role and a small set of tools, coordinated by an orchestration pattern. It&rsquo;s the difference between a freelancer doing everything and a team where each person excels at their part.</p>
+
+    <div class="highlight-box">
+      <h3>Multi-agent orchestration is like a software team</h3>
+      <p>You have a <strong>tech lead</strong> (supervisor agent) who breaks down the project, <strong>specialists</strong> (frontend, backend, QA agents) who do the work, and they coordinate through <strong>standups and shared docs</strong> (message passing and shared state). Nobody does everything &mdash; everyone does their thing well.</p>
+    </div>
+
+    <h2>The Four Orchestration Patterns</h2>
+
+    <p>Almost every multi-agent system uses one of these four patterns (or a combination):</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Supervisor</span>
+        <span class="stat-label">One manager delegates to specialists</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Pipeline</span>
+        <span class="stat-label">Agents in a chain, each processing in order</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Swarm</span>
+        <span class="stat-label">Peers collaborate, routing work dynamically</span>
+      </div>
+    </div>
+
+    <h2>Pattern 1: The Supervisor</h2>
+
+    <p>The most common pattern. One &ldquo;manager&rdquo; agent receives the task, breaks it into subtasks, delegates each to a specialist, and synthesizes the results.</p>
+
+    <div class="architecture-box">
+      <h3>The Supervisor Architecture</h3>
+      <div class="workflow-steps">
+        <span class="step">User Task</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Supervisor</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Specialist A</span>
+      </div>
+      <div class="workflow-steps" style="margin-top: 0.5rem;">
+        <span class="step">Supervisor</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Specialist B</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Supervisor</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Final Result</span>
+      </div>
+      <p>The supervisor is typically a reasoning-heavy model (like Claude Opus or GPT-4) that plans and coordinates. Specialists can be cheaper, faster models (Claude Haiku, GPT-4o-mini) since they have narrow, well-defined tasks. This <strong>heterogeneous model selection</strong> can cut costs by up to 90% compared to using the expensive model for everything.</p>
+    </div>
+
+    <p>Here&rsquo;s a supervisor implementation using the &ldquo;agent as tool&rdquo; pattern &mdash; each specialist agent is wrapped as a tool the supervisor can call:</p>
+
+<pre><code>import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+def run_specialist(name: str, system_prompt: str, task: str,
+                   model: str = "claude-haiku-4-5-20251001") -> str:
+    """Run a specialist agent and return its output."""
+    response = client.messages.create(
+        model=model,
+        max_tokens=2048,
+        system=system_prompt,
+        messages=[{"role": "user", "content": task}],
+    )
+    return response.content[0].text
+
+
+# Define specialist agents as tools for the supervisor
+supervisor_tools = [
+    {
+        "name": "researcher",
+        "description": (
+            "Delegate a research task to the research specialist. "
+            "This agent searches the web and reads pages to gather "
+            "information. Give it a specific research question."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "The research question or topic to investigate"
+                }
+            },
+            "required": ["task"]
+        }
+    },
+    {
+        "name": "writer",
+        "description": (
+            "Delegate a writing task to the writing specialist. "
+            "This agent takes research findings and produces clear, "
+            "structured content. Provide the source material and "
+            "desired format."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Writing instructions with source material"
+                }
+            },
+            "required": ["task"]
+        }
+    },
+    {
+        "name": "reviewer",
+        "description": (
+            "Delegate a review task to the quality reviewer. "
+            "This agent checks content for accuracy, completeness, "
+            "and clarity. Provide the content to review."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Content to review with review criteria"
+                }
+            },
+            "required": ["task"]
+        }
+    }
+]
+
+# Specialist system prompts
+SPECIALISTS = {
+    "researcher": "You are a research specialist. Given a topic, provide "
+                  "detailed findings with sources. Be thorough and factual.",
+    "writer": "You are a writing specialist. Given research findings, "
+              "produce clear, well-structured content. Use headers, "
+              "bullet points, and concise paragraphs.",
+    "reviewer": "You are a quality reviewer. Check content for accuracy, "
+                "completeness, clarity, and suggest improvements. "
+                "Be specific in your feedback.",
+}
+
+SUPERVISOR_PROMPT = """You are a project supervisor. Your job is to coordinate
+specialists to complete complex tasks. You have three specialists available:
+
+- researcher: gathers information on a topic
+- writer: creates structured content from research
+- reviewer: checks quality and accuracy
+
+PROCESS:
+1. Break the task into subtasks for each specialist
+2. Start with research, then writing, then review
+3. If the reviewer finds issues, send the content back to the writer
+4. Synthesize the final result and present it to the user
+
+Be efficient — only involve specialists when their expertise is needed."""</code></pre>
+
+    <p>The supervisor calls specialists as tools. Each specialist runs in its own context with its own system prompt. The supervisor sees only the result, not the specialist&rsquo;s internal reasoning.</p>
+
+    <h2>Running the Supervisor System</h2>
+
+<pre><code>def run_supervisor(task: str, max_steps: int = 10) -> str:
+    """Run the supervisor with its specialist team."""
+    messages = [{"role": "user", "content": task}]
+
+    for step in range(1, max_steps + 1):
+        response = client.messages.create(
+            model="claude-sonnet-4-6-20250514",  # Smart model for supervisor
+            max_tokens=4096,
+            system=SUPERVISOR_PROMPT,
+            tools=supervisor_tools,
+            messages=messages,
+        )
+
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    specialist_name = block.name
+                    specialist_task = block.input["task"]
+                    print(f"  [{step}] Supervisor → {specialist_name}: "
+                          f"{specialist_task[:80]}...")
+
+                    # Run the specialist agent
+                    result = run_specialist(
+                        specialist_name,
+                        SPECIALISTS[specialist_name],
+                        specialist_task,
+                    )
+                    print(f"  [{step}] {specialist_name} → Supervisor: "
+                          f"{result[:80]}...")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            print(f"\n  [Done in {step} steps]")
+            return response.content[0].text
+
+    return "Supervisor hit step limit."
+
+# Run it
+result = run_supervisor(
+    "Write a comparison of Rust vs Go for CLI tools in 2026. "
+    "Research both, write a structured analysis, and review for accuracy."
+)
+print(result)</code></pre>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Supervisor</span>
+        <span>I need to research both Rust and Go for CLI development, then write and review a comparison. Let me start with research.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Delegate</span>
+        <span><code>researcher({"task": "Research Rust for CLI tools in 2026: ecosystem, performance, DX, popular frameworks (clap, etc.)"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Researcher</span>
+        <span>Rust CLI ecosystem is mature: clap v4 for argument parsing, indicatif for progress bars, crossterm for TUI. Performance is ~10x faster than Go for some workloads. Compile times improving but still slower than Go&hellip;</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Delegate</span>
+        <span><code>researcher({"task": "Research Go for CLI tools in 2026: ecosystem, performance, DX, popular frameworks (cobra, etc.)"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Researcher</span>
+        <span>Go CLI ecosystem: Cobra + Viper standard, fast compilation (2-5s for most projects), single binary deployment, cross-compilation built in. Excellent for DevOps tools&hellip;</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Delegate</span>
+        <span><code>writer({"task": "Write a structured Rust vs Go comparison for CLI tools based on these findings: [research data]"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Writer</span>
+        <span>Produced a 500-word comparison with sections: Performance, DX, Ecosystem, Deployment, Verdict&hellip;</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Delegate</span>
+        <span><code>reviewer({"task": "Review this Rust vs Go comparison for accuracy and completeness: [article]"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Reviewer</span>
+        <span>Mostly accurate. Suggestion: add error handling comparison (Rust&rsquo;s Result type vs Go&rsquo;s if err != nil pattern). The compile time claim needs a source.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Supervisor</span>
+        <span>Here&rsquo;s the final comparison, incorporating the reviewer&rsquo;s suggestions&hellip;</span>
+      </div>
+    </div>
+
+    <h2>Pattern 2: The Pipeline</h2>
+
+    <p>Agents in a chain, each processing and passing results to the next. Think of it like an assembly line.</p>
+
+    <div class="workflow-steps">
+      <span class="step">Input</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Agent 1: Extract</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Agent 2: Analyze</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Agent 3: Format</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Output</span>
+    </div>
+
+<pre><code>def run_pipeline(input_data: str, stages: list) -> str:
+    """Run agents in a pipeline — each stage's output feeds the next."""
+    current_data = input_data
+
+    for i, stage in enumerate(stages, 1):
+        print(f"  Pipeline stage {i}/{len(stages)}: {stage['name']}")
+        current_data = run_specialist(
+            name=stage["name"],
+            system_prompt=stage["system_prompt"],
+            task=f"{stage['instruction']}\n\nInput:\n{current_data}",
+        )
+        print(f"  → Output: {current_data[:100]}...")
+
+    return current_data
+
+# Example: content creation pipeline
+pipeline = [
+    {
+        "name": "outliner",
+        "system_prompt": "You create detailed outlines for articles.",
+        "instruction": "Create a detailed outline for an article about:"
+    },
+    {
+        "name": "writer",
+        "system_prompt": "You write engaging articles from outlines.",
+        "instruction": "Write a full article based on this outline:"
+    },
+    {
+        "name": "editor",
+        "system_prompt": "You edit articles for clarity and style.",
+        "instruction": "Edit this article for clarity, grammar, and flow:"
+    }
+]
+
+result = run_pipeline("The future of remote work in 2026", pipeline)</code></pre>
+
+    <p><strong>When to use:</strong> Tasks with clear, sequential stages where each stage transforms the output. Content creation, data processing, ETL pipelines.</p>
+
+    <p><strong>Limitation:</strong> No backtracking. If stage 2 finds a problem with stage 1&rsquo;s output, it can&rsquo;t send it back. For tasks that need iteration, use the supervisor pattern instead.</p>
+
+    <h2>Pattern 3: The Swarm</h2>
+
+    <p>In a swarm, agents are <strong>peers</strong> that route work to each other dynamically. There&rsquo;s no central supervisor &mdash; each agent decides whether to handle a task itself or hand it off to a more appropriate peer.</p>
+
+    <div class="pattern-box">
+      <h3>The Handoff Pattern (OpenAI Agents SDK Style)</h3>
+      <p><strong>Problem:</strong> You have multiple specialized agents and need requests to flow to the right one automatically.</p>
+      <p><strong>Solution:</strong> Each agent has a list of agents it can &ldquo;hand off&rdquo; to. When an agent determines the task is outside its expertise, it transfers the conversation to a more suitable peer. The handoff is represented as a tool call.</p>
+      <p><strong>When to use:</strong> Customer service (billing agent, tech support agent, sales agent), multi-domain Q&amp;A, any system where the right specialist depends on the user&rsquo;s actual question.</p>
+    </div>
+
+<pre><code># Swarm-style handoffs — each agent can route to peers
+def create_swarm_agent(name, system_prompt, peers):
+    """Create an agent that can hand off to peers."""
+    handoff_tools = [
+        {
+            "name": f"transfer_to_{peer}",
+            "description": f"Transfer this conversation to the {peer} specialist. "
+                           f"Use this when the task is better handled by {peer}.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Why you're transferring"
+                    }
+                },
+                "required": ["reason"]
+            }
+        }
+        for peer in peers
+    ]
+
+    return {
+        "name": name,
+        "system_prompt": system_prompt,
+        "tools": handoff_tools,
+    }
+
+# Define a customer service swarm
+billing = create_swarm_agent(
+    "billing", "You handle billing questions, refunds, and payment issues.",
+    peers=["tech_support", "sales"]
+)
+tech_support = create_swarm_agent(
+    "tech_support", "You handle technical problems, bugs, and setup issues.",
+    peers=["billing", "sales"]
+)
+sales = create_swarm_agent(
+    "sales", "You handle upgrade requests, pricing, and new subscriptions.",
+    peers=["billing", "tech_support"]
+)
+
+agents = {"billing": billing, "tech_support": tech_support, "sales": sales}
+
+def run_swarm(initial_agent: str, user_message: str):
+    """Run a swarm — agents hand off to each other as needed."""
+    current_agent = initial_agent
+    messages = [{"role": "user", "content": user_message}]
+
+    for step in range(10):
+        agent = agents[current_agent]
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=agent["system_prompt"],
+            tools=agent["tools"],
+            messages=messages,
+        )
+
+        # Check for handoff
+        for block in response.content:
+            if block.type == "tool_use" and block.name.startswith("transfer_to_"):
+                next_agent = block.name.replace("transfer_to_", "")
+                print(f"  {current_agent} → {next_agent}: {block.input['reason']}")
+                current_agent = next_agent
+                break
+        else:
+            # No handoff — agent handled the request
+            return response.content[0].text
+
+    return "Swarm hit routing limit."</code></pre>
+
+    <h2>Pattern 4: The Debate</h2>
+
+    <p>Multiple agents propose different solutions. A judge agent evaluates them and picks the best one. This is useful when quality matters more than speed.</p>
+
+<pre><code>def run_debate(question: str, n_debaters: int = 3) -> str:
+    """Multiple agents propose answers, a judge picks the best."""
+    proposals = []
+    for i in range(n_debaters):
+        proposal = run_specialist(
+            f"debater_{i+1}",
+            f"You are debater #{i+1}. Provide a unique, well-reasoned "
+            f"answer. Think creatively — don't give the obvious answer.",
+            question,
+        )
+        proposals.append(proposal)
+        print(f"  Debater {i+1}: {proposal[:100]}...")
+
+    # Judge evaluates all proposals
+    judge_input = "\n\n".join(
+        f"## Proposal {i+1}\n{p}" for i, p in enumerate(proposals)
+    )
+    verdict = run_specialist(
+        "judge",
+        "You are a judge. Evaluate the proposals for accuracy, "
+        "completeness, and reasoning quality. Pick the best one "
+        "and explain why. Combine strengths from multiple proposals "
+        "if appropriate.",
+        f"Question: {question}\n\n{judge_input}",
+        model="claude-sonnet-4-6-20250514",  # Smart model for judging
+    )
+    return verdict</code></pre>
+
+    <p><strong>When to use:</strong> Design decisions, complex analysis, any task where exploring multiple approaches yields better results. <strong>When to skip:</strong> Simple tasks, time-sensitive work (debate multiplies latency).</p>
+
+    <h2>Agent Communication: How Agents Share Information</h2>
+
+    <p>Agents need to exchange data. Three approaches:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Method</th>
+          <th>How It Works</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Tool returns</strong></td>
+          <td>Specialist output flows back through tool results</td>
+          <td>Supervisor pattern, simple handoffs</td>
+        </tr>
+        <tr>
+          <td><strong>Shared state</strong></td>
+          <td>All agents read/write to a common state object or file</td>
+          <td>Pipeline, collaborative editing</td>
+        </tr>
+        <tr>
+          <td><strong>Message passing</strong></td>
+          <td>Agents send structured messages to each other via a queue</td>
+          <td>Async work, distributed systems</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>For most projects, <strong>tool returns are enough</strong>. The supervisor calls a specialist, gets the result, and passes relevant parts to the next specialist. Shared state and message passing add complexity &mdash; use them only when agents genuinely need to work concurrently on shared data.</p>
+
+    <h2>The Coordination Problem</h2>
+
+    <p>Multi-agent systems introduce coordination challenges that don&rsquo;t exist with single agents:</p>
+
+    <div class="pitfall-box">
+      <strong>Duplicate work.</strong> Without coordination, two agents might research the same topic independently, wasting tokens and time. The supervisor pattern prevents this naturally (the supervisor assigns distinct tasks), but swarm patterns need explicit deduplication &mdash; a shared &ldquo;already done&rdquo; list that agents check before starting work.
+    </div>
+
+    <div class="warning-box">
+      <strong>Cost multiplication.</strong> Multi-agent systems multiply API costs. A 3-agent supervisor system uses at least 4x the tokens of a single agent (supervisor + 3 specialists). Strategies to manage this: use cheap models for specialists, keep specialist prompts short, limit the number of specialist calls, and cache results aggressively.
+    </div>
+
+    <h2>When Multi-Agent vs. Single Agent</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Good use of multi-agent</div>
+        <div class="prompt-text">&ldquo;Review this PR for security, code style, and performance.&rdquo;
+→ Three specialist agents, each focused on one aspect, run in parallel.</div>
+        <div class="prompt-explanation">Different expertise needed. Specialists can run concurrently. Each has a clear, narrow scope.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Overkill for multi-agent</div>
+        <div class="prompt-text">&ldquo;Summarize this article.&rdquo;
+→ No need for a researcher, writer, and reviewer. One agent does this fine.</div>
+        <div class="prompt-explanation">Simple task, single expertise. Multi-agent adds cost and latency without benefit.</div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>The decision rule:</strong> use multi-agent when the task requires <em>different types of expertise</em> or when subtasks can run <em>in parallel</em>. If one agent with the right tools can do it in a few steps, multi-agent is overhead, not help.
+    </div>
+
+    <h2>Real-World Example: Code Review System</h2>
+
+    <p>Here&rsquo;s how a production code review system might work with three specialist agents:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">S</div>
+      <div class="tool-info">
+        <div class="tool-name">Security Agent</div>
+        <div class="tool-desc">Scans for vulnerabilities: SQL injection, XSS, hardcoded secrets, insecure dependencies. Uses a security-focused system prompt and has access to vulnerability databases.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">Q</div>
+      <div class="tool-info">
+        <div class="tool-name">Quality Agent</div>
+        <div class="tool-desc">Checks code quality: naming conventions, code duplication, complexity metrics, design patterns. Reviews against the project&rsquo;s style guide.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">P</div>
+      <div class="tool-info">
+        <div class="tool-name">Performance Agent</div>
+        <div class="tool-desc">Identifies performance issues: N+1 queries, missing indexes, unnecessary allocations, algorithmic complexity. Suggests optimizations.</div>
+      </div>
+    </div>
+
+    <p>A supervisor agent coordinates all three, merges their findings, resolves conflicts (e.g., when the security agent wants a change that hurts performance), and produces a unified review. This is exactly the system we&rsquo;ll build in the Chapter 12 capstone project.</p>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Build a 2-Agent Research &amp; Writing System</h3>
+      <p>Build a supervisor system with two specialist agents:</p>
+      <ol>
+        <li><strong>Create a researcher agent</strong> that has access to <code>search_web</code> and <code>read_page</code> tools from Chapter 4. It gathers information on a topic and returns structured findings.</li>
+        <li><strong>Create a writer agent</strong> that takes research findings and produces a well-structured article. It has no tools &mdash; just writing ability.</li>
+        <li><strong>Create a supervisor</strong> that receives a user request, delegates research to the researcher, passes findings to the writer, and presents the final article.</li>
+        <li><strong>Test it</strong> with: &ldquo;Write a 500-word article about the impact of AI agents on software development in 2026.&rdquo;</li>
+      </ol>
+      <p>Bonus: add a reviewer agent that checks the article and sends it back to the writer with feedback if quality is insufficient. Track total token cost across all agents.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Multi-agent systems are powerful but fragile. When one agent in a three-agent pipeline fails, the whole system can stall. When a specialist returns garbage, the supervisor has to deal with it. These systems need robust error handling &mdash; and agent errors are fundamentally different from traditional software bugs.</p>
+
+    <p>In <a href="08-error-recovery.html">Chapter 8: Error Handling &amp; Recovery</a>, we&rsquo;ll learn how to make agents robust: retry strategies, fallback patterns, self-correction, circuit breakers, and the observability tools you need to debug agents in production.</p>
+
+    <nav class="chapter-nav">
+      <a href="06-human-in-the-loop.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Human-in-the-Loop Patterns</span>
+      </a>
+      <a href="08-error-recovery.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Error Handling &amp; Recovery</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

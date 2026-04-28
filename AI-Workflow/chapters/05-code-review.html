@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: AI-Powered Code Review | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-hooks.html">&larr; Prev</a>
+      <a href="06-automating-tests.html">Next &rarr;</a>
+      <a href="maps/05-code-review-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>AI-Powered Code Review</h1>
+    <p class="subtitle">Consistent, thorough reviews on every PR &mdash; in minutes, not days</p>
+  </header>
+
+  <main>
+
+    <h2>The Code Review Bottleneck</h2>
+
+    <p>You know the pattern. You open a PR at 2 PM. Your reviewer is in meetings until 4. They start looking at 4:30 but get pulled into a production issue. Next morning they leave a few comments. You address them, push, and wait again. The PR that took an hour to write takes <em>three days</em> to merge.</p>
+
+    <p>Code review is the single biggest bottleneck in most development workflows. Not because reviews aren&rsquo;t valuable &mdash; they absolutely are &mdash; but because they depend on a scarce resource: another human&rsquo;s focused attention.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">24&ndash;72h</span>
+        <span class="stat-label">average time to first review comment</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">60%</span>
+        <span class="stat-label">of review comments are about style, not logic</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">4&ndash;6</span>
+        <span class="stat-label">context switches per PR review cycle</span>
+      </div>
+    </div>
+
+    <p>AI doesn&rsquo;t replace human reviewers. But it handles the mechanical parts &mdash; style checks, pattern violations, common bugs, security scanning &mdash; so your human reviewer can focus on architecture, design, and the stuff only a human understands.</p>
+
+    <h2>Quick Review from the Command Line</h2>
+
+    <p>The simplest way to get an AI review: pipe your diff into Claude Code.</p>
+
+    <pre><code># Review your current changes against main
+git diff main...HEAD | claude -p "Review this diff. For each issue found, report:
+- File and approximate location
+- Severity: critical / warning / suggestion
+- What the issue is
+- How to fix it
+
+Focus on: bugs, security issues, performance problems, and Android-specific pitfalls."</code></pre>
+
+    <p>That&rsquo;s a useful one-liner, but it&rsquo;s not repeatable or customizable. Let&rsquo;s make it a proper skill.</p>
+
+    <h2>Building the /review Skill</h2>
+
+    <div class="recipe-box">
+      <h3>Creating a Comprehensive /review Skill</h3>
+      <ol>
+        <li>Create the file: <code>.claude/commands/review.md</code></li>
+        <li>Add this content:</li>
+      </ol>
+      <pre><code># Code Review
+
+Review the current branch's changes against main.
+
+## Steps
+1. Run `git diff main...HEAD` to get all changes
+2. Run `git log main..HEAD --oneline` for commit context
+3. Read CLAUDE.md for team review standards
+
+## Review Checklist
+
+### Logic &amp; Correctness
+- Are there any bugs or logic errors?
+- Are edge cases handled (null, empty, boundary values)?
+- Do error paths behave correctly?
+
+### Security
+- SQL injection, XSS, or command injection risks?
+- Secrets or API keys in the diff?
+- Proper input validation on user-facing inputs?
+- Correct permission checks?
+
+### Android-Specific
+- Lifecycle awareness — will this leak or crash on config change?
+- Threading — are coroutines scoped correctly (viewModelScope, not GlobalScope)?
+- Memory — large bitmaps, unbounded caches, or retained references?
+- Compose — unnecessary recompositions? Missing `remember` or `key`?
+
+### Style &amp; Conventions
+- Matches patterns in CLAUDE.md?
+- Consistent naming?
+- No unnecessary complexity?
+
+### Performance
+- N+1 queries or redundant network calls?
+- Missing pagination on large lists?
+- Heavy work on the main thread?
+
+## Output Format
+For each issue, report:
+```
+### [SEVERITY] File: path/to/file
+**Line area:** ~line number or function name
+**Issue:** What's wrong
+**Fix:** How to fix it
+```
+
+Severity levels: CRITICAL (must fix), WARNING (should fix), SUGGESTION (nice to have)
+
+End with a summary: total issues by severity, and an overall assessment.</code></pre>
+      <ol start="3">
+        <li>Test it: <code>/review</code> in Claude Code on any branch with changes</li>
+      </ol>
+    </div>
+
+    <p>Now every developer on your team has the same thorough review checklist. No more &ldquo;I forgot to check for lifecycle leaks&rdquo; &mdash; the skill checks every time.</p>
+
+    <h2>Domain-Specific Review Checklists</h2>
+
+    <p>One size doesn&rsquo;t fit all. A UI change needs different checks than a database migration. Build specialized review skills:</p>
+
+    <h3>/review:android-ui &mdash; Compose and UI changes</h3>
+
+    <pre><code># File: .claude/commands/review/android-ui.md
+
+Review the current changes, focusing on UI and Compose code.
+
+Check for:
+- **Recomposition**: Are composables stable? State hoisted correctly?
+- **Accessibility**: contentDescription on all interactive elements, touch targets >= 48dp
+- **Theming**: Using MaterialTheme values, not hardcoded colors/dimensions
+- **Responsiveness**: Works on different screen sizes? Handles landscape?
+- **State management**: collectAsStateWithLifecycle() not collectAsState()
+- **Previews**: Every new screen has @Preview with light and dark themes
+- **Navigation**: Correct back stack behavior, no leaked screens
+
+Flag any hardcoded strings (should be in strings.xml).</code></pre>
+
+    <h3>/review:security &mdash; Security-focused review</h3>
+
+    <pre><code># File: .claude/commands/review/security.md
+
+Security review of the current branch changes.
+
+## OWASP Mobile Top 10 Checks
+1. **Insecure Data Storage**: SharedPreferences for sensitive data? Should use EncryptedSharedPreferences
+2. **Insecure Communication**: HTTP instead of HTTPS? Certificate pinning missing?
+3. **Insecure Authentication**: Tokens stored in plain text? Missing token refresh?
+4. **Insufficient Input Validation**: User input passed to SQL, WebView, or Intents unvalidated?
+5. **Insufficient Cryptography**: Weak algorithms? Hardcoded keys?
+6. **Insecure Authorization**: Client-side-only permission checks?
+7. **Client Code Quality**: Debug logging with sensitive data? Stack traces in production?
+8. **Code Tampering**: ProGuard/R8 rules for new classes?
+9. **Reverse Engineering**: Sensitive logic that should be server-side?
+10. **Extraneous Functionality**: Test endpoints, debug flags, or backdoors?
+
+## Also check
+- Intent filters: are exported components properly secured?
+- Deep links: validated before processing?
+- WebView: JavaScript enabled without need? loadUrl with user input?
+
+Report each finding with severity and remediation steps.</code></pre>
+
+    <div class="automation-box">
+      <p><strong>Review skills encode your team&rsquo;s hard-won knowledge.</strong> Every security incident, every production bug, every &ldquo;we should check for that in review&rdquo; moment &mdash; capture it in a review skill. Over time, your /review commands become a living encyclopedia of everything your team has learned the hard way. New developers get the benefit of that institutional knowledge from day one.</p>
+    </div>
+
+    <h2>Automated PR Descriptions</h2>
+
+    <p>You built a <code>/pr-description</code> skill in Chapter 3. Let&rsquo;s level it up by making it part of your review workflow. The idea: generate the PR description <em>and</em> a self-review in one step.</p>
+
+    <pre><code># File: .claude/commands/ship-pr.md
+
+Prepare this branch for a pull request.
+
+## Steps
+1. Run `git diff main...HEAD` for all changes
+2. Run `git log main..HEAD --oneline` for commit history
+3. Read CLAUDE.md for PR template and conventions
+
+## Generate
+
+### PR Description
+Write a complete PR description following the team template:
+- Title (imperative mood, under 70 characters)
+- ## What — bullet list of changes
+- ## Why — motivation and context
+- ## Testing — specific verification steps
+- ## Breaking Changes — if any (with migration notes)
+
+### Self-Review Findings
+Run through the review checklist from CLAUDE.md and flag
+anything the author should fix before requesting review.
+
+## Output
+Print the PR description in a markdown code block (ready to copy-paste),
+followed by any self-review findings that need attention.</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Self-review before human review.</strong> Having Claude Code review your own PR before you request human review catches the easy stuff early. Your reviewer spends less time on nitpicks and more time on meaningful feedback. Everyone wins.</p>
+    </div>
+
+    <h2>Encoding Review Standards in CLAUDE.md</h2>
+
+    <p>Skills define <em>what to check</em>. CLAUDE.md defines <em>what good looks like</em>. When both work together, reviews are consistent across the entire team.</p>
+
+    <pre><code># In your project's CLAUDE.md — add a Review Standards section
+
+## Review Standards
+
+### Must-fix (block merge)
+- Any failing test
+- Security vulnerabilities (OWASP top 10)
+- Memory leaks or lifecycle issues
+- Missing null checks on external API responses
+- Hardcoded secrets or API keys
+
+### Should-fix (fix before next release)
+- Missing KDoc on public APIs
+- Hardcoded strings (should be in strings.xml)
+- Complex functions without tests (&gt; 20 lines of logic)
+- TODO comments without ticket numbers
+
+### Nice-to-have (suggestion only)
+- Variable naming improvements
+- Extracting reusable functions
+- Reducing nesting levels
+- Adding Compose previews for new components</code></pre>
+
+    <p>Now when any Claude Code session runs a review &mdash; whether through a skill, a CI step, or an interactive conversation &mdash; it knows your team&rsquo;s severity levels.</p>
+
+    <h2>Review in GitHub Actions</h2>
+
+    <p>The ultimate automation: every PR gets an AI review automatically, with comments posted directly to GitHub. No human has to remember to run anything.</p>
+
+    <p>The cleanest way is Anthropic&rsquo;s official action, <code>anthropics/claude-code-action@v1</code>. It runs Claude Code in CI, posts comments to the PR for you, and handles authentication &mdash; no manual install or extra <code>github-script</code> step needed:</p>
+
+    <pre><code># .github/workflows/ai-review.yml
+name: AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this PR's diff for an Android project. Check for:
+            - Bugs and logic errors
+            - Security issues (OWASP mobile top 10)
+            - Android pitfalls (lifecycle, threading, memory)
+            - Style violations
+
+            For each issue, report the file, severity (critical/warning/suggestion),
+            the problem, and the fix. Format as a markdown checklist; end with a summary.
+          claude_args: --tools "Read,Grep,Bash(git *)"</code></pre>
+
+    <div class="tip-box">
+      <p><strong><code>--tools</code> vs <code>--allowedTools</code>.</strong> In CI you usually want to <em>restrict which tools are available at all</em> &mdash; that&rsquo;s <code>--tools "Read,Grep,Bash(git *)"</code>. The older <code>--allowedTools</code> flag still works, but it controls <em>auto-approval</em>, not availability; it doesn&rsquo;t stop a tool from running, just skips the prompt. For deny-by-default review jobs, prefer <code>--tools</code> (or <code>--disallowedTools</code> to block specific tools).</p>
+    </div>
+
+    <p>Need raw control? The older manual pattern still works &mdash; <code>npm install -g @anthropic-ai/claude-code</code>, then <code>git diff &hellip; | claude -p "&hellip;" &gt; review.md</code>, then post the file with <code>actions/github-script@v9</code>. Reach for it when you need to script multiple Claude calls or pipe output through other tools before commenting.</p>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Code Review Without Automation</h4>
+        <ol>
+          <li>Developer opens PR at 2 PM</li>
+          <li>Reviewer starts looking next morning</li>
+          <li>Leaves 12 comments (8 are style nitpicks)</li>
+          <li>Developer fixes, pushes, waits again</li>
+          <li>Second review round: 2 more comments</li>
+          <li>Approved after 2&ndash;3 days</li>
+        </ol>
+        <p><strong>Elapsed time: 2&ndash;3 days. Developer context-switches: 4&ndash;6 times.</strong></p>
+      </div>
+      <div class="after">
+        <h4>Code Review With AI Automation</h4>
+        <ol>
+          <li>Developer runs <code>/ship-pr</code> for self-review</li>
+          <li>Fixes issues before opening PR</li>
+          <li>Opens PR &mdash; AI review posts in 3 minutes</li>
+          <li>Addresses AI findings, pushes</li>
+          <li>Human reviewer sees clean PR, focuses on design</li>
+          <li>Approved same day, often within hours</li>
+        </ol>
+        <p><strong>Elapsed time: hours, not days. Style nitpicks: zero (caught by AI).</strong></p>
+      </div>
+    </div>
+
+    <h2>Handling Review Output</h2>
+
+    <p>A good review is only useful if it&rsquo;s easy to act on. Structure your review output for scanability:</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Hard to scan</p>
+        <div class="prompt-text">The code looks mostly fine but there's an issue in UserRepository where the token might be null if the refresh fails, also the ViewModel doesn't handle the loading state correctly and there's a potential memory leak in the observer...</div>
+        <p class="prompt-explanation">Wall of text. Hard to track which issues are fixed and which aren&rsquo;t.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Easy to act on</p>
+        <div class="prompt-text">### CRITICAL: UserRepository.kt
+**Function:** fetchUser()
+**Issue:** Null token after refresh failure causes crash
+**Fix:** Add null check before API call
+
+### WARNING: HomeViewModel.kt
+**Function:** loadData()
+**Issue:** Loading state never set to false on error path
+**Fix:** Add `_uiState.value = Loaded` in catch block
+
+### SUGGESTION: HomeScreen.kt
+**Issue:** Missing remember{} around derived state
+**Fix:** Wrap calculation in remember(key)</div>
+        <p class="prompt-explanation">Structured, scannable, actionable. Each issue is independent and trackable.</p>
+      </div>
+    </div>
+
+    <h2>Review for Specific File Types</h2>
+
+    <p>Not every file needs the same review. Gradle files need dependency checks. XML needs accessibility checks. Kotlin needs lifecycle awareness. Use the file type to focus the review:</p>
+
+    <pre><code># File: .claude/commands/review/focused.md
+
+Review only the files matching: **$ARGUMENTS**
+
+## Steps
+1. Run `git diff main...HEAD -- $ARGUMENTS` for targeted diff
+2. Apply the appropriate review lens:
+
+### For *.kt files
+- Coroutine scoping, lifecycle awareness, null safety, Compose stability
+
+### For *.gradle.kts / *.toml files
+- New dependencies: are they necessary? Actively maintained? Any CVEs?
+- Version conflicts with existing dependencies
+- ProGuard rules needed for new libraries?
+
+### For *.xml files (layouts)
+- Accessibility: contentDescription, importantForAccessibility
+- Hardcoded dimensions (should use dimens.xml)
+- Deprecated attributes
+
+### For AndroidManifest.xml
+- New permissions: are they necessary? Explained in privacy docs?
+- Exported components: properly secured?
+- Intent filters: validated?
+
+Output findings grouped by file, with severity levels.</code></pre>
+
+    <h2>The Review Workflow Stack</h2>
+
+    <p>Here&rsquo;s how all the review pieces fit together:</p>
+
+    <div class="workflow-steps">
+      <div class="step">CLAUDE.md Standards</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">/ship-pr Self-Review</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">CI AI Review</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Human Review</div>
+    </div>
+
+    <ul>
+      <li><strong>CLAUDE.md</strong> defines what &ldquo;good code&rdquo; means for your team</li>
+      <li><strong>/ship-pr</strong> catches issues before the PR is even opened</li>
+      <li><strong>CI AI review</strong> runs automatically on every push, posts findings as comments</li>
+      <li><strong>Human review</strong> focuses on design, architecture, and context that only a teammate understands</li>
+    </ul>
+
+    <p>Each layer catches different things. By the time a human looks at the code, the mechanical issues are already gone.</p>
+
+    <div class="warning-box">
+      <p><strong>AI review augments humans, it doesn&rsquo;t replace them.</strong> Claude Code is excellent at catching bugs, style issues, and known vulnerability patterns. It&rsquo;s not great at judging whether the overall design is right, whether a feature matches the product intent, or whether the approach will create maintenance headaches six months from now. Keep humans in the loop for the high-judgment calls.</p>
+    </div>
+
+    <h2>Exercise: Build Your Review Pipeline</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Set Up AI Code Review in Three Layers</h3>
+      <p>Build this end-to-end. Total time: about 20 minutes.</p>
+
+      <h4>Layer 1: Review standards in CLAUDE.md</h4>
+      <ol>
+        <li>Open your project&rsquo;s CLAUDE.md</li>
+        <li>Add a &ldquo;## Review Standards&rdquo; section with must-fix, should-fix, and nice-to-have categories</li>
+        <li>Include at least 5 rules specific to your project (Android lifecycle? API patterns? Testing requirements?)</li>
+      </ol>
+
+      <h4>Layer 2: The /review skill</h4>
+      <ol>
+        <li>Create <code>.claude/commands/review.md</code> using the template from this chapter</li>
+        <li>Customize the Android-specific checks for your project&rsquo;s patterns</li>
+        <li>Test it on an existing branch: run <code>/review</code> and check if the output matches what a human reviewer would catch</li>
+      </ol>
+
+      <h4>Layer 3: Self-review before PR</h4>
+      <ol>
+        <li>Create <code>.claude/commands/ship-pr.md</code></li>
+        <li>On your next feature branch, run <code>/ship-pr</code> before opening the PR</li>
+        <li>Fix any findings, then open the PR</li>
+        <li>Notice how much cleaner the human review goes</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> If your project uses GitHub Actions, set up the <code>ai-review.yml</code> workflow from this chapter. Watch it post automated review comments on your next PR.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your code review pipeline now catches bugs, style issues, and security problems automatically. But there&rsquo;s one thing reviews always flag: <strong>missing tests.</strong></p>
+
+    <p>In <strong>Chapter 6: Automating Tests with AI</strong>, you&rsquo;ll build skills that generate comprehensive test suites, find coverage gaps, diagnose flaky tests, and keep tests in sync when code changes. No more &ldquo;I&rsquo;ll add tests later&rdquo; &mdash; tests generate themselves.</p>
+
+    <p>Let&rsquo;s automate the test suite.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-hooks.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Hooks That Work For You</span>
+      </a>
+      <a href="06-automating-tests.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Automating Tests with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

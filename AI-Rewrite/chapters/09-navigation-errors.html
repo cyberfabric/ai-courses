@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Navigation, Errors, and Cross-Cutting Concerns | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="08-dependency-injection.html">&larr; Prev</a>
+      <a href="10-testing-rewrite.html">Next &rarr;</a>
+      <a href="maps/09-navigation-errors-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Navigation, Errors, and Cross-Cutting Concerns</h1>
+    <p class="subtitle">Type-safe navigation, error hierarchy, network layer, and Gradle rules</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Connecting the Rooms</h2>
+
+      <p>The house is built. Foundation (domain), plumbing (data), walls (presentation), electrical wiring (DI) &mdash; all in place. But you can't get from the kitchen to the bedroom. There are no hallways, no doors, no corridors connecting the rooms.</p>
+
+      <p>Navigation is the hallway system. Error handling is the fire alarm &mdash; wired through every room, translating low-level sensor data into messages humans understand. The network layer is the plumbing that connects to the city water supply. And Gradle conventions are the building codes that keep everything up to standard.</p>
+
+      <p>This chapter tackles the cross-cutting concerns that span all layers. They're the unglamorous parts of architecture that AI loves to get wrong &mdash; because they require understanding boundaries, not just individual components.</p>
+    </section>
+
+    <!-- Navigation Rules -->
+    <section>
+      <h2>The Navigation Rules</h2>
+
+      <div class="rule-callout">
+        <h4>Rule NAV-001: Route Constants in Owning Feature</h4>
+        <p>Each feature module defines its own route constants. <code>:feature:recipe</code> owns <code>RecipeRoutes</code>. <code>:feature:books</code> owns <code>BookRoutes</code>. The <code>:app</code> module only assembles the <code>NavHost</code> &mdash; it never invents route strings.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule NAV-002: Type-Safe Routes Only</h4>
+        <p>No raw strings for navigation arguments. Use Kotlin serialization-based type-safe routes or sealed classes with typed parameters. If AI generates <code>navController.navigate("recipe/$id")</code>, reject it.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule NAV-003: Features Don't Know Each Other</h4>
+        <p>Feature modules never depend on each other. Cross-feature navigation uses route interfaces defined in <code>:core:common</code> and resolved in <code>:app</code>. If <code>:feature:recipe</code> needs to navigate to <code>:feature:books</code>, it emits an Effect &mdash; the app-level NavHost handles the routing.</p>
+      </div>
+    </section>
+
+    <!-- Navigation Migration Step -->
+    <section>
+      <h2>From startActivity() to Type-Safe Routes</h2>
+
+      <div class="migration-step">
+        <h4>Migration: Intent-Based Navigation &rarr; Compose Navigation</h4>
+        <div class="before-code">
+          <h5>Before: Monolith (RecipeListActivity.kt)</h5>
+          <pre><code>// Scattered throughout Activities
+btnViewRecipe.setOnClickListener {
+    val intent = Intent(this, RecipeDetailActivity::class.java)
+    intent.putExtra("RECIPE_ID", recipe.id)
+    intent.putExtra("SOURCE", "list")
+    startActivity(intent)
+}
+
+// In RecipeDetailActivity
+btnEditRecipe.setOnClickListener {
+    val intent = Intent(this, RecipeEditActivity::class.java)
+    intent.putExtra("RECIPE_ID", recipeId)
+    startActivityForResult(intent, EDIT_REQUEST_CODE)
+}
+
+// In RecipeDetailActivity.onActivityResult
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    if (requestCode == EDIT_REQUEST_CODE && resultCode == RESULT_OK) {
+        loadRecipe() // reload
+    }
+}</code></pre>
+        </div>
+        <div class="after-code">
+          <h5>After: :feature:recipe &mdash; RecipeRoutes.kt</h5>
+          <pre><code>// Route definitions in the owning feature
+@Serializable data class RecipeList(val filter: String? = null)
+@Serializable data class RecipeDetail(val recipeId: Long)
+@Serializable data class RecipeEdit(val recipeId: Long)
+
+// In :app — NavHost assembly
+NavHost(navController, startDestination = RecipeList()) {
+    composable&lt;RecipeList&gt; { entry -&gt;
+        RecipeListScreen(
+            filter = entry.toRoute&lt;RecipeList&gt;().filter,
+            onRecipeClick = { navController.navigate(RecipeDetail(it)) },
+            onAddClick = { navController.navigate(RecipeEdit(recipeId = 0L)) })
+    }
+    composable&lt;RecipeDetail&gt; { entry -&gt;
+        RecipeDetailScreen(
+            recipeId = entry.toRoute&lt;RecipeDetail&gt;().recipeId,
+            onEditClick = { navController.navigate(RecipeEdit(it)) },
+            onBack = { navController.popBackStack() })
+    }
+    composable&lt;RecipeEdit&gt; { entry -&gt;
+        RecipeEditScreen(
+            recipeId = entry.toRoute&lt;RecipeEdit&gt;().recipeId,
+            onSaved = { navController.popBackStack() },
+            onBack = { navController.popBackStack() })
+    }
+}</code></pre>
+        </div>
+      </div>
+
+      <p>Notice: <code>startActivityForResult</code> is gone. The edit screen calls <code>onSaved</code>, which pops the back stack. The list screen recomposes automatically because it collects from a <code>StateFlow</code> that Room keeps updated.</p>
+    </section>
+
+    <!-- Navigation Prompt -->
+    <section>
+      <h2>The Navigation Generation Prompt</h2>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate Navigation</h5>
+        <pre><code>Context: Android Compose Navigation with Kotlin serialization type-safe routes.
+Project: multi-module recipes app.
+
+Rules: NAV-001 (routes in owning feature), NAV-002 (type-safe @Serializable
+data classes, no raw strings), NAV-003 (features isolated — cross-feature
+navigation resolves in :app's NavHost via lambda callbacks)
+
+Features: :feature:recipe (list, detail, edit), :feature:books (cookbook list,
+cookbook detail), :feature:grocery (grocery list)
+
+Generate: Route data classes per feature, NavHost in :app, inter-feature
+navigation (recipe detail → add to cookbook). Each composable receives
+navigation callbacks as lambdas. No navController outside NavHost.</code></pre>
+      </div>
+
+      <div class="prompt-example bad">
+        <h5>Bad Prompt</h5>
+        <pre><code>Add navigation to my app using Jetpack Compose.</code></pre>
+      </div>
+
+      <p>The bad prompt gives you raw string routes, a monolithic NavHost, and navController leaking into ViewModels.</p>
+    </section>
+
+    <!-- Cross-Feature Navigation -->
+    <section>
+      <h2>Cross-Feature Navigation Pattern</h2>
+
+      <p>When <code>:feature:recipe</code> needs to navigate to <code>:feature:books</code>, it can't depend on that module. The pattern:</p>
+
+      <div class="highlight-box">
+        <h4>The Inter-Feature Navigation Flow</h4>
+        <ol>
+          <li>ViewModel emits <code>Effect.NavigateToCookbook(recipeId)</code></li>
+          <li>Screen's <code>LaunchedEffect</code> calls the navigation callback lambda</li>
+          <li>The lambda was provided by <code>:app</code>'s NavHost: <code>onAddToCookbook = { id -> navController.navigate(CookbookDetail(id)) }</code></li>
+          <li>No feature module references any other feature module</li>
+        </ol>
+      </div>
+
+      <div class="tip-box">
+        <h4>Tip: AI Loves to Create Shared Navigation Modules</h4>
+        <p>AI frequently generates a <code>:core:navigation</code> module that imports all feature routes. This creates a hidden coupling &mdash; every feature transitively depends on every other. Keep route definitions in owning features. The only assembler is <code>:app</code>.</p>
+      </div>
+
+      <p><strong>What about Navigation 3?</strong> Jetpack Navigation 3 went stable in November 2025 (1.1.x as of April 2026) with a Compose-first design, <code>NavMetadata</code> DSL, and shared elements. The Navigation 2.x type-safe routes pattern this chapter teaches remains fully supported and is the right choice for an incremental rewrite; consider Navigation 3 as a follow-up migration once the rewrite is complete.</p>
+    </section>
+
+    <!-- Error Handling -->
+    <section>
+      <h2>The Error Hierarchy</h2>
+
+      <p>Errors are fire alarms. The smoke detector (network layer) reports "HTTP 401." The alarm panel (repository) translates it to "authentication failed." The room display (UI) shows "Please sign in again." Each layer translates, never passes raw signals upstream.</p>
+
+      <div class="rule-callout">
+        <h4>Rule ERR-001: Three-Tier Error Hierarchy</h4>
+        <p>Network errors → <code>ApiResult</code>. Repository errors → <code>AppResult</code> / domain <code>Result&lt;T&gt;</code>. UI errors → <code>UiError</code> (user-visible strings). No layer skips a tier. No <code>IOException</code> reaches the ViewModel. No HTTP status code reaches the Composable.</p>
+      </div>
+
+      <div class="migration-step">
+        <h4>Migration: Raw Exceptions &rarr; Three-Tier Error Handling</h4>
+        <div class="before-code">
+          <h5>Before: Monolith (RecipeListActivity.kt)</h5>
+          <pre><code>// Raw exceptions everywhere
+try {
+    val recipes = api.getRecipes()
+    adapter.submitList(recipes)
+} catch (e: IOException) {
+    Toast.makeText(this, "Network error: ${e.message}", Toast.LENGTH_LONG).show()
+} catch (e: HttpException) {
+    if (e.code() == 401) {
+        startActivity(Intent(this, LoginActivity::class.java))
+    } else {
+        Toast.makeText(this, "Server error: ${e.code()}", Toast.LENGTH_LONG).show()
+    }
+} catch (e: Exception) {
+    Toast.makeText(this, "Something went wrong", Toast.LENGTH_LONG).show()
+}</code></pre>
+        </div>
+        <div class="after-code">
+          <h5>After: Three Tiers</h5>
+          <pre><code>// Tier 1: Network layer (:data:repository) — CallAdapter wraps responses
+sealed interface ApiResult&lt;out T&gt; {
+    data class Success&lt;T&gt;(val data: T) : ApiResult&lt;T&gt;
+    data class ApiError(val code: Int, val message: String) : ApiResult&lt;Nothing&gt;
+    data class NetworkError(val exception: IOException) : ApiResult&lt;Nothing&gt;
+}
+
+// Tier 2: Repository — translates to domain Result&lt;T&gt;
+override suspend fun getRecipes(): Result&lt;List&lt;Recipe&gt;&gt; = when (val response = api.getRecipes()) {
+    is ApiResult.Success -> Result.Success(response.data.map { it.toDomain() })
+    is ApiResult.ApiError -> Result.Error(AppException.Server(response.code, response.message))
+    is ApiResult.NetworkError -> Result.Error(AppException.Network(response.exception))
+}
+
+// Tier 3: ViewModel — translates to UiError for display
+private fun handleError(error: AppException): UiError = when (error) {
+    is AppException.Network -> UiError("Check your connection and try again")
+    is AppException.Server -> if (error.code == 401) UiError("Session expired. Please sign in.")
+        else UiError("Server error. Try again later.")
+    is AppException.NotFound -> UiError("Recipe not found")
+    is AppException.Validation -> UiError(error.message)
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Error Generation Prompt -->
+    <section>
+      <h2>Generating the Error Hierarchy</h2>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate Error Types</h5>
+        <pre><code>Context: Multi-module Android app with Clean Architecture.
+Modules: :data:repository (network + DB), :core:domain, :feature:*
+
+Rules: ERR-001 (three-tier error hierarchy). No raw exceptions cross boundaries.
+- Tier 1: ApiResult&lt;T&gt; in :data:repository — wraps Retrofit responses
+- Tier 2: AppException in :core:domain — Network, Server(code, msg),
+  NotFound, Validation, Database, Authentication
+- Tier 3: UiError in :feature:* ViewModels — user-friendly strings
+
+Generate: ApiResult sealed interface, AppException hierarchy, toResult()
+extension, and mapToUiError() helper. Tell me which module each file goes in.</code></pre>
+      </div>
+
+      <p>The key: tell AI exactly which types live in which module. Without module placement, it dumps everything in <code>:app</code> or creates circular dependencies.</p>
+
+      <div class="warning-box">
+        <h4>Warning: AI Puts Error Types in the Wrong Module</h4>
+        <p>AI commonly puts <code>ApiResult</code> in <code>:core:domain</code> (leaks network concepts into domain) or <code>AppException</code> in <code>:data:repository</code> (feature modules can't see it). <code>AppException</code> lives in <code>:core:domain</code> because both data and feature modules reference it. Review module placement for every generated error type.</p>
+      </div>
+    </section>
+
+    <!-- Network Layer -->
+    <section>
+      <h2>The Network Layer Rules</h2>
+
+      <div class="rule-callout">
+        <h4>Rule NET-001: CallAdapter for ApiResult</h4>
+        <p>Never let raw Retrofit <code>Response&lt;T&gt;</code> escape to repository code. A custom <code>CallAdapter</code> wraps every response in <code>ApiResult&lt;T&gt;</code> automatically. The repository never writes <code>try/catch</code> around network calls &mdash; the adapter handles it.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule NET-002: Dual OkHttpClient</h4>
+        <p>Two OkHttpClient instances: one for authenticated requests (with token interceptor), one for public endpoints. Qualified with <code>@Authenticated</code> and <code>@Public</code> in Hilt. AI defaults to a single client &mdash; override this.</p>
+      </div>
+
+      <div class="highlight-box">
+        <h4>CallAdapter: Zero Try/Catch in Repositories</h4>
+        <pre><code>// :data:repository — ApiResultCallAdapter.kt
+class ApiResultCallAdapter&lt;T&gt;(private val resultType: Type) : CallAdapter&lt;T, Call&lt;ApiResult&lt;T&gt;&gt;&gt; {
+    override fun responseType(): Type = resultType
+    override fun adapt(call: Call&lt;T&gt;): Call&lt;ApiResult&lt;T&gt;&gt; = ApiResultCall(call)
+}
+
+// The repository becomes clean:
+override suspend fun getRecipes(): Result&lt;List&lt;Recipe&gt;&gt; {
+    return api.getRecipes().toResult { it.map { dto -&gt; dto.toDomain() } }
+}
+// No try/catch. ApiResult handles network + HTTP errors. toResult() maps to domain Result.</code></pre>
+      </div>
+
+      <p>Compare that to the monolith's try/catch nesting. The CallAdapter eliminates an entire category of boilerplate &mdash; and an entire category of AI mistakes.</p>
+    </section>
+
+    <!-- Dual OkHttpClient -->
+    <section>
+      <h2>Dual OkHttpClient Setup</h2>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate Network Module</h5>
+        <pre><code>Context: :data:repository module, Hilt DI, OkHttp + Retrofit.
+
+Rules: NET-001 (CallAdapter wraps all calls in ApiResult), NET-002 (two
+OkHttpClient instances: @Authenticated with token interceptor, @Public
+without), DI-004 (qualifiers in :core:common, not :data:repository)
+
+Generate: @Authenticated/@Public qualifiers in :core:common, TokenInterceptor,
+NetworkModule with dual OkHttpClient + Retrofit, ApiResultCallAdapterFactory.</code></pre>
+      </div>
+
+      <p>Following DI-004, the <code>@Authenticated</code> and <code>@Public</code> qualifiers live in <code>:core:common</code>, not in <code>:data:repository</code>. This way any module can reference them without depending on the data layer.</p>
+    </section>
+
+    <!-- Package Structure Validation -->
+    <section>
+      <h2>Package Structure Validation</h2>
+
+      <div class="rule-callout">
+        <h4>Rule PKG-001: No Forbidden Dependencies</h4>
+        <p><code>:core:domain</code> must never import from <code>:data:*</code> or <code>:feature:*</code>. <code>:feature:*</code> must never import from another <code>:feature:*</code>. The dependency graph is strictly unidirectional: features → domain ← data. Validate this after every AI generation pass.</p>
+      </div>
+
+      <p>AI doesn't inherently understand module boundaries. After generating cross-cutting code, run a validation pass:</p>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Validate Package Dependencies</h5>
+        <pre><code>Scan all .kt files for forbidden imports. Allowed graph:
+  :feature:* → :core:domain, :core:common, :core:design-system
+  :data:local → :core:domain, :core:common
+  :data:repository → :data:local, :core:domain, :core:common
+  :app → all modules
+Forbidden: :core:domain → :data:*/:feature:*, :feature:* → :feature:*,
+  :data:local → :feature:*/:data:repository
+
+Report: file path, line number, forbidden import, rule violated.</code></pre>
+      </div>
+
+      <div class="ai-review-box">
+        <h4>AI Review: Package Dependency Scan</h4>
+        <table>
+          <thead><tr><th>File</th><th>Violation</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>:core:domain/RecipeRepository.kt</code></td>
+              <td>Imports <code>RecipeEntity</code> from <code>:data:local</code></td>
+              <td>PKG-001: domain → data forbidden</td>
+            </tr>
+            <tr>
+              <td><code>:feature:recipe/RecipeDetailVM.kt</code></td>
+              <td>Imports <code>CookbookRoutes</code> from <code>:feature:books</code></td>
+              <td>PKG-001: feature → feature forbidden</td>
+            </tr>
+            <tr>
+              <td><code>:data:repository/RecipeRepoImpl.kt</code></td>
+              <td>Imports <code>UiError</code> from <code>:feature:recipe</code></td>
+              <td>PKG-001: data → feature forbidden</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Result: 3 violations found.</strong> Each requires moving the type to the correct module or replacing with a boundary-appropriate type.</p>
+      </div>
+    </section>
+
+    <!-- Gradle Rules -->
+    <section>
+      <h2>The Gradle Rules</h2>
+
+      <div class="rule-callout">
+        <h4>Rule GRADLE-001: Convention Plugins + Version Catalog</h4>
+        <p>All build configuration via convention plugins in <code>build-logic/</code>. Dependencies via <code>libs.versions.toml</code> version catalog. No hardcoded version strings in any <code>build.gradle.kts</code>. No <code>buildscript</code> blocks. KSP only &mdash; no KAPT.</p>
+      </div>
+
+      <div class="comparison">
+        <div>
+          <h5>Bad: Hardcoded Versions</h5>
+          <pre><code>// :feature:recipe/build.gradle.kts
+plugins {
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+    kotlin("kapt") // KAPT!
+    id("dagger.hilt.android.plugin")
+}
+dependencies {
+    implementation("androidx.room:room-runtime:2.8.4")
+    ksp("com.google.dagger:hilt-compiler:2.59.2")
+}</code></pre>
+        </div>
+        <div>
+          <h5>Good: Convention Plugin + Catalog</h5>
+          <pre><code>// :feature:recipe/build.gradle.kts
+plugins {
+    id("recipes.android.feature")  // convention plugin
+}
+dependencies {
+    implementation(libs.room.runtime)
+    ksp(libs.hilt.compiler)  // KSP, not KAPT
+}
+
+// Convention plugin handles: Android config, Compose,
+// Hilt plugin, KSP, test dependencies, etc.</code></pre>
+        </div>
+      </div>
+
+      <div class="prompt-example good">
+        <h5>Good Prompt: Generate Convention Plugins</h5>
+        <pre><code>Context: Multi-module Android project, composite builds for build-logic.
+Rules: GRADLE-001 (convention plugins + version catalog, KSP only, no KAPT)
+
+Plugin types: recipes.android.library (base), recipes.android.feature
+(library + Compose + Hilt + KSP), recipes.android.application (app),
+recipes.jvm.library (pure Kotlin: :core:domain, :core:common)
+
+Generate: build-logic build files, convention plugin .kt files per type,
+libs.versions.toml entries. Minimum plugins per type. Feature plugin adds
+Compose compiler, Hilt plugin, KSP for Hilt.</code></pre>
+      </div>
+    </section>
+
+    <!-- Convention Plugin Example -->
+    <section>
+      <h2>Convention Plugin: Feature Module</h2>
+
+      <div class="highlight-box">
+        <h4>build-logic — RecipesAndroidFeaturePlugin.kt</h4>
+        <pre><code>class RecipesAndroidFeaturePlugin : Plugin&lt;Project&gt; {
+    override fun apply(target: Project) = with(target) {
+        pluginManager.apply {
+            apply("recipes.android.library")      // base Android config
+            apply("recipes.android.hilt")          // Hilt + KSP
+            apply("org.jetbrains.kotlin.plugin.compose")
+        }
+        dependencies {
+            "implementation"(project(":core:domain"))
+            "implementation"(project(":core:common"))
+            "implementation"(project(":core:design-system"))
+            "implementation"(libs.findLibrary("androidx.lifecycle.viewmodel.compose").get())
+            "implementation"(libs.findLibrary("androidx.navigation.compose").get())
+            "implementation"(libs.findLibrary("androidx.hilt.navigation.compose").get())
+        }
+    }
+}
+
+// Usage in :feature:recipe/build.gradle.kts — just one line:
+// plugins { id("recipes.android.feature") }</code></pre>
+      </div>
+
+      <p>The plugin declares the dependencies every feature needs. Individual feature modules only add feature-specific dependencies. AI generates one convention plugin per module type &mdash; not per module.</p>
+    </section>
+
+    <!-- Version Catalog -->
+    <section>
+      <h2>The Version Catalog</h2>
+
+      <div class="highlight-box">
+        <h4>gradle/libs.versions.toml (excerpt)</h4>
+        <pre><code>[versions]
+kotlin = "2.3.21"
+compose-bom = "2026.04.00"
+hilt = "2.59.2"
+room = "2.8.4"
+navigation = "2.9.8"
+ksp = "2.3.7"
+
+[libraries]
+hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
+hilt-compiler = { module = "com.google.dagger:hilt-compiler", version.ref = "hilt" }
+room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
+
+[plugins]
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>Warning: AI Ignores Your Version Catalog</h4>
+        <p>Even when you provide the catalog, AI will generate <code>implementation("group:artifact:version")</code> with hardcoded strings. Add this to your rules: <strong>"All dependencies MUST use the version catalog. Hardcoded version strings are forbidden."</strong> Check every generated <code>build.gradle.kts</code>.</p>
+      </div>
+    </section>
+
+    <!-- Common AI Mistakes -->
+    <section>
+      <h2>Cross-Cutting AI Mistakes</h2>
+
+      <table class="comparison">
+        <thead><tr><th>Mistake</th><th>What AI Does</th><th>Rule / Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Raw string routes</td>
+            <td><code>navigate("recipe/$id")</code></td>
+            <td>NAV-002: type-safe @Serializable routes only</td>
+          </tr>
+          <tr>
+            <td>navController in ViewModel</td>
+            <td>Injects NavController</td>
+            <td>NAV-003: Effects → callbacks. ViewModel never sees navController</td>
+          </tr>
+          <tr>
+            <td>Shared navigation module</td>
+            <td><code>:core:navigation</code> with all routes</td>
+            <td>NAV-001: routes in owning feature. Assembly in :app only</td>
+          </tr>
+          <tr>
+            <td>IOException in ViewModel</td>
+            <td>Catches IOException in presentation</td>
+            <td>ERR-001: repository translates to AppException → ViewModel to UiError</td>
+          </tr>
+          <tr>
+            <td>KAPT in build files</td>
+            <td><code>kapt(libs.hilt.compiler)</code></td>
+            <td>GRADLE-001: KSP only. <code>ksp(libs.hilt.compiler)</code></td>
+          </tr>
+          <tr>
+            <td>Hardcoded dependency versions</td>
+            <td><code>"com.google.dagger:hilt-android:2.51"</code></td>
+            <td>GRADLE-001: version catalog only. <code>libs.hilt.android</code></td>
+          </tr>
+          <tr>
+            <td>Feature-to-feature imports</td>
+            <td><code>:feature:recipe</code> imports <code>:feature:books</code></td>
+            <td>PKG-001: features are isolated. Cross-nav via :app</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- The Full Cross-Cutting Review -->
+    <section>
+      <h2>The Cross-Cutting Review Checklist</h2>
+
+      <div class="checklist">
+        <h4>After every AI generation pass, verify:</h4>
+        <ul>
+          <li><strong>Navigation:</strong> All routes are @Serializable data classes, defined in owning feature?</li>
+          <li><strong>Navigation:</strong> NavHost is in :app only? No navController refs outside NavHost?</li>
+          <li><strong>Navigation:</strong> Cross-feature navigation uses Effect → callback, not direct navigation?</li>
+          <li><strong>Errors:</strong> Network errors wrapped in ApiResult by CallAdapter?</li>
+          <li><strong>Errors:</strong> Repositories return Result&lt;T&gt; with AppException, never raw exceptions?</li>
+          <li><strong>Errors:</strong> ViewModels translate to UiError — no HTTP codes in UI?</li>
+          <li><strong>Network:</strong> Dual OkHttpClient with @Authenticated/@Public qualifiers?</li>
+          <li><strong>Gradle:</strong> Convention plugins for all module types? No raw plugin application?</li>
+          <li><strong>Gradle:</strong> KSP everywhere, KAPT nowhere?</li>
+          <li><strong>Gradle:</strong> All versions in libs.versions.toml, none hardcoded?</li>
+          <li><strong>Packages:</strong> No forbidden imports across module boundaries?</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Exercise: Wire Your Cross-Cutting Concerns</h2>
+
+      <div class="exercise-box">
+        <h4>Exercise 9: The Cross-Cutting Audit</h4>
+        <ol>
+          <li><strong>Navigation:</strong> Generate type-safe routes for your app's screens. Provide AI with NAV-001/002/003 rules, your feature module list, and which screens need cross-feature navigation. Verify no raw string routes appear.</li>
+          <li><strong>Errors:</strong> Generate the three-tier error hierarchy. Provide AI with ERR-001, your module structure, and the list of error scenarios (network timeout, 401, 404, validation failure, database error). Verify each type lives in the correct module.</li>
+          <li><strong>Network:</strong> Generate the CallAdapter and dual OkHttpClient. Provide AI with NET-001/002 and DI-004. Verify the qualifiers are in <code>:core:common</code>, not <code>:data:repository</code>.</li>
+          <li><strong>Gradle:</strong> Generate convention plugins for your module types. Provide AI with GRADLE-001 and your version catalog. Verify every feature module's <code>build.gradle.kts</code> is under 10 lines.</li>
+          <li><strong>Validate:</strong> Run the package dependency scan prompt from this chapter. Fix every violation before proceeding.</li>
+        </ol>
+        <p><strong>Success criteria:</strong> Zero raw string routes. Zero raw exceptions in ViewModels. Zero KAPT references. Zero hardcoded versions. Zero forbidden imports.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The house is fully connected &mdash; hallways between rooms, fire alarms in every zone, plumbing to the city grid, and all built to code. Every module knows its boundaries. Errors translate cleanly through each tier. Navigation is type-safe and feature-isolated.</p>
+
+      <p>Now we test everything. Chapter 10 generates a comprehensive test suite: domain unit tests, repository tests with fakes, ViewModel contract tests, and Compose UI tests. The target: 128+ tests covering every layer. For more on TDD with AI, see <em>AI-Advanced</em> Chapter 8.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="08-dependency-injection.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Dependency Injection: Hilt Modules With AI</span>
+    </a>
+    <a href="10-testing-rewrite.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Testing the Rewrite</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

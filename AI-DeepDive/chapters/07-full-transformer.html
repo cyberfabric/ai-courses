@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: The Full Transformer Architecture | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-attention-mechanism.html">&larr; Prev</a>
+      <a href="08-prediction-to-conversation.html">Next &rarr;</a>
+      <a href="maps/07-full-transformer-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>The Full Transformer Architecture</h1>
+    <p class="chapter-subtitle">Layer norm, residual connections, FFN, and positional encoding &mdash; the complete picture beyond attention</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/05-transformer.html">AI-Intro Ch 5: The Transformer</a>. There you saw the transformer as a black box. Now you&rsquo;ll trace every operation inside a single transformer block.
+    </div>
+
+    <p>In <a href="06-attention-mechanism.html">Chapter 6</a>, you computed attention from scratch &mdash; the mechanism that lets tokens pay attention to each other. But attention is only <strong>one of four operations</strong> in a transformer block. The other three are just as essential, and without them, attention alone would collapse.</p>
+
+    <p>In this chapter, you&rsquo;ll trace all four operations with real numbers and understand why each one exists. By the end, you&rsquo;ll know exactly what happens inside one transformer &ldquo;layer&rdquo; &mdash; and GPT-4 has about 120 of them stacked in sequence.</p>
+
+    <!-- ============================================== -->
+    <h2>The Four Operations in a Transformer Block</h2>
+    <!-- ============================================== -->
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Attention</h4>
+        <p>Which tokens matter?</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Add &amp; Norm</h4>
+        <p>Residual + layer norm</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. FFN</h4>
+        <p>Process each token</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Add &amp; Norm</h4>
+        <p>Residual + layer norm again</p>
+      </div>
+    </div>
+
+    <p>That&rsquo;s one transformer block. The input enters, passes through all four operations, and exits as a refined representation. Then it enters the next block. And the next. And the next &mdash; 96 times in GPT-3.</p>
+
+    <p>Let&rsquo;s trace each operation with a 4-dimensional vector, starting from where Chapter 6 left off: the attention output for one token.</p>
+
+    <!-- ============================================== -->
+    <h2>Residual Connections: Don&rsquo;t Forget the Original</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>Residual Connection (Skip Connection)</h4>
+      <p>Instead of replacing the input with the attention output, <strong>add the input back to the output</strong>. The formula is simply: output = input + attention(input). This &ldquo;skip connection&rdquo; lets information flow directly through the network without being forced through every transformation.</p>
+    </div>
+
+    <p>Why is this necessary? Deep networks suffer from the <strong>vanishing gradient problem</strong>: by the time error signals travel backward through 96 layers, they shrink to nearly zero, and early layers stop learning. Residual connections create a &ldquo;highway&rdquo; for gradients to flow directly to early layers.</p>
+
+    <div class="math-walkthrough">
+      <h4>Residual connection with numbers</h4>
+
+      <p><strong>Input to the block:</strong> <code>[0.50, 0.30, 0.80, 0.10]</code></p>
+      <p><strong>Attention output:</strong> <code>[0.20, -0.10, 0.30, 0.40]</code></p>
+
+      <p><strong>Add them element by element:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Position</th><th>Input</th><th>+</th><th>Attention</th><th>=</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code>0.50</code></td><td>+</td><td><code>0.20</code></td><td>=</td><td><code>0.70</code></td></tr>
+          <tr><td>2</td><td><code>0.30</code></td><td>+</td><td><code>-0.10</code></td><td>=</td><td><code>0.20</code></td></tr>
+          <tr><td>3</td><td><code>0.80</code></td><td>+</td><td><code>0.30</code></td><td>=</td><td><code>1.10</code></td></tr>
+          <tr><td>4</td><td><code>0.10</code></td><td>+</td><td><code>0.40</code></td><td>=</td><td><code>0.50</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Residual output:</strong> <code>[0.70, 0.20, 1.10, 0.50]</code></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What the residual connection means</h4>
+      <p>The original input is <em>preserved</em> in the output. Attention only needs to learn what to <strong>add</strong> to the representation &mdash; the refinement, the adjustment. It doesn&rsquo;t have to learn to reproduce everything the input already knew. Think of it as editing a document: you keep the original draft and mark up changes, rather than rewriting from scratch each time.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Layer Normalization: Keeping Numbers Tame</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>Layer Normalization</h4>
+      <p>Normalize a vector to have <strong>mean = 0</strong> and <strong>variance = 1</strong>, then apply learnable scale (&gamma;) and shift (&beta;) parameters. This prevents numbers from growing too large or too small as they pass through dozens of layers.</p>
+    </div>
+
+    <p>After 96 transformer blocks, numbers could easily explode to millions or collapse to near-zero. Layer norm keeps them in a stable range at every step.</p>
+
+    <div class="math-walkthrough">
+      <h4>Layer normalization step by step</h4>
+
+      <p><strong>Input vector:</strong> <code>[0.70, 0.20, 1.10, 0.50]</code> (our residual output from above)</p>
+
+      <p><strong>Step 1: Compute the mean</strong></p>
+      <p>&mu; = (0.70 + 0.20 + 1.10 + 0.50) / 4 = 2.50 / 4 = <strong>0.625</strong></p>
+
+      <p><strong>Step 2: Subtract the mean (center at zero)</strong></p>
+      <table>
+        <thead><tr><th>Position</th><th>Value</th><th>- Mean</th><th>= Centered</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>0.70</code></td><td>- 0.625</td><td><code>0.075</code></td></tr>
+          <tr><td>2</td><td><code>0.20</code></td><td>- 0.625</td><td><code>-0.425</code></td></tr>
+          <tr><td>3</td><td><code>1.10</code></td><td>- 0.625</td><td><code>0.475</code></td></tr>
+          <tr><td>4</td><td><code>0.50</code></td><td>- 0.625</td><td><code>-0.125</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 3: Compute the variance</strong></p>
+      <p>&sigma;&sup2; = (0.075&sup2; + (-0.425)&sup2; + 0.475&sup2; + (-0.125)&sup2;) / 4</p>
+      <p>= (0.0056 + 0.1806 + 0.2256 + 0.0156) / 4 = 0.4275 / 4 = <strong>0.1069</strong></p>
+
+      <p><strong>Step 4: Divide by standard deviation</strong> (&sigma; = &radic;0.1069 &asymp; 0.327)</p>
+      <table>
+        <thead><tr><th>Position</th><th>Centered</th><th>&divide; 0.327</th><th>= Normalized</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>0.075</code></td><td>&divide; 0.327</td><td><code>0.23</code></td></tr>
+          <tr><td>2</td><td><code>-0.425</code></td><td>&divide; 0.327</td><td><code>-1.30</code></td></tr>
+          <tr><td>3</td><td><code>0.475</code></td><td>&divide; 0.327</td><td><code>1.45</code></td></tr>
+          <tr><td>4</td><td><code>-0.125</code></td><td>&divide; 0.327</td><td><code>-0.38</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Normalized output:</strong> <code>[0.23, -1.30, 1.45, -0.38]</code></p>
+      <p>Mean &asymp; 0, variance &asymp; 1. The numbers are centered and scaled. &#10003;</p>
+
+      <p><strong>Step 5: Scale and shift</strong> (learnable parameters &gamma; and &beta;)</p>
+      <p>Final = &gamma; &times; normalized + &beta;. Typically &gamma; starts at 1 and &beta; at 0, so the initial output equals the normalized values. During training, the model learns the best &gamma; and &beta; for each position.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Checkpoint</h4>
+      <p>After layer normalization, the vector <code>[0.70, 0.20, 1.10, 0.50]</code> became <code>[0.23, -1.30, 1.45, -0.38]</code>. What&rsquo;s the key property of the normalized output?</p>
+      <p><em>Answer: Mean &asymp; 0 and variance &asymp; 1. The values are centered and have consistent scale, regardless of what the input values were.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Feed-Forward Network: Token-Level Processing</h2>
+    <!-- ============================================== -->
+
+    <p>After attention and Add&amp;Norm, each token passes through a <strong>feed-forward network (FFN)</strong> &mdash; independently. This is the same kind of neural network from Chapters 2&ndash;3: two linear layers with an activation function in between.</p>
+
+    <div class="operation-box">
+      <h4>Feed-Forward Network (FFN)</h4>
+      <p>FFN(x) = W<sub>2</sub> &times; ReLU(W<sub>1</sub> &times; x + b<sub>1</sub>) + b<sub>2</sub></p>
+      <p>The hidden layer is typically <strong>4&times; wider</strong> than the model dimension. If the model is 4D, the FFN hidden layer is 16D. This expansion lets the network process and transform the information from attention.</p>
+    </div>
+
+    <p>Why is this needed? Attention tells each token <em>what to look at</em>, but the FFN processes <em>what to do with that information</em>. Researchers have found that FFNs often store factual knowledge &mdash; &ldquo;Paris is the capital of France&rdquo; lives in the FFN weights.</p>
+
+    <div class="math-walkthrough">
+      <h4>FFN with numbers: 4D &rarr; 8D &rarr; 4D</h4>
+
+      <p><strong>Input (after layer norm):</strong> <code>[0.23, -1.30, 1.45, -0.38]</code></p>
+
+      <p><strong>Layer 1:</strong> Multiply by W<sub>1</sub> (4&times;8 matrix) + bias, then ReLU.</p>
+      <p>We&rsquo;ll show 3 of the 8 hidden neurons to keep things readable:</p>
+
+      <table>
+        <thead><tr><th>Hidden Neuron</th><th>Weighted Sum</th><th>ReLU</th></tr></thead>
+        <tbody>
+          <tr><td>h<sub>1</sub></td><td><code>0.82</code></td><td><code>0.82</code></td></tr>
+          <tr><td>h<sub>2</sub></td><td><code>-0.45</code></td><td><code>0.00</code> &larr; killed by ReLU</td></tr>
+          <tr><td>h<sub>3</sub></td><td><code>1.23</code></td><td><code>1.23</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>All 8 hidden values after ReLU: <code>[0.82, 0.00, 1.23, 0.55, 0.00, 0.91, 0.37, 0.00]</code></p>
+
+      <p><strong>Layer 2:</strong> Multiply by W<sub>2</sub> (8&times;4 matrix) + bias. Projects back to 4D.</p>
+      <p><strong>FFN output:</strong> <code>[0.41, -0.22, 0.53, 0.18]</code></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Expand, process, compress</h4>
+      <p>The FFN expands 4D &rarr; 8D, applies ReLU (killing some neurons), then compresses back to 4D. This &ldquo;expand and compress&rdquo; pattern lets the network explore a richer space of representations before projecting back. Three of the 8 hidden neurons were killed by ReLU &mdash; the FFN decided those &ldquo;features&rdquo; weren&rsquo;t relevant for this token. The surviving neurons carry the useful information forward.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Second Add &amp; Norm</h2>
+    <!-- ============================================== -->
+
+    <p>After the FFN, we apply the same residual connection and layer normalization again:</p>
+
+    <div class="math-walkthrough">
+      <h4>Second residual + layer norm</h4>
+
+      <p><strong>Input to FFN (from first layer norm):</strong> <code>[0.23, -1.30, 1.45, -0.38]</code></p>
+      <p><strong>FFN output:</strong> <code>[0.41, -0.22, 0.53, 0.18]</code></p>
+
+      <p><strong>Residual connection (add):</strong></p>
+      <p><code>[0.23+0.41, -1.30+(-0.22), 1.45+0.53, -0.38+0.18]</code> = <code>[0.64, -1.52, 1.98, -0.20]</code></p>
+
+      <p><strong>Layer norm:</strong> Normalize to mean&asymp;0, variance&asymp;1 (same process as before).</p>
+      <p><strong>Block output:</strong> <code>[0.37, -1.26, 1.43, -0.54]</code></p>
+    </div>
+
+    <p>That&rsquo;s the complete output of one transformer block for one token. This vector enters the next block, where the whole process repeats.</p>
+
+    <!-- ============================================== -->
+    <h2>Putting It All Together: One Complete Block</h2>
+    <!-- ============================================== -->
+
+    <p>Here&rsquo;s the full flow through one transformer block, with all the numbers we just computed:</p>
+
+    <table>
+      <thead>
+        <tr><th>Stage</th><th>Operation</th><th>Output</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Input</strong></td><td>&mdash;</td><td><code>[0.50, 0.30, 0.80, 0.10]</code></td></tr>
+        <tr><td><strong>Attention</strong></td><td>Q&times;K<sup>T</sup> &rarr; softmax &rarr; &times;V</td><td><code>[0.20, -0.10, 0.30, 0.40]</code></td></tr>
+        <tr><td><strong>Add</strong></td><td>Input + Attention</td><td><code>[0.70, 0.20, 1.10, 0.50]</code></td></tr>
+        <tr><td><strong>Layer Norm</strong></td><td>Mean=0, Var=1</td><td><code>[0.23, -1.30, 1.45, -0.38]</code></td></tr>
+        <tr><td><strong>FFN</strong></td><td>Expand, ReLU, compress</td><td><code>[0.41, -0.22, 0.53, 0.18]</code></td></tr>
+        <tr><td><strong>Add</strong></td><td>LayerNorm output + FFN</td><td><code>[0.64, -1.52, 1.98, -0.20]</code></td></tr>
+        <tr><td><strong>Layer Norm</strong></td><td>Mean=0, Var=1</td><td><code>[0.37, -1.26, 1.43, -0.54]</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>Seven operations. One block. The input went in as <code>[0.50, 0.30, 0.80, 0.10]</code> and came out as <code>[0.37, -1.26, 1.43, -0.54]</code> &mdash; refined by attention (context from other tokens) and the FFN (processing that information).</p>
+
+    <!-- ============================================== -->
+    <h2>Positional Encoding: Where Are You in the Sentence?</h2>
+    <!-- ============================================== -->
+
+    <p>There&rsquo;s a problem we haven&rsquo;t addressed: attention treats all tokens the same regardless of position. &ldquo;The cat sat&rdquo; and &ldquo;sat cat the&rdquo; would produce identical attention scores. But word order obviously matters!</p>
+
+    <div class="operation-box">
+      <h4>Positional Encoding</h4>
+      <p>Before the first transformer block, add a unique &ldquo;position fingerprint&rdquo; to each token&rsquo;s embedding. This way, the model can distinguish between the same word at position 1 vs. position 100.</p>
+    </div>
+
+    <p>The original transformer paper used <strong>sinusoidal encoding</strong>: each position gets a vector of sine and cosine values at different frequencies.</p>
+
+    <div class="math-walkthrough">
+      <h4>Positional encoding vectors (4D, simplified)</h4>
+
+      <table>
+        <thead>
+          <tr><th>Position</th><th>PE<sub>1</sub></th><th>PE<sub>2</sub></th><th>PE<sub>3</sub></th><th>PE<sub>4</sub></th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>0</strong> (&ldquo;The&rdquo;)</td><td><code>0.00</code></td><td><code>1.00</code></td><td><code>0.00</code></td><td><code>1.00</code></td></tr>
+          <tr><td><strong>1</strong> (&ldquo;cat&rdquo;)</td><td><code>0.84</code></td><td><code>0.54</code></td><td><code>0.01</code></td><td><code>1.00</code></td></tr>
+          <tr><td><strong>2</strong> (&ldquo;sat&rdquo;)</td><td><code>0.91</code></td><td><code>-0.42</code></td><td><code>0.02</code></td><td><code>1.00</code></td></tr>
+          <tr><td><strong>3</strong> (&ldquo;on&rdquo;)</td><td><code>0.14</code></td><td><code>-0.99</code></td><td><code>0.03</code></td><td><code>1.00</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>Each position has a unique pattern. The sine/cosine waves at different frequencies create a unique &ldquo;fingerprint&rdquo; that the model can learn to decode.</p>
+
+      <p><strong>Combining position with meaning:</strong></p>
+      <p>Token embedding for &ldquo;cat&rdquo;: <code>[0.30, 0.90, 0.70, 0.10]</code></p>
+      <p>Position encoding for position 1: <code>[0.84, 0.54, 0.01, 1.00]</code></p>
+      <p><strong>Sum:</strong> <code>[1.14, 1.44, 0.71, 1.10]</code></p>
+
+      <p>This combined vector encodes both <em>what</em> the token is (cat) and <em>where</em> it is (position 1).</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why addition works</h4>
+      <p>It seems crude to just add two vectors together &mdash; wouldn&rsquo;t that scramble the meaning? In high dimensions (768+), there&rsquo;s enough &ldquo;room&rdquo; for the model to separate the meaning signal from the position signal. Think of it like adding a watermark to an image: the watermark is always there, but it doesn&rsquo;t destroy the original picture.</p>
+    </div>
+
+    <div class="tip-box">
+      <strong>Modern alternative:</strong> Most current models use <strong>RoPE (Rotary Position Embedding)</strong> instead of sinusoidal encoding. RoPE rotates the Q and K vectors by amounts proportional to their position, making it easier for the model to extrapolate to longer sequences than it was trained on. The intuition is the same &mdash; encode position &mdash; but the mechanism is more flexible.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Causal Mask: No Peeking at the Future</h2>
+    <!-- ============================================== -->
+
+    <p>Language models like GPT and Claude generate text left to right. When predicting the next token, the model should only see tokens that came <em>before</em> the current position &mdash; not future tokens. This is enforced by a <strong>causal mask</strong>.</p>
+
+    <div class="math-walkthrough">
+      <h4>Causal mask for a 4-token sequence</h4>
+
+      <p>Before softmax, we add a mask to the attention scores. Future positions get <code>-&infin;</code>, which softmax turns into 0:</p>
+
+      <table>
+        <thead>
+          <tr><th>Q &darr; &nbsp; K &rarr;</th><th>The</th><th>cat</th><th>sat</th><th>on</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>The</strong></td><td><code>0.77</code></td><td><code>-&infin;</code></td><td><code>-&infin;</code></td><td><code>-&infin;</code></td></tr>
+          <tr><td><strong>cat</strong></td><td><code>0.57</code></td><td><code>0.44</code></td><td><code>-&infin;</code></td><td><code>-&infin;</code></td></tr>
+          <tr><td><strong>sat</strong></td><td><code>0.63</code></td><td><code>0.46</code></td><td><code>0.46</code></td><td><code>-&infin;</code></td></tr>
+          <tr><td><strong>on</strong></td><td><code>0.55</code></td><td><code>0.41</code></td><td><code>0.39</code></td><td><code>0.50</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>After softmax:</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>att(The)</th><th>att(cat)</th><th>att(sat)</th><th>att(on)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>The</strong></td><td><code>1.00</code></td><td><code>0.00</code></td><td><code>0.00</code></td><td><code>0.00</code></td></tr>
+          <tr><td><strong>cat</strong></td><td><code>0.53</code></td><td><code>0.47</code></td><td><code>0.00</code></td><td><code>0.00</code></td></tr>
+          <tr><td><strong>sat</strong></td><td><code>0.37</code></td><td><code>0.32</code></td><td><code>0.31</code></td><td><code>0.00</code></td></tr>
+          <tr><td><strong>on</strong></td><td><code>0.28</code></td><td><code>0.25</code></td><td><code>0.24</code></td><td><code>0.23</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>&ldquo;The&rdquo; can only see itself. &ldquo;cat&rdquo; can see &ldquo;The&rdquo; and itself. &ldquo;on&rdquo; can see everything before it. Nobody can see the future.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why the mask matters</h4>
+      <p>Without the causal mask, the model could &ldquo;cheat&rdquo; during training by looking at the answer. If it&rsquo;s supposed to predict &ldquo;sat&rdquo; after &ldquo;The cat,&rdquo; it shouldn&rsquo;t already be able to see &ldquo;sat&rdquo; in its attention. The mask forces the model to make genuine predictions using only past context &mdash; exactly as it will need to during generation.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Encoder vs. Decoder</h2>
+    <!-- ============================================== -->
+
+    <p>The original transformer paper had two halves. Modern models typically use only one:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Type</th><th>Attention</th><th>Used For</th><th>Example Models</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Encoder-only</strong></td>
+            <td>Bidirectional (sees all tokens)</td>
+            <td>Understanding: classification, embeddings</td>
+            <td>BERT, RoBERTa</td>
+          </tr>
+          <tr>
+            <td><strong>Decoder-only</strong></td>
+            <td>Causal (only sees past tokens)</td>
+            <td>Generation: chat, code, writing</td>
+            <td>GPT-4, Claude, LLaMA</td>
+          </tr>
+          <tr>
+            <td><strong>Encoder-Decoder</strong></td>
+            <td>Both + cross-attention</td>
+            <td>Translation, summarization</td>
+            <td>T5, original Transformer</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>GPT-4, Claude, and LLaMA are all <strong>decoder-only</strong>. They use the causal mask and generate tokens one at a time. We&rsquo;ll explore why decoder-only won in Chapter 13.</p>
+
+    <!-- ============================================== -->
+    <h2>Stacking Blocks: Why Depth Creates Intelligence</h2>
+    <!-- ============================================== -->
+
+    <p>One transformer block refines the representation slightly. But stack 96 of them, and something remarkable happens:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Layers</th><th>Parameters</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GPT-2 Small</td><td>12</td><td>117M</td></tr>
+          <tr><td>GPT-2 Large</td><td>36</td><td>774M</td></tr>
+          <tr><td>GPT-3</td><td>96</td><td>175B</td></tr>
+          <tr><td>LLaMA 2 70B</td><td>80</td><td>70B</td></tr>
+          <tr><td>GPT-4 (estimated)</td><td>~120</td><td>~1.8T</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Each layer builds on the previous one&rsquo;s output. Early layers tend to capture simple patterns (syntax, word proximity). Middle layers capture semantic relationships (what refers to what). Late layers capture high-level reasoning and task-specific behavior.</p>
+
+    <div class="tip-box">
+      <strong>What each layer &ldquo;learns&rdquo;:</strong> Research on probing classifiers shows that layer 1 already knows parts of speech, layer 5 understands syntax trees, layer 20 grasps semantic roles, and the final layers specialize in the specific task (question answering, code completion, etc.). Each block refines the representation one step further.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Editing Analogy</h2>
+    <!-- ============================================== -->
+
+    <p>A transformer block is like one round of document editing:</p>
+
+    <ol>
+      <li><strong>Attention</strong> = Research. &ldquo;What information from other parts of this document is relevant here?&rdquo;</li>
+      <li><strong>Residual + Layer Norm</strong> = Keep the original draft and format the notes.</li>
+      <li><strong>FFN</strong> = Rewriting. Process the gathered information and improve the text.</li>
+      <li><strong>Residual + Layer Norm</strong> = Merge the rewrite with the original, clean up formatting.</li>
+    </ol>
+
+    <p>One round of editing makes the document a little better. After 96 rounds, it&rsquo;s polished. Each round has access to the improvements from all previous rounds.</p>
+
+    <!-- ============================================== -->
+    <h2>Parameter Count: Where Do They All Go?</h2>
+    <!-- ============================================== -->
+
+    <p>For a model with dimension <em>d</em> and <em>L</em> layers:</p>
+
+    <div class="math-walkthrough">
+      <h4>Parameters per transformer block</h4>
+
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Formula</th><th>GPT-3 (d=12288)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Q, K, V projections</td><td>3 &times; d &times; d</td><td>3 &times; 12288&sup2; = 453M</td></tr>
+          <tr><td>Output projection (W<sub>O</sub>)</td><td>d &times; d</td><td>12288&sup2; = 151M</td></tr>
+          <tr><td>FFN layer 1</td><td>d &times; 4d</td><td>12288 &times; 49152 = 604M</td></tr>
+          <tr><td>FFN layer 2</td><td>4d &times; d</td><td>49152 &times; 12288 = 604M</td></tr>
+          <tr><td>Layer norms (2)</td><td>2 &times; 2 &times; d</td><td>~49K (tiny)</td></tr>
+          <tr><td><strong>Total per block</strong></td><td>~12d&sup2;</td><td><strong>~1.81B</strong></td></tr>
+        </tbody>
+      </table>
+
+      <p>GPT-3 has 96 blocks: 96 &times; 1.81B &asymp; <strong>174B parameters</strong>, close to the reported 175B.</p>
+      <p>Notice: the FFN has <strong>2/3 of the parameters</strong> in each block. Attention gets the fame, but FFN does most of the heavy lifting in terms of parameter count.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Checkpoint</h4>
+      <p>In a transformer block, which component has more parameters: attention or the FFN?</p>
+      <p><em>Answer: The FFN. With the standard 4&times; expansion, the FFN has 8d&sup2; parameters vs. attention&rsquo;s 4d&sup2;. The FFN is 2/3 of the block.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Residual Connection + Layer Norm</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your turn: apply Add &amp; Norm</h4>
+
+      <p><strong>Input vector:</strong> <code>[1.0, -0.5, 0.3, 0.8]</code></p>
+      <p><strong>Attention output:</strong> <code>[0.4, 0.2, -0.1, 0.3]</code></p>
+
+      <p><strong>Compute:</strong></p>
+      <ol>
+        <li>The residual output (add the two vectors)</li>
+        <li>The mean of the residual output</li>
+        <li>The centered values (subtract the mean)</li>
+        <li>Verify the centered values sum to approximately 0</li>
+      </ol>
+
+      <p><strong>Solution:</strong></p>
+      <ol>
+        <li>Residual: <code>[1.0+0.4, -0.5+0.2, 0.3+(-0.1), 0.8+0.3]</code> = <code>[1.4, -0.3, 0.2, 1.1]</code></li>
+        <li>Mean: (1.4 + (-0.3) + 0.2 + 1.1) / 4 = 2.4 / 4 = <strong>0.6</strong></li>
+        <li>Centered: <code>[1.4-0.6, -0.3-0.6, 0.2-0.6, 1.1-0.6]</code> = <code>[0.8, -0.9, -0.4, 0.5]</code></li>
+        <li>Sum: 0.8 + (-0.9) + (-0.4) + 0.5 = 0.0 &#10003;</li>
+      </ol>
+
+      <p>The centering step is the core of layer normalization &mdash; making the mean zero. You&rsquo;d then divide by the standard deviation to make the variance 1.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Key Takeaways</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <ul>
+        <li><strong>A transformer block</strong> has four operations: Attention &rarr; Add&amp;Norm &rarr; FFN &rarr; Add&amp;Norm.</li>
+        <li><strong>Residual connections</strong> add the input back to the output, creating gradient highways and letting each operation learn refinements.</li>
+        <li><strong>Layer normalization</strong> keeps values centered (mean=0, variance=1) to prevent numerical explosion across deep stacks.</li>
+        <li><strong>The FFN</strong> expands, processes with ReLU, and compresses back. It holds 2/3 of a block&rsquo;s parameters and stores factual knowledge.</li>
+        <li><strong>Positional encoding</strong> is added to embeddings before the first block so the model knows token order.</li>
+        <li><strong>The causal mask</strong> prevents tokens from seeing the future &mdash; essential for autoregressive generation.</li>
+        <li><strong>Stacking blocks</strong> builds from simple patterns to complex reasoning: 12 layers for basic tasks, 96+ for GPT-3-level capability.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>You now understand everything that happens inside a transformer. But we haven&rsquo;t yet seen how the model actually <em>generates text</em> &mdash; how it goes from a probability distribution over tokens to forming complete sentences, one token at a time.</p>
+
+    <p>In <a href="08-prediction-to-conversation.html">Chapter 8: From Prediction to Conversation</a>, you&rsquo;ll trace autoregressive generation token by token through the full pipeline, see how greedy decoding and beam search work with real numbers, and understand why streaming responses appear one word at a time.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="06-attention-mechanism.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Attention Is All You Need</span>
+    </a>
+    <a href="08-prediction-to-conversation.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">From Prediction to Conversation</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10 &mdash; Version Catalogs &amp; Dependency Health | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="09-debug-build-inspectors.html">&larr; Prev</a>
+      <a href="11-r8-minification.html">Next &rarr;</a>
+      <a href="maps/10-version-catalogs-and-deps-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Version Catalogs &amp; Dependency Health</h1>
+    <p class="subtitle">Switch to <code>libs.versions.toml</code> and add tooling that flags unused, outdated, and risky deps</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The dependency mess you've been living with</h2>
+
+      <p>Open <code>app/build.gradle.kts</code> in any 3+ year-old Android project and you'll find roughly the same fossil layer: <code>retrofit:2.6.0</code> in one module, <code>retrofit:2.9.0</code> in another, <code>kotlinx.coroutines</code> hardcoded in five places with three different versions, a <code>compileSdk</code> integer literal, and at least one comment that says "TODO: bump this when we have time."</p>
+
+      <p>It's not a code-quality problem in the sense lint or detekt would catch. It's an <em>operational</em> problem: every dependency upgrade requires a grep + multi-file edit. Every "which version of OkHttp are we on?" question requires reading three modules. And nobody knows which deps are actually used vs. which were added in 2022 for a feature that got cut.</p>
+
+      <p>This chapter solves that. Step one is the modern way to declare dependencies: a <strong>Gradle version catalog</strong>, a single <code>libs.versions.toml</code> file that becomes the source of truth. Step two is wiring two small plugins that automatically tell you which deps are unused, which are outdated, and which have known CVEs.</p>
+
+      <div class="highlight-box">
+        <p><strong>The frame for this chapter:</strong> your dependency list is a tax surface. Every line is something to upgrade, audit, or remove. Catalogs centralize the surface. Health plugins give you a report on it. Together they convert "I have no idea what's in this APK" into "I know exactly, and I get a weekly diff."</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Meet the Tools</h2>
+
+      <div class="tool-profile-box">
+        <h3>Meet Version Catalogs + Dependency Health</h3>
+        <p><strong>What it is:</strong> a Gradle-native dependency catalog (<code>gradle/libs.versions.toml</code>) plus two plugins &mdash; <code>com.autonomousapps.dependency-analysis</code> (find unused/misused deps) and <code>com.github.ben-manes.versions</code> (find outdated deps).</p>
+        <p><strong>What it catches that humans miss:</strong> unused dependencies bloating your APK, version drift across modules, deps declared <code>api</code> when they should be <code>implementation</code> (and vice versa), transitive deps you should declare directly, libraries your team is 4+ minor versions behind on.</p>
+        <p><strong>Install snippet:</strong> create <code>gradle/libs.versions.toml</code> (built-in to Gradle 7.0+, no plugin needed) and apply <code>com.autonomousapps.dependency-analysis</code> + <code>com.github.ben-manes.versions</code> to your root project.</p>
+        <p><strong>Runtime cost:</strong> zero. These are build-time checks. The catalog adds milliseconds to configuration; the plugins are tasks you invoke explicitly (<code>./gradlew buildHealth</code>, <code>./gradlew dependencyUpdates</code>) or wire to a weekly cron.</p>
+        <p><strong>When to skip it:</strong> if your project has fewer than 10 dependencies and one module, just inline them. Catalogs pay back at multi-module scale.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What a version catalog actually looks like</h2>
+
+      <p>The catalog is a single TOML file at <code>gradle/libs.versions.toml</code>. Gradle picks it up automatically &mdash; no <code>settings.gradle.kts</code> registration needed. It has four sections: <code>[versions]</code>, <code>[libraries]</code>, <code>[plugins]</code>, and <code>[bundles]</code>.</p>
+
+      <div class="config-recipe">
+        <h4><code>gradle/libs.versions.toml</code> &mdash; a realistic starter</h4>
+<pre><code>[versions]
+agp = "8.7.3"
+kotlin = "2.0.21"
+ksp = "2.0.21-1.0.28"
+compose-bom = "2024.12.01"
+core-ktx = "1.15.0"
+lifecycle = "2.8.7"
+retrofit = "2.11.0"
+okhttp = "4.12.0"
+moshi = "1.15.1"
+hilt = "2.52"
+coroutines = "1.9.0"
+junit = "4.13.2"
+mockk = "1.13.13"
+
+[libraries]
+# AndroidX
+androidx-core-ktx       = { module = "androidx.core:core-ktx",        version.ref = "core-ktx" }
+androidx-lifecycle-rt   = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-vm   = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
+
+# Compose (BOM-managed — no version on individual artifacts)
+compose-bom             = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
+compose-ui              = { module = "androidx.compose.ui:ui" }
+compose-material3       = { module = "androidx.compose.material3:material3" }
+compose-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-tooling         = { module = "androidx.compose.ui:ui-tooling" }
+
+# Networking
+retrofit                = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
+retrofit-moshi          = { module = "com.squareup.retrofit2:converter-moshi", version.ref = "retrofit" }
+okhttp                  = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okhttp-logging          = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp" }
+moshi                   = { module = "com.squareup.moshi:moshi", version.ref = "moshi" }
+moshi-kotlin            = { module = "com.squareup.moshi:moshi-kotlin", version.ref = "moshi" }
+
+# DI
+hilt-android            = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
+hilt-compiler           = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
+
+# Coroutines
+coroutines-android      = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+coroutines-test         = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+# Testing
+junit                   = { module = "junit:junit", version.ref = "junit" }
+mockk                   = { module = "io.mockk:mockk", version.ref = "mockk" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library     = { id = "com.android.library",     version.ref = "agp" }
+kotlin-android      = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp                 = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+
+[bundles]
+networking = ["retrofit", "retrofit-moshi", "okhttp", "okhttp-logging", "moshi", "moshi-kotlin"]
+compose-ui = ["compose-ui", "compose-material3", "compose-tooling-preview"]
+testing    = ["junit", "mockk", "coroutines-test"]</code></pre>
+        <p class="recipe-note">The naming convention matters. Hyphens in TOML keys become dots in Gradle: <code>androidx-core-ktx</code> in the catalog becomes <code>libs.androidx.core.ktx</code> in your <code>build.gradle.kts</code>. Pick a convention and stick to it &mdash; usually <code>{group}-{artifact}</code> with the noisy parts dropped (e.g. <code>androidx-core-ktx</code>, not <code>androidx-androidx-core-core-ktx</code>).</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What a module's <code>build.gradle.kts</code> looks like after</h2>
+
+      <div class="config-recipe">
+        <h4><code>app/build.gradle.kts</code> &mdash; consuming the catalog</h4>
+<pre><code>plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.rt)
+    implementation(libs.androidx.lifecycle.vm)
+
+    // Compose: BOM aligns versions; individual artifacts have none
+    implementation(platform(libs.compose.bom))
+    implementation(libs.bundles.compose.ui)
+    debugImplementation(libs.compose.tooling)
+
+    // Networking — one bundle, six artifacts
+    implementation(libs.bundles.networking)
+
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+
+    implementation(libs.coroutines.android)
+
+    testImplementation(libs.bundles.testing)
+}</code></pre>
+        <p class="recipe-note">Notice three things: (1) plugin IDs come from <code>libs.plugins</code>, (2) bundles let you pull in groups of artifacts in one line, (3) the <code>compose-bom</code> trick &mdash; you declare the BOM as a <code>platform()</code> and the individual Compose artifacts inherit the BOM's pinned versions.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>The "where is this version pinned?" answer is now one file.</strong> When you bump <code>retrofit</code> from 2.11.0 to 2.12.0, you change one line in <code>libs.versions.toml</code>. Every module that uses it picks up the new version automatically. Gone is the multi-grep-multi-edit ritual.
+      </div>
+    </section>
+
+    <section>
+      <h2>Migrating an existing project</h2>
+
+      <p>The migration is mechanical and tedious. It is the textbook AI-assisted task &mdash; deterministic transforms across many files. Don't do it by hand.</p>
+
+      <h3>The order that won't break things</h3>
+
+      <ol class="map-timeline" style="list-style: decimal; padding-left: 1.5rem;">
+        <li><strong>Create <code>gradle/libs.versions.toml</code></strong> with all your existing deps &amp; their current versions copied verbatim. Don't upgrade anything yet.</li>
+        <li><strong>Migrate one module</strong> (start with the smallest leaf, not <code>app</code>). Run <code>./gradlew :feature-foo:assembleDebug</code> &mdash; if it builds, you've validated the catalog entries.</li>
+        <li><strong>Migrate the rest</strong> module by module, building each time. Don't try to do all of them in one PR.</li>
+        <li><strong>Migrate plugins</strong> in your top-level <code>build.gradle.kts</code> last. The <code>plugins {}</code> block uses <code>alias(libs.plugins.X)</code> instead of <code>id("...") version "..."</code>.</li>
+        <li><strong>Delete the old version constants</strong> &mdash; <code>buildSrc/Versions.kt</code>, <code>ext { }</code> blocks, hardcoded version strings.</li>
+        <li><strong>Now</strong> consider upgrades. Don't mix migration with upgrades in the same PR.</li>
+      </ol>
+
+      <div class="warning-box">
+        <strong>Don't use the auto-migration IDE action blindly.</strong> Android Studio has a "Replace with new dependency notation" option that converts your existing build files. It works for simple cases but produces ugly names (<code>libs.com.squareup.retrofit2.retrofit</code>) and doesn't do bundles. Use it as a starting point, then clean up the names by hand or with the AI skill below.
+      </div>
+    </section>
+
+    <section>
+      <h2>The dependency-analysis plugin: find unused deps</h2>
+
+      <p>Now that all your deps live in one catalog, you'd love to know which ones are actually <em>used</em>. Enter <code>dependency-analysis-gradle-plugin</code> by Tony Robalik (<code>@autonomousapps</code> on GitHub). It analyzes your bytecode and reports: unused implementations, abused <code>api</code> declarations, transitive deps you depend on directly, and more.</p>
+
+      <div class="config-recipe">
+        <h4>Root <code>build.gradle.kts</code> &mdash; apply once at the root</h4>
+<pre><code>plugins {
+    // ... your existing plugins
+    id("com.autonomousapps.dependency-analysis") version "2.6.1"
+}</code></pre>
+        <p class="recipe-note">This plugin is unique &mdash; it's applied at the root project, not per-module. It then introspects every subproject automatically.</p>
+      </div>
+
+      <h3>Running it</h3>
+
+      <div class="config-recipe">
+        <h4>Run buildHealth across the whole project</h4>
+<pre><code>$ ./gradlew buildHealth
+
+> Task :buildHealth FAILED
+
+Advice for :feature:profile
+  Unused dependencies which should be removed:
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.airbnb.android:lottie:6.1.0")
+
+  Existing dependencies which should be modified to be as indicated:
+    api("androidx.core:core-ktx:1.15.0") (was implementation)
+
+  Transitively used dependencies that should be declared directly:
+    implementation("androidx.annotation:annotation:1.7.0")</code></pre>
+        <p class="recipe-note">Three categories of advice: <strong>remove</strong> (unused), <strong>change</strong> (wrong configuration), <strong>add</strong> (transitive used directly). All three matter. The "wrong configuration" advice is what catches the worst kind of fragility &mdash; an <code>api</code> declaration leaking implementation details to consumer modules.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>The first <code>buildHealth</code> run on a legacy project will return hundreds of items.</strong> Don't try to fix them all in one PR. Pick the unused-deps category first &mdash; pure deletion, lowest risk, biggest APK-size payoff. Save the <code>api</code>/<code>implementation</code> tweaks for later when you have time to test consumer modules.
+      </div>
+    </section>
+
+    <section>
+      <h2>The versions plugin: find outdated deps</h2>
+
+      <p>Different problem, different plugin. <code>com.github.ben-manes.versions</code> answers: which of your declared dependencies have newer versions available? It scans Maven Central, JitPack, and your other configured repos and tells you what's behind.</p>
+
+      <div class="config-recipe">
+        <h4>Root <code>build.gradle.kts</code></h4>
+<pre><code>plugins {
+    id("com.github.ben-manes.versions") version "0.51.0"
+}
+
+// Filter: ignore alphas, betas, RCs unless you opt in
+fun isStable(version: String): Boolean {
+    val stableKeywords = listOf("RELEASE", "FINAL", "GA")
+        .any { version.uppercase().contains(it) }
+    val regex = "^[0-9,.v-]+(-r)?$".toRegex()
+    return stableKeywords || regex.matches(version)
+}
+
+tasks.withType&lt;com.github.benmanes.gradle.versions.updates.DependencyUpdatesTask&gt; {
+    rejectVersionIf {
+        !isStable(candidate.version) &amp;&amp; isStable(currentVersion)
+    }
+}</code></pre>
+        <p class="recipe-note">The <code>rejectVersionIf</code> filter is critical. Without it, you'll get noise reporting every alpha and snapshot. With it, you only see stable upgrades you'd actually consider.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4>Run dependencyUpdates</h4>
+<pre><code>$ ./gradlew dependencyUpdates -Drevision=release
+
+------------------------------------------------------------
+ Project Dependency Updates (report to plain text file)
+------------------------------------------------------------
+
+The following dependencies are using the latest release version:
+ - androidx.core:core-ktx:1.15.0
+ - junit:junit:4.13.2
+
+The following dependencies have later release versions:
+ - com.squareup.retrofit2:retrofit [2.9.0 -> 2.11.0]
+ - com.squareup.okhttp3:okhttp     [4.10.0 -> 4.12.0]
+ - org.jetbrains.kotlinx:kotlinx-coroutines-android [1.7.3 -> 1.9.0]
+
+Failed to determine the latest version for the following dependencies:
+ - com.example:internal-sdk
+   1.2.3</code></pre>
+        <p class="recipe-note">The "failed to determine" section usually means the dep is in a private repo the plugin can't reach. Add the repo to your <code>repositories {}</code> block or accept that you'll have to check those manually.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The vulnerability layer: CVE scanning</h2>
+
+      <p>Outdated isn't the same as <em>unsafe</em>. A 2-year-old version of OkHttp may have a known CVE; a brand-new version might too. CVE scanning is its own discipline. Mention here, deep dives in the security course.</p>
+
+      <div class="tool-card">
+        <h4>OWASP Dependency-Check</h4>
+        <p>The free option. Gradle plugin <code>org.owasp.dependencycheck</code>. Cross-references your deps against the National Vulnerability Database. Slow first run (downloads the NVD), fast after. Generates HTML/JSON reports. Hooks into CI.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4>Snyk / Sonatype OSS Index / GitHub Dependabot Alerts</h4>
+        <p>Hosted alternatives. Snyk and Sonatype are paid but more polished. Dependabot Alerts are free with GitHub repos and surface CVEs as repo notifications &mdash; the lowest-friction starting point for most teams.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>For most teams the right starting point is GitHub's Dependabot Alerts.</strong> Free, on-by-default for public repos, opt-in for private. It will tell you within a day when a CVE drops on a dep you ship. Step up to OWASP Dependency-Check when you need build-time gating, not just notifications.
+      </div>
+    </section>
+
+    <section>
+      <h2>Automated upgrade PRs: Renovate &amp; Dependabot</h2>
+
+      <p>Knowing about outdated deps is half the win. The other half is upgrading them <em>without</em> the manual ritual of bump-build-test-PR. Two robots compete for this job.</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <h4>Renovate</h4>
+          <p>Most flexible. Configurable groups, schedules, automerge rules. Best for teams that want to batch all weekly patch updates into one PR. Slightly more config to learn.</p>
+        </div>
+        <div class="prompt-example good">
+          <h4>Dependabot</h4>
+          <p>Built into GitHub. Zero-setup beyond a YAML file. Excellent for "open one PR per dep upgrade." Less granular grouping than Renovate but vastly less to think about.</p>
+        </div>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>.github/dependabot.yml</code> &mdash; weekly batch upgrades</h4>
+<pre><code>version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 10
+    groups:
+      androidx:
+        patterns:
+          - "androidx.*"
+      kotlin-stack:
+        patterns:
+          - "org.jetbrains.kotlin*"
+          - "org.jetbrains.kotlinx*"
+      networking:
+        patterns:
+          - "com.squareup.retrofit2*"
+          - "com.squareup.okhttp3*"
+          - "com.squareup.moshi*"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"</code></pre>
+        <p class="recipe-note">The <code>groups</code> section turns 30 individual PRs ("bump retrofit," "bump okhttp," "bump moshi") into one weekly PR per logical group. This is the difference between dependency upgrades being a thing your team does and a thing your team avoids.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>AI-Assisted Setup: <code>/migrate-to-version-catalog</code></h2>
+
+      <p>The biggest lift in this chapter is the initial migration. Hand it to Claude with a clear contract.</p>
+
+      <div class="prompt-example good">
+        <h4>Good prompt</h4>
+        <p>"Migrate this Android project to a Gradle version catalog. Read every <code>build.gradle.kts</code> in the project, every <code>buildSrc/Versions.kt</code> file, and any <code>ext {}</code> version blocks in the root <code>build.gradle.kts</code>. Produce: (1) a <code>gradle/libs.versions.toml</code> with <code>[versions]</code>, <code>[libraries]</code>, <code>[plugins]</code>, and <code>[bundles]</code> sections (suggest bundles for: networking, compose UI, testing); (2) the corresponding <code>build.gradle.kts</code> diffs for every module. Use hyphenated naming &mdash; <code>androidx-core-ktx</code>, not the verbose form. Don't change versions during migration &mdash; preserve them exactly. Output the TOML and a unified diff."</p>
+      </div>
+
+      <div class="prompt-example bad">
+        <h4>Bad prompt</h4>
+        <p>"Make a version catalog for me."</p>
+        <p><em>Why it fails:</em> doesn't say to preserve versions, doesn't define naming, doesn't ask for bundles, doesn't ask for diffs. You'll get a generic example file and zero application of it to your project.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>.claude/commands/migrate-to-version-catalog.md</code></h4>
+<pre><code># /migrate-to-version-catalog
+
+Migrate this Gradle project to a version catalog at gradle/libs.versions.toml.
+
+Inputs (read from disk):
+- All build.gradle.kts files
+- buildSrc/src/main/kotlin/**/*.kt (especially Versions.kt, Deps.kt)
+- Root build.gradle.kts ext {} blocks
+- gradle.properties (kotlin.version, agp.version, etc.)
+
+Outputs:
+1. gradle/libs.versions.toml with [versions], [libraries], [plugins], [bundles]
+2. Unified diffs for every build.gradle.kts that needs to change
+3. A list of files to delete after migration (Versions.kt, Deps.kt)
+
+Naming convention: hyphenated, group-artifact short form.
+  - androidx.core:core-ktx     → androidx-core-ktx
+  - com.squareup.retrofit2:retrofit → retrofit
+  - com.google.dagger:hilt-android   → hilt-android
+
+Bundles to suggest:
+  - networking: retrofit + okhttp + moshi (and converters)
+  - compose-ui: ui + material3 + tooling-preview (BOM-managed)
+  - testing: junit + mockk + coroutines-test
+
+Constraints:
+  - Preserve every version exactly. Migration is mechanical, not an upgrade.
+  - Use plugin aliases (`alias(libs.plugins.foo)`) instead of the legacy `id() version` form.
+  - Compose artifacts that are BOM-managed should NOT have a version in [libraries].
+  - Output the diffs in a way I can apply with `git apply`.</code></pre>
+      </div>
+
+      <p>The skill becomes one-shot for any Android project you join. Run it, review the output, apply the diff, build &mdash; one PR, done.</p>
+    </section>
+
+    <section>
+      <h2>Adoption ladder</h2>
+
+      <div class="adoption-ladder">
+
+        <div class="rung">
+          <h4>Day 1</h4>
+          <p>Create <code>gradle/libs.versions.toml</code> with current versions copied verbatim. Migrate one leaf module to it. Verify it builds. Don't change versions, don't add bundles yet, don't migrate plugins. Total: 60 minutes with the AI skill above.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Week 1</h4>
+          <p>Migrate the remaining modules + plugins block. Add bundles for the obvious groupings (networking, compose UI, testing). Apply <code>com.autonomousapps.dependency-analysis</code> + <code>com.github.ben-manes.versions</code> at the root. Run <code>./gradlew buildHealth</code> &mdash; remove the top 5 unused deps in a separate PR.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Month 1</h4>
+          <p>Add Dependabot or Renovate config &mdash; weekly grouped PRs for AndroidX, Kotlin stack, and networking. Wire <code>buildHealth</code> as a CI step (warning, not blocker, until the noise floor is low). Enable Dependabot Alerts for CVE notifications.</p>
+        </div>
+
+      </div>
+    </section>
+
+    <section>
+      <h2>The before/after</h2>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <h4>Before</h4>
+          <p>"Bump Retrofit to 2.12.0." You grep for <code>retrofit2</code>, find 8 occurrences across 5 modules, edit each, hope you got them consistent. Build fails because module 6 still has 2.9.0 transitively. APK size mysteriously grows. Six months later: nobody knows whether <code>lottie</code> is still used, but everyone is afraid to remove it.</p>
+        </div>
+        <div class="prompt-example good">
+          <h4>After</h4>
+          <p>"Bump Retrofit to 2.12.0." Edit one line in <code>libs.versions.toml</code>. Build. Done. <code>./gradlew buildHealth</code> reports <code>lottie</code> as unused; you delete it in a 2-line PR. <code>./gradlew dependencyUpdates</code> tells you OkHttp 5.0 is out; you decide whether to take the major bump or wait.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The pitfalls</h2>
+
+      <div class="warning-box">
+        <strong>Don't migrate and upgrade in the same PR.</strong> If a build breaks during migration, you need to know whether it's the catalog or the version bump. Two PRs, two diffs, two reviews. Faster overall.
+      </div>
+
+      <div class="warning-box">
+        <strong>The first <code>buildHealth</code> report is overwhelming.</strong> Resist the urge to fix everything. Fix the "unused dependencies" section first &mdash; lowest risk, biggest payoff. Save the <code>api</code>/<code>implementation</code> reshuffles for a dedicated tech-debt week.
+      </div>
+
+      <div class="warning-box">
+        <strong>Beware ungrouped Dependabot.</strong> Without <code>groups</code>, Dependabot opens one PR per dep per week. With 50 deps, that's a 50-PR review pile every Monday morning. Group aggressively from day one.
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Migrate &amp; audit your real project</h3>
+        <ol>
+          <li>Copy your largest module's dependency list into a <code>gradle/libs.versions.toml</code>. Preserve every version exactly. Hyphenated naming.</li>
+          <li>Migrate that one module's <code>build.gradle.kts</code> to consume from the catalog. Build it. If it fails, fix the catalog entries until it doesn't.</li>
+          <li>Apply <code>com.autonomousapps.dependency-analysis</code> at the root. Run <code>./gradlew buildHealth</code>. Save the output.</li>
+          <li>Apply <code>com.github.ben-manes.versions</code> with the <code>isStable</code> filter from this chapter. Run <code>./gradlew dependencyUpdates -Drevision=release</code>.</li>
+          <li>Open a PR with: the <code>libs.versions.toml</code>, the migrated module, and the two plugins applied. Title: "Migrate to version catalog + dep health plugins."</li>
+          <li>Open a separate PR removing the top 3 unused deps from the <code>buildHealth</code> report. Title: "Remove unused dependencies."</li>
+        </ol>
+        <p><strong>Deliverable:</strong> two PRs, an opinion on Dependabot vs. Renovate for your team, and a written-down number for "deps removed" and "APK bytes saved." That number is what you show the next person who says "we don't have time for that."</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>You now know exactly what's in your APK and which parts are aging. Chapter 11 takes the next obvious step: making the APK <em>smaller and faster</em>. R8 (the bundled minifier in Android Gradle Plugin) shrinks, optimizes, and obfuscates your release builds &mdash; but only if you write the right keep rules. We'll demystify it: keep-rule patterns for Gson/Moshi/Retrofit/Hilt/ViewBinding, reading obfuscated stack traces, the <code>mapping.txt</code> golden rule, and a <code>/draft-keep-rules</code> skill that turns release-only crashes into the precise <code>-keep</code> rules that fix them.</p>
+
+    </section>
+
+    <footer class="chapter-nav">
+      <a href="09-debug-build-inspectors.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Debug-Build Inspectors</span>
+      </a>
+      <a href="11-r8-minification.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">R8: Minification Without Mysteries</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

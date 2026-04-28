@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Smart Search &amp; Content Generation | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-chat-conversational.html">&larr; Prev</a>
+      <a href="07-image-document.html">Next &rarr;</a>
+      <a href="maps/06-smart-search-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Smart Search &amp; Content Generation</h1>
+    <p class="subtitle">Semantic search with NLEmbedding, AI-powered autocomplete, content drafting, and template-based generation</p>
+  </header>
+
+  <main>
+
+    <h2>Why Keyword Search Fails</h2>
+
+    <p>Your user opens your recipe app, types &ldquo;something spicy with chicken,&rdquo; and gets&hellip; nothing. Zero results. Because no recipe in your database is literally called &ldquo;something spicy with chicken.&rdquo; There&rsquo;s a &ldquo;Thai Basil Chicken&rdquo; and a &ldquo;Sriracha Lime Wings&rdquo; &mdash; both perfect matches &mdash; but keyword search only finds exact string matches.</p>
+
+    <p>This is the gap between what users <em>mean</em> and what they <em>type</em>. Semantic search closes that gap by understanding intent, not just characters.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Leo is decluttering his notes app. He has 200+ notes accumulated over two years. He vaguely remembers writing something about &ldquo;that blue jacket from the trip.&rdquo; Keyword search finds nothing &mdash; the note is titled &ldquo;Copenhagen Packing List&rdquo; and mentions a &ldquo;navy parka.&rdquo; But with semantic search, &ldquo;blue jacket from the trip&rdquo; matches &ldquo;navy parka&rdquo; + &ldquo;Copenhagen&rdquo; context because the embeddings understand that &ldquo;blue jacket&rdquo; and &ldquo;navy parka&rdquo; are semantically similar. Leo finds his note in 2 seconds.</p>
+    </div>
+
+    <h2>Text Embeddings on iOS</h2>
+
+    <p>An embedding turns text into a list of numbers &mdash; a 512-dimensional vector that captures the <em>meaning</em> of the text. Similar meanings produce similar vectors. &ldquo;Happy&rdquo; and &ldquo;joyful&rdquo; are close together. &ldquo;Happy&rdquo; and &ldquo;socket wrench&rdquo; are far apart. This is the foundation of semantic search.</p>
+
+    <p>Apple provides <code>NLEmbedding</code> in the Natural Language framework, available since iOS 13 and running on any iPhone 8 or later. It supports word-level and sentence-level embeddings in seven languages: English, Spanish, French, Italian, German, Portuguese, and Simplified Chinese.</p>
+
+    <div class="highlight-box">
+      <h3>Why Embeddings Matter for Your App</h3>
+      <p>Embeddings let you search by meaning instead of matching characters. They&rsquo;re the building block for &ldquo;find similar items,&rdquo; &ldquo;smart suggestions,&rdquo; and &ldquo;related content&rdquo; features &mdash; all running on-device, for free, with no internet required.</p>
+    </div>
+
+    <h2>Building a Local Semantic Search</h2>
+
+    <p>Here&rsquo;s the big picture: you embed all your app&rsquo;s content once (at import or creation time), store those vectors, and then at search time, embed the user&rsquo;s query and find the closest matches.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Embed content</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Store vectors</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Embed query</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Find nearest</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Show results</div>
+    </div>
+
+    <div class="api-recipe">
+      <h3>Recipe: Semantic Search with NLEmbedding</h3>
+      <p><strong>Goal:</strong> Search 100 recipes by meaning, not just keywords. &ldquo;Something spicy with chicken&rdquo; should find &ldquo;Thai Basil Chicken.&rdquo;</p>
+      <p><strong>Step 1:</strong> Get the sentence embedding model:</p>
+<pre><code>import NaturalLanguage
+
+guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else {
+    // Embedding not available for this language
+    return
+}</code></pre>
+      <p><strong>Step 2:</strong> Embed your content at import time and store the vectors:</p>
+<pre><code>struct RecipeIndex {
+    let recipe: Recipe
+    let vector: [Double]  // 512 dimensions
+}
+
+func buildIndex(recipes: [Recipe]) -> [RecipeIndex] {
+    guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else { return [] }
+
+    return recipes.compactMap { recipe in
+        let text = "\(recipe.title) \(recipe.ingredients.joined(separator: " "))"
+        guard let vector = embedding.vector(for: text) else { return nil }
+        return RecipeIndex(recipe: recipe, vector: vector)
+    }
+}</code></pre>
+      <p><strong>Step 3:</strong> At search time, embed the query and find nearest neighbors:</p>
+<pre><code>func search(query: String, in index: [RecipeIndex]) -> [Recipe] {
+    guard let embedding = NLEmbedding.sentenceEmbedding(for: .english),
+          let queryVector = embedding.vector(for: query) else { return [] }
+
+    return index
+        .map { (item: $0, distance: cosineSimilarity(queryVector, $0.vector)) }
+        .sorted { $0.distance > $1.distance }  // Higher similarity first
+        .prefix(10)
+        .map(\.item.recipe)
+}</code></pre>
+      <p><strong>Step 4:</strong> Compute cosine similarity between two vectors:</p>
+<pre><code>func cosineSimilarity(_ a: [Double], _ b: [Double]) -> Double {
+    let dot = zip(a, b).map(*).reduce(0, +)
+    let magA = sqrt(a.map { $0 * $0 }.reduce(0, +))
+    let magB = sqrt(b.map { $0 * $0 }.reduce(0, +))
+    guard magA > 0, magB > 0 else { return 0 }
+    return dot / (magA * magB)
+}</code></pre>
+      <p>Now &ldquo;something spicy with chicken&rdquo; returns Thai Basil Chicken, Sriracha Lime Wings, and Chicken Tikka Masala &mdash; even though none of those titles contain the words &ldquo;spicy&rdquo; or &ldquo;something.&rdquo;</p>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>Embed once, search many times.</strong> Building the index takes ~1ms per item. Searching is even faster. Embed content when it&rsquo;s created or imported, store the vectors in SwiftData or a local database, and reuse them for every search. Don&rsquo;t re-embed on every keystroke.</p>
+    </div>
+
+    <h2>Cloud-Powered Semantic Search</h2>
+
+    <p>NLEmbedding is great for modest datasets (hundreds to low thousands of items) on-device. But if you need:</p>
+
+    <ul>
+      <li><strong>More languages</strong> &mdash; NLEmbedding supports 7 languages. Cloud models cover 100+.</li>
+      <li><strong>Higher quality</strong> &mdash; Cloud embedding models (OpenAI <code>text-embedding-3-small</code>, Google <code>text-embedding-005</code>) produce more nuanced vectors.</li>
+      <li><strong>Large datasets</strong> &mdash; Millions of items need a vector database (Pinecone, Qdrant) on your server.</li>
+    </ul>
+
+    <p>The architecture: embed content on your server at ingestion time, store vectors in a vector database, and query from the app via your backend API. The app sends the search query; the server embeds it, searches the vector DB, and returns results.</p>
+
+    <div class="warning-box">
+      <p><strong>Cloud search means the query leaves the device.</strong> If your app searches personal content (notes, photos, health data), keep it on-device with NLEmbedding. Cloud semantic search is for catalog content &mdash; products, articles, recipes &mdash; where the data is already on your server anyway.</p>
+    </div>
+
+    <h2>Autocomplete That Predicts Intent</h2>
+
+    <p>Great autocomplete doesn&rsquo;t just match prefixes &mdash; it predicts what the user is looking for. The trick is a two-tier approach:</p>
+
+    <div class="product-pattern">
+      <h3>The Two-Tier Autocomplete Pattern</h3>
+      <ol>
+        <li><strong>Tier 1: Prefix Match (instant)</strong> &mdash; As the user types &ldquo;chi,&rdquo; immediately show items starting with &ldquo;chi&rdquo;: &ldquo;Chicken Tikka,&rdquo; &ldquo;Chimichurri Steak.&rdquo; This is free, instant, and works on any device. Use <code>localizedStandardContains</code> for efficient prefix matching.</li>
+        <li><strong>Tier 2: Semantic Suggestions (200ms delay)</strong> &mdash; After a 200ms debounce, run an NLEmbedding search for the full typed text. &ldquo;Chi&rdquo; might surface &ldquo;Kung Pao Tofu&rdquo; (Chinese food, semantically related). Show these below the prefix matches, labeled &ldquo;Related.&rdquo;</li>
+      </ol>
+      <p>The prefix matches give immediate feedback (the app feels responsive), while the semantic suggestions add intelligence (the app feels smart). Together they create the best of both worlds.</p>
+    </div>
+
+    <h2>Search UI in SwiftUI</h2>
+
+    <p>SwiftUI&rsquo;s <code>.searchable</code> modifier gives you a search bar with suggestions out of the box. Pair it with your semantic search engine:</p>
+
+<pre><code>struct RecipeSearchView: View {
+    @State private var searchText = ""
+    @State private var results: [Recipe] = []
+    @State private var suggestions: [String] = []
+
+    var body: some View {
+        NavigationStack {
+            List(results) { recipe in
+                RecipeRow(recipe: recipe)
+            }
+            .searchable(text: $searchText) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Text(suggestion)
+                        .searchCompletion(suggestion)
+                }
+            }
+            .onChange(of: searchText) { _, query in
+                performSearch(query)
+            }
+            .overlay {
+                if results.isEmpty && !searchText.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            }
+        }
+    }
+}</code></pre>
+
+    <p>New in iOS 26: the <code>searchToolbarBehavior()</code> modifier lets you minimize the search bar into a compact toolbar button when the user isn&rsquo;t actively searching. And you can create a dedicated search tab with the <code>.search</code> role &mdash; useful for apps where search is a primary navigation pattern.</p>
+
+    <div class="tip-box">
+      <p><strong>Never show an empty search result without help.</strong> Use <code>ContentUnavailableView.search</code> for the built-in &ldquo;No Results&rdquo; state. Even better: suggest alternative queries. &ldquo;No results for &lsquo;blue pasta.&rsquo; Try: &lsquo;pesto,&rsquo; &lsquo;seafood,&rsquo; or &lsquo;Mediterranean.&rsquo;&rdquo;</p>
+    </div>
+
+    <h2>Content Generation with Foundation Models</h2>
+
+    <p>Search helps users find things. Content generation helps them <em>create</em> things. The pattern is always the same: the AI produces a draft, the user edits it, and the result is theirs. Never present AI-generated content as final &mdash; it&rsquo;s always a starting point.</p>
+
+    <div class="highlight-box">
+      <h3>The AI Draft Pattern</h3>
+      <p>AI creates the first draft. The user refines it. This works for emails, product descriptions, social posts, review responses, meeting notes, and any text the user needs to produce. The AI eliminates the blank page; the user adds their voice.</p>
+    </div>
+
+    <h3>Drafting with @Generable Templates</h3>
+
+    <p>For consistent, structured content, combine Foundation Models with <code>@Generable</code> templates. This gives you typed fields that constrain the AI&rsquo;s output:</p>
+
+<pre><code>@Generable
+struct ProductDescription {
+    @Guide(description: "A catchy headline, max 10 words")
+    var headline: String
+
+    @Guide(description: "A compelling 2-3 sentence description")
+    var body: String
+
+    @Guide(description: "Three key selling points as bullet items")
+    var highlights: [String]
+}
+
+let session = LanguageModelSession(
+    instructions: "You write concise, engaging product descriptions for an online store."
+)
+let description = try await session.respond(
+    to: "Describe this product: \(product.name), category: \(product.category)",
+    generating: ProductDescription.self
+)</code></pre>
+
+    <p>The template guarantees structure: you always get a headline, body, and exactly three highlights. No parsing, no hoping the model formatted it correctly. The view can bind directly to the struct&rsquo;s fields.</p>
+
+    <h3>Multi-Format Generation</h3>
+
+    <p>Let users choose the output format for the same content:</p>
+
+<pre><code>@Generable
+enum OutputFormat: String {
+    case brief      // 1-2 sentences
+    case detailed   // Full paragraph
+    case bullets    // Bullet points
+    case social     // Social media post style
+}
+
+@Generable
+struct GeneratedContent {
+    @Guide(description: "The content in the requested format")
+    var text: String
+
+    @Guide(description: "Suggested title for this content")
+    var suggestedTitle: String
+}</code></pre>
+
+    <p>A single &ldquo;Generate Description&rdquo; button with a format picker gives users control over the AI&rsquo;s output without needing to learn prompt engineering.</p>
+
+    <h2>Token Limits and Chunking</h2>
+
+    <p>The on-device model has a ~4,096 token context window. If your source content is longer &mdash; a 5,000-word article, a lengthy document, a full email thread &mdash; it won&rsquo;t fit in a single prompt. The solution is chunking with a map-reduce pattern:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Split into chunks</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Summarize each</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Combine summaries</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Final summary</div>
+    </div>
+
+<pre><code>func summarizeLongDocument(_ text: String) async throws -> String {
+    let chunks = text.splitIntoChunks(maxTokens: 2000)
+
+    // Map: summarize each chunk
+    var chunkSummaries: [String] = []
+    for chunk in chunks {
+        let session = LanguageModelSession()
+        let summary = try await session.respond(
+            to: "Summarize this section in 2-3 sentences: \(chunk)"
+        )
+        chunkSummaries.append(summary.content)
+    }
+
+    // Reduce: summarize the summaries
+    let combined = chunkSummaries.joined(separator: "\n\n")
+    let finalSession = LanguageModelSession()
+    let final = try await finalSession.respond(
+        to: "Create a cohesive summary from these section summaries: \(combined)"
+    )
+    return final.content
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Check token count before sending.</strong> Use a rough estimate of ~4 characters per token for English. A 16,000-character text is ~4,000 tokens and fits in one prompt. Anything longer needs chunking. When in doubt, chunk &mdash; two good summaries merged beats one truncated summary.</p>
+    </div>
+
+    <h2>Personalized Search</h2>
+
+    <p>Search gets smarter when it learns from the user. Track what the user searches for, what they tap, and how long they spend on results. Over time, use this to boost relevant results:</p>
+
+<pre><code>struct SearchPreference {
+    var categoryBoosts: [String: Double]  // "Italian": 1.5, "Dessert": 0.8
+    var recentSearches: [String]
+    var favoriteItemIDs: Set&lt;String&gt;
+}
+
+func personalizedSearch(query: String, preferences: SearchPreference) -> [Recipe] {
+    let baseResults = semanticSearch(query)
+
+    return baseResults
+        .map { recipe in
+            var score = recipe.similarityScore
+            // Boost categories the user prefers
+            if let boost = preferences.categoryBoosts[recipe.category] {
+                score *= boost
+            }
+            // Boost favorited items
+            if preferences.favoriteItemIDs.contains(recipe.id) {
+                score *= 1.3
+            }
+            return (recipe, score)
+        }
+        .sorted { $0.1 > $1.1 }
+        .map(\.0)
+}</code></pre>
+
+    <p>All of this runs on-device. No user data leaves the phone. Over time, the search results adapt to each user&rsquo;s tastes without anyone else ever seeing their search history.</p>
+
+    <div class="warning-box">
+      <p><strong>Don&rsquo;t over-personalize.</strong> If the user always searches for Italian food, they might still want to discover Thai recipes. Keep a balance: boost preferred categories, but don&rsquo;t completely bury everything else. A &ldquo;Discover Something New&rdquo; section can help avoid the filter bubble.</p>
+    </div>
+
+    <h2>Combining Search + Generation</h2>
+
+    <p>The most powerful pattern combines semantic search with content generation. The user searches &rarr; finds something &rarr; the AI helps them act on it:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Search + Generate: The Killer Combo</p>
+        <p class="prompt-text">User searches &ldquo;quick dinner for two.&rdquo; Semantic search returns Thai Basil Chicken (25 min, serves 2). User taps it. Below the recipe, a &ldquo;Generate Shopping List&rdquo; button uses Foundation Models to extract ingredients, check what&rsquo;s likely already in their pantry (salt, oil, rice), and produce a clean shopping list.</p>
+        <p class="prompt-explanation">Search finds the content. AI makes it actionable. Neither is as useful alone.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Generation Without Search: Hallucination Risk</p>
+        <p class="prompt-text">User asks &ldquo;Write me a recipe for Thai Basil Chicken.&rdquo; The model makes one up. Ingredient amounts may be wrong. Cooking times may be unsafe. No real recipe was consulted &mdash; it&rsquo;s pure hallucination dressed up as expertise.</p>
+        <p class="prompt-explanation">Always ground generation in real data. Search first, generate from results.</p>
+      </div>
+    </div>
+
+    <h2>Search Performance Tips</h2>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Debounce search input</strong> &mdash; Don&rsquo;t run a semantic search on every keystroke. Wait 200&ndash;300ms after the user stops typing. Prefix matching can run immediately (it&rsquo;s cheap).</li>
+        <li><strong>Pre-compute embeddings</strong> &mdash; Embed content at creation or import time, not at search time. Store vectors alongside your data model in SwiftData.</li>
+        <li><strong>Use Accelerate for vector math</strong> &mdash; Apple&rsquo;s Accelerate framework has SIMD-optimized dot product and norm functions. For 100+ items, this matters.</li>
+        <li><strong>Index in the background</strong> &mdash; When new content arrives, embed it on a background queue. Use Swift concurrency with <code>Task.detached(priority: .utility)</code>.</li>
+        <li><strong>Cache search results</strong> &mdash; If the user searches the same query twice, return cached results instantly. Invalidate when content changes.</li>
+        <li><strong>Spotlight integration</strong> &mdash; Index your content with <code>CSSearchableItem</code> so it appears in system-wide Spotlight search. Combine with your in-app semantic search for maximum discoverability.</li>
+      </ul>
+    </div>
+
+    <h2>Real-World Examples</h2>
+
+    <p>Smart search and content generation are everywhere in successful iOS apps:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Photos</span>
+        <span class="stat-label">Search &ldquo;beach sunset&rdquo; across thousands of photos using visual + text embeddings</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Mail</span>
+        <span class="stat-label">Suggested replies generated from email context using Foundation Models</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Spotlight</span>
+        <span class="stat-label">System-wide search understands natural language queries across all apps</span>
+      </div>
+    </div>
+
+    <p>Third-party apps are catching up: Notion uses AI-powered search to find pages by concept rather than title. Bear uses smart tagging. Fantastical parses natural language dates (&ldquo;lunch next Thursday&rdquo;) using on-device NLP. The pattern is clear: understand what the user means, not just what they type.</p>
+
+    <div class="tip-box">
+      <p><strong>Cross-reference:</strong> For deeper NLEmbedding implementation details, vector storage optimization, and advanced similarity computation, see <a href="#">iOS-OnDevice Chapter 5</a>.</p>
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build Semantic Recipe Search</h3>
+      <p>Build a semantic search feature for a recipe app with 100 recipes:</p>
+      <ol>
+        <li><strong>Create sample data:</strong> Define a <code>Recipe</code> model with title, ingredients, cuisine, and cook time. Create at least 20 diverse recipes (use Foundation Models to generate them if you like).</li>
+        <li><strong>Build the embedding index:</strong> Use <code>NLEmbedding.sentenceEmbedding(for: .english)</code> to embed each recipe&rsquo;s title + ingredients. Store vectors alongside the recipe data.</li>
+        <li><strong>Implement search:</strong> Embed the user&rsquo;s query, compute cosine similarity against all stored vectors, return the top 10 matches.</li>
+        <li><strong>Build the UI:</strong> Use <code>.searchable</code> with suggestions. Show two tiers: prefix matches (instant) and semantic results (after 200ms debounce).</li>
+        <li><strong>Add generation:</strong> When the user taps a recipe, add a &ldquo;Generate Shopping List&rdquo; button that uses Foundation Models with <code>@Generable</code> to extract a clean shopping list from the ingredients.</li>
+        <li><strong>Handle empty results:</strong> Show <code>ContentUnavailableView.search</code> with alternative query suggestions.</li>
+      </ol>
+      <p><strong>Test queries:</strong> Try &ldquo;something spicy with chicken,&rdquo; &ldquo;quick weeknight dinner,&rdquo; and &ldquo;comfort food for a rainy day&rdquo; &mdash; all should return relevant results even though no recipe title contains those exact words.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You can now build search that understands meaning and generate content that helps users create. Text is covered. But what about <em>images</em>? What if your app needs to read a receipt, scan a document, or understand what&rsquo;s in a photo?</p>
+
+    <p>That&rsquo;s <strong>Chapter 7: Image Understanding &amp; Document Intelligence</strong> &mdash; Vision framework OCR, RecognizeDocumentsRequest, photo library intelligence, and structured data extraction from visual content.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="05-chat-conversational.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">In-App Chat &amp; Conversational AI</span>
+        </a>
+        <a href="07-image-document.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Image Understanding &amp; Document Intelligence</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

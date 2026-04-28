@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4 &mdash; Detekt + Konsist | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="03-android-lint.html">&larr; Prev</a>
+      <a href="05-ktlint-and-spotless.html">Next &rarr;</a>
+      <a href="maps/04-detekt-and-konsist-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Detekt + Konsist: Kotlin Smells &amp; Architecture Rules</h1>
+    <p class="subtitle">Lint knows Android. Detekt knows Kotlin. Konsist knows your architecture. Together they cover most of the codebase debt category from your audit.</p>
+  </header>
+
+  <main>
+
+    <h2>The Kotlin-shaped hole in your stack</h2>
+
+    <p>You just wired up Android Lint. It's catching <code>NewApi</code>, <code>HardcodedText</code>, manifest issues. Great. But Lint has a blind spot: it understands the Android platform, not Kotlin idioms. It does not flag a 200-line method, an exception that's caught and silently swallowed, a deeply nested <code>when</code>, or six different <code>NullPointerException</code>-prone <code>!!</code> calls in a row.</p>
+
+    <p>Detekt does. And on a real Kotlin codebase, the count of detekt findings is usually 5&ndash;10x the count of lint findings &mdash; not because your code is worse than the average, but because Kotlin gives you that many more dimensions on which to be inconsistent. The good news: the same baseline-file pattern works, the same adoption ladder works, and most of the value lives in the default rule sets.</p>
+
+    <div class="tool-profile-box">
+      <div class="tool-name">Detekt</div>
+      <dl>
+        <dt>What it catches</dt>
+        <dd>Kotlin smells: <code>LongMethod</code>, <code>ComplexCondition</code>, <code>NestedBlockDepth</code>, <code>UnsafeCallOnNullableType</code> (the <code>!!</code> trap), <code>SwallowedException</code>, <code>TooGenericExceptionCaught</code>, <code>MagicNumber</code>, <code>WildcardImport</code>. Architecture-shaped concerns like <code>ForbiddenComment</code>, <code>UseRequire</code>, naming conventions. Roughly 10 rule sets, ~250 rules.</dd>
+
+        <dt>Install</dt>
+        <dd>One Gradle plugin at the root project: <code>id("io.gitlab.arturbosch.detekt") version "1.23.7"</code>. Default config is sane on day one.</dd>
+
+        <dt>Run cost</dt>
+        <dd>Without type resolution: ~10&ndash;30s on a medium app, fully cacheable. With type resolution (recommended): 1&ndash;3 minutes. Per-module parallelism is built in.</dd>
+
+        <dt>When to skip</dt>
+        <dd>You're a pure-Java codebase. Otherwise, install it &mdash; the day-one defaults already pay for themselves.</dd>
+      </dl>
+    </div>
+
+    <h2>Where detekt fits next to lint and ktlint</h2>
+
+    <p>The three Kotlin-friendly static analyzers in this course look similar from a distance and are very different up close:</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <h4>📐 Android Lint</h4>
+        <p>Knows the <em>Android platform</em>: manifest, SDK levels, accessibility, R8 keep rules. Catches platform-contract bugs.</p>
+      </div>
+      <div class="tool-card">
+        <h4>🧩 Detekt</h4>
+        <p>Knows <em>Kotlin idioms</em>: complexity, exception handling, smells, code shape, naming, performance hot-spots. Catches design-quality bugs.</p>
+      </div>
+      <div class="tool-card">
+        <h4>✏️ Ktlint</h4>
+        <p>Knows <em>formatting</em>: indentation, line length, wildcard imports, trailing commas. Catches style drift &mdash; and auto-fixes most of it. (Chapter 5.)</p>
+      </div>
+    </div>
+
+    <p>You want all three. They overlap by less than 5%, and where they overlap, configuring one to disable the duplicate rule is a 10-second job.</p>
+
+    <h2>Installing detekt</h2>
+
+    <p>The cleanest setup applies detekt at the root project so every module gets it for free. The plugin is small; the config file is the meaningful part.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">build.gradle.kts (root)</div>
+<pre><code>plugins {
+  // Detekt at the root means every subproject inherits the task graph.
+  id("io.gitlab.arturbosch.detekt") version "1.23.7"
+}
+
+allprojects {
+  apply(plugin = "io.gitlab.arturbosch.detekt")
+
+  detekt {
+    // Start from the bundled defaults so you only override what you care about.
+    buildUponDefaultConfig = true
+
+    // Project-wide config file &mdash; one source of truth.
+    config.setFrom("$rootDir/config/detekt/detekt.yml")
+
+    // Baseline lives next to the config. Generated once, committed, ignored after.
+    baseline = file("$rootDir/config/detekt/baseline.xml")
+
+    // Run analysis in parallel across modules. Free speedup.
+    parallel = true
+
+    // Don't fail on the first issue; collect all findings, fail at the end.
+    autoCorrect = false
+  }
+
+  // The detekt JVM target should match your Kotlin target.
+  tasks.withType&lt;io.gitlab.arturbosch.detekt.Detekt&gt;().configureEach {
+    jvmTarget = "17"
+    reports {
+      html.required.set(true)
+      xml.required.set(true)
+      sarif.required.set(true)   // For GitHub code-scanning integration
+    }
+  }
+}</code></pre>
+      <div class="recipe-note">If your project is multi-module, applying at the root via <code>allprojects</code> is the lowest-friction path. For finer control, switch to a convention plugin (Chapter 12) once you've earned the right to.</div>
+    </div>
+
+    <h2>The <code>detekt.yml</code> config file</h2>
+
+    <p>Detekt's defaults are sensible. The first time, generate the default config and commit it &mdash; then override only what you want to change. This file is the heart of your team's Kotlin standard.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">Generate the default config</div>
+<pre><code>./gradlew detektGenerateConfig
+mv detekt.yml config/detekt/detekt.yml</code></pre>
+      <div class="recipe-note">The generated file is ~700 lines and exhaustively documents every rule. Don't trim it; it's a reference. Just override the rules you care about at the top or with comments.</div>
+    </div>
+
+    <p>The rule sets you'll touch most:</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">config/detekt/detekt.yml &mdash; meaningful overrides</div>
+<pre><code>build:
+  maxIssues: 0                # Any new finding fails the build (we have a baseline)
+  excludeCorrectable: false
+
+complexity:
+  LongMethod:
+    active: true
+    threshold: 60             # Default 60. Drop to 40 if you're brave.
+  ComplexCondition:
+    active: true
+    threshold: 4              # &gt;4 boolean ops in one expression = unreadable
+  NestedBlockDepth:
+    active: true
+    threshold: 4              # Loops/ifs nested 4 deep is a function-extraction signal
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: true              # catch (Exception e) is almost always a bug
+  SwallowedException:
+    active: true              # catch ... { /* nothing */ } &mdash; the silent killer
+  ReturnCount:
+    active: true
+    max: 3                    # Multiple returns are fine; ten is a smell
+
+style:
+  MagicNumber:
+    active: true
+    ignoreNumbers: ['-1', '0', '1', '2', '100']
+    ignorePropertyDeclaration: true
+  WildcardImport:
+    active: true              # `import foo.bar.*` &mdash; nope
+  ForbiddenComment:
+    active: true
+    comments: ['FIXME:', 'STOPSHIP:', 'TODO:']  # surface latent debt</code></pre>
+      <div class="recipe-note">Don't try to enable everything at once. Pick 8&ndash;10 rules you actually want, override their thresholds, and let the baseline absorb the rest. You can promote more rules over time.</div>
+    </div>
+
+    <h2>Generating the baseline</h2>
+
+    <p>Same pattern as Chapter 3. Detekt has its own task; the file is XML; you commit it.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">Generate &amp; commit the baseline</div>
+<pre><code># Generates config/detekt/baseline.xml
+./gradlew detektBaseline
+
+git add config/detekt/baseline.xml
+git commit -m "chore(detekt): baseline existing findings"</code></pre>
+      <div class="recipe-note">If you split detekt across multiple modules with their own baselines, you'll get one baseline per module. That's fine &mdash; one source of truth per scope.</div>
+    </div>
+
+    <h2>Type resolution &mdash; the upgrade you'll want</h2>
+
+    <p>By default detekt analyzes your code without resolving types &mdash; faster, but blind to whole categories of bugs. With type resolution turned on, detekt knows what <code>foo.bar()</code> actually returns, can flag <code>UnsafeCallOnNullableType</code>, <code>UnreachableCatchBlock</code>, <code>ImplicitDefaultLocale</code>, and dozens more rules that depend on knowing real Kotlin types.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/build.gradle.kts &mdash; type resolution</div>
+<pre><code>tasks.withType&lt;io.gitlab.arturbosch.detekt.Detekt&gt;().configureEach {
+  jvmTarget = "17"
+  // Tell detekt to type-resolve against the main classpath
+  classpath.setFrom(
+    android.sourceSets["main"].kotlin.srcDirs,
+    configurations["releaseRuntimeClasspath"]
+  )
+}
+
+// And in your detekt.yml &mdash; rules that require type resolution:
+// potential-bugs:
+//   UnsafeCallOnNullableType: { active: true }
+//   ExitOutsideMain:          { active: true }
+//   ImplicitDefaultLocale:    { active: true }</code></pre>
+      <div class="recipe-note">Type resolution roughly triples runtime. On a medium app that's still under 3 minutes. The trade is firmly worth it; just don't put type-resolution detekt on a pre-commit hook (Chapter 6) &mdash; that's a CI job.</div>
+    </div>
+
+    <h2>The eight rules worth their weight on day one</h2>
+
+    <p>If you read nothing else from <code>detekt.yml</code>, these eight rules pay for themselves in the first week of use:</p>
+
+    <table>
+      <thead>
+        <tr><th>Rule</th><th>Catches</th><th>Why it matters</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>UnsafeCallOnNullableType</code></td><td>Naked <code>!!</code> calls</td><td>Single largest source of NPEs in Kotlin codebases</td></tr>
+        <tr><td><code>SwallowedException</code></td><td>Empty catch blocks</td><td>Hides bugs for years; almost always wrong</td></tr>
+        <tr><td><code>TooGenericExceptionCaught</code></td><td><code>catch (e: Exception)</code> at random</td><td>Masks NPEs, IO errors, and your real intent</td></tr>
+        <tr><td><code>LongMethod</code></td><td>Methods over your threshold</td><td>The single best signal of a method that should be split</td></tr>
+        <tr><td><code>ComplexCondition</code></td><td>Boolean expressions with &gt;4 ops</td><td>Unreadable; should be extracted to a named function</td></tr>
+        <tr><td><code>NestedBlockDepth</code></td><td>4+ nested blocks</td><td>The other side of LongMethod &mdash; same fix</td></tr>
+        <tr><td><code>ReturnCount</code></td><td>Functions with too many <code>return</code>s</td><td>Doesn't ban early-returns; just flags spaghetti</td></tr>
+        <tr><td><code>WildcardImport</code></td><td><code>import foo.*</code></td><td>Hides what your file actually depends on; breaks reviews</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Writing a custom detekt rule</h2>
+
+    <p>The default rule sets cover most cases, but every team eventually wants something specific: &ldquo;don't call <code>System.currentTimeMillis()</code> directly &mdash; use <code>Clock.now()</code>,&rdquo; &ldquo;ban <code>runBlocking</code> outside of tests,&rdquo; &ldquo;ViewModel classes must end in <code>ViewModel</code>.&rdquo; Detekt makes this surprisingly approachable.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">detekt-rules/src/main/kotlin/.../NoSystemTime.kt</div>
+<pre><code>package com.example.detekt
+
+import io.gitlab.arturbosch.detekt.api.*
+import org.jetbrains.kotlin.psi.KtCallExpression
+
+class NoSystemTime(config: Config) : Rule(config) {
+  override val issue = Issue(
+    "NoSystemTime",
+    Severity.Defect,
+    "Use Clock.now() instead of System.currentTimeMillis()",
+    Debt.FIVE_MINS,
+  )
+
+  override fun visitCallExpression(expression: KtCallExpression) {
+    super.visitCallExpression(expression)
+    val text = expression.text
+    if (text.contains("System.currentTimeMillis")
+        || text.contains("System.nanoTime")) {
+      report(CodeSmell(issue, Entity.from(expression),
+        "Replace System time call with Clock.now() so tests can fake it"))
+    }
+  }
+}</code></pre>
+      <div class="recipe-note">A rule is one Kotlin class extending <code>Rule</code>, with a <code>visit*</code> override for the AST node you care about. The hard part is knowing which <code>visit*</code> to override &mdash; which is exactly where the AI skill below earns its keep.</div>
+    </div>
+
+    <h2>AI-Assisted Setup: <code>/draft-custom-detekt-rule</code></h2>
+
+    <p>The AST visitor pattern is the wall most teams hit when they first try to write a detekt rule. You know what smell you want to ban; you don't know whether it's a <code>visitCallExpression</code>, a <code>visitProperty</code>, or a <code>visitClassOrObject</code>. Claude Code can draft the skeleton from a one-sentence description.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">.claude/commands/draft-custom-detekt-rule.md</div>
+<pre><code>---
+description: Draft a custom detekt rule from an English description
+---
+
+The user will describe a Kotlin smell they want to ban. Your output is:
+
+1. A complete Kotlin file at `detekt-rules/src/main/kotlin/.../&lt;RuleName&gt;.kt`
+   that:
+   - extends `io.gitlab.arturbosch.detekt.api.Rule`
+   - declares an `Issue` with appropriate `Severity` and `Debt`
+   - overrides the right `visit*` method based on what the smell touches:
+       * function calls   → visitCallExpression
+       * property decls   → visitProperty
+       * class shapes     → visitClassOrObject
+       * import lines     → visitImportDirective
+       * inheritance      → visitSuperTypeList
+   - uses `report(CodeSmell(...))` with a clear human message
+
+2. A `tests/` file with at least 2 positive cases and 2 negative cases
+   using detekt's KtTestCompiler.
+
+3. The YAML stanza to add to `config/detekt/detekt.yml` to enable it.
+
+Be precise. Don't write generic visitor code &mdash; pick the most specific
+visit method for the smell described.</code></pre>
+      <div class="recipe-note">The first time you call this on a new rule, paste the failing detekt output (or your test case for the smell) so Claude has a concrete example. The skeleton is rarely 100% right, but it gets you 80% of the way.</div>
+    </div>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Good prompt</div>
+      <div class="prompt-text">/draft-custom-detekt-rule
+
+Ban any direct call to runBlocking() outside of files in src/test/.
+Severity: Defect. Reason: in production code, runBlocking blocks the
+caller thread and is almost always misused. Use viewModelScope or a
+coroutine context instead.</div>
+    </div>
+
+    <h2>Konsist: architecture-as-code</h2>
+
+    <p>Detekt catches code smells at the function/class level. Konsist enforces architecture invariants at the module level &mdash; the things you currently rely on code review to catch, like &ldquo;no <code>presentation</code> class imports from <code>data</code>&rdquo; or &ldquo;every <code>ViewModel</code> ends with the suffix <code>ViewModel</code>.&rdquo; Konsist tests are JUnit tests; they live in <code>src/test</code>; they fail your build the moment a violation is introduced.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/src/test/.../ArchitectureTest.kt</div>
+<pre><code>import com.lemonappdev.konsist.api.Konsist
+import com.lemonappdev.konsist.api.verify.assertTrue
+import org.junit.Test
+
+class ArchitectureTest {
+
+  @Test fun `viewmodels end with ViewModel`() {
+    Konsist.scopeFromProject()
+      .classes()
+      .filter { it.resideInPackage("..presentation..") }
+      .filter { it.hasParent { it.name == "ViewModel" } }
+      .assertTrue { it.name.endsWith("ViewModel") }
+  }
+
+  @Test fun `domain does not depend on data`() {
+    Konsist.scopeFromProject()
+      .files
+      .filter { it.resideInPackage("..domain..") }
+      .assertTrue { file -&gt;
+        file.imports.none { it.name.contains(".data.") }
+      }
+  }
+
+  @Test fun `repository implementations live in data`() {
+    Konsist.scopeFromProject()
+      .classes()
+      .filter { it.name.endsWith("RepositoryImpl") }
+      .assertTrue { it.resideInPackage("..data..") }
+  }
+}</code></pre>
+      <div class="recipe-note">Konsist scans your code at test time using the Kotlin compiler's PSI &mdash; same engine detekt uses. The tests are fast (a few seconds); they're real JUnit; they run with <code>./gradlew test</code> alongside everything else.</div>
+    </div>
+
+    <p>Three or four Konsist tests per module is enough to start. They codify the architecture decisions you currently re-explain in every code review. After the first month, "we don't import from <code>data</code> in <code>domain</code>" stops being a review comment and becomes a build failure &mdash; which is exactly where you want it.</p>
+
+    <h2>The adoption ladder</h2>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        <p>Apply detekt at the root. Generate <code>detekt.yml</code>, generate the baseline, commit. Run <code>./gradlew detekt</code> &mdash; it should pass (the baseline absorbs everything). <strong>2 hours.</strong></p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        <p>Enable type resolution. Promote the eight day-one rules. Install the IntelliJ detekt plugin so devs see findings in-editor. Add <code>./gradlew detekt</code> to your CI workflow.</p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        <p>Add Konsist with 3&ndash;4 architecture invariants. Write your first custom detekt rule (use <code>/draft-custom-detekt-rule</code>). Update <code>quality-debt.md</code> with detekt's row in the adoption log.</p>
+      </div>
+    </div>
+
+    <h2>Exercise: detekt + one Konsist test, in one PR</h2>
+
+    <div class="exercise-box">
+      <h3>Bolt detekt onto the project, with one architectural assertion</h3>
+      <p>Set aside a half-day. From your project root:</p>
+      <ol>
+        <li>Apply the detekt plugin per the recipe above. Run <code>./gradlew detektGenerateConfig</code>. Move the generated file to <code>config/detekt/detekt.yml</code>.</li>
+        <li>Customize the eight day-one rules. Save.</li>
+        <li>Generate the baseline: <code>./gradlew detektBaseline</code>. Commit the file.</li>
+        <li>Run <code>./gradlew detekt</code>. It should pass. Open the HTML report at <code>build/reports/detekt/detekt.html</code> &mdash; just to see what's been baselined.</li>
+        <li>Add Konsist as a test dependency: <code>testImplementation("com.lemonappdev:konsist:0.16.1")</code>. Write one test that asserts a real architectural rule from your codebase. Make it pass.</li>
+        <li>Add detekt to your CI workflow. Push. Verify the green check.</li>
+        <li>Open the PR. Title: &ldquo;chore(detekt): install + baseline + first Konsist test.&rdquo;</li>
+        <li>Save <code>/draft-custom-detekt-rule</code> in <code>.claude/commands/</code>. You'll use it the first time the team asks "can we ban X?"</li>
+      </ol>
+      <p><strong>Done.</strong> Two new merge blockers in one PR. Both will earn their keep this sprint.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>Chapter 5 closes out static analysis with ktlint and Spotless &mdash; the formatters that end PR style debates forever. Detekt and lint catch bugs; ktlint catches inconsistency. The trio is what gives you a clean static-analysis pillar: Android Lint for the platform, detekt for Kotlin, ktlint for shape. By the end of Chapter 5 every PR runs through all three, and your reviewers can finally focus on the code's <em>meaning</em>.</p>
+
+    <footer class="chapter-nav">
+      <a href="03-android-lint.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Android Lint</span>
+      </a>
+      <a href="05-ktlint-and-spotless.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Ktlint &amp; Spotless</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

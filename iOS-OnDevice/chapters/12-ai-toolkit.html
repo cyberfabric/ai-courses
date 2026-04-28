@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Building Your On-Device AI Toolkit — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="11-production-deployment.html">&larr; Prev</a>
+      <a href="maps/12-ai-toolkit-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Building Your On-Device AI Toolkit</h1>
+    <p class="subtitle">Everything Together &mdash; Decision Framework, Multi-Model Pipelines, and What's Next</p>
+  </header>
+
+  <main>
+
+    <h2>You Made It</h2>
+
+    <p>Eleven chapters. Core ML, Vision, NaturalLanguage, Foundation Models, Metal, Create ML, MLX Swift, production deployment. You've gone from "what's a tensor?" to shipping AI features that run entirely on the user's device.</p>
+
+    <p>This final chapter ties everything together. You'll build a decision framework for choosing the right approach for any AI feature, design a multi-model pipeline that combines multiple frameworks, and look ahead at what's coming next for on-device AI on Apple platforms.</p>
+
+    <h2>The On-Device AI Decision Framework</h2>
+
+    <p>You're starting a new feature. Someone says "we should add AI to this." How do you decide what to build and which framework to use? Here's the decision tree:</p>
+
+    <div class="model-pipeline">
+      <h3>Framework Selection Decision Tree</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>What's the input?</strong>
+            <p>Image? Text? Audio? Video? Structured data?</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Does Apple have a built-in API?</strong>
+            <p>Vision, NaturalLanguage, SoundAnalysis, Foundation Models</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Need custom classes/domain?</strong>
+            <p>Create ML or convert a model</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Need generative AI?</strong>
+            <p>Foundation Models or MLX Swift</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="apple-framework">
+      <h3>Framework Selection Guide</h3>
+      <table>
+        <thead>
+          <tr><th>Task</th><th>Best Framework</th><th>Why</th><th>Chapter</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Text recognition (OCR)</td><td>Vision</td><td>Apple-maintained, zero model management</td><td>4</td></tr>
+          <tr><td>Face/body detection</td><td>Vision</td><td>Built-in, updated with every iOS release</td><td>4</td></tr>
+          <tr><td>Document scanning</td><td>Vision (RecognizeDocumentsRequest)</td><td>New in iOS 26, structured extraction</td><td>4</td></tr>
+          <tr><td>Sentiment analysis</td><td>NaturalLanguage</td><td>Runs in microseconds, 50+ languages</td><td>5</td></tr>
+          <tr><td>Speech-to-text</td><td>SpeechTranscriber</td><td>Streaming, on-device, modern async API</td><td>5</td></tr>
+          <tr><td>Sound classification</td><td>SoundAnalysis</td><td>300+ built-in categories</td><td>5</td></tr>
+          <tr><td>Text generation/rewriting</td><td>Foundation Models</td><td>@Generable, guided output, zero setup</td><td>6</td></tr>
+          <tr><td>Custom image classifier</td><td>Create ML + Core ML</td><td>Train with your data, 30 images enough</td><td>9</td></tr>
+          <tr><td>Custom object detection</td><td>Create ML + Core ML</td><td>Bounding boxes for your specific objects</td><td>9</td></tr>
+          <tr><td>Open-source LLM chat</td><td>MLX Swift</td><td>Model choice, fine-tuning, wider devices</td><td>10</td></tr>
+          <tr><td>Domain-specific generation</td><td>MLX Swift + LoRA</td><td>Fine-tuned model for your vertical</td><td>10</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tip-box">
+      <h4>The Golden Rule: Start with Apple's Built-In APIs</h4>
+      <p>Always check if Vision, NaturalLanguage, SoundAnalysis, or Foundation Models can solve your problem first. These frameworks are free, maintained by Apple, optimized for every device, and require zero model management. Only reach for custom models or MLX when the built-in APIs can't handle your specific domain.</p>
+    </div>
+
+    <h2>Building a Reusable Inference Wrapper</h2>
+
+    <p>Every on-device AI feature follows the same pattern: load model, preprocess input, run inference, postprocess output, handle errors, measure performance. Let's build a reusable protocol.</p>
+
+<pre><code>import CoreML
+import os
+
+protocol OnDeviceMLFeature {
+    associatedtype Input
+    associatedtype Output
+
+    var modelName: String { get }
+    func preprocess(_ input: Input) throws -> MLFeatureProvider
+    func postprocess(_ result: MLFeatureProvider) throws -> Output
+}
+
+extension OnDeviceMLFeature {
+    func predict(_ input: Input) async throws -> Output {
+        let log = OSLog(subsystem: "com.app.ml", category: modelName)
+        let signpostID = OSSignpostID(log: log)
+
+        // Load with warm-up
+        os_signpost(.begin, log: log, name: "Load",
+                    signpostID: signpostID)
+        let config = MLModelConfiguration()
+        config.computeUnits = .all
+        let model = try MLModel(contentsOf: modelURL,
+                                configuration: config)
+        os_signpost(.end, log: log, name: "Load",
+                    signpostID: signpostID)
+
+        // Preprocess + Infer
+        os_signpost(.begin, log: log, name: "Inference",
+                    signpostID: signpostID)
+        let features = try preprocess(input)
+        let prediction = try model.prediction(from: features)
+        os_signpost(.end, log: log, name: "Inference",
+                    signpostID: signpostID)
+
+        return try postprocess(prediction)
+    }
+}</code></pre>
+
+    <p>Every AI feature in your app implements this protocol. You get consistent error handling, performance telemetry, and compute unit management for free.</p>
+
+    <h2>Multi-Model Pipelines</h2>
+
+    <p>The real power of on-device AI comes from combining multiple frameworks into a single feature. Each framework does what it's best at, and you chain the outputs together.</p>
+
+    <h3>Example: Smart Document Processor</h3>
+
+    <p>Let's design a feature that scans a document, extracts text, identifies entities, and generates a summary &mdash; all on-device.</p>
+
+    <div class="model-pipeline">
+      <h3>Multi-Model Document Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Vision</strong>
+            <p>Scan &amp; extract text with VNRecognizeTextRequest</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>NaturalLanguage</strong>
+            <p>Extract names, dates, amounts with NLTagger</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Foundation Models</strong>
+            <p>Summarize document with @Generable</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>SwiftUI</strong>
+            <p>Display structured results</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+<pre><code>import Vision
+import NaturalLanguage
+import FoundationModels
+
+struct DocumentProcessor {
+    // Step 1: OCR with Vision
+    func extractText(from image: CGImage) async throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        let handler = VNImageRequestHandler(cgImage: image)
+        try handler.perform([request])
+        return request.results?
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: "\n") ?? ""
+    }
+
+    // Step 2: Entity extraction with NaturalLanguage
+    func extractEntities(from text: String) -> [Entity] {
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        tagger.string = text
+        var entities: [Entity] = []
+        tagger.enumerateTags(in: text.startIndex..<text.endIndex,
+                             unit: .word, scheme: .nameType) {
+            tag, range in
+            if let tag = tag {
+                entities.append(Entity(
+                    text: String(text[range]),
+                    type: tag.rawValue
+                ))
+            }
+            return true
+        }
+        return entities
+    }
+
+    // Step 3: Summarize with Foundation Models
+    @available(iOS 26, *)
+    func summarize(_ text: String) async throws -> String {
+        let session = LanguageModelSession()
+        let response = try await session.respond(
+            to: "Summarize in 2 sentences: \(text)"
+        )
+        return response.content
+    }
+}</code></pre>
+
+    <h3>Pipeline Memory Budget</h3>
+
+    <p>When chaining models, memory adds up. Plan your budget carefully:</p>
+
+    <div class="device-benchmark">
+      <h3>Multi-Model Memory Budget (iPhone 15 Pro, 8 GB)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Memory</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>iOS + background apps</td>
+            <td>~2.5 GB</td>
+            <td>Always</td>
+          </tr>
+          <tr>
+            <td>Your app (non-ML)</td>
+            <td>~100 MB</td>
+            <td>Always</td>
+          </tr>
+          <tr>
+            <td>Vision text recognition</td>
+            <td>~50 MB</td>
+            <td>During OCR only</td>
+          </tr>
+          <tr>
+            <td>NaturalLanguage tagger</td>
+            <td>~10 MB</td>
+            <td>During extraction</td>
+          </tr>
+          <tr>
+            <td>Foundation Models</td>
+            <td>Managed by OS</td>
+            <td>During generation</td>
+          </tr>
+          <tr>
+            <td>Custom Core ML model</td>
+            <td>~50-200 MB</td>
+            <td>Load/unload per step</td>
+          </tr>
+          <tr>
+            <td>MLX 3B model</td>
+            <td>~2.5 GB</td>
+            <td>Load/unload per step</td>
+          </tr>
+          <tr>
+            <td><strong>Available headroom</strong></td>
+            <td><strong>~5 GB</strong></td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="benchmark-note">Run pipeline steps sequentially, not in parallel. Unload each model before loading the next to stay within budget.</p>
+    </div>
+
+    <div class="warning-box">
+      <h4>Sequential, Not Parallel</h4>
+      <p>Never load multiple large models simultaneously. Run each pipeline step, collect its output, unload, then load the next model. Vision + NaturalLanguage are lightweight enough to coexist, but an MLX model should be loaded alone.</p>
+    </div>
+
+    <h2>Edge Cases and Failure Modes</h2>
+
+    <p>Real-world inputs are messy. Your AI features need to handle the unexpected gracefully.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <h4>What Users Will Throw at You</h4>
+        <ul>
+          <li>Photos in extreme lighting (pitch dark, direct sun glare)</li>
+          <li>Blurry images from shaky hands or motion</li>
+          <li>Objects the model has never seen before</li>
+          <li>Mixed-language text in a single document</li>
+          <li>Background noise drowning out speech</li>
+          <li>Adversarial inputs (rotated, occluded, cropped)</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <h4>How to Handle Them</h4>
+        <ul>
+          <li>Set confidence thresholds (reject predictions below 70%)</li>
+          <li>Show "I'm not sure" instead of a wrong answer</li>
+          <li>Add an "other" class for unknown objects</li>
+          <li>Use NLLanguageRecognizer to detect language first</li>
+          <li>Check audio levels before starting transcription</li>
+          <li>Validate input dimensions before inference</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>The Model Evaluation Checklist</h2>
+
+    <p>Before shipping any AI feature, run it through these six checkpoints:</p>
+
+    <div class="checklist">
+      <h4>Six Metrics Before You Ship</h4>
+      <ul>
+        <li><strong>Accuracy</strong> &mdash; does it get the right answer? Test on 100+ real-world inputs, not just your curated test set. What's your acceptable error rate?</li>
+        <li><strong>Latency</strong> &mdash; fast enough for real-time? Under 30ms for camera features, under 2 seconds for generative text. Measure p95, not just average.</li>
+        <li><strong>Model size</strong> &mdash; fits the download budget? Under 20 MB for embedded, use ODR or Background Assets for larger. Users on cellular notice.</li>
+        <li><strong>Memory</strong> &mdash; runs without jetsam? Test on lowest-tier device with memory pressure. Stay under 200 MB for Core ML, plan carefully for MLX.</li>
+        <li><strong>Power</strong> &mdash; drains the battery? Run continuous inference for 5 minutes, check battery drain. Neural Engine is 10x more power-efficient than CPU.</li>
+        <li><strong>Device coverage</strong> &mdash; what % of your users can run it? Check your analytics for device distribution. If 40% of users have iPhone 12 or older, Foundation Models won't work for them.</li>
+      </ul>
+    </div>
+
+    <h2>Device Diversity as a Design Constraint</h2>
+
+    <p>Not a bug &mdash; a feature. Different devices get different AI capabilities. Design for this from the start.</p>
+
+    <div class="device-benchmark">
+      <h3>Capability Matrix by Device</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>iPhone SE / 12</th>
+            <th>iPhone 14 / 15</th>
+            <th>iPhone 15 Pro+</th>
+            <th>iPad M-series</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Vision framework</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>NaturalLanguage</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>SoundAnalysis</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>Core ML (small models)</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>MLX Swift (1B model)</td>
+            <td>&#9888;&#65039; Tight</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>MLX Swift (3B model)</td>
+            <td>&#10060;</td>
+            <td>&#9888;&#65039; Tight</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>Foundation Models</td>
+            <td>&#10060;</td>
+            <td>&#10060;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+          <tr>
+            <td>MLX Swift (7B model)</td>
+            <td>&#10060;</td>
+            <td>&#10060;</td>
+            <td>&#9989;</td>
+            <td>&#9989;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Privacy as a Competitive Advantage</h2>
+
+    <p>On-device AI isn't just a technical choice &mdash; it's a business differentiator. While competitors send user photos to cloud APIs, your app processes everything locally.</p>
+
+    <div class="highlight-box">
+      <h3>Your Privacy Story</h3>
+      <ul>
+        <li><strong>App Privacy Report:</strong> "Data Not Collected" for all AI features</li>
+        <li><strong>GDPR/CCPA:</strong> on-device processing doesn't require consent for AI analysis</li>
+        <li><strong>Marketing:</strong> "Your photos/documents/voice never leave your device"</li>
+        <li><strong>Enterprise:</strong> on-device AI meets data residency requirements automatically</li>
+        <li><strong>User trust:</strong> Apple Intelligence's Private Cloud Compute sets the expectation &mdash; users increasingly expect on-device processing</li>
+      </ul>
+    </div>
+
+    <h2>What's Coming Next</h2>
+
+    <p>On-device AI is evolving fast. Here's what to watch for:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">Core AI</div>
+        <div class="stat-label">Expected WWDC 2026</div>
+        <p>Rumored successor to Core ML. Unified framework for classical ML and generative AI. Will likely coexist with Core ML initially.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">LoRA</div>
+        <div class="stat-label">Adapter fine-tuning</div>
+        <p>Apple's Foundation Models already use LoRA internally. Expect developer APIs for custom LoRA adapters on the on-device model.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Multimodal</div>
+        <div class="stat-label">Vision + Language</div>
+        <p>Foundation Models already understand images internally. Expect multimodal APIs: describe images, answer questions about photos.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">MLX</div>
+        <div class="stat-label">Growing ecosystem</div>
+        <p>More models, better tooling, official Apple WWDC sessions. Becoming the de facto open-source ML framework for Apple Silicon.</p>
+      </div>
+    </div>
+
+    <h2>Keeping Up with the Landscape</h2>
+
+    <div class="checklist">
+      <h4>Essential Resources</h4>
+      <ul>
+        <li><strong>WWDC sessions</strong> &mdash; Apple's ML sessions are always the authoritative source. Watch the Foundation Models, Core ML, and MLX sessions.</li>
+        <li><strong>Apple ML Research blog</strong> &mdash; machinelearning.apple.com. Deep technical papers on Apple's model architecture and optimization techniques.</li>
+        <li><strong>Hugging Face mlx-community</strong> &mdash; hundreds of pre-quantized models ready for MLX Swift. New models appear within days of open-source releases.</li>
+        <li><strong>coremltools release notes</strong> &mdash; new optimization techniques, supported ops, and conversion improvements ship regularly.</li>
+        <li><strong>ml-explore/mlx-swift on GitHub</strong> &mdash; the source for MLX Swift. Watch releases for new features and performance improvements.</li>
+        <li><strong>Apple Developer Forums</strong> &mdash; Core ML and Machine Learning sections. Apple engineers sometimes answer directly.</li>
+      </ul>
+    </div>
+
+    <h2>The Complete Capstone: Design Your AI Feature</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: Technical Design Document</h3>
+      <p>Design an on-device AI feature for your own app (or an app you wish existed). Write a technical design document covering all aspects:</p>
+      <ol>
+        <li><strong>Problem statement</strong> &mdash; what user problem does this feature solve? Why does it need AI? Why on-device?</li>
+        <li><strong>Framework selection</strong> &mdash; which Apple/open-source framework(s) will you use? Justify with the decision framework from this chapter.</li>
+        <li><strong>Data pipeline</strong> &mdash; draw the input &rarr; preprocess &rarr; inference &rarr; postprocess &rarr; output flow. Identify where each framework fits.</li>
+        <li><strong>Optimization strategy</strong> &mdash; what compression techniques (Ch. 8) will you apply? What's your size and latency target?</li>
+        <li><strong>Device coverage matrix</strong> &mdash; which devices can run this feature? What's the fallback for unsupported devices?</li>
+        <li><strong>Memory budget</strong> &mdash; estimate RAM usage for each pipeline stage. Will it fit on your lowest-tier target device?</li>
+        <li><strong>Error handling</strong> &mdash; what can go wrong? How does the UI degrade gracefully for each failure mode?</li>
+        <li><strong>Privacy considerations</strong> &mdash; does any data leave the device? What do you disclose in the App Privacy Report?</li>
+        <li><strong>Monitoring plan</strong> &mdash; what metrics will you track? What's the alert threshold for each?</li>
+        <li><strong>Model update strategy</strong> &mdash; how will you ship model improvements? Staged rollout plan?</li>
+      </ol>
+      <h4>Bonus:</h4>
+      <ul>
+        <li>Build a prototype of steps 1-3 using the multi-model pipeline pattern from this chapter</li>
+        <li>Present your design to a colleague and incorporate their feedback</li>
+      </ul>
+    </div>
+
+    <h2>Your Toolkit Is Ready</h2>
+
+    <p>You started this course wondering how to make your iPhone do something smart without a cloud API. Now you have the full picture:</p>
+
+    <div class="highlight-box">
+      <h3>What You've Learned</h3>
+      <ul>
+        <li><strong>Chapter 1-2:</strong> Why on-device AI matters and how models work on Apple Silicon</li>
+        <li><strong>Chapter 3:</strong> Your first Core ML model &mdash; convert, integrate, run live on camera</li>
+        <li><strong>Chapter 4:</strong> Vision framework &mdash; text, faces, bodies, documents, barcodes</li>
+        <li><strong>Chapter 5:</strong> NaturalLanguage, Speech, Sound &mdash; the "hearing" frameworks</li>
+        <li><strong>Chapter 6:</strong> Foundation Models &mdash; on-device generative AI with @Generable</li>
+        <li><strong>Chapter 7:</strong> Hardware acceleration &mdash; Neural Engine, Metal 4, benchmarking</li>
+        <li><strong>Chapter 8:</strong> Model optimization &mdash; quantization, palettization, pruning</li>
+        <li><strong>Chapter 9:</strong> Create ML &mdash; train custom models with your data</li>
+        <li><strong>Chapter 10:</strong> MLX Swift &mdash; open-source LLMs on Apple Silicon</li>
+        <li><strong>Chapter 11:</strong> Production &mdash; bundling, monitoring, A/B testing, ship it</li>
+        <li><strong>Chapter 12:</strong> This chapter &mdash; decision framework, multi-model pipelines, what's next</li>
+      </ul>
+    </div>
+
+    <p>The models will get better. The frameworks will evolve. Core AI may replace Core ML. But the patterns you've learned &mdash; inference pipelines, hardware dispatch, memory management, progressive enhancement, privacy-first design &mdash; those are permanent.</p>
+
+    <p>Now go build something smart. Your users' iPhones are waiting.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="11-production-deployment.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Model Management and Production Deployment</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to Contents &rarr;</span>
+        <span class="nav-chapter">On-Device AI for iOS</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

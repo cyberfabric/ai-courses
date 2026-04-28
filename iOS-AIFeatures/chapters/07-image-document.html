@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Image Understanding &amp; Document Intelligence | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-smart-search.html">&larr; Prev</a>
+      <a href="08-image-generation.html">Next &rarr;</a>
+      <a href="maps/07-image-document-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Image Understanding &amp; Document Intelligence</h1>
+    <p class="subtitle">Vision framework OCR, RecognizeDocumentsRequest, photo intelligence, and structured data extraction</p>
+  </header>
+
+  <main>
+
+    <h2>Your Camera Is an AI Input Device</h2>
+
+    <p>Every iPhone has a camera. That camera is also the world&rsquo;s most convenient scanner, translator, and data entry tool &mdash; if your app knows how to use it. This chapter is about teaching your app to <em>see</em>: read text from images, understand document structure, classify photos, and extract structured data from visual content.</p>
+
+    <p>The magic pipeline is: <strong>camera captures image &rarr; Vision extracts text &rarr; Foundation Models structures it</strong>. Vision handles the seeing. Foundation Models handles the understanding. Together, they turn a photo of a receipt into a typed Swift struct with merchant, date, total, and line items &mdash; all on-device, for free.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Aisha is at a business lunch. She snaps a photo of the receipt with her expense app. In under 2 seconds, the app shows: &ldquo;Cafe Milano &mdash; $47.80 &mdash; March 12, 2026 &mdash; 3 items.&rdquo; Each field is editable in case the AI got something wrong. She taps &ldquo;Save&rdquo; and the expense is logged. No typing. No data entry. Just point, shoot, done.</p>
+    </div>
+
+    <h2>Vision Framework: The Eyes</h2>
+
+    <p>The Vision framework has been on iOS since iOS 11, and it keeps getting better. It provides specialized request types for different visual tasks &mdash; each optimized, each running on-device:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">26</span>
+        <span class="stat-label">Languages supported for text recognition</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">0ms</span>
+        <span class="stat-label">Cloud latency &mdash; everything runs on-device</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">iPhone 8+</span>
+        <span class="stat-label">Minimum device for Vision framework</span>
+      </div>
+    </div>
+
+    <h3>The Key Vision Requests</h3>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>RecognizeDocumentsRequest</strong> (iOS 26) &mdash; The new star. Understands document <em>structure</em>: tables, lists, paragraphs, QR codes, data types (emails, phone numbers, URLs, dates, addresses). Not just &ldquo;here&rsquo;s some text&rdquo; but &ldquo;here&rsquo;s a table with 4 rows and 3 columns.&rdquo;</li>
+        <li><strong>RecognizeTextRequest</strong> &mdash; Classic OCR. Extracts raw text with per-character confidence scores. Two modes: <code>.fast</code> for real-time camera preview, <code>.accurate</code> for still images. Still useful when you just need the text without structure.</li>
+        <li><strong>VNClassifyImageRequest</strong> &mdash; Multi-label image classification. &ldquo;This photo contains: beach, sunset, people.&rdquo; No custom model needed.</li>
+        <li><strong>VNDetectFaceRectanglesRequest</strong> &mdash; Finds faces in images. Returns bounding boxes, landmarks (eyes, nose, mouth), and face quality scores.</li>
+        <li><strong>GeneratePersonSegmentationRequest</strong> &mdash; Creates a matte that isolates people from the background. Three quality levels. Works on video frames too.</li>
+      </ul>
+    </div>
+
+    <h2>RecognizeDocumentsRequest: The Game Changer</h2>
+
+    <p>Before iOS 26, scanning a table was painful. <code>RecognizeTextRequest</code> returned each cell as a separate, unrelated text observation. You had to figure out which cells belonged to which row and column by analyzing bounding box positions. It was fragile and error-prone.</p>
+
+    <p><code>RecognizeDocumentsRequest</code> changes everything. It returns a hierarchical <code>DocumentObservation</code> that understands structure:</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Scan a Document with Structure</h3>
+      <p><strong>Goal:</strong> Extract structured content from a document image &mdash; paragraphs, tables, and detected data types.</p>
+      <p><strong>Step 1:</strong> Create and perform the request:</p>
+<pre><code>import Vision
+
+let request = RecognizeDocumentsRequest()
+let observations = try await request.perform(on: documentImage)
+
+for document in observations {
+    for block in document.blocks {
+        switch block {
+        case .paragraph(let paragraph):
+            print("Paragraph: \(paragraph.text)")
+        case .table(let table):
+            for row in table.rows {
+                let cells = row.cells.map(\.text)
+                print("Row: \(cells.joined(separator: " | "))")
+            }
+        case .list(let list):
+            for item in list.items {
+                print("• \(item.text)")
+            }
+        }
+    }
+}</code></pre>
+      <p><strong>Step 2:</strong> Extract detected data types automatically:</p>
+<pre><code>// RecognizeDocumentsRequest also detects:
+// - Email addresses
+// - Phone numbers
+// - URLs
+// - Dates
+// - Postal addresses
+// - Tracking numbers
+// - Flight numbers
+// - Payment card numbers
+
+for dataItem in document.detectedDataItems {
+    switch dataItem {
+    case .email(let email): handleEmail(email)
+    case .phoneNumber(let phone): handlePhone(phone)
+    case .url(let url): handleURL(url)
+    case .date(let date): handleDate(date)
+    default: break
+    }
+}</code></pre>
+      <p>No regex. No custom parsing. The framework detects data types and hands them to you as typed values. A business card becomes a contact. A receipt becomes structured data. A boarding pass becomes a flight number and gate.</p>
+    </div>
+
+    <div class="highlight-box">
+      <h3>RecognizeDocumentsRequest vs RecognizeTextRequest</h3>
+      <p>Use <code>RecognizeDocumentsRequest</code> when you need <strong>structure</strong> (tables, lists, data types). Use <code>RecognizeTextRequest</code> when you just need <strong>raw text</strong> fast (real-time camera overlay, simple OCR). For most new features, start with RecognizeDocumentsRequest &mdash; it&rsquo;s the modern path.</p>
+    </div>
+
+    <h2>The Snap-and-Understand Pipeline</h2>
+
+    <p>Here&rsquo;s where it gets powerful: Vision extracts text, Foundation Models structures it. Two frameworks, one pipeline, entirely on-device.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Camera capture</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Vision OCR</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Foundation Models</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Typed Swift data</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Editable UI</div>
+    </div>
+
+    <div class="product-pattern">
+      <h3>The Snap-and-Understand Pattern</h3>
+      <ol>
+        <li><strong>Capture</strong> &mdash; User points camera at a document (receipt, business card, menu, invoice). Use <code>DataScannerViewController</code> for a polished camera UI with live text overlay.</li>
+        <li><strong>Extract</strong> &mdash; Vision&rsquo;s <code>RecognizeDocumentsRequest</code> pulls out raw text with structure. Tables stay as tables. Lists stay as lists.</li>
+        <li><strong>Structure</strong> &mdash; Foundation Models with <code>@Generable</code> parses the raw text into your typed Swift struct. Receipt text becomes <code>ReceiptData(merchant: "Cafe Milano", total: 47.80, items: [...])</code>.</li>
+        <li><strong>Verify</strong> &mdash; Show results in an editable form with confidence indicators. Users can fix anything the AI got wrong.</li>
+        <li><strong>Save</strong> &mdash; One tap to save. The 30-second manual data entry is now a 2-second photo.</li>
+      </ol>
+      <p>This pattern works for receipts, business cards, invoices, menus, boarding passes, prescriptions &mdash; any structured document.</p>
+    </div>
+
+    <h3>Receipt Parsing with @Generable</h3>
+
+    <p>Let&rsquo;s build the Foundation Models side of the pipeline. Vision gives us raw text; we need typed data:</p>
+
+<pre><code>@Generable
+struct ReceiptData {
+    @Guide(description: "The merchant or store name")
+    var merchant: String
+
+    @Guide(description: "The total amount paid")
+    var total: String
+
+    @Guide(description: "The date of the transaction")
+    var date: String
+
+    @Guide(description: "Individual line items with name and price")
+    var items: [LineItem]
+}
+
+@Generable
+struct LineItem {
+    @Guide(description: "Item name or description")
+    var name: String
+
+    @Guide(description: "Item price")
+    var price: String
+}
+
+// After Vision extracts the text:
+let session = LanguageModelSession()
+let receipt = try await session.respond(
+    to: "Extract receipt details from this text: \(ocrText)",
+    generating: ReceiptData.self
+)
+// receipt.merchant → "Cafe Milano"
+// receipt.total → "$47.80"
+// receipt.items → [LineItem(name: "Margherita Pizza", price: "$18.00"), ...]</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Why not just use RecognizeDocumentsRequest alone?</strong> It detects structure beautifully (tables, data types), but it doesn&rsquo;t <em>interpret</em>. It knows &ldquo;this is a table with prices&rdquo; but doesn&rsquo;t know which number is the total vs a subtotal vs a tax amount. Foundation Models adds the <em>understanding</em> layer. Use both together.</p>
+    </div>
+
+    <h2>Photo Library Intelligence</h2>
+
+    <p>Beyond documents, Vision can make your entire photo library smarter. Here are the building blocks:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Smart Photo Features You Can Build</p>
+        <p class="prompt-text">Auto-categorization (vacation/food/pets), duplicate detection, &ldquo;find photos like this,&rdquo; accessibility descriptions for VoiceOver, face grouping for contacts, scene detection for filters.</p>
+        <p class="prompt-explanation">Each uses a different Vision request, all on-device, all private. Photos are deeply personal &mdash; on-device processing is essential.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Don&rsquo;t Do This</p>
+        <p class="prompt-text">Upload photos to a cloud API for analysis, process the entire library on the main thread, show classification labels without letting users correct them, auto-delete &ldquo;bad&rdquo; photos.</p>
+        <p class="prompt-explanation">Photos trigger the strongest privacy reactions. Never upload without explicit consent. Never auto-delete. Always let users override AI decisions.</p>
+      </div>
+    </div>
+
+    <h3>Image Classification</h3>
+
+<pre><code>import Vision
+
+func classifyImage(_ image: CGImage) async throws -> [String] {
+    let request = VNClassifyImageRequest()
+    let handler = VNImageRequestHandler(cgImage: image)
+    try handler.perform([request])
+
+    guard let results = request.results else { return [] }
+    return results
+        .filter { $0.confidence > 0.5 }
+        .prefix(5)
+        .map(\.identifier)
+    // → ["food", "pizza", "indoor", "restaurant", "plate"]
+}</code></pre>
+
+    <p>The built-in classifier recognizes hundreds of categories without any custom model. It&rsquo;s perfect for auto-tagging, smart albums, and content filtering.</p>
+
+    <h3>Person Segmentation for Portrait Features</h3>
+
+<pre><code>let request = GeneratePersonSegmentationRequest()
+request.qualityLevel = .accurate  // .fast for video, .accurate for stills
+
+let handler = VNImageRequestHandler(cgImage: photo)
+try handler.perform([request])
+
+if let result = request.results?.first {
+    let matteMask = result.pixelBuffer
+    // Use matteMask to blur background, change background color,
+    // create sticker cutouts, or apply effects to people only
+}</code></pre>
+
+    <p>This is how the Photos app creates portrait effects without a depth sensor on older devices. The segmentation mask isolates people pixel-by-pixel, letting you blur backgrounds, swap backgrounds, or create sticker-style cutouts.</p>
+
+    <h2>Batch Processing Photos</h2>
+
+    <p>When you analyze a photo library, you&rsquo;re potentially processing hundreds or thousands of images. This requires careful resource management:</p>
+
+<pre><code>func analyzeLibrary(photos: [PHAsset]) async {
+    // Process in batches to avoid memory pressure
+    let batchSize = 10
+
+    for batch in photos.chunked(into: batchSize) {
+        await withTaskGroup(of: PhotoAnalysis?.self) { group in
+            for asset in batch {
+                group.addTask {
+                    guard let image = await self.loadImage(asset) else { return nil }
+                    let categories = try? await self.classifyImage(image)
+                    let text = try? await self.extractText(image)
+                    return PhotoAnalysis(assetID: asset.localIdentifier,
+                                        categories: categories ?? [],
+                                        extractedText: text ?? "")
+                }
+            }
+            for await result in group {
+                if let analysis = result {
+                    await saveAnalysis(analysis)  // Store in SwiftData
+                }
+            }
+        }
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Never block the main thread.</strong> Image processing is CPU-intensive. Always use <code>Task.detached(priority: .utility)</code> or a background TaskGroup. Process in batches of 10&ndash;20 images to control memory. Show a progress indicator: &ldquo;Analyzing photos&hellip; 47/120.&rdquo;</p>
+    </div>
+
+    <h2>Image Preprocessing</h2>
+
+    <p>Before feeding images to Vision, handle iOS-specific format considerations:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>HEIC format</strong> &mdash; iOS&rsquo;s default photo format. Vision handles it natively, but if you&rsquo;re sending to a cloud API, convert to JPEG first.</li>
+        <li><strong>Live Photos</strong> &mdash; Extract the still image component. Don&rsquo;t accidentally process the video portion.</li>
+        <li><strong>Orientation metadata</strong> &mdash; iOS stores rotation in EXIF metadata, not in pixel data. Always pass the image orientation to <code>VNImageRequestHandler</code> via the <code>orientation</code> parameter, or your bounding boxes will be wrong.</li>
+        <li><strong>Resize for performance</strong> &mdash; A 48MP ProRAW photo is overkill for classification. Downscale to 1024px on the long edge before processing. Vision&rsquo;s accuracy is nearly identical at lower resolutions.</li>
+        <li><strong>Memory management</strong> &mdash; <code>CGImage</code> objects are large. Release them as soon as processing completes. Use autoreleasepool blocks in tight loops.</li>
+      </ul>
+    </div>
+
+    <h2>Accessibility: AI-Generated Image Descriptions</h2>
+
+    <p>One of the most impactful uses of image AI is generating VoiceOver descriptions for visually impaired users. Combine Vision classification with Foundation Models to create natural descriptions:</p>
+
+<pre><code>func generateAccessibleDescription(for image: CGImage) async throws -> String {
+    // Step 1: Vision classifies the image
+    let categories = try await classifyImage(image)  // ["beach", "sunset", "people"]
+
+    // Step 2: Foundation Models creates a natural description
+    let session = LanguageModelSession(
+        instructions: "Create brief, helpful image descriptions for VoiceOver users."
+    )
+    let description = try await session.respond(
+        to: "Describe a photo containing: \(categories.joined(separator: ", "))"
+    )
+    return description.content
+    // → "A beach at sunset with people visible in the scene"
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>This is high-impact accessibility.</strong> Photos without descriptions are invisible to VoiceOver users. Auto-generating descriptions makes your entire photo experience accessible. Set them via <code>.accessibilityLabel()</code> in SwiftUI. Apple does this in the Photos app &mdash; you should too.</p>
+    </div>
+
+    <h2>Privacy: The Non-Negotiable Rule</h2>
+
+    <p>Photos are the most personal data on someone&rsquo;s phone. More personal than messages, more personal than health data. The privacy rules for image AI are absolute:</p>
+
+    <div class="highlight-box">
+      <h3>The Photo Privacy Compact</h3>
+      <ul>
+        <li><strong>Process on-device.</strong> Vision + Foundation Models both run on-device. Use them. No photo should leave the device for AI analysis unless the user explicitly opts in.</li>
+        <li><strong>Request minimal access.</strong> Use <code>PHPickerViewController</code> for user-selected photos (no permission dialog needed). Only request full library access if your feature genuinely needs it.</li>
+        <li><strong>Be transparent.</strong> If a feature requires photo library access, explain exactly why in the permission dialog string. &ldquo;To organize your photos by category&rdquo; is specific. &ldquo;To improve your experience&rdquo; is not.</li>
+        <li><strong>Never upload without consent.</strong> If you must send a photo to a cloud API (for capabilities beyond on-device), show a clear dialog first: &ldquo;This photo will be sent to our servers for analysis. Continue?&rdquo;</li>
+      </ul>
+    </div>
+
+    <h2>Real-World Examples</h2>
+
+    <p>Image understanding powers some of the most beloved features on iOS:</p>
+
+    <ul>
+      <li><strong>Live Text</strong> &mdash; Apple&rsquo;s built-in feature that lets you select, copy, and act on text in any photo. It uses Vision under the hood and surfaces phone numbers, URLs, and addresses as tappable actions.</li>
+      <li><strong>Notes Scanner</strong> &mdash; The document scanner in Notes uses Vision for OCR and perspective correction. RecognizeDocumentsRequest makes this even more powerful in iOS 26.</li>
+      <li><strong>Signeasy</strong> &mdash; Extracts contract clauses, dates, and obligations from scanned documents using on-device AI. Legal privacy makes on-device processing essential.</li>
+      <li><strong>Receipts by Wave</strong> &mdash; Photograph receipts, auto-extract merchant, total, and date. Exactly the snap-and-understand pipeline we built above.</li>
+      <li><strong>CamScanner / Scanner Pro</strong> &mdash; Professional document scanning with OCR, table detection, and export to searchable PDF.</li>
+    </ul>
+
+    <div class="tip-box">
+      <p><strong>Cross-reference:</strong> For deeper Vision framework internals, request configuration options, and performance optimization, see <a href="#">iOS-OnDevice Chapter 4</a>.</p>
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build a Receipt Organizer</h3>
+      <p>Build a feature where users photograph receipts and the app extracts structured data:</p>
+      <ol>
+        <li><strong>Camera capture:</strong> Use <code>PHPickerViewController</code> or the camera to capture a receipt image.</li>
+        <li><strong>Vision OCR:</strong> Use <code>RecognizeDocumentsRequest</code> to extract text with structure. If targeting older iOS versions, fall back to <code>RecognizeTextRequest</code>.</li>
+        <li><strong>Foundation Models parsing:</strong> Define a <code>@Generable ReceiptData</code> struct with merchant, date, total, and items. Pass the OCR text to Foundation Models to fill it.</li>
+        <li><strong>Editable form:</strong> Show the extracted data in a SwiftUI form where every field is editable. Add a colored confidence dot next to each field (green for high confidence, yellow for medium).</li>
+        <li><strong>Save &amp; organize:</strong> Store receipts in SwiftData, grouped by month and category.</li>
+        <li><strong>Graceful fallback:</strong> If Foundation Models isn&rsquo;t available on this device, still show the raw OCR text and let the user fill in the fields manually.</li>
+      </ol>
+      <p><strong>Test with:</strong> A restaurant receipt, a grocery receipt, and a gas station receipt. Each has different layouts &mdash; your @Generable struct should handle all three because Foundation Models understands context, not just format.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You can now read and understand images &mdash; extracting text, structure, and meaning from visual content. But what about <em>creating</em> images? What if your app needs to generate illustrations, concept art, or custom emoji?</p>
+
+    <p>That&rsquo;s <strong>Chapter 8: Image Generation &amp; Creative AI</strong> &mdash; Image Playground, Genmoji, the ImageCreator API, and building creative features that let users generate images on-device.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="06-smart-search.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Smart Search &amp; Content Generation</span>
+        </a>
+        <a href="08-image-generation.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Image Generation &amp; Creative AI</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

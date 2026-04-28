@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Compose Recomposition Performance | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-memory-leaks.html">&larr; Prev</a>
+      <a href="06-network-debugging.html">Next &rarr;</a>
+      <a href="maps/05-compose-recomposition-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Compose Recomposition Performance</h1>
+    <p class="subtitle">When your composables redraw 50 times during a scroll and you wonder where the jank comes from</p>
+  </header>
+
+  <main>
+
+    <h2>The Invisible Performance Tax</h2>
+
+    <p>Chapter 4 dealt with memory leaks &mdash; objects that silently accumulate. Recomposition issues are the CPU equivalent: your composables silently re-execute dozens of times when they should execute once, burning battery and dropping frames.</p>
+
+    <p>In the View system, a layout only redraws when you explicitly call <code>invalidate()</code> or change a property. In Compose, <em>any state change</em> can trigger recomposition of any composable that reads that state. This is powerful &mdash; and dangerous.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">16 ms</span>
+        <span class="stat-label">budget per frame at 60 FPS &mdash; exceed it and you drop frames</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">10&ndash;100x</span>
+        <span class="stat-label">recomposition overhead from common Compose mistakes</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">#1</span>
+        <span class="stat-label">Compose performance issue: unnecessary recomposition</span>
+      </div>
+    </div>
+
+    <h2>The Recomposition Mental Model</h2>
+
+    <p>Think of recomposition like re-rendering a web page. If every keystroke in a search box re-rendered the entire page instead of just the search results, your browser would grind to a halt. Compose works the same way &mdash; it <em>should</em> only recompose the composables that actually depend on the changed state.</p>
+
+    <p>Recomposition is triggered when:</p>
+
+    <ul>
+      <li>A <code>State</code>, <code>MutableState</code>, <code>StateFlow</code>, or other observable value changes</li>
+      <li>A composable reads that state (directly or indirectly)</li>
+      <li>Compose decides the composable&rsquo;s inputs have changed (parameter equality check)</li>
+    </ul>
+
+    <p>The problem arises when Compose thinks inputs have changed even though the <em>meaningful</em> data hasn&rsquo;t. This happens because of unstable types, lambda allocations, and state read scoping mistakes.</p>
+
+    <h2>Strong Skipping Mode (The Modern Default)</h2>
+
+    <p>Before you go hunting for unstable parameters, know what the compiler already does for you. Since <strong>Kotlin 2.0.20</strong> (Compose Compiler 1.5.4 introduced it; 2.0.20 made it default), <strong>strong skipping mode</strong> is on by default for every Compose project on a current Kotlin toolchain. It changes the rules you may have learned a couple of years ago.</p>
+
+    <p>What strong skipping does:</p>
+
+    <ul>
+      <li><strong>All restartable composables become skippable</strong> &mdash; even ones with unstable parameters. The old &ldquo;restartable but NOT skippable&rdquo; verdict in the compiler report mostly goes away.</li>
+      <li><strong>Lambdas inside composables are auto-memoized.</strong> The compiler wraps them in <code>remember</code> with their captured values as keys. You no longer need to manually <code>remember { { ... } }</code> to stabilize a callback.</li>
+      <li><strong>Equality semantics shift</strong>: stable parameters are compared with object equality (<code>.equals()</code>); unstable parameters are compared with instance equality (<code>===</code>).</li>
+    </ul>
+
+    <pre><code>// What the compiler does for you under strong skipping:
+@Composable
+fun ProductCard(product: Product, onClick: () -&gt; Unit) {
+    // 'onClick' is auto-memoized — same instance across recompositions
+    // unless its captured values change.
+    Card(onClick = onClick) { Text(product.name) }
+}</code></pre>
+
+    <p>So why do <code>@Stable</code> and <code>@Immutable</code> still matter? Because they switch the comparison from <code>===</code> (instance) to <code>.equals()</code> (content). For data flowing from Room, networking, or any source that reallocates objects on every emission, instance equality always reports &ldquo;different&rdquo; and the composable recomposes anyway. Annotating the type as <code>@Immutable</code> lets Compose see &ldquo;same content &rarr; safe to skip.&rdquo;</p>
+
+    <p>If you need to opt out for a specific case, use <code>@NonSkippableComposable</code> on a composable to disable skipping entirely, or <code>@DontMemoize</code> on a lambda to disable auto-memoization.</p>
+
+    <div class="tip-box">
+      The trap patterns below still matter &mdash; strong skipping reduces but doesn&rsquo;t eliminate the cost of unstable types and re-allocated lambdas. Treat them as the second optimization tier you reach for after profiling tells you a screen is still janky.
+    </div>
+
+    <h2>Measuring Recomposition</h2>
+
+    <p>Before optimizing, you need data. Here&rsquo;s how to see recomposition counts:</p>
+
+    <h3>Method 1: Layout Inspector</h3>
+
+    <p>Android Studio&rsquo;s Layout Inspector shows recomposition counts in real-time:</p>
+
+    <ol>
+      <li>Run your app in debug mode</li>
+      <li>Open <strong>Tools &rarr; Layout Inspector</strong></li>
+      <li>Enable <strong>&ldquo;Show Recomposition Counts&rdquo;</strong> in the toolbar</li>
+      <li>Interact with the app &mdash; watch the numbers climb</li>
+    </ol>
+
+    <h3>Method 2: Compose Compiler Metrics</h3>
+
+    <p>Since Kotlin 2.0, the Compose Compiler ships as the <code>org.jetbrains.kotlin.plugin.compose</code> Gradle plugin (versioned in lockstep with Kotlin), and metrics are configured through a dedicated DSL block instead of raw <code>-P</code> flags. Apply the plugin and add a <code>composeCompiler</code> block to your <code>build.gradle.kts</code>:</p>
+
+    <pre><code>// app/build.gradle.kts
+plugins {
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+composeCompiler {
+    reportsDestination = layout.buildDirectory.dir("compose_compiler")
+    metricsDestination = layout.buildDirectory.dir("compose_compiler")
+}</code></pre>
+
+    <p>After building, check <code>app/build/compose_compiler/</code> for files like <code>*-composables.txt</code> and <code>*-classes.txt</code>. These show which composables are restartable, skippable, and which classes are stable or unstable.</p>
+
+    <div class="tip-box">
+      Feed the Compose compiler metrics files directly to Claude Code. Ask: &ldquo;Which composables in this report are not skippable, and what&rsquo;s making their parameters unstable?&rdquo; AI can parse these reports much faster than you can scan them manually.
+    </div>
+
+    <h2>The Top Recomposition Traps</h2>
+
+    <p>AI catches these patterns instantly because they appear in almost every Compose codebase. Let&rsquo;s walk through each one.</p>
+
+    <p>Before diving in: with strong skipping on, Compose will often skip these composables anyway, so you may never see the &ldquo;NOT skippable&rdquo; verdict the old reports complained about. The traps still cost CPU though &mdash; unstable parameters force <code>===</code> instance-equality checks (which a freshly allocated list or DTO will always fail), and re-allocated lambda captures invalidate the auto-<code>remember</code> keys the compiler generated. The same patterns are also exactly what you must fix if you opt out of skipping on a particular composable with <code>@NonSkippableComposable</code>. Read on for the fixes.</p>
+
+    <h3>Trap 1: Unstable Parameters</h3>
+
+    <p>Compose skips recomposition if a composable&rsquo;s parameters haven&rsquo;t changed. But it can only do this if the parameters are <em>stable</em> &mdash; meaning Compose can verify equality. Lists, non-data classes, and classes from external modules are often unstable.</p>
+
+    <div class="debug-trace">
+      <h4>Compose Compiler Report: Unstable Parameters</h4>
+<pre><code>restartable but NOT skippable composable fun ProductCard(
+  unstable product: Product,
+  unstable onAddToCart: Function1&lt;Product, Unit&gt;
+)
+
+// From classes.txt:
+unstable class Product {
+  stable val id: String
+  stable val name: String
+  stable val price: Double
+  unstable val tags: List&lt;String&gt;    // &lt;-- List is unstable!
+  stable val imageUrl: String
+}</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>Problem:</strong> <code>ProductCard</code> is &ldquo;restartable but NOT skippable.&rdquo; This means every time the parent recomposes, <code>ProductCard</code> will re-execute &mdash; even if the product data hasn&rsquo;t changed. <strong>Cause:</strong> The <code>Product</code> class has a <code>List&lt;String&gt;</code> property (<code>tags</code>), and <code>List</code> is an interface that Compose treats as unstable (it could be mutable). Also, the <code>onAddToCart</code> lambda is unstable because it&rsquo;s a new allocation on each parent recomposition.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: List Interface + Lambda Allocation = No Skipping</h4>
+      <p>Compose&rsquo;s stability system can&rsquo;t guarantee that a <code>List&lt;String&gt;</code> hasn&rsquo;t been mutated between recompositions (it could be a <code>MutableList</code> behind the interface). So it conservatively marks <code>Product</code> as unstable. Combined with a lambda parameter that&rsquo;s re-allocated on every parent recomposition, Compose <em>never</em> skips <code>ProductCard</code>.</p>
+      <p>In a LazyColumn with 50 product cards, this means all 50 recompose on every state change in the parent &mdash; even if only a search bar text changed.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Make Parameters Stable</h4>
+<pre><code>// Fix 1: Use @Immutable and ImmutableList from kotlinx.collections
+@Immutable
+data class Product(
+    val id: String,
+    val name: String,
+    val price: Double,
+    val tags: ImmutableList&lt;String&gt;,  // kotlinx.collections.immutable
+    val imageUrl: String
+)
+
+// Fix 2: Stabilize the lambda with remember
+@Composable
+fun ProductList(viewModel: ProductViewModel = hiltViewModel()) {
+    val products by viewModel.products.collectAsState()
+
+    // Stabilize the lambda — same reference across recompositions
+    val onAddToCart = remember(viewModel) {
+        { product: Product -&gt; viewModel.addToCart(product) }
+    }
+
+    LazyColumn {
+        items(products, key = { it.id }) { product -&gt;
+            ProductCard(product = product, onAddToCart = onAddToCart)
+        }
+    }
+}
+
+// Now ProductCard IS skippable — Compose can skip it when
+// the product and lambda haven't changed.</code></pre>
+      <p><strong>Key changes:</strong> (1) Replace <code>List</code> with <code>ImmutableList</code> from <code>kotlinx-collections-immutable</code> so Compose knows it can&rsquo;t mutate. (2) Wrap the lambda in <code>remember</code> so the same reference is passed across recompositions. (3) Use <code>key</code> in the <code>LazyColumn</code> so Compose can track individual items.</p>
+    </div>
+
+    <h3>Trap 2: Reading State in the Wrong Scope</h3>
+
+    <pre><code>// BAD: Reading state in the parent forces recomposition of everything
+@Composable
+fun SearchScreen(viewModel: SearchViewModel = hiltViewModel()) {
+    val scrollState = viewModel.scrollPosition.collectAsState()
+
+    Column {
+        SearchBar(...)
+        // scrollState is read HERE, in SearchScreen's scope.
+        // Any scroll change recomposes SearchScreen AND SearchBar.
+        ProductList(scrollOffset = scrollState.value)
+    }
+}
+
+// GOOD: Read state only where it's needed
+@Composable
+fun SearchScreen(viewModel: SearchViewModel = hiltViewModel()) {
+    Column {
+        SearchBar(...)
+        // Move state reading INTO ProductList
+        ProductList(viewModel)
+    }
+}
+
+@Composable
+fun ProductList(viewModel: SearchViewModel) {
+    val scrollState by viewModel.scrollPosition.collectAsState()
+    // Now only ProductList recomposes on scroll changes.
+    // SearchBar is untouched.
+    LazyColumn(state = rememberLazyListState(scrollState)) { ... }
+}</code></pre>
+
+    <div class="warning-box">
+      The rule: <strong>read state as late as possible</strong>, in the narrowest composable scope. The composable that <em>reads</em> the state is the one that recomposes. Push state reads down the tree.
+    </div>
+
+    <h3>Trap 3: Missing <code>remember</code></h3>
+
+    <pre><code>// BAD: Creates a new DateFormatter on EVERY recomposition
+@Composable
+fun OrderDate(timestamp: Long) {
+    val formatter = SimpleDateFormat("MMM dd, yyyy", Locale.US)
+    Text(formatter.format(Date(timestamp)))
+}
+
+// GOOD: Create once, reuse across recompositions
+@Composable
+fun OrderDate(timestamp: Long) {
+    val formatter = remember {
+        SimpleDateFormat("MMM dd, yyyy", Locale.US)
+    }
+    Text(formatter.format(Date(timestamp)))
+}</code></pre>
+
+    <p>Without <code>remember</code>, expensive objects are recreated on every recomposition. For a <code>SimpleDateFormat</code> this is mild. For a regex pattern, a JSON parser, or a bitmap decoder, it can be devastating.</p>
+
+    <h2>Building an <code>/analyze-recomposition</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/analyze-recomposition.md</code>:</p>
+
+    <pre><code># /analyze-recomposition — Compose Recomposition Analysis
+
+Analyze Compose recomposition issues from metrics, Layout Inspector
+data, or code review.
+
+## Input
+The user will provide one or more of:
+- Compose compiler metrics (*-composables.txt, *-classes.txt)
+- Recomposition counts from Layout Inspector
+- Composable source code with performance concerns
+
+## Analysis Steps
+
+1. **Identify non-skippable composables** — any composable marked
+   "restartable but NOT skippable" is recomposing unnecessarily.
+   Note whether strong skipping is enabled (Kotlin 2.0.20+ default):
+   under strong skipping, the relevant signal is unstable parameters
+   that hurt skip *quality* (forcing `===` instance equality on
+   freshly allocated objects), not skip *occurrence*.
+
+2. **Find unstable parameters** (refinement layer over strong
+   skipping — still actionable because instance equality on
+   reallocated data ≈ "never skip"):
+   - List, Map, Set interfaces (use kotlinx ImmutableList etc.)
+   - Non-data classes without @Stable or @Immutable
+   - Classes from external modules (Compose can't verify stability)
+   - Lambda captures that change every recomposition (auto-memoize
+     keys invalidate)
+
+3. **Check state read scoping** — is state being read higher in the
+   tree than necessary? Moving reads lower reduces blast radius.
+
+4. **Check for missing remember** — expensive object creation inside
+   composable bodies without remember.
+
+5. **LazyColumn/LazyRow audit:**
+   - Missing key parameter (forces recomposition of all items)
+   - Heavy composables in item blocks
+   - Nested scrolling containers
+
+## Output Format
+
+### Non-Skippable Composables
+[List with reason for each]
+
+### Unstable Types
+[Classes that need @Immutable or property changes]
+
+### State Scoping Issues
+[State reads that should be moved lower]
+
+### Optimization Suggestions
+[Ranked by impact: High/Medium/Low]
+
+### Code Fixes
+```kotlin
+[Specific fixes]
+```</code></pre>
+
+    <h2>Advanced: <code>derivedStateOf</code> and <code>snapshotFlow</code></h2>
+
+    <p>Two power tools that AI often recommends for recomposition optimization:</p>
+
+    <h3><code>derivedStateOf</code> &mdash; Computed State That Filters Recomposition</h3>
+
+    <pre><code>// Without derivedStateOf: recomposes on EVERY scroll pixel
+@Composable
+fun ScrollIndicator(listState: LazyListState) {
+    val showButton = listState.firstVisibleItemIndex > 0
+    // This recomposes every time firstVisibleItemIndex changes:
+    // 0→1, 1→2, 2→3... each triggers recomposition
+    if (showButton) { ScrollToTopButton() }
+}
+
+// With derivedStateOf: only recomposes when the derived value changes
+@Composable
+fun ScrollIndicator(listState: LazyListState) {
+    val showButton by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 }
+    }
+    // Only recomposes when showButton flips: false→true or true→false
+    // Not on every index change. Massive reduction.
+    if (showButton) { ScrollToTopButton() }
+}</code></pre>
+
+    <h3><code>snapshotFlow</code> &mdash; Bridge Compose State to Coroutine Flows</h3>
+
+    <pre><code>// Useful when you need to react to state changes with side effects
+@Composable
+fun AnalyticsTracker(listState: LazyListState) {
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .filter { it > 10 }
+            .collect { index -&gt;
+                analytics.trackScroll(index)  // Only fires when needed
+            }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      Use <code>derivedStateOf</code> when you want to reduce recomposition by computing a simpler value from frequently-changing state. Use <code>snapshotFlow</code> when you need to perform side effects (analytics, logging, network calls) in response to state changes.
+    </div>
+
+    <h2>Lazy List Performance</h2>
+
+    <p>LazyColumn and LazyRow are where recomposition issues hurt the most &mdash; because they deal with many items and scrolling demands consistent 60 FPS.</p>
+
+    <h3>The <code>key</code> Parameter</h3>
+
+    <pre><code>// BAD: No key — Compose tracks items by position
+LazyColumn {
+    items(products) { product -&gt;
+        ProductCard(product)
+    }
+}
+// If a product is added at the top, EVERY item recomposes
+// because their positions all shifted.
+
+// GOOD: Key by unique ID — Compose tracks items by identity
+LazyColumn {
+    items(products, key = { it.id }) { product -&gt;
+        ProductCard(product)
+    }
+}
+// Now only the new item composes. Existing items keep their state.</code></pre>
+
+    <h3>Heavy Item Composables</h3>
+
+    <p>Keep item composables lightweight. If a <code>ProductCard</code> loads images, formats prices, and parses markdown descriptions on every recomposition, your scroll will jank.</p>
+
+    <pre><code>// Move expensive operations into remember or the ViewModel
+@Composable
+fun ProductCard(product: Product) {
+    val formattedPrice = remember(product.price) {
+        NumberFormat.getCurrencyInstance().format(product.price)
+    }
+    // formattedPrice is only recalculated when price actually changes
+}</code></pre>
+
+    <h2>Baseline Profiles</h2>
+
+    <p>Baseline Profiles pre-compile your critical code paths so they run as optimized machine code from the first app launch, instead of being interpreted by the JIT compiler.</p>
+
+    <pre><code>// Add to your app's build.gradle.kts:
+dependencies {
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    baselineProfile(project(":baselineprofile"))
+}
+
+// Create a :baselineprofile module with a test that exercises
+// your critical UI paths:
+@RunWith(AndroidJUnit4::class)
+class BaselineProfileGenerator {
+    @get:Rule
+    val rule = BaselineProfileRule()
+
+    @Test
+    fun generateBaselineProfile() = rule.collect("com.example.myapp") {
+        pressHome()
+        startActivityAndWait()
+        // Navigate through critical screens
+        device.findObject(By.text("Products")).click()
+        device.waitForIdle()
+        // Scroll the product list
+        device.findObject(By.res("product_list")).fling(Direction.DOWN)
+    }
+}</code></pre>
+
+    <p>After generating baseline profiles, you can ask Claude Code to analyze the improvement:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here are my Macrobenchmark results before and after adding Baseline Profiles:
+
+Before: Cold startup median 847ms, P95 1,203ms
+After: Cold startup median 612ms, P95 891ms
+
+Before: LazyColumn scroll jank frames: 8.2%
+After: LazyColumn scroll jank frames: 2.1%
+
+Is this improvement typical? What else can I do to reduce startup time further?</div>
+      <div class="prompt-explanation">Concrete benchmark numbers give AI the context to assess whether your optimization hit the expected range and what to try next.</div>
+    </div>
+
+    <h2>Measuring the Impact</h2>
+
+    <p>Here&rsquo;s a real before/after from optimizing a product list screen with the techniques from this chapter:</p>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Unstable, No Keys</h4>
+        <p><strong>ProductCard recompositions per scroll:</strong> 47</p>
+        <p><strong>Frame render time (P50):</strong> 22 ms</p>
+        <p><strong>Dropped frames during scroll:</strong> 31%</p>
+        <p><strong>SearchBar recomposes on scroll:</strong> Yes</p>
+        <p><strong>User perception:</strong> Visible jank</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: @Immutable, Keys, Scoped State</h4>
+        <p><strong>ProductCard recompositions per scroll:</strong> 3</p>
+        <p><strong>Frame render time (P50):</strong> 8 ms</p>
+        <p><strong>Dropped frames during scroll:</strong> 1.2%</p>
+        <p><strong>SearchBar recomposes on scroll:</strong> No</p>
+        <p><strong>User perception:</strong> Butter smooth</p>
+      </div>
+    </div>
+
+    <h2>Your Compose Performance Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Enable Compose compiler metrics to identify non-skippable composables</li>
+      <li class="checked">Mark data classes with <code>@Immutable</code> when all properties are immutable</li>
+      <li class="checked">Use <code>ImmutableList</code> / <code>ImmutableMap</code> from kotlinx-collections-immutable</li>
+      <li class="checked">Wrap callback lambdas in <code>remember</code> to stabilize references</li>
+      <li class="checked">Read state in the narrowest scope possible &mdash; push reads down the tree</li>
+      <li class="checked">Always provide <code>key</code> in <code>LazyColumn</code> / <code>LazyRow</code> items</li>
+      <li class="checked">Use <code>derivedStateOf</code> to filter frequent state changes</li>
+      <li class="checked">Use <code>remember</code> for expensive object creation inside composables</li>
+      <li class="checked">Generate Baseline Profiles for critical UI paths</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Recomposition Rule of Thumb</h3>
+      <p>If a composable is recomposing and nothing visible on screen is changing, something is wrong. Every recomposition should produce a visible change. If it doesn&rsquo;t, you&rsquo;re burning CPU for nothing. Use Layout Inspector&rsquo;s recomposition counts to find the offenders, feed the Compose compiler metrics to Claude Code, and fix the stability issues at their source.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Profile and Optimize a Compose Screen</h4>
+      <ol>
+        <li><strong>Enable compiler metrics:</strong> Add the Compose compiler flags to your <code>build.gradle.kts</code> and rebuild.</li>
+        <li><strong>Find unstable composables:</strong> Open the <code>*-composables.txt</code> file in <code>app/build/compose_metrics/</code>. Feed it to Claude Code with <code>/analyze-recomposition</code>. How many composables are &ldquo;restartable but NOT skippable&rdquo;?</li>
+        <li><strong>Measure recomposition:</strong> Open Layout Inspector, enable recomposition counts, and scroll through a list screen. Note which composables have the highest counts.</li>
+        <li><strong>Apply fixes:</strong> Pick the highest-count composable and apply the techniques from this chapter: stabilize parameters, add <code>key</code> to lazy lists, scope state reads.</li>
+        <li><strong>Measure again:</strong> Compare recomposition counts before and after. Did the counts drop?</li>
+        <li><strong>Bonus:</strong> Set up Baseline Profiles and run a Macrobenchmark to measure cold start and scroll performance.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>We&rsquo;ve optimized the UI layer. But your app doesn&rsquo;t live in isolation &mdash; it talks to servers. And when those network calls fail, time out, or return unexpected data, debugging gets painful fast. SSL errors, 401s that only happen on certain devices, responses that don&rsquo;t match your data model.</p>
+
+    <p>In <strong>Chapter 6: Network Debugging with AI</strong>, we&rsquo;ll dive into OkHttp interceptor logs, Retrofit error handling, and building an <code>/analyze-network</code> skill that diagnoses API failures from raw HTTP logs.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-memory-leaks.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Memory Leak Detection with AI</span>
+      </a>
+      <a href="06-network-debugging.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Network Debugging with AI</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

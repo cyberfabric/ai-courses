@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Structured Output &amp; Validation | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-prompt-engineering.html">&larr; Prev</a>
+      <a href="11-context-reliability.html">Next &rarr;</a>
+      <a href="maps/10-structured-output-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 10</div>
+    <h1>Structured Output &amp; Validation</h1>
+    <p class="subtitle">JSON schema enforcement, validation loops, extraction pipelines &mdash; making agent output predictable and parseable</p>
+  </header>
+
+  <main>
+
+    <h2>Completing Domain 4</h2>
+
+    <p>This chapter finishes <strong>Domain 4: Prompt Engineering &amp; Structured Output (20%)</strong>. Chapter 9 covered prompting techniques. Now we cover the other half: how to make Claude's output <strong>machine-parseable, schema-compliant, and reliably structured</strong>.</p>
+
+    <p>This is where the <strong>Structured Data Extraction</strong> scenario lives. It's also where you'll find questions about validation loops, JSON schemas, and production-grade extraction pipelines. If you've ever called <code>JSON.parse()</code> on Claude's output and gotten an error, this chapter explains how to never have that happen again.</p>
+
+    <div class="highlight-box">
+      <h3>Why Structured Output Matters</h3>
+      <p>Without structured output, Claude's responses are freeform text. That's fine for conversations, but useless for downstream systems. APIs expect JSON. Databases expect typed fields. Dashboards expect numbers. Structured output is the bridge between Claude's reasoning and your application logic.</p>
+    </div>
+
+    <h2>Two Approaches: JSON Outputs vs. Strict Tool Use</h2>
+
+    <p>The Claude API offers two complementary features for structured output. Understanding when to use each is heavily exam-tested.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">JSON</span>
+        <span class="stat-label">output_config.format &mdash; controls response format</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Strict</span>
+        <span class="stat-label">strict: true on tools &mdash; guarantees input schema</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Both</span>
+        <span class="stat-label">Can be used together in the same request</span>
+      </div>
+    </div>
+
+    <h3>JSON Outputs (<code>output_config.format</code>)</h3>
+
+    <p>This controls the format of Claude's <em>response</em>. You provide a JSON Schema, and Claude's output is guaranteed to match it through <strong>constrained decoding</strong> &mdash; the model literally cannot produce tokens that would violate your schema.</p>
+
+    <pre><code>import anthropic
+
+client = anthropic.Anthropic()
+
+response = client.messages.create(
+    model="claude-opus-4-7",
+    max_tokens=1024,
+    messages=[{
+        "role": "user",
+        "content": "Extract info: John Smith (john@example.com) wants the Enterprise plan."
+    }],
+    output_config={
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "email": {"type": "string"},
+                    "plan": {"type": "string"},
+                    "demo_requested": {"type": "boolean"}
+                },
+                "required": ["name", "email", "plan", "demo_requested"],
+                "additionalProperties": False
+            }
+        }
+    }
+)
+
+# Guaranteed valid JSON matching the schema
+data = json.loads(response.content[0].text)</code></pre>
+
+    <p><strong>When to use:</strong> Data extraction, report generation, API response formatting, any time you need Claude's final answer as structured JSON.</p>
+
+    <h3>Strict Tool Use (<code>strict: true</code>)</h3>
+
+    <p>This guarantees that Claude's <em>tool call inputs</em> match the tool's input schema exactly. We covered this in Chapter 5 &mdash; here's how it connects to structured output.</p>
+
+    <pre><code># strict: true guarantees schema conformance on tool inputs
+{
+  "name": "extract_invoice",
+  "strict": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "vendor": {"type": "string"},
+      "total": {"type": "number"},
+      "line_items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "description": {"type": "string"},
+            "amount": {"type": "number"}
+          },
+          "required": ["description", "amount"]
+        }
+      }
+    },
+    "required": ["vendor", "total", "line_items"]
+  }
+}</code></pre>
+
+    <p><strong>When to use:</strong> When you need structured data as input to a tool call, not as the final response. Common in extraction pipelines where Claude calls a "save" or "process" tool with the extracted data.</p>
+
+    <div class="exam-tip-box">
+      The exam tests the distinction between these two approaches. <strong>JSON outputs</strong> = structured final response. <strong>Strict tool use</strong> = structured tool call inputs. A common question: "An agent needs to extract invoice data and return it to the user as JSON." Answer: use <code>output_config.format</code> with a JSON schema. If the question says "extract data and pass it to a validation tool," use <code>strict: true</code> on the tool.
+    </div>
+
+    <h2>Constrained Decoding: How It Works</h2>
+
+    <p>Under the hood, structured outputs use <strong>constrained decoding</strong>. Your JSON Schema is compiled into a grammar, and during token generation, the model is physically restricted to only produce tokens that would result in valid output matching your schema.</p>
+
+    <p>This means:</p>
+    <ul>
+      <li><strong>Always valid JSON syntax</strong> &mdash; no <code>JSON.parse()</code> errors, ever</li>
+      <li><strong>Type-safe fields</strong> &mdash; a <code>"type": "number"</code> field always contains a number</li>
+      <li><strong>Required fields always present</strong> &mdash; no missing fields</li>
+      <li><strong>No extra fields</strong> when <code>additionalProperties: false</code></li>
+    </ul>
+
+    <p>This is fundamentally different from "prompting Claude to return JSON." Prompting is probabilistic &mdash; it usually works, but occasionally fails. Constrained decoding is deterministic &mdash; schema violations are impossible.</p>
+
+    <div class="architect-box">
+      <strong>Constrained decoding vs. validation loops: the architect's choice.</strong>
+      <br><br>
+      <strong>Constrained decoding</strong> (structured outputs): Schema compliance is guaranteed at generation time. No retries needed. Fastest approach. Use when the schema is known in advance and the Claude API supports it.
+      <br><br>
+      <strong>Validation loops</strong> (generate → validate → retry): Schema compliance is checked after generation. Retries needed on failure. More flexible &mdash; works with any validation logic, not just JSON Schema. Use when you need custom validation beyond what JSON Schema can express (business rules, cross-field constraints, external lookups).
+      <br><br>
+      <strong>Best practice:</strong> Use constrained decoding as the first layer (guarantees structure), then add validation loops on top for business logic (guarantees semantics).
+    </div>
+
+    <h2>The Validation Loop Pattern</h2>
+
+    <p>Even with guaranteed structure, you might need to validate <em>content</em>. A valid JSON response with <code>"email": "not-an-email"</code> passes schema validation but fails business validation. The validation loop handles this:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Generate</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Validate</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Pass? Done</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Fail? Retry with feedback</div>
+    </div>
+
+    <pre><code>MAX_RETRIES = 3
+
+for attempt in range(MAX_RETRIES):
+    response = client.messages.create(
+        model="claude-opus-4-7",
+        max_tokens=1024,
+        messages=messages,
+        output_config={"format": {"type": "json_schema", "schema": schema}}
+    )
+
+    data = json.loads(response.content[0].text)  # Always valid JSON
+
+    # Business validation (beyond schema)
+    errors = validate_business_rules(data)
+
+    if not errors:
+        return data  # Success!
+
+    # Retry with error feedback
+    messages.append({"role": "assistant", "content": response.content})
+    messages.append({
+        "role": "user",
+        "content": f"Validation errors: {errors}. Please fix and try again."
+    })
+
+raise ValidationError(f"Failed after {MAX_RETRIES} attempts")</code></pre>
+
+    <p>The key insight: <strong>feed the validation errors back to Claude</strong>. Don't just retry with the same input &mdash; tell Claude what went wrong so it can fix it. This dramatically improves success rates on retries.</p>
+
+    <div class="exam-tip-box">
+      The exam tests the generate → validate → retry pattern specifically. A common question format: "An extraction pipeline produces valid JSON but the email field contains an invalid format. What's the best approach?" Answer: <strong>validation loop with error feedback</strong>. The distractor "tighten the JSON schema" is wrong because email format validation goes beyond what JSON Schema handles well. You need business-level validation in code, with error messages fed back to Claude.
+    </div>
+
+    <h2>Building Extraction Pipelines</h2>
+
+    <p>The <strong>Structured Data Extraction</strong> scenario is all about multi-step extraction from unstructured text. Here's the standard architecture:</p>
+
+    <pre><code># Multi-step extraction pipeline
+#
+# ┌──────────────┐
+# │ Raw Document │  (PDF, email, contract, invoice)
+# └──────┬───────┘
+#        │
+# ┌──────▼───────┐
+# │ Step 1:       │  Claude extracts fields into JSON
+# │ Extract       │  (constrained decoding for structure)
+# └──────┬───────┘
+#        │
+# ┌──────▼───────┐
+# │ Step 2:       │  Code validates business rules
+# │ Validate      │  (email format, date ranges, amounts)
+# └──────┬───────┘
+#     Pass│  Fail
+#        │  └── Retry with feedback (up to 3x)
+# ┌──────▼───────┐
+# │ Step 3:       │  Transform for downstream system
+# │ Transform     │  (normalize dates, currency, etc.)
+# └──────┬───────┘
+#        │
+# ┌──────▼───────┐
+# │ Step 4:       │  Store in database / send to API
+# │ Load          │
+# └──────────────┘</code></pre>
+
+    <h3>Extraction with Confidence Scores</h3>
+
+    <p>For documents where some fields are ambiguous, include confidence scores in the schema:</p>
+
+    <pre><code>{
+  "type": "object",
+  "properties": {
+    "vendor_name": {
+      "type": "object",
+      "properties": {
+        "value": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
+      },
+      "required": ["value", "confidence"]
+    },
+    "total_amount": {
+      "type": "object",
+      "properties": {
+        "value": {"type": "number"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
+      },
+      "required": ["value", "confidence"]
+    }
+  }
+}</code></pre>
+
+    <p>Low-confidence fields can be flagged for human review. This is a common pattern in the Data Extraction scenario &mdash; the agent extracts what it can, marks uncertain fields, and escalates ambiguity.</p>
+
+    <h2>Schema Design Best Practices</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Practice</th>
+          <th>Do</th>
+          <th>Don't</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Nesting</td>
+          <td>Flat when possible, nested only when logical</td>
+          <td>Deeply nested objects (3+ levels)</td>
+        </tr>
+        <tr>
+          <td>Required fields</td>
+          <td>Mark truly required fields, use <code>nullable</code> for optional</td>
+          <td>Make everything required (causes extraction failure)</td>
+        </tr>
+        <tr>
+          <td>Enums</td>
+          <td>Use for fields with fixed valid values</td>
+          <td>Freeform strings for categorical data</td>
+        </tr>
+        <tr>
+          <td>Descriptions</td>
+          <td>Add <code>description</code> to every property</td>
+          <td>Rely on property names alone</td>
+        </tr>
+        <tr>
+          <td>Additional properties</td>
+          <td>Set <code>additionalProperties: false</code></td>
+          <td>Allow arbitrary extra fields</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <strong>Schema design trap:</strong> Making all fields required when some may not be present in the source document. If your schema requires <code>"phone_number"</code> but the document doesn't contain one, Claude is forced to hallucinate a value to satisfy the schema. Use <code>"type": ["string", "null"]</code> for fields that might be absent, so Claude can return <code>null</code> instead of inventing data.
+    </div>
+
+    <h2>When to Use Structured Output vs. Freeform Text</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Use Structured Output</div>
+        <div class="prompt-text">- Data extraction (invoices, contracts)
+- Classification (ticket routing, sentiment)
+- API responses consumed by code
+- Metadata generation (tags, categories)
+- Any output parsed by downstream systems</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Use Freeform Text</div>
+        <div class="prompt-text">- Explanations for humans
+- Creative writing
+- Code generation (use code blocks)
+- Conversational responses
+- Analysis with nuanced reasoning</div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      The exam rule of thumb: if the output is consumed by <strong>code</strong>, use structured output. If consumed by a <strong>human</strong>, freeform is usually better. Many scenarios involve both &mdash; the agent's internal processing uses structured output, but the final customer-facing response is freeform text.
+    </div>
+
+    <h2>Handling Malformed Output Gracefully</h2>
+
+    <p>Even with constrained decoding, you need fallback strategies for edge cases (API errors, timeout mid-generation, etc.):</p>
+
+    <h3>1. Partial Extraction</h3>
+    <p>If Claude extracts 8 of 10 fields successfully but fails on 2, accept the partial result rather than rejecting everything. Flag the missing fields for human review.</p>
+
+    <h3>2. Fallback to Freeform</h3>
+    <p>If structured extraction fails after max retries, fall back to asking Claude for a freeform summary. You lose machine parseability but still get useful information.</p>
+
+    <h3>3. Multi-Pass Extraction</h3>
+    <p>For complex documents, extract in multiple passes: first pass gets the easy fields (names, dates, amounts), second pass gets the nuanced fields (contract terms, obligations). Each pass has a simpler schema, improving reliability.</p>
+
+    <div class="architect-box">
+      <strong>Design pattern: extraction pipeline with escalation tiers.</strong>
+      <br><br>
+      <strong>Tier 1 &mdash; Constrained decoding:</strong> Fast, guaranteed structure. Handles 80-90% of documents.
+      <br><br>
+      <strong>Tier 2 &mdash; Validation loop:</strong> For documents that pass schema but fail business rules. Retry with feedback, 2-3 attempts.
+      <br><br>
+      <strong>Tier 3 &mdash; Human review:</strong> For documents that fail after max retries. Flag specific fields that need human judgment.
+      <br><br>
+      This tiered approach ensures high throughput for easy cases while maintaining quality for edge cases. The exam tests whether you can design this kind of graduated fallback.
+    </div>
+
+    <h2>The Batch API for Cost Optimization</h2>
+
+    <p>For high-volume extraction (thousands of documents), the <strong>Message Batches API</strong> offers 50% cost savings with a 24-hour processing window:</p>
+
+    <pre><code># Batch extraction for cost optimization
+batch = client.messages.batches.create(
+    requests=[
+        {
+            "custom_id": f"invoice-{i}",
+            "params": {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": doc}],
+                "output_config": {
+                    "format": {"type": "json_schema", "schema": invoice_schema}
+                }
+            }
+        }
+        for i, doc in enumerate(documents)
+    ]
+)</code></pre>
+
+    <p>The tradeoff: 50% cheaper, but results arrive within 24 hours, not in real-time. Use batch for overnight processing jobs, not for real-time agent interactions.</p>
+
+    <div class="exam-tip-box">
+      The exam tests the Batch API as a <strong>cost optimization strategy for latency-tolerant workloads</strong>. Key detail: <strong>50% cost savings</strong>, <strong>24-hour processing window</strong>. If the question describes a scenario where "1,000 invoices need to be processed overnight," Batch API is the correct answer. If it says "each invoice must be processed in real-time as it arrives," use the standard Messages API.
+    </div>
+
+    <h2>Scenario Deep Dive: Data Extraction</h2>
+
+    <p>The <strong>Structured Data Extraction</strong> scenario is the exam's primary test of this chapter. Here's what it typically involves:</p>
+
+    <ul>
+      <li>Extracting structured data from invoices, contracts, or reports</li>
+      <li>Enforcing schema compliance with constrained decoding</li>
+      <li>Validating business rules beyond the schema (amount ranges, date validity)</li>
+      <li>Handling ambiguous or missing fields with confidence scores</li>
+      <li>Building a multi-step pipeline: extract &rarr; validate &rarr; transform &rarr; load</li>
+    </ul>
+
+    <p>In the <strong>Customer Support</strong> scenario, structured output also appears: extracting ticket metadata (category, priority, customer ID) from freeform messages. The agent needs to produce structured data that the ticketing system can consume.</p>
+
+    <div class="exercise-box">
+      <strong>Exercise: Build an Invoice Extraction Schema</strong>
+      <p>Design a JSON Schema for extracting data from invoices. The schema should handle:</p>
+      <ol>
+        <li>Vendor name and address</li>
+        <li>Invoice number and date</li>
+        <li>Line items (description, quantity, unit price, total)</li>
+        <li>Subtotal, tax, and grand total</li>
+        <li>Payment terms and due date</li>
+      </ol>
+      <p>Then design the validation layer:</p>
+      <ol>
+        <li>What business rules can't be expressed in JSON Schema? (Hint: line item totals should equal quantity &times; unit price)</li>
+        <li>Which fields should be nullable (might not be on every invoice)?</li>
+        <li>How would you handle a 3-page invoice that exceeds easy extraction? (Multi-pass?)</li>
+        <li>What's your retry strategy when validation fails?</li>
+      </ol>
+      <p><strong>Check yourself:</strong> Line item math validation (total = qty &times; price) is business logic, not schema. Payment terms might be absent &mdash; make nullable. Long invoices benefit from per-page extraction with aggregation. Retry up to 3 times with error feedback, then escalate to human review.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Two approaches: JSON outputs (<code>output_config.format</code>) for structured responses, strict tool use (<code>strict: true</code>) for structured tool inputs</li>
+      <li>Constrained decoding guarantees schema compliance at generation time &mdash; no <code>JSON.parse()</code> errors, no retries needed for structure</li>
+      <li>Validation loops handle business logic beyond schema: generate &rarr; validate &rarr; retry with error feedback &mdash; max 3 attempts</li>
+      <li>Use nullable types for fields that may not exist in the source &mdash; forcing required fields causes hallucination</li>
+      <li>Batch API offers 50% cost savings for high-volume extraction with 24-hour processing window</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>Domain 4 is complete! In <strong>Chapter 11: Context Management &amp; Reliability</strong>, we enter <strong>Domain 5: Context Management &amp; Reliability (15%)</strong>. You'll learn about token budgets, compaction strategies, escalation patterns, graceful degradation, and the reliability engineering that keeps agent systems running in production.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-prompt-engineering.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Prompt Engineering for Architects</span>
+      </a>
+      <a href="11-context-reliability.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Context Management &amp; Reliability</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

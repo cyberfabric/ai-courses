@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map — Chapter 6: Domain Events</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../06-domain-events.html">Chapter</a>
+      <a href="05-subdomains-map.html">&#8592; Prev Map</a>
+      <a href="07-entities-and-value-objects-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Domain Events</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">⚡</span>
+      <h3>The Big Idea</h3>
+      <p>Stop modeling only nouns &mdash; model verbs too. A domain event is an immutable, past-tense, business-named fact captured at the moment it happens. Get the events right and boundaries, audits, replay, and cross-context coupling all get easier. <em>If your event names all end in "Updated," you're doing CRUD with extra steps.</em></p>
+    </div>
+
+    <h2>📜 The Three Rules</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⏪</span>
+        <div class="map-card-title">Past tense</div>
+        <div class="map-card-desc"><code>OrderPlaced</code>, not <code>PlaceOrder</code>. <code>PaymentCaptured</code>, not <code>CapturePayment</code>. The fact already happened.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪨</span>
+        <div class="map-card-title">Immutable</div>
+        <div class="map-card-desc">No edits. Corrections are NEW events (e.g., <code>OrderCancelled</code>). The history is append-only.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗣️</span>
+        <div class="map-card-title">Domain-named</div>
+        <div class="map-card-desc">A PM should recognize the name on a Slack screenshot. No vendor leaks (<code>StripeChargeSucceeded</code> ❌).</div>
+      </div>
+    </div>
+
+    <h2>⚖️ Events vs Commands</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Event</th><th>Command</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Tense</td><td>Past (<code>OrderPlaced</code>)</td><td>Imperative (<code>PlaceOrder</code>)</td></tr>
+        <tr><td>Mood</td><td>A fact</td><td>A wish</td></tr>
+        <tr><td>Can be rejected?</td><td>No, already happened</td><td>Yes ("out of stock")</td></tr>
+        <tr><td>Can fail?</td><td>No</td><td>Yes</td></tr>
+        <tr><td>How many emitted</td><td>0..N per command</td><td>1 attempt</td></tr>
+        <tr><td>Lives in</td><td>Event bus + log</td><td>Request layer / use case</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🎨 Event Storming Workshop</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📝 Orange stickies<br>(events, past tense)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📅 Timeline order</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🟦 Blue stickies<br>(commands)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🟨 Yellow stickies<br>(aggregates)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🟪 Draw context boundaries</div>
+    </div>
+
+    <p>3 hours, one wall, one room: PM + senior engineers + QA + support. Output: a complete event canvas + bounded-context boundaries.</p>
+
+    <h2>🔄 The Checkout Event Chain</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Tap "Pay now" → Command <code>PlaceOrder</code></h4>
+        <p>ViewModel sends command to use case.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Use case loads Cart aggregate, calls <code>cart.place()</code></h4>
+        <p>Aggregate validates, returns an <code>OrderPlaced</code> event.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Bus publishes <code>OrderPlaced</code></h4>
+        <p>All subscribers learn the same fact at the same moment.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Subscribers react independently</h4>
+        <p>Payment captures → <code>PaymentCaptured</code>. Notifications schedules a push. Statements records the line.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Later: <code>OrderShipped</code> arrives</h4>
+        <p>Same notifications handler picks it up and schedules a delivery push. No producer/consumer coupling.</p>
+      </li>
+    </ol>
+
+    <h2>📡 Publishing on Android</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⚡</span>
+        <div class="map-card-title">SharedFlow (default)</div>
+        <div class="map-card-desc">In-process, hot. Subscribers in the same process get events as they happen. No persistence. The 95% case.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title">Room-backed event log</div>
+        <div class="map-card-desc">SharedFlow + Room table. Events persist; subscribers can replay. Use for offline-first apps and bug forensics.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🌐</span>
+        <div class="map-card-title">Backend broker</div>
+        <div class="map-card-desc">Kafka, NATS, SQS. Use only when events leave the device. App publishes via API; broker handles backend fanout.</div>
+      </div>
+    </div>
+
+    <h2>🌍 Events Crossing Contexts</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">Statements<br>ACL → records line</div>
+      <div class="map-rel-node">Notifications<br>ACL → schedules push</div>
+      <div class="map-rel-center">Checkout<br>emits <code>OrderPlaced</code></div>
+      <div class="map-rel-node">Analytics<br>ACL → tracks revenue</div>
+      <div class="map-rel-node">Statements<br>ACL → audit row</div>
+    </div>
+
+    <p>Each consumer translates the foreign event into <em>its own</em> vocabulary at the boundary. Events are the canonical Published Language between bounded contexts.</p>
+
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Domain Event</dt>
+      <dd>Immutable, past-tense, business-named fact. Captured at the moment it happens.</dd>
+
+      <dt>Command</dt>
+      <dd>An imperative request that may be rejected. Produces 0..N events.</dd>
+
+      <dt>Event Storming</dt>
+      <dd>3-hour wall-of-stickies workshop that surfaces events, commands, aggregates, and boundaries with the whole team.</dd>
+
+      <dt>Event Bus</dt>
+      <dd>The thing subscribers attach to. On Android, almost always a <code>SharedFlow</code>.</dd>
+
+      <dt>Replay</dt>
+      <dd>Rebuilding state by reading the event log from the start. Free audit trail + bug forensics.</dd>
+
+      <dt>Schema Version</dt>
+      <dd>An integer field on every event. Looks like overhead until your first migration, then it's gold.</dd>
+
+      <dt>Event-as-Published-Language</dt>
+      <dd>Events are how upstream contexts speak to downstream contexts. Each consumer translates at its ACL.</dd>
+    </dl>
+
+    <h2>🚨 Anti-Patterns</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🎭</span>
+        <div class="map-card-title">"EntityChanged" disguise</div>
+        <div class="map-card-desc"><code>UserUpdated</code> + the entire user object = CRUD in costume. Real events are specific: <code>UserEmailVerified</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎒</span>
+        <div class="map-card-title">Fat events</div>
+        <div class="map-card-desc">30 fields per event = model leak. Carry the minimum (ID + delta). Consumers query upstream if they need more.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪁</span>
+        <div class="map-card-title">Events for everything</div>
+        <div class="map-card-desc">If a single caller awaits a single result, that's a method call &mdash; not architecture theater.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⏳</span>
+        <div class="map-card-title">Sync flow on async events</div>
+        <div class="map-card-desc">Faking request/response on top of an event bus = worst of both worlds.</div>
+      </div>
+    </div>
+
+    <h2>✅ When to Use vs When to Skip</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Use a domain event when…</th><th>Skip when…</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Multiple subscribers react independently</td><td>One caller, one return value</td></tr>
+        <tr><td>Producer doesn't (and shouldn't) know consumers</td><td>Single-actor synchronous flow</td></tr>
+        <tr><td>The interaction crosses a context boundary</td><td>Inside one tiny context with one consumer</td></tr>
+        <tr><td>You want audit / replay / forensics</td><td>No business meaning to the change</td></tr>
+        <tr><td>The fact has business meaning a PM would recognize</td><td>Just a UX signal ("user opened a screen")</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🎯 Naming Events Well</h2>
+
+    <ul>
+      <li>✅ <strong>Past tense</strong> &mdash; <code>OrderPlaced</code>, never <code>OrderPlacement</code>.</li>
+      <li>✅ <strong>Subject + verb</strong> &mdash; <code>InvoiceIssued</code>, <code>SubscriptionCancelled</code>.</li>
+      <li>✅ <strong>Specific</strong> &mdash; <code>UserEmailVerified</code> beats <code>UserUpdated</code>.</li>
+      <li>✅ <strong>Domain words, not technical</strong> &mdash; <code>PaymentCaptured</code>, not <code>StripeChargeSucceeded</code>.</li>
+      <li>✅ <strong>One verb per event</strong> &mdash; <code>OrderPlacedAndPaid</code> is two events.</li>
+    </ul>
+
+    <h2>❓ Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test yourself</h3>
+      <details>
+        <summary>Why must events be in past tense?</summary>
+        <p class="quiz-answer">Because they are facts, not requests. <code>PlaceOrder</code> is a wish that may be rejected. <code>OrderPlaced</code> is a historical fact you can't undo. The tense is the difference between a command and an event.</p>
+      </details>
+      <details>
+        <summary>Your event is named <code>UserUpdated</code>. Why is that a smell?</summary>
+        <p class="quiz-answer">It's CRUD wearing a costume. Real domain events name the specific business transition: <code>UserEmailVerified</code>, <code>UserSubscriptionRenewed</code>, <code>UserNameChanged</code>. If you can't pick a specific past-tense verb, you don't have a domain event &mdash; you have a database write.</p>
+      </details>
+      <details>
+        <summary>Do you need Kafka for domain events on Android?</summary>
+        <p class="quiz-answer">Almost never. <code>SharedFlow</code> covers 95% of in-process needs. Add a Room-backed log when you want persistence/replay. Reach for a backend broker only when the event truly needs to leave the device.</p>
+      </details>
+      <details>
+        <summary>What's a "schema version" field on an event for?</summary>
+        <p class="quiz-answer">It looks like overhead until you have to migrate stored events. Once you've done one event-shape migration, you'll never ship an event without a version field again.</p>
+      </details>
+      <details>
+        <summary>What are the four output stages of an event-storming workshop?</summary>
+        <p class="quiz-answer">(1) Events on orange stickies in timeline order. (2) Commands on blue stickies. (3) Aggregates on yellow stickies. (4) Context boundaries drawn through the wall.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Domain events are immutable, past-tense, business-named facts. Three rules &mdash; everything else is detail.</li>
+        <li class="map-summary-item">Events ≠ commands. Past tense vs imperative. Fact vs wish. Cannot fail vs can be rejected.</li>
+        <li class="map-summary-item">Event storming = orange-sticky workshop with PM + engineers + QA. 3 hours, one wall. Output is the domain map.</li>
+        <li class="map-summary-item">In Kotlin: a sealed class with one data class per event. Always include <code>occurredAt</code> and a <code>version: Int</code>.</li>
+        <li class="map-summary-item">On Android: <code>SharedFlow</code> is the default bus; Room is the persistence layer; a backend broker is a last resort.</li>
+        <li class="map-summary-item">Events crossing context boundaries = the canonical Published Language. Each consumer translates at its ACL.</li>
+        <li class="map-summary-item">Cross-aggregate consistency is always eventual, mediated by events. Never two aggregates in one transaction.</li>
+        <li class="map-summary-item">If your event names end in "Updated"/"Changed"/"Modified," you're doing CRUD with an extra step.</li>
+        <li class="map-summary-item">Skip events for single-actor request/response flows. Don't pay the indirection cost when a method call is clearer.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="05-subdomains-map.html">
+        <span class="nav-direction">&#8592; Previous Map</span>
+        <span class="nav-chapter">Subdomains</span>
+      </a>
+      <a href="../06-domain-events.html">
+        <span class="nav-direction">📖 Read</span>
+        <span class="nav-chapter">Chapter 6</span>
+      </a>
+      <a href="07-entities-and-value-objects-map.html" class="next">
+        <span class="nav-direction">Next Map &#8594;</span>
+        <span class="nav-chapter">Entities &amp; Value Objects</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>
