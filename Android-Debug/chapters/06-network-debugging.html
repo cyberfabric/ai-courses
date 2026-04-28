@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Network Debugging with AI | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-compose-recomposition.html">&larr; Prev</a>
+      <a href="07-gradle-build-performance.html">Next &rarr;</a>
+      <a href="maps/06-network-debugging-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Network Debugging with AI</h1>
+    <p class="subtitle">OkHttp, Retrofit, SSL &mdash; diagnosing network-layer issues with AI assistance</p>
+  </header>
+
+  <main>
+
+    <h2>When the Server Says No</h2>
+
+    <p>In Chapter 5, we optimized how your app renders. Now let&rsquo;s talk about where the data comes from. Network calls are the lifeline of almost every Android app, and when they break, the symptoms are maddening: silent failures, intermittent timeouts, 401s that only happen on certain devices, and response bodies that don&rsquo;t match your data model.</p>
+
+    <p>The challenge with network bugs is that they span two systems &mdash; your app <em>and</em> the server. You can&rsquo;t set a breakpoint on a remote API. But you <em>can</em> capture every HTTP request and response with OkHttp interceptors, and feed that data to Claude Code for analysis.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">38%</span>
+        <span class="stat-label">of mobile app bugs involve the network layer</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3&ndash;5</span>
+        <span class="stat-label">layers involved in a single API call (app, OkHttp, TLS, server, CDN)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">60%</span>
+        <span class="stat-label">of network bugs are reproducible only intermittently</span>
+      </div>
+    </div>
+
+    <h2>Setting Up OkHttp Logging</h2>
+
+    <p>The first step in network debugging is seeing what&rsquo;s actually going over the wire. OkHttp&rsquo;s <code>HttpLoggingInterceptor</code> captures every request and response.</p>
+
+    <pre><code>// build.gradle.kts
+dependencies {
+    debugImplementation("com.squareup.okhttp3:logging-interceptor:5.3.2")
+}
+
+// In your Hilt NetworkModule:
+@Provides
+@Singleton
+fun provideOkHttpClient(): OkHttpClient {
+    return OkHttpClient.Builder()
+        .apply {
+            if (BuildConfig.DEBUG) {
+                addInterceptor(HttpLoggingInterceptor().apply {
+                    level = HttpLoggingInterceptor.Level.BODY
+                })
+            }
+        }
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+}</code></pre>
+
+    <p>OkHttp 5.x (5.0.0 shipped July 2025) is a major release with breaking changes for callers still on 4.x &mdash; OkHttp now ships split JVM and Android artifacts, <code>MockWebServer</code> relocated to the <code>mockwebserver3</code> package and coordinate, and timeout APIs accept <code>kotlin.time.Duration</code>. The <code>HttpLoggingInterceptor</code> usage above is unchanged across the bump.</p>
+
+    <div class="warning-box">
+      <strong>Never log request/response bodies in release builds.</strong> They can contain auth tokens, personal data, and payment information. Use <code>Level.BODY</code> only in debug builds. For release, use <code>Level.BASIC</code> at most (method + URL + response code).
+    </div>
+
+    <h3>Logging Levels</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Level</th>
+          <th>What It Logs</th>
+          <th>When to Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>NONE</code></td>
+          <td>Nothing</td>
+          <td>Release builds</td>
+        </tr>
+        <tr>
+          <td><code>BASIC</code></td>
+          <td>Method, URL, response code, timing</td>
+          <td>Quick overview of call patterns</td>
+        </tr>
+        <tr>
+          <td><code>HEADERS</code></td>
+          <td>Basic + all headers</td>
+          <td>Auth, caching, content-type issues</td>
+        </tr>
+        <tr>
+          <td><code>BODY</code></td>
+          <td>Headers + full request/response bodies</td>
+          <td>Debugging data issues (debug only!)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Feeding HTTP Logs to Claude Code</h2>
+
+    <p>Once logging is enabled, capture a failing API flow and feed it to Claude Code. Here&rsquo;s what a real failing flow looks like:</p>
+
+    <div class="debug-trace">
+      <h4>OkHttp Interceptor Log: 401 After Token Refresh</h4>
+<pre><code>--&gt; POST https://api.example.com/auth/refresh
+Content-Type: application/json; charset=utf-8
+Content-Length: 87
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+
+{"refresh_token":"dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4..."}
+
+&lt;-- 200 OK (238ms)
+Content-Type: application/json
+Set-Cookie: session=abc123; HttpOnly; Secure
+
+{"access_token":"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2Vy...","expires_in":3600}
+
+--&gt; GET https://api.example.com/v2/user/profile
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+Accept: application/json
+
+&lt;-- 401 Unauthorized (52ms)
+Content-Type: application/json
+
+{"error":"invalid_token","message":"Token has been revoked"}</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>The refresh succeeded</strong> (200 OK) and returned a new <code>access_token</code>. But the <strong>profile request still uses the OLD token</strong> &mdash; look at the Authorization header. The Bearer token in the GET request matches the original expired token, not the new one from the refresh response.</p>
+      <p><strong>Diagnosis:</strong> The token refresh interceptor updates the stored token, but the retried request was built before the refresh completed. The request chain doesn&rsquo;t rebuild the Authorization header after refreshing.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Race Condition in Auth Interceptor</h4>
+      <p>The <code>Authenticator</code> refreshes the token and stores it, but OkHttp&rsquo;s retry uses the <em>original</em> request object. If the interceptor doesn&rsquo;t build a <strong>new</strong> request with the fresh token, the retry sends the stale token and gets 401 again.</p>
+      <p>This is the most common auth-related network bug. It manifests as &ldquo;random logouts&rdquo; or &ldquo;401s even though the user is logged in.&rdquo;</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Rebuild the Request with the New Token</h4>
+<pre><code>class TokenAuthenticator @Inject constructor(
+    private val tokenStore: TokenStore
+) : Authenticator {
+
+    override fun authenticate(route: Route?, response: Response): Request? {
+        // Don't retry if we already refreshed (prevent infinite loops)
+        if (response.request.header("X-Retry-Auth") != null) return null
+
+        synchronized(this) {
+            // Check if another thread already refreshed
+            val currentToken = tokenStore.accessToken
+            val requestToken = response.request.header("Authorization")
+                ?.removePrefix("Bearer ")
+
+            val freshToken = if (currentToken == requestToken) {
+                // Token hasn't been refreshed yet — do it now
+                tokenStore.refreshTokenSync() ?: return null
+            } else {
+                // Another thread already refreshed — use the new token
+                currentToken
+            }
+
+            // Build a NEW request with the fresh token
+            return response.request.newBuilder()
+                .header("Authorization", "Bearer $freshToken")
+                .header("X-Retry-Auth", "true")
+                .build()
+        }
+    }
+}</code></pre>
+      <p><strong>Key details:</strong> (1) <code>synchronized</code> prevents multiple threads from refreshing simultaneously. (2) Check if the token was already refreshed by another thread. (3) Build a <em>new</em> request with the fresh token. (4) <code>X-Retry-Auth</code> header prevents infinite retry loops.</p>
+    </div>
+
+    <h2>Building an <code>/analyze-network</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/analyze-network.md</code>:</p>
+
+    <pre><code># /analyze-network — HTTP Traffic Analysis
+
+Analyze OkHttp interceptor logs or HTTP traffic captures from an
+Android app.
+
+## Input
+The user will paste one or more HTTP request/response pairs from
+OkHttp logging interceptor output.
+
+## Analysis Steps
+
+1. **Map the request flow** — identify the sequence of calls and
+   their dependencies (auth → data → follow-up).
+
+2. **Check response codes:**
+   - 4xx: client error — wrong URL, missing auth, bad payload
+   - 5xx: server error — log it but look for client-side causes
+   - Timeouts: check client timeout config vs server response time
+
+3. **Inspect headers:**
+   - Authorization: is the token present, fresh, correct format?
+   - Content-Type: does it match what the server expects?
+   - Cache-Control: is caching configured appropriately?
+   - Accept: does it match what the server returns?
+
+4. **Analyze timing:**
+   - DNS resolution time (if available)
+   - Connection time vs. response time
+   - Calls that are suspiciously slow (&gt;2s for simple endpoints)
+
+5. **Check for patterns:**
+   - Duplicate requests (same endpoint called multiple times)
+   - Missing error handling (no retry on transient failures)
+   - Token refresh race conditions
+   - Unnecessary sequential calls that could be parallelized
+
+## Output Format
+
+### Request Flow
+[Numbered sequence of HTTP calls]
+
+### Issues Found
+[Each issue with severity: Critical/High/Medium/Low]
+
+### Root Cause
+[Why the failure or inefficiency is happening]
+
+### Suggested Fix
+```kotlin
+[Code]
+```
+
+### Optimization Opportunities
+[Caching, batching, parallelization suggestions]</code></pre>
+
+    <h2>SSL/TLS Debugging</h2>
+
+    <p>SSL errors are the most cryptic network failures. The stacktraces are full of security jargon, and the error messages are deliberately vague (for security reasons). AI excels here because it can map the cryptic exception to a specific misconfiguration.</p>
+
+    <h3>Certificate Pinning Failures</h3>
+
+    <pre><code>// Setting up certificate pinning:
+val client = OkHttpClient.Builder()
+    .certificatePinner(
+        CertificatePinner.Builder()
+            .add("api.example.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            .add("api.example.com", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=")
+            .build()
+    )
+    .build()
+
+// When pinning fails, you get:
+// javax.net.ssl.SSLPeerUnverifiedException:
+//   Certificate pinning failure!
+//   Peer certificate chain:
+//     sha256/CCCCCCCCCCC... : CN=api.example.com
+//     sha256/DDDDDDDDDDD... : CN=Let's Encrypt R3
+//   Pinned certificates for api.example.com:
+//     sha256/AAAAAAAAAA...
+//     sha256/BBBBBBBBBB...</code></pre>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">I'm getting this certificate pinning failure on production but not on staging. The pinning was working until last week. Here's the exception:
+
+[paste SSLPeerUnverifiedException]
+
+And here's my CertificatePinner configuration:
+
+[paste config code]
+
+Did the server's certificate rotate?</div>
+      <div class="prompt-explanation">Claude Code will compare the pinned hashes with the peer certificate chain, identify which certificate changed, and explain whether it was a leaf cert rotation or a CA chain change.</div>
+    </div>
+
+    <div class="tip-box">
+      When pinning certificates, always pin <strong>at least two</strong> hashes: the current certificate and a backup. Pin the intermediate CA certificate, not the leaf &mdash; leaf certificates rotate frequently. Include a pin for a backup CA from a different provider in case your primary CA has an outage.
+    </div>
+
+    <h3>SSLHandshakeException Analysis</h3>
+
+    <p>Common <code>SSLHandshakeException</code> causes AI identifies instantly:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Error Message</th>
+          <th>Common Cause</th>
+          <th>AI&rsquo;s Usual Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>CertPathValidatorException: Trust anchor not found</code></td>
+          <td>Self-signed cert or missing intermediate CA</td>
+          <td>Add custom TrustManager for staging; fix cert chain for production</td>
+        </tr>
+        <tr>
+          <td><code>SSLProtocolException: SSL handshake aborted</code></td>
+          <td>TLS version mismatch (server requires TLS 1.3, device only supports 1.2)</td>
+          <td>Configure <code>ConnectionSpec</code> with compatible TLS versions</td>
+        </tr>
+        <tr>
+          <td><code>CertificateException: No name matching</code></td>
+          <td>Certificate CN/SAN doesn&rsquo;t match the requested hostname</td>
+          <td>Fix the server certificate or use the correct hostname</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Timeout and Retry Strategies</h2>
+
+    <p>Bad timeout configuration is the #1 cause of &ldquo;the app is slow&rdquo; complaints that aren&rsquo;t actually slow code &mdash; they&rsquo;re slow network handling.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">OkHttp Config</div>
+        <div class="prompt-text">OkHttpClient.Builder()
+    .connectTimeout(60, SECONDS)
+    .readTimeout(60, SECONDS)
+    .writeTimeout(60, SECONDS)
+    .build()</div>
+        <div class="prompt-explanation">60-second timeouts mean users wait a full minute before seeing an error. Most users abandon after 8 seconds.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">OkHttp Config</div>
+        <div class="prompt-text">OkHttpClient.Builder()
+    .connectTimeout(10, SECONDS)
+    .readTimeout(30, SECONDS)
+    .writeTimeout(15, SECONDS)
+    .retryOnConnectionFailure(true)
+    .addInterceptor(RetryInterceptor(maxRetries = 2))
+    .build()</div>
+        <div class="prompt-explanation">Aggressive connect timeout (fail fast if server is unreachable), longer read timeout (for large responses), and retry logic for transient failures.</div>
+      </div>
+    </div>
+
+    <p>Ask Claude Code to review your timeout configuration by pasting your <code>OkHttpClient.Builder</code> code and describing your API patterns (mostly small JSON? large file downloads? real-time streaming?).</p>
+
+    <h2>Caching Strategy Review</h2>
+
+    <p>A well-configured HTTP cache can eliminate unnecessary network calls entirely. But most Android apps either don&rsquo;t cache at all or cache incorrectly.</p>
+
+    <pre><code>// Setting up OkHttp cache:
+val cache = Cache(
+    directory = File(context.cacheDir, "http_cache"),
+    maxSize = 50L * 1024 * 1024  // 50 MB
+)
+
+val client = OkHttpClient.Builder()
+    .cache(cache)
+    .build()
+
+// For endpoints that rarely change, add a cache interceptor:
+class CacheInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val response = chain.proceed(chain.request())
+        val cacheControl = CacheControl.Builder()
+            .maxAge(5, TimeUnit.MINUTES)
+            .build()
+        return response.newBuilder()
+            .removeHeader("Pragma")
+            .removeHeader("Cache-Control")
+            .header("Cache-Control", cacheControl.toString())
+            .build()
+    }
+}</code></pre>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here are the Cache-Control headers from our main API endpoints. Which ones could benefit from client-side caching, and what cache durations would you recommend?
+
+GET /api/v2/categories → Cache-Control: no-cache
+GET /api/v2/products?page=1 → Cache-Control: no-store
+GET /api/v2/user/profile → Cache-Control: private, max-age=0
+GET /api/v2/config/features → no Cache-Control header
+
+Categories change weekly. Products change daily. Profile changes on user action. Feature flags change on deploy.</div>
+      <div class="prompt-explanation">Giving AI the change frequency for each endpoint lets it suggest specific cache durations. Categories could cache for hours, products for minutes, features for the session.</div>
+    </div>
+
+    <h2>API Call Deduplication</h2>
+
+    <p>A common performance issue: the same API endpoint gets called multiple times unnecessarily. This happens when multiple screens or ViewModels independently request the same data.</p>
+
+    <pre><code>// The problem: three ViewModels each call getUser()
+// That's three identical network requests.
+
+// Fix: Use a repository with in-flight request deduplication
+class UserRepository @Inject constructor(
+    private val api: UserApi
+) {
+    private var inFlightRequest: Deferred&lt;User&gt;? = null
+
+    suspend fun getUser(): User {
+        // If a request is already in flight, await it instead of starting a new one
+        inFlightRequest?.let { return it.await() }
+
+        return coroutineScope {
+            val deferred = async { api.getUser() }
+            inFlightRequest = deferred
+            try {
+                deferred.await()
+            } finally {
+                inFlightRequest = null
+            }
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      Run <code>/analyze-network</code> on a logcat capture from a typical user session. Look for the same URL appearing multiple times within a short window. AI can identify which calls are redundant and suggest where to add caching or deduplication.
+    </div>
+
+    <h2>Measuring Network Optimization</h2>
+
+    <p>Here&rsquo;s the impact of applying the techniques from this chapter to a real shopping app:</p>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: No Cache, No Dedup</h4>
+        <p><strong>API calls per session:</strong> 127</p>
+        <p><strong>Data transferred:</strong> 4.8 MB</p>
+        <p><strong>Failed requests (timeout/error):</strong> 8</p>
+        <p><strong>Average response latency:</strong> 340 ms</p>
+        <p><strong>Auth failures (token race):</strong> 3 per day</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: Cache + Dedup + Auth Fix</h4>
+        <p><strong>API calls per session:</strong> 52</p>
+        <p><strong>Data transferred:</strong> 1.9 MB</p>
+        <p><strong>Failed requests (timeout/error):</strong> 1</p>
+        <p><strong>Average response latency:</strong> 89 ms (cache hits)</p>
+        <p><strong>Auth failures (token race):</strong> 0</p>
+      </div>
+    </div>
+
+    <h2>Your Network Debugging Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Add <code>HttpLoggingInterceptor</code> with <code>Level.BODY</code> in debug builds only</li>
+      <li class="checked">Set realistic timeouts &mdash; 10s connect, 30s read, 15s write</li>
+      <li class="checked">Implement a thread-safe <code>TokenAuthenticator</code> that rebuilds requests</li>
+      <li class="checked">Pin intermediate CA certificates, not leaf certs; always have a backup pin</li>
+      <li class="checked">Configure OkHttp <code>Cache</code> with a reasonable size (50&ndash;100 MB)</li>
+      <li class="checked">Deduplicate in-flight requests in your repository layer</li>
+      <li class="checked">Set up the <code>/analyze-network</code> skill for repeatable HTTP diagnostics</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Network Debugging Approach</h3>
+      <p>Network bugs feel random because you can&rsquo;t see the wire. But with OkHttp logging, every request and response is visible. Capture the full HTTP conversation, paste it into Claude Code, and let AI trace the issue across headers, tokens, timing, and response bodies. The bug that took an hour to figure out from a vague &ldquo;something went wrong&rdquo; error takes 5 minutes when you have the full HTTP log.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Capture and Diagnose a Network Flow</h4>
+      <ol>
+        <li><strong>Enable logging:</strong> Add <code>HttpLoggingInterceptor</code> at <code>Level.BODY</code> to your OkHttp client (debug builds only).</li>
+        <li><strong>Capture a flow:</strong> Run your app and navigate through a feature that makes multiple API calls (e.g., login &rarr; load profile &rarr; load data). Capture the logcat output.</li>
+        <li><strong>Run <code>/analyze-network</code>:</strong> Paste the HTTP log sequence into Claude Code. Ask it to: identify the request flow, check for duplicate calls, review timeout configuration, and spot any error handling gaps.</li>
+        <li><strong>Test error handling:</strong> Enable airplane mode mid-flow, or point your app at a non-existent server. Capture the error logs and feed them to Claude Code. Does your app handle the failure gracefully?</li>
+        <li><strong>Audit caching:</strong> Paste the <code>Cache-Control</code> headers from your API responses and ask Claude Code which endpoints should be cached and for how long.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>We&rsquo;ve debugged the runtime &mdash; crashes, ANRs, memory, Compose performance, and networking. But there&rsquo;s a productivity killer that happens <em>before</em> your code even runs: <strong>build times</strong>. That 4-minute Gradle build that runs 30 times a day? That&rsquo;s 2 hours of waiting. Per day.</p>
+
+    <p>In <strong>Chapter 7: Gradle Build Performance</strong>, we&rsquo;ll feed build scan data to Claude Code, identify the slowest tasks, and build an <code>/analyze-build</code> skill that turns your CI pipeline from a coffee break into a quick refresh.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-compose-recomposition.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Compose Recomposition Performance</span>
+      </a>
+      <a href="07-gradle-build-performance.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Gradle Build Performance</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

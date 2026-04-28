@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Beyond Text: The Future of RAG | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="11-production-deployment.html">&larr; Prev</a>
+      <a href="maps/12-beyond-text-rag-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Beyond Text: The Future of RAG</h1>
+    <p class="subtitle">Multi-modal RAG, code retrieval, knowledge graphs, agentic RAG, and where this entire field is heading</p>
+  </header>
+
+  <main>
+
+    <div class="highlight-box">
+      <p><strong>The big idea:</strong> Everything you've learned about RAG &mdash; chunking, embedding, retrieving, generating &mdash; applies far beyond plain text. The same pattern powers image search, code assistants, database querying, and autonomous AI agents. This final chapter expands your mental model from "text Q&amp;A" to "any data, any modality, any reasoning pattern."</p>
+    </div>
+
+    <p>In the last chapter, you learned to run RAG in production &mdash; managing costs, optimizing latency, securing access, and monitoring everything. Your text-based RAG system is solid.</p>
+
+    <p>But here's the thing: the real world isn't just text. Your company has architecture diagrams, database tables, code repositories, meeting recordings, and product screenshots. A RAG system that only understands text is like a librarian who can only read books but ignores maps, charts, and blueprints.</p>
+
+    <p>The good news? The core RAG pattern &mdash; <strong>retrieve relevant context, then generate</strong> &mdash; works for all of these. The retrieval mechanism changes, but the idea is the same. Let's explore what's possible.</p>
+
+    <!-- ============================================ -->
+    <h2>Multimodal RAG: When Text Isn't Enough</h2>
+
+    <p>Imagine you're building a support system for a hardware product. The manual has wiring diagrams, the FAQ has screenshots, and the troubleshooting guide has flowcharts. A text-only RAG system would miss all of that visual information &mdash; or worse, try to answer with text that says "see Figure 3" without actually seeing Figure 3.</p>
+
+    <p><strong>Multimodal RAG</strong> indexes and retrieves images, diagrams, tables, and other non-text content alongside regular text. Think of it as giving your RAG system eyes in addition to its reading ability.</p>
+
+    <div class="pipeline-box">
+      <p><strong>Where multimodal fits in the pipeline:</strong> The core pipeline stays the same &mdash; ingest, index, retrieve, generate. What changes is that the <em>ingest</em> step now extracts images and tables (not just text), the <em>index</em> step stores multimodal embeddings, and the <em>retrieve</em> step can return a mix of text chunks and visual content. The <em>generate</em> step uses a vision-capable LLM (like GPT-4o or Claude) to reason over both.</p>
+    </div>
+
+    <h3>Three Approaches to Multimodal RAG</h3>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th>How It Works</th>
+            <th>Best For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Caption &amp; Embed</strong></td>
+            <td>Use a vision model to generate text descriptions of images, then embed the captions alongside text chunks</td>
+            <td>Simple setups; works with any text embedding model</td>
+          </tr>
+          <tr>
+            <td><strong>Native Vision Embeddings</strong></td>
+            <td>Use multimodal embedding models (like Cohere Embed 4 or Voyage Multimodal) that natively embed both text and images into the same vector space</td>
+            <td>Rich visual content where captions lose too much detail</td>
+          </tr>
+          <tr>
+            <td><strong>Late Interaction (ColPali)</strong></td>
+            <td>Treat entire document pages as images and use vision-language models to match queries against page screenshots</td>
+            <td>Complex layouts (PDFs with tables, charts, mixed formatting)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The "caption and embed" approach is the easiest to implement and works surprisingly well for many use cases:</p>
+
+    <pre><code>import anthropic
+from pathlib import Path
+import base64
+
+client = anthropic.Anthropic()
+
+def caption_image(image_path: str) -> str:
+    """Use a vision model to generate a text caption for an image."""
+    image_data = base64.standard_b64encode(
+        Path(image_path).read_bytes()
+    ).decode("utf-8")
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": image_data
+                }},
+                {"type": "text", "text":
+                    "Describe this image in detail for a "
+                    "technical knowledge base. Include all "
+                    "text, labels, relationships, and data "
+                    "visible in the image."
+                }
+            ]
+        }]
+    )
+    return response.content[0].text
+
+
+# Index: caption each image, then embed the caption
+for img in document_images:
+    caption = caption_image(img.path)
+    embedding = embed(caption)  # Same embedding model as text
+    vector_db.upsert(
+        id=img.id,
+        vector=embedding,
+        metadata={
+            "type": "image",
+            "caption": caption,
+            "source_page": img.page_number,
+            "image_path": img.path
+        }
+    )</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The ColPali approach is a game-changer for PDFs.</strong> Instead of extracting text from PDFs (which loses tables, charts, and layout), ColPali-style models treat each page as an image and create embeddings directly from the visual representation. Tools like RAG-Anything (open-sourced in 2025) combine this with knowledge graph construction to handle scanned PDFs, embedded images, LaTeX equations, and charts &mdash; all without traditional text extraction.</p>
+    </div>
+
+    <div class="gotcha-box">
+      <p><strong>Gotcha: Multimodal embeddings aren't interchangeable.</strong> You can't mix text embeddings from one model with image embeddings from another &mdash; they live in different vector spaces. If you use the "native vision embeddings" approach, every piece of content (text and images) must be embedded with the same multimodal model. The "caption and embed" approach avoids this problem by converting everything to text first.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Code RAG: How Your AI Coding Assistant Works</h2>
+
+    <p>Every time you use Cursor, GitHub Copilot, or Claude Code, you're using Code RAG. These tools don't just predict the next token &mdash; they retrieve relevant code from your project and feed it to the LLM as context. That's why Copilot's suggestions get dramatically better when you have related files open.</p>
+
+    <div class="retrieval-box">
+      <p><strong>Code retrieval is RAG with a twist.</strong> Instead of searching a document corpus, code RAG searches your codebase &mdash; function definitions, type signatures, import graphs, docstrings, and test files. The retrieval signals are different too: code structure (AST), symbol references, and file proximity matter more than pure semantic similarity. When you type a function call, the assistant retrieves the function's definition, its callers, and related tests &mdash; not just "semantically similar" code snippets.</p>
+    </div>
+
+    <h3>How Code Assistants Retrieve Context</h3>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Codebase Indexing</strong>
+          <p>The tool indexes your repository: file tree, symbols, function signatures, import graphs. Some tools use embeddings; others use AST-based indexing.</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Context Gathering</strong>
+          <p>When you type, the tool collects signals: cursor position, open files, recent edits, imported symbols, the current function's signature.</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Retrieval</strong>
+          <p>Using those signals, it retrieves the most relevant code: the function you're calling, related type definitions, similar patterns elsewhere in the codebase.</p>
+        </div>
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <strong>Fill-in-the-Middle (FIM)</strong>
+          <p>The LLM receives the code before your cursor (prefix), after your cursor (suffix), and the retrieved context. It generates the code that fits in the middle.</p>
+        </div>
+      </div>
+    </div>
+
+    <pre><code># Simplified Code RAG — what happens behind the scenes
+# when your AI assistant suggests a function body
+
+def build_code_context(cursor_position, project):
+    """Gather context for a code completion request."""
+    context_chunks = []
+
+    # 1. Current file — code before and after cursor
+    current_file = project.get_file(cursor_position.file)
+    prefix = current_file[:cursor_position.offset]
+    suffix = current_file[cursor_position.offset:]
+
+    # 2. Open tabs — the user chose to open these, so they're likely relevant
+    for tab in project.open_tabs:
+        if tab != current_file:
+            context_chunks.append({
+                "source": tab.path,
+                "content": tab.content[:2000],  # First 2K chars
+                "relevance": "open_tab"
+            })
+
+    # 3. Symbol retrieval — find definitions of symbols used near cursor
+    symbols_near_cursor = extract_symbols(prefix[-500:])
+    for symbol in symbols_near_cursor:
+        definition = project.find_definition(symbol)
+        if definition:
+            context_chunks.append({
+                "source": definition.file,
+                "content": definition.code,
+                "relevance": "symbol_definition"
+            })
+
+    # 4. Semantic retrieval — find similar code patterns
+    query = prefix[-200:]  # Use recent code as search query
+    similar = project.vector_index.search(query, top_k=3)
+    context_chunks.extend(similar)
+
+    return prefix, suffix, context_chunks</code></pre>
+
+    <div class="tip-box">
+      <p><strong>This is why "open the relevant file" improves AI suggestions.</strong> Most code assistants use open tabs as a strong retrieval signal. If you're working on a REST handler and the data model file is open, the assistant can see the field names and types. Close that tab, and it has to guess &mdash; or retrieve less relevant code from the index.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Structured Data RAG: Talking to Databases</h2>
+
+    <p>What if your data lives in a PostgreSQL database, not in documents? You can't chunk a SQL table into paragraphs. This is where <strong>Text-to-SQL RAG</strong> comes in: the user asks a natural language question, and the system converts it into a SQL query, executes it, and generates a human-readable answer.</p>
+
+    <p>Think of it like having a data analyst on call. Instead of writing <code>SELECT department, AVG(salary) FROM employees GROUP BY department</code>, the user asks: "What's the average salary by department?"</p>
+
+    <h3>Two Approaches to Database RAG</h3>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th>How It Works</th>
+            <th>Best For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Text-to-SQL</strong></td>
+            <td>LLM generates a SQL query from the natural language question. The query runs against the database. Results are fed back to the LLM for a natural language answer.</td>
+            <td>Aggregations, filters, computations, joins &mdash; anything SQL is good at</td>
+          </tr>
+          <tr>
+            <td><strong>Embed &amp; Retrieve Rows</strong></td>
+            <td>Embed database rows (or their text representations) into a vector store. Retrieve similar rows via semantic search.</td>
+            <td>Free-text fields, conceptual queries ("find customers like X")</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code># Text-to-SQL RAG — simplified pipeline
+
+def text_to_sql_rag(question: str, db_schema: str, llm, db_conn):
+    """Convert a natural language question to SQL, execute, and explain."""
+
+    # Step 1: Generate SQL from the question + schema
+    sql_prompt = f"""You are a SQL expert. Given this database schema:
+
+{db_schema}
+
+Convert this question to a SQL query:
+Question: {question}
+
+Return ONLY the SQL query, no explanation."""
+
+    sql_query = llm.generate(sql_prompt).strip()
+
+    # Step 2: Execute the query (with safety checks!)
+    if not sql_query.upper().startswith("SELECT"):
+        return "I can only run read-only queries for safety."
+
+    results = db_conn.execute(sql_query).fetchall()
+
+    # Step 3: Generate a natural language answer
+    answer_prompt = f"""Based on this data:
+
+Question: {question}
+SQL Query: {sql_query}
+Results: {results[:50]}  # Limit rows sent to LLM
+
+Provide a clear, concise answer to the question.
+Include the key numbers and cite the data."""
+
+    return llm.generate(answer_prompt)</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Never let an LLM run arbitrary SQL against your production database.</strong> Always: (1) whitelist only SELECT statements, (2) use a read-only database connection, (3) set query timeouts, and (4) limit result set sizes. LLMs can generate valid but destructive queries &mdash; <code>DROP TABLE</code> is syntactically correct too.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Knowledge Graphs + RAG: GraphRAG</h2>
+
+    <p>Standard vector RAG treats each chunk as an isolated island. It finds the most similar chunks but doesn't understand how concepts <em>relate</em> to each other. Ask "How does the marketing team's strategy connect to the engineering roadmap?" and vector search might retrieve chunks about marketing and chunks about engineering &mdash; but it can't trace the <em>relationship</em> between them.</p>
+
+    <p><strong>GraphRAG</strong> solves this by building a knowledge graph from your documents. Instead of just storing chunks, it extracts entities (people, products, concepts) and relationships ("manages," "depends on," "competes with"), then uses that structure for retrieval.</p>
+
+    <div class="embedding-box">
+      <p><strong>How GraphRAG works (the Microsoft approach):</strong> First, the system uses an LLM to extract entities and relationships from your text. Then it builds a graph and detects "communities" &mdash; clusters of closely related entities. For each community, it generates a summary. When you ask a question, GraphRAG can traverse the graph to find related entities, use community summaries for high-level questions, or combine graph traversal with vector search for the best of both worlds. In benchmarks, it shows <strong>3.4x better accuracy</strong> than traditional vector RAG for questions that require connecting information across multiple documents.</p>
+    </div>
+
+    <pre><code># GraphRAG — conceptual pipeline (using the Microsoft graphrag library)
+# pip install graphrag
+
+# Step 1: Extract entities and relationships from documents
+# GraphRAG uses an LLM to identify entities and how they connect
+
+"""
+Input text: "Alice manages the payments team. The payments team
+depends on the auth service maintained by Bob's infrastructure team."
+
+Extracted entities:
+  - Alice (person, role: manager)
+  - Payments Team (team)
+  - Auth Service (service)
+  - Bob (person)
+  - Infrastructure Team (team)
+
+Extracted relationships:
+  - Alice --manages--> Payments Team
+  - Payments Team --depends_on--> Auth Service
+  - Auth Service --maintained_by--> Infrastructure Team
+  - Bob --member_of--> Infrastructure Team
+"""
+
+# Step 2: Query the graph
+# "Who is affected if the auth service goes down?"
+# Graph traversal: Auth Service <-- depends_on -- Payments Team
+#                  Payments Team <-- manages -- Alice
+# Answer: "The payments team (managed by Alice) depends on the
+#          auth service, so they would be directly affected."</code></pre>
+
+    <h3>When to Use GraphRAG vs Vector RAG</h3>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Question Type</th>
+            <th>Vector RAG</th>
+            <th>GraphRAG</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>"What is our refund policy?"</td>
+            <td>Great &mdash; find the policy chunk</td>
+            <td>Overkill</td>
+          </tr>
+          <tr>
+            <td>"How are teams X and Y connected?"</td>
+            <td>Struggles &mdash; no relationship awareness</td>
+            <td>Excellent &mdash; traverses relationships</td>
+          </tr>
+          <tr>
+            <td>"Summarize all Q1 initiatives"</td>
+            <td>Retrieves random chunks</td>
+            <td>Uses community summaries</td>
+          </tr>
+          <tr>
+            <td>"Find docs about authentication"</td>
+            <td>Great &mdash; semantic similarity</td>
+            <td>Good, but slower</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="gotcha-box">
+      <p><strong>Gotcha: GraphRAG is expensive to build.</strong> Extracting entities and relationships requires sending every chunk through an LLM, which can cost 10&ndash;50x more than just embedding the text. For a 10,000-document corpus, vector indexing might cost $5 in embedding API calls, while GraphRAG entity extraction could cost $50&ndash;$200 in LLM calls. Use GraphRAG when your questions genuinely require relationship reasoning &mdash; not as a default replacement for vector search.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Agentic RAG: When the System Thinks for Itself</h2>
+
+    <p>Everything we've built so far follows a fixed pipeline: embed the question, retrieve chunks, generate an answer. But what if the question is ambiguous? What if the first retrieval misses? What if the answer requires multiple searches?</p>
+
+    <p><strong>Agentic RAG</strong> replaces the fixed pipeline with an autonomous agent that <em>decides</em> what to do at each step. The agent can rephrase the query, choose which index to search, evaluate whether retrieved chunks are relevant, search again if needed, and combine information from multiple sources.</p>
+
+    <div class="retrieval-box">
+      <p><strong>The shift from pipeline to agent:</strong> In traditional RAG, the retrieval strategy is hard-coded: embed, search, return top-k. In agentic RAG, the agent dynamically chooses its retrieval strategy based on the question. A factual question might trigger a single vector search. A complex question might trigger keyword search first, then semantic search, then a re-ranking step. The agent observes the results at each step and decides what to do next &mdash; following a <strong>ReAct loop</strong> (Reason &rarr; Act &rarr; Observe &rarr; Repeat).</p>
+    </div>
+
+    <pre><code># Agentic RAG — the agent decides its own retrieval strategy
+
+from anthropic import Anthropic
+
+client = Anthropic()
+
+tools = [
+    {
+        "name": "keyword_search",
+        "description": "Search by exact keyword match (BM25). "
+                       "Best for names, IDs, error codes, jargon.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "collection": {"type": "string",
+                               "enum": ["docs", "code", "tickets"]}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "semantic_search",
+        "description": "Search by meaning similarity. "
+                       "Best for conceptual questions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "collection": {"type": "string",
+                               "enum": ["docs", "code", "tickets"]}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "sql_query",
+        "description": "Query structured data. "
+                       "Best for numbers, aggregations, filters.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"}
+            },
+            "required": ["question"]
+        }
+    }
+]
+
+# The agent decides which tools to call and in what order
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    system="You are a research assistant with access to multiple "
+           "data sources. Use the available tools to find information "
+           "needed to answer the user's question. Search multiple "
+           "sources if needed. If results seem incomplete, try a "
+           "different search strategy.",
+    tools=tools,
+    messages=[{"role": "user", "content": user_question}]
+)
+# The agent might: semantic_search("docs") -> read results ->
+# keyword_search("tickets") -> combine -> answer</code></pre>
+
+    <div class="tip-box">
+      <p><strong>RAG as one tool among many.</strong> In a fully agentic system, RAG isn't the whole application &mdash; it's one tool the agent can use. The agent might also call APIs, run calculations, query databases, or browse the web. The agent decides <em>when</em> retrieval is needed, and it might not need it at all for some questions. This is the pattern behind tools like Claude Code, Cursor's agent mode, and enterprise AI assistants.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Conversational RAG: Handling Follow-Up Questions</h2>
+
+    <p>Real users don't ask isolated questions. They have conversations: "What's our refund policy?" followed by "What about for international orders?" followed by "How long does that take?" Each follow-up depends on the previous context.</p>
+
+    <p>The challenge: "How long does that take?" means nothing on its own. Your retrieval system needs to know that "that" refers to "international refunds."</p>
+
+    <h3>The Solution: Query Contextualization</h3>
+
+    <pre><code># Conversational RAG — rewrite follow-up questions using chat history
+
+def contextualize_query(chat_history: list, new_question: str, llm) -> str:
+    """Rewrite a follow-up question to be self-contained."""
+    prompt = f"""Given this conversation history:
+
+{format_history(chat_history)}
+
+The user's latest question is: "{new_question}"
+
+Rewrite this question to be fully self-contained — it should
+make sense without the conversation history. If the question
+is already self-contained, return it unchanged.
+
+Return ONLY the rewritten question."""
+
+    return llm.generate(prompt)
+
+# Example:
+# History: [("What's our refund policy?", "Our refund policy is..."),
+#           ("What about international orders?", "For international...")]
+# New question: "How long does that take?"
+# Rewritten: "How long does the refund process take for international orders?"
+
+# Now search with the rewritten query — much better retrieval!</code></pre>
+
+    <div class="gotcha-box">
+      <p><strong>Gotcha: Don't stuff the entire chat history into every retrieval query.</strong> If you embed the full conversation as your search query, the embedding will be diluted by irrelevant earlier turns. Instead, use the LLM to rewrite just the latest question into a self-contained query, then search with that. This keeps retrieval focused and accurate.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Emerging RAG Stack (2026)</h2>
+
+    <p>The RAG ecosystem has matured rapidly. Here's what the modern stack looks like:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">85%</div>
+        <div class="stat-label">of production LLM apps use RAG (up from 30% in early 2024)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">3.4x</div>
+        <div class="stat-label">accuracy improvement with GraphRAG for complex reasoning tasks</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">90%+</div>
+        <div class="stat-label">factual accuracy achievable with hybrid retrieval + re-ranking + evaluation loops</div>
+      </div>
+    </div>
+
+    <h3>The Modern RAG Toolkit</h3>
+
+    <div class="stats-grid">
+      <div class="tool-card">
+        <div class="tool-icon">🧠</div>
+        <div class="tool-name">Embedding Models</div>
+        <div class="tool-desc">OpenAI text-embedding-3, Cohere Embed 4, Voyage 3, open-source BGE/E5. Multimodal options: ColPali, Cohere Embed 4 multimodal.</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">🗄️</div>
+        <div class="tool-name">Vector Databases</div>
+        <div class="tool-desc">Pinecone, Weaviate, Qdrant, ChromaDB, pgvector. Trend: hybrid databases that support both vector and keyword search natively.</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">🔗</div>
+        <div class="tool-name">Knowledge Graphs</div>
+        <div class="tool-desc">Microsoft GraphRAG, LightRAG, RAG-Anything, Neo4j. Combine structured relationships with unstructured text retrieval.</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">🤖</div>
+        <div class="tool-name">Orchestration</div>
+        <div class="tool-desc">LangChain, LlamaIndex, Haystack, custom pipelines. Trend: agentic frameworks (LangGraph, CrewAI) replacing fixed pipelines.</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">📊</div>
+        <div class="tool-name">Evaluation</div>
+        <div class="tool-desc">RAGAS, DeepEval, custom LLM-as-judge. Trend: continuous evaluation in production, not just offline testing.</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-icon">👁️</div>
+        <div class="tool-name">Multimodal</div>
+        <div class="tool-desc">ColPali for visual document retrieval, RAG-Anything for unified multimodal graphs, vision LLMs for generation.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>When NOT to Use RAG</h2>
+
+    <p>RAG isn't always the answer. Here are the alternatives and when they win:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Alternative</th>
+            <th>When It Wins Over RAG</th>
+            <th>Tradeoff</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Long Context Windows</strong></td>
+            <td>Your entire knowledge base fits in the context window (e.g., Claude's 200K tokens). Just paste everything in &mdash; no retrieval needed.</td>
+            <td>Expensive per query. Doesn't scale beyond the context limit. Slower.</td>
+          </tr>
+          <tr>
+            <td><strong>Fine-Tuning</strong></td>
+            <td>You need the model to adopt a specific style, follow strict formatting rules, or internalize domain jargon. Knowledge that changes rarely.</td>
+            <td>Expensive to train. Can't update knowledge without retraining. Still hallucinates.</td>
+          </tr>
+          <tr>
+            <td><strong>Prompt Caching</strong></td>
+            <td>You have a stable set of reference documents that every query needs. Cache them as a system prompt prefix.</td>
+            <td>Limited to what fits in the prompt. Not dynamic.</td>
+          </tr>
+          <tr>
+            <td><strong>Direct API/Tool Calls</strong></td>
+            <td>The answer is in a structured system (database, API, calendar). Don't embed it &mdash; just call the API.</td>
+            <td>Requires API access and integration work.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tip-box">
+      <p><strong>The decision tree is simple:</strong> Can you fit all the relevant data in the context window and afford the cost? &rarr; Use long context. Is the knowledge stable and about style/format, not facts? &rarr; Fine-tune. Is the data in a structured system with an API? &rarr; Call the API. For everything else &mdash; large, changing, unstructured knowledge bases &mdash; RAG is still the best pattern.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Bigger Picture</h2>
+
+    <p>RAG is one pattern in the broader landscape of <strong>AI-powered knowledge systems</strong>. The trend is convergence: systems that combine vector search, knowledge graphs, structured data queries, tool use, and agentic reasoning into a unified architecture. The "RAG pipeline" you learned in Chapter 2 is becoming the "knowledge engine" at the center of every AI application.</p>
+
+    <div class="highlight-box">
+      <p><strong>What you've learned in this course:</strong></p>
+      <ul>
+        <li><strong>The problem</strong> &mdash; LLMs hallucinate because they don't have your data (Ch. 1&ndash;2)</li>
+        <li><strong>The building blocks</strong> &mdash; Embeddings, vector databases, chunking, retrieval (Ch. 3&ndash;7)</li>
+        <li><strong>The pipeline</strong> &mdash; Building, improving, and evaluating RAG systems (Ch. 8&ndash;10)</li>
+        <li><strong>Production</strong> &mdash; Cost, latency, security, monitoring (Ch. 11)</li>
+        <li><strong>The future</strong> &mdash; Multimodal, code, structured data, knowledge graphs, agents (Ch. 12)</li>
+      </ul>
+      <p>You started this course with "LLMs make things up." You're ending it with a complete toolkit for building systems that answer from your data &mdash; in any modality, at any scale, with measurable quality. That's the journey from "AI toy" to "AI tool."</p>
+    </div>
+
+    <div class="exercise-box">
+      <h3>Try It: Design a Multimodal RAG System</h3>
+      <p>Pick a real use case from your own work and design a multimodal RAG system on paper. Answer these questions:</p>
+      <ol>
+        <li><strong>Data sources:</strong> What would you index? Text documents? Images? Database tables? Code? A mix?</li>
+        <li><strong>Ingestion:</strong> How would you handle each modality? Caption images? Use native multimodal embeddings? Text-to-SQL for structured data?</li>
+        <li><strong>Retrieval:</strong> Would you use vector search, keyword search, graph traversal, SQL, or a hybrid? Would an agent choose the strategy dynamically?</li>
+        <li><strong>Generation:</strong> Would you need a vision-capable LLM? How would you handle sources from different modalities?</li>
+        <li><strong>Evaluation:</strong> How would you measure quality? What metrics make sense for your use case?</li>
+      </ol>
+      <p>Sketch the architecture diagram. Identify the hardest part. That's your next learning goal.</p>
+    </div>
+
+    <p>You now have the complete mental model for building RAG systems &mdash; from a 20-line prototype to a production-grade, multimodal, agentic knowledge engine. The RAG pattern isn't going away. It's evolving. And you're equipped to evolve with it.</p>
+
+    <p><strong>Go build something.</strong></p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="11-production-deployment.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">RAG in Production</span>
+    </a>
+    <a href="index.html" class="next">
+      <span class="nav-direction">Back to Contents</span>
+      <span class="nav-chapter">Course Index</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

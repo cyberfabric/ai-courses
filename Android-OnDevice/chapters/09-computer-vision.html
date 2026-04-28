@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Computer Vision Features — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-model-optimization.html">&larr; Prev</a>
+      <a href="10-nlp-audio.html">Next &rarr;</a>
+      <a href="maps/09-computer-vision-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Computer Vision Features</h1>
+    <p class="subtitle">Object detection, segmentation, custom training, and real-time video at 30fps</p>
+  </header>
+
+  <main>
+
+    <h2>Beyond "What Is This?"</h2>
+
+    <p>In Chapter 3 you built an image classifier that answers "what is this?" — one label for the whole image. Useful, but real apps need more. They need to know <em>where</em> objects are, <em>which pixels</em> belong to which object, and how to <em>track</em> objects across frames.</p>
+
+    <p>This chapter covers the four levels of computer vision, from simplest to most complex:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Classification</span>
+        <span class="stat-label">"What is it?" &mdash; one label per image</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Detection</span>
+        <span class="stat-label">"Where is it?" &mdash; bounding boxes + labels</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Segmentation</span>
+        <span class="stat-label">"Which pixels?" &mdash; per-pixel masks</span>
+      </div>
+    </div>
+
+    <h2>Object Detection with SSD-MobileNet</h2>
+
+    <p>Object detection is the workhorse of mobile vision. Instead of one label for the whole image, you get a list of objects, each with a class name, confidence score, and bounding box telling you exactly where it is.</p>
+
+    <div class="model-pipeline">
+      <p><strong>Object detection pipeline — from camera frame to bounding boxes:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Camera Frame</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Resize 320&times;320</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">SSD-MobileNet</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">NMS Filter</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Boxes + Labels</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Canvas Overlay</span>
+      </div>
+    </div>
+
+    <p>SSD-MobileNetV2 is the standard choice: 6.8MB, detects 90 COCO object categories (person, car, dog, chair, phone, etc.), and runs in under 10ms on an NPU.</p>
+
+<pre><code>class ObjectDetector(context: Context) {
+
+    private val interpreter: Interpreter
+    private val labels: List&lt;String&gt;
+    private val inputSize = 320
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "ssd_mobilenet_v2.tflite")
+        val options = Interpreter.Options().apply {
+            addDelegate(NnApiDelegate())
+        }
+        interpreter = Interpreter(model, options)
+        labels = FileUtil.loadLabels(context, "coco_labels.txt")
+    }
+
+    fun detect(bitmap: Bitmap): List&lt;Detection&gt; {
+        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        val input = TensorImage(DataType.FLOAT32).apply { load(resized) }
+
+        // SSD outputs: [1,N,4] boxes, [1,N] classes, [1,N] scores, [1] count
+        val boxes = Array(1) { Array(10) { FloatArray(4) } }
+        val classes = Array(1) { FloatArray(10) }
+        val scores = Array(1) { FloatArray(10) }
+        val count = FloatArray(1)
+
+        val outputs = mapOf(
+            0 to boxes, 1 to classes, 2 to scores, 3 to count
+        )
+        interpreter.runForMultipleInputsOutputs(arrayOf(input.buffer), outputs)
+
+        return (0 until count[0].toInt()).map { i -&gt;
+            Detection(
+                label = labels[classes[0][i].toInt()],
+                score = scores[0][i],
+                box = RectF(boxes[0][i][1], boxes[0][i][0],
+                            boxes[0][i][3], boxes[0][i][2])
+            )
+        }.filter { it.score &gt; 0.5f }
+    }
+}
+
+data class Detection(val label: String, val score: Float, val box: RectF)</code></pre>
+
+    <div class="tip-box">
+      <strong>SSD output boxes are normalized to [0, 1].</strong> The bounding box coordinates represent percentages of the image dimensions, not pixels. Multiply by the display width/height to get screen coordinates: <code>screenX = box.left * viewWidth</code>.
+    </div>
+
+    <h2>Non-Maximum Suppression (NMS)</h2>
+
+    <p>When a detector sees a cat, it doesn't return one box — it returns 20 overlapping boxes for the same cat. NMS filters these duplicates by keeping only the highest-confidence box and removing any that overlap too much.</p>
+
+    <p>The algorithm is simple:</p>
+    <ol>
+      <li>Sort detections by confidence (highest first)</li>
+      <li>Take the top detection — keep it</li>
+      <li>Remove any remaining detections that overlap with it by more than a threshold (IoU &gt; 0.5)</li>
+      <li>Repeat with the next remaining detection</li>
+    </ol>
+
+<pre><code>fun nonMaxSuppression(
+    detections: List&lt;Detection&gt;, iouThreshold: Float = 0.5f
+): List&lt;Detection&gt; {
+    val sorted = detections.sortedByDescending { it.score }.toMutableList()
+    val kept = mutableListOf&lt;Detection&gt;()
+
+    while (sorted.isNotEmpty()) {
+        val best = sorted.removeFirst()
+        kept.add(best)
+        sorted.removeAll { other -&gt;
+            calculateIoU(best.box, other.box) &gt; iouThreshold
+        }
+    }
+    return kept
+}
+
+fun calculateIoU(a: RectF, b: RectF): Float {
+    val intersection = RectF()
+    if (!intersection.setIntersect(a, b)) return 0f
+    val intersectionArea = intersection.width() * intersection.height()
+    val unionArea = a.width() * a.height() + b.width() * b.height() - intersectionArea
+    return intersectionArea / unionArea
+}</code></pre>
+
+    <div class="warning-box">
+      Many TFLite detection models include NMS as a built-in postprocessing step — check the model metadata before implementing your own. The SSD-MobileNet model from TensorFlow Hub already outputs NMS-filtered results.
+    </div>
+
+    <h2>Image Segmentation with DeepLab</h2>
+
+    <p>Segmentation goes pixel by pixel: instead of a box around a person, you get a mask that covers exactly the person's outline. This powers portrait mode (blur the background), background replacement, and visual effects.</p>
+
+<pre><code>class Segmenter(context: Context) {
+
+    private val interpreter: Interpreter
+    private val inputSize = 257
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "deeplabv3_257.tflite")
+        interpreter = Interpreter(model, Interpreter.Options().apply {
+            addDelegate(GpuDelegate())
+        })
+    }
+
+    fun segment(bitmap: Bitmap): IntArray {
+        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        val input = TensorImage(DataType.FLOAT32).apply { load(resized) }
+
+        // Output: [1, 257, 257, 21] — 21 class probabilities per pixel
+        val output = Array(1) { Array(inputSize) { Array(inputSize) { FloatArray(21) } } }
+        interpreter.run(input.buffer, output)
+
+        // For each pixel, find the class with highest probability
+        val mask = IntArray(inputSize * inputSize)
+        for (y in 0 until inputSize) {
+            for (x in 0 until inputSize) {
+                mask[y * inputSize + x] = output[0][y][x].indices.maxByOrNull {
+                    output[0][y][x][it]
+                } ?: 0
+            }
+        }
+        return mask  // 0=background, 15=person, etc.
+    }
+}</code></pre>
+
+    <h3>Building a Portrait Mode Effect</h3>
+
+<pre><code>@Composable
+fun PortraitModeOverlay(mask: IntArray, size: Int) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val scaleX = this.size.width / size
+        val scaleY = this.size.height / size
+
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                if (mask[y * size + x] != 15) { // 15 = person class
+                    // Draw semi-transparent blur overlay on non-person pixels
+                    drawRect(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        topLeft = Offset(x * scaleX, y * scaleY),
+                        size = Size(scaleX, scaleY)
+                    )
+                }
+            }
+        }
+    }
+}</code></pre>
+
+    <div class="device-benchmark">
+      <p><strong>Vision model performance comparison (int8 quantized, NNAPI on Pixel 9 Pro):</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Task</th>
+            <th>Input Size</th>
+            <th>Size</th>
+            <th>Inference</th>
+            <th>FPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>MobileNetV3-Large</td>
+            <td>Classification</td>
+            <td>224&times;224</td>
+            <td>2.7 MB</td>
+            <td>2.5 ms</td>
+            <td>400</td>
+          </tr>
+          <tr>
+            <td>SSD-MobileNetV2</td>
+            <td>Detection (90 classes)</td>
+            <td>320&times;320</td>
+            <td>4.4 MB</td>
+            <td>6 ms</td>
+            <td>166</td>
+          </tr>
+          <tr>
+            <td>YOLOv8-nano</td>
+            <td>Detection (80 classes)</td>
+            <td>320&times;320</td>
+            <td>3.2 MB</td>
+            <td>5 ms</td>
+            <td>200</td>
+          </tr>
+          <tr>
+            <td>DeepLabV3</td>
+            <td>Segmentation (21 classes)</td>
+            <td>257&times;257</td>
+            <td>2.4 MB</td>
+            <td>8 ms</td>
+            <td>125</td>
+          </tr>
+          <tr>
+            <td>DeepLabV3</td>
+            <td>Segmentation (21 classes)</td>
+            <td>513&times;513</td>
+            <td>2.4 MB</td>
+            <td>25 ms</td>
+            <td>40</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">All models comfortably exceed 30fps on flagship hardware. Even the larger DeepLabV3 (513&times;513) runs at 40fps. On mid-range devices, use the smaller input size or lower frame rate.</p>
+    </div>
+
+    <h2>Custom Model Training for Your Domain</h2>
+
+    <p>COCO's 90 categories are a good start, but your app probably needs to detect objects that aren't in any pre-trained model — your company's products, specific document types, or domain-specific items. You need a custom model.</p>
+
+    <p>The fastest path: <strong>TensorFlow Model Maker</strong> — a high-level library that fine-tunes a pre-trained detector on your images with minimal code:</p>
+
+<pre><code># Python — in Google Colab (free GPU)
+from tflite_model_maker import object_detector
+
+# Your labeled images in Pascal VOC or COCO format
+train_data = object_detector.DataLoader.from_pascal_voc(
+    "train_images/", "train_annotations/", ["product_a", "product_b", "product_c"]
+)
+
+# Fine-tune EfficientDet-Lite0 on your data
+model = object_detector.create(
+    train_data,
+    model_spec=object_detector.EfficientDetLite0Spec(),
+    epochs=50,
+    batch_size=8
+)
+
+# Export as TFLite (automatically quantized)
+model.export(export_dir=".", tflite_filename="my_detector.tflite")</code></pre>
+
+    <h3>How Much Data Do You Need?</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Images per Class</th>
+          <th>Expected Accuracy</th>
+          <th>Good For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>50-100</td>
+          <td>70-80%</td>
+          <td>Prototype / proof of concept</td>
+        </tr>
+        <tr>
+          <td>200-500</td>
+          <td>85-92%</td>
+          <td>Production MVP — usually sufficient</td>
+        </tr>
+        <tr>
+          <td>1,000+</td>
+          <td>93-98%</td>
+          <td>High-accuracy production</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Use data augmentation to multiply your dataset.</strong> Flip, rotate, crop, adjust brightness/contrast, and add noise to your training images. A 200-image dataset with augmentation can perform like a 1,000-image dataset. TensorFlow Model Maker applies standard augmentations automatically.
+    </div>
+
+    <h2>Real-Time Video Processing — The 30fps Challenge</h2>
+
+    <p>Running detection on a single image is straightforward. Running it at 30fps on a live camera feed requires careful engineering. At 30fps, you have <strong>33ms per frame</strong> — and you need to capture, preprocess, run inference, postprocess, and render within that budget.</p>
+
+    <h3>The Producer-Consumer Pattern</h3>
+
+    <p>The key insight: <strong>don't process every frame.</strong> The camera produces frames at 30fps, but inference might take 10ms. You don't need the result of every single frame — the user can't perceive the difference between 30fps and 20fps detection updates.</p>
+
+<pre><code>// Producer: camera pushes frames at 30fps
+// Consumer: inference processes as fast as it can, skipping stale frames
+val latestFrame = AtomicReference&lt;Bitmap?&gt;(null)
+
+// Camera side — always update to latest frame
+analysis.setAnalyzer(executor) { proxy -&gt;
+    latestFrame.set(proxy.toBitmap())
+    proxy.close()
+}
+
+// Inference side — process latest available frame
+val detectionJob = scope.launch(Dispatchers.Default) {
+    while (isActive) {
+        val frame = latestFrame.getAndSet(null) ?: continue
+        val results = detector.detect(frame)
+        withContext(Dispatchers.Main) {
+            detectionState.value = results
+        }
+    }
+}</code></pre>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Efficient frame processing</p>
+        <div class="prompt-text">Process latest frame, skip stale ones.
+Inference runs on Dispatchers.Default.
+UI updates via StateFlow (non-blocking).
+Reuse Bitmap buffers when possible.
+Frame skip: process every 2nd frame on slow devices.</div>
+        <p class="prompt-explanation">Smooth camera preview, inference runs as fast as the hardware allows, no frame queue buildup.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Frame processing anti-patterns</p>
+        <div class="prompt-text">Queue every frame for processing (OOM).
+Run inference on the main thread (ANR).
+Create new Bitmap every frame (GC thrashing).
+Block camera callback until inference completes.
+No frame skipping on slow devices (stutters).</div>
+        <p class="prompt-explanation">Memory pressure, UI freezes, and eventually a crash. Never queue frames — always use latest-only.</p>
+      </div>
+    </div>
+
+    <h2>Drawing Results on Compose Canvas</h2>
+
+    <p>Scaling detection coordinates from model space to screen space is the trickiest part of any vision feature. The model operates on a 320&times;320 input, but your camera preview fills the screen at an arbitrary aspect ratio:</p>
+
+<pre><code>@Composable
+fun DetectionCanvas(
+    detections: List&lt;Detection&gt;,
+    imageWidth: Int,  // model input width (e.g., 320)
+    imageHeight: Int  // model input height (e.g., 320)
+) {
+    val paint = remember {
+        Paint().apply {
+            color = android.graphics.Color.parseColor("#FBBF24")
+            textSize = 40f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+    }
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val scaleX = size.width / imageWidth
+        val scaleY = size.height / imageHeight
+
+        detections.forEach { det ->
+            val left = det.box.left * imageWidth * scaleX
+            val top = det.box.top * imageHeight * scaleY
+            val right = det.box.right * imageWidth * scaleX
+            val bottom = det.box.bottom * imageHeight * scaleY
+
+            drawRect(
+                color = Color(0xFFFBBF24),
+                topLeft = Offset(left, top),
+                size = Size(right - left, bottom - top),
+                style = Stroke(3.dp.toPx())
+            )
+            drawContext.canvas.nativeCanvas.drawText(
+                "${det.label} ${(det.score * 100).toInt()}%",
+                left, top - 10f, paint
+            )
+        }
+    }
+}</code></pre>
+
+    <div class="hardware-note">
+      <p><strong>Aspect ratio handling between camera and model:</strong></p>
+      <ul>
+        <li><strong>Camera sensor</strong> typically outputs 4:3 (e.g., 4032&times;3024)</li>
+        <li><strong>Preview display</strong> is often 16:9 or 20:9</li>
+        <li><strong>Model input</strong> is usually square (320&times;320 or 640&times;640)</li>
+      </ul>
+      <p>When you resize a 4:3 frame to a 1:1 model input, objects get squished. Two strategies:</p>
+      <ul>
+        <li><strong>Letterbox (pad)</strong> — add black bars to maintain aspect ratio. More accurate boxes, but wastes model input space.</li>
+        <li><strong>Stretch (distort)</strong> — stretch to fill the square. Uses all input pixels, but boxes need inverse-distortion scaling. Most mobile models handle mild distortion well.</li>
+      </ul>
+    </div>
+
+    <h2>Testing Vision Features</h2>
+
+    <p>Vision features need automated tests just like any other code. Build a test suite with saved images and expected results:</p>
+
+<pre><code>@Test
+fun testDetectsPersonInOfficePhoto() {
+    val bitmap = loadTestImage("test_images/office_scene.jpg")
+    val detections = detector.detect(bitmap)
+
+    val personDetections = detections.filter { it.label == "person" }
+    assertTrue("Should detect at least one person", personDetections.isNotEmpty())
+    assertTrue("Confidence should be > 70%", personDetections[0].score > 0.7f)
+
+    // Bounding box should be in the expected region (center of image)
+    val box = personDetections[0].box
+    assertTrue("Person should be in center region", box.centerX() in 0.2f..0.8f)
+}
+
+@Test
+fun testModelPerformance() {
+    val bitmap = loadTestImage("test_images/office_scene.jpg")
+    val times = (1..50).map {
+        measureTimeMillis { detector.detect(bitmap) }
+    }
+    val p95 = times.sorted()[(times.size * 0.95).toInt()]
+    assertTrue("p95 latency should be under 15ms", p95 < 15)
+}</code></pre>
+
+    <div class="tip-box">
+      Keep a folder of 20-30 test images covering your key scenarios: well-lit, dim, close-up, far away, multiple objects, empty scene. Run these tests whenever you change models or update preprocessing. They catch regressions that manual testing misses.
+    </div>
+
+    <h2>Try It: Build a Real-Time Object Detector at 30fps</h2>
+
+    <div class="exercise-box">
+      <p><strong>Build a production-quality real-time object detector that draws labeled bounding boxes on the live camera feed.</strong></p>
+      <ol>
+        <li>Download <strong>SSD-MobileNetV2</strong> (int8 quantized) and COCO labels into <code>assets/</code></li>
+        <li>Load the model with NNAPI delegate (with GPU and CPU fallbacks)</li>
+        <li>Connect to CameraX with the producer-consumer pattern (process latest frame only)</li>
+        <li>Draw bounding boxes with labels and confidence scores on a Compose Canvas overlay</li>
+        <li>Display the current FPS and inference time in a debug overlay</li>
+        <li>Verify the detector maintains <strong>30fps</strong> camera preview with detection updates at <strong>15+ fps</strong></li>
+      </ol>
+      <p><strong>Test with:</strong></p>
+      <ul>
+        <li>Your desk — should detect monitor, keyboard, mouse, cup, bottle, phone</li>
+        <li>A room with people — should draw boxes around each person</li>
+        <li>A street view — should detect cars, bicycles, traffic lights</li>
+      </ul>
+      <p><strong>Bonus:</strong> Add frame skipping for slow devices — process every 2nd or 3rd frame when inference exceeds 30ms.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've mastered computer vision — from classification to detection to segmentation, with custom training and real-time performance. But vision is only half the sensory picture. What about understanding <em>text</em> at a deeper level than OCR? What about <em>audio</em> — speech recognition, keyword spotting, sound classification?</p>
+
+    <p>In <strong>Chapter 10: NLP and Audio On-Device</strong>, we'll build language understanding and audio processing features that run entirely on the phone — text classification, sentiment analysis, offline speech-to-text, and always-on keyword detection. Same pattern as vision (load, preprocess, infer, postprocess), different input modality.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-model-optimization.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Model Optimization — Making Models Mobile-Ready</span>
+      </a>
+      <a href="10-nlp-audio.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">NLP and Audio On-Device</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

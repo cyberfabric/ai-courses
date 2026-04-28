@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Tool Design for Agents | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-agent-architectures.html">&larr; Prev</a>
+      <a href="04-first-agent.html">Next &rarr;</a>
+      <a href="maps/03-tool-design-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Tool Design for Agents</h1>
+    <p class="subtitle">The most underestimated skill in agent building &mdash; tools make or break your agent</p>
+  </header>
+
+  <main>
+
+    <h2>Tools Matter More Than Models</h2>
+
+    <p>Here&rsquo;s a controversial claim: <strong>your choice of tools matters more than your choice of model</strong>. A great model with poorly designed tools will fail on basic tasks. A decent model with well-designed tools will handle complex work reliably.</p>
+
+    <p>Why? Because tools are the agent&rsquo;s hands. The LLM is the brain &mdash; it can think, reason, plan &mdash; but without tools, it can only produce text. And when tools are confusing, ambiguous, or poorly documented, the brain makes bad decisions about which hand to use and how.</p>
+
+    <p>Think of it like designing an API for a junior developer who can only read your documentation &mdash; no Stack Overflow, no asking a colleague. If your API docs are vague, they&rsquo;ll misuse the API. If the error messages are cryptic, they&rsquo;ll get stuck. That&rsquo;s exactly how an LLM experiences your tools.</p>
+
+    <h2>Anatomy of a Tool</h2>
+
+    <p>Every tool an agent uses has four parts:</p>
+
+    <div class="architecture-box">
+      <h3>The Four Parts of a Tool</h3>
+      <ol>
+        <li><strong>Name</strong> &mdash; a clear, descriptive identifier: <code>search_web</code>, <code>read_file</code>, <code>create_issue</code></li>
+        <li><strong>Description</strong> &mdash; what the tool does, when to use it, and what to expect. This is what the LLM reads to decide whether to call it.</li>
+        <li><strong>Parameters</strong> &mdash; the inputs, defined as a JSON Schema with types, descriptions, required fields, and constraints</li>
+        <li><strong>Return format</strong> &mdash; what comes back: structured data, natural language, or an error message</li>
+      </ol>
+      <p>The LLM sees the name, description, and parameter schema. It <em>never</em> sees your implementation code. So everything the model needs to know must be in those three fields. This is the fundamental insight of tool design: <strong>the interface IS the tool</strong>, as far as the agent is concerned.</p>
+    </div>
+
+    <h2>The Golden Rules of Tool Design</h2>
+
+    <h3>Rule 1: Names Should Be Verbs</h3>
+
+    <p>Tool names should describe an action. The LLM uses the name as its first signal for what the tool does.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Good names</div>
+        <div class="prompt-text">search_web
+read_file
+create_pull_request
+list_directory
+delete_branch</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad names</div>
+        <div class="prompt-text">web_tool
+file_handler
+github_api
+utils
+do_stuff</div>
+      </div>
+    </div>
+
+    <h3>Rule 2: Descriptions Are Documentation</h3>
+
+    <p>The description is the most important part of the tool. It&rsquo;s what the LLM reads to decide: &ldquo;Should I use this tool? What parameters should I pass? What will I get back?&rdquo;</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Good description</div>
+        <div class="prompt-text">Search the web for current information. Returns up to 5 results, each with a title, URL, and snippet. Use specific, detailed queries for better results. Example: "Python 3.12 new features" instead of just "Python".</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad description</div>
+        <div class="prompt-text">Searches the web.</div>
+      </div>
+    </div>
+
+    <p>A good description answers: <strong>What does it do? When should I use it? What does it return? Any tips for using it well?</strong></p>
+
+    <h3>Rule 3: Parameters Need Types, Descriptions, and Constraints</h3>
+
+    <p>Every parameter should have a type, a description, and constraints where applicable. Don&rsquo;t make the LLM guess what format you expect.</p>
+
+<pre><code># Good: explicit types, descriptions, constraints
+{
+    "name": "search_issues",
+    "description": "Search for issues in a GitHub repository. Returns "
+                   "matching issues with title, number, state, and labels.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "repo": {
+                "type": "string",
+                "description": "Repository in 'owner/name' format, e.g. 'facebook/react'"
+            },
+            "query": {
+                "type": "string",
+                "description": "Search terms to match against issue title and body"
+            },
+            "state": {
+                "type": "string",
+                "enum": ["open", "closed", "all"],
+                "description": "Filter by issue state. Defaults to 'open'."
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of results to return (1-100). Default: 10."
+            }
+        },
+        "required": ["repo", "query"]
+    }
+}</code></pre>
+
+    <p>Notice the use of <code>enum</code> for the <code>state</code> parameter. When you have a fixed set of valid values, <strong>always use an enum</strong>. It prevents the model from inventing invalid values like &ldquo;active&rdquo; or &ldquo;pending.&rdquo;</p>
+
+    <div class="tip-box">
+      Include example values in parameter descriptions. Instead of <code>"The repository name"</code>, write <code>"Repository in 'owner/name' format, e.g. 'facebook/react'"</code>. The example removes all ambiguity about the expected format.
+    </div>
+
+    <h3>Rule 4: Return Structured Data</h3>
+
+    <p>When your tool returns data, prefer structured formats over free-form text. The LLM can parse JSON reliably; it struggles with ambiguous prose.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Structured return</div>
+        <div class="prompt-text">{"results": [
+  {"title": "Issue #42", "state": "open", "labels": ["bug"]},
+  {"title": "Issue #37", "state": "open", "labels": ["feature"]}
+], "total_count": 2}</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Unstructured return</div>
+        <div class="prompt-text">Found 2 issues. The first one is Issue #42 which is open and has the bug label. The second is Issue #37, also open, labeled as feature.</div>
+      </div>
+    </div>
+
+    <p>Exception: when the tool returns content meant to be read (like a web page or document), natural language is fine. The rule is: <strong>data should be structured, content can be natural.</strong></p>
+
+    <h2>Writing Descriptions That LLMs Understand</h2>
+
+    <p>This is where most tool designers get it wrong. They write descriptions for humans and forget that an LLM reads them differently. Here&rsquo;s what LLMs need:</p>
+
+    <ul>
+      <li><strong>Be explicit about edge cases:</strong> &ldquo;Returns an empty array if no results are found, not an error.&rdquo;</li>
+      <li><strong>Specify what NOT to do:</strong> &ldquo;Do not use this for binary files. Use read_binary_file instead.&rdquo;</li>
+      <li><strong>Include format examples:</strong> &ldquo;Date format: YYYY-MM-DD. Example: 2026-04-02.&rdquo;</li>
+      <li><strong>Describe the relationship between tools:</strong> &ldquo;Use search_web first to find URLs, then use read_page to get the full content.&rdquo;</li>
+    </ul>
+
+    <div class="pattern-box">
+      <h3>The Description Template</h3>
+      <p>Use this structure for every tool description:</p>
+      <ol>
+        <li><strong>What it does</strong> (one sentence)</li>
+        <li><strong>When to use it</strong> (one sentence about the use case)</li>
+        <li><strong>What it returns</strong> (the format and key fields)</li>
+        <li><strong>Usage tips</strong> (optional &mdash; examples, edge cases, related tools)</li>
+      </ol>
+      <p><strong>Example:</strong> &ldquo;Execute a SQL query against the application database. Use this when you need to look up data, check records, or verify database state. Returns a JSON object with <code>rows</code> (array of objects) and <code>row_count</code> (integer). Only SELECT queries are allowed &mdash; for writes, use the write_record tool instead.&rdquo;</p>
+    </div>
+
+    <h2>Error Handling: Talk to the Agent, Not the Developer</h2>
+
+    <p>When a tool fails, the error message goes straight to the LLM. A stack trace is useless. The agent needs to know: <strong>what happened, why, and what to do next</strong>.</p>
+
+<pre><code># Bad: raw error the agent can't use
+def search_web(query):
+    try:
+        results = api.search(query)
+        return results
+    except Exception as e:
+        return str(e)  # "ConnectionError: HTTPSConnectionPool..."
+
+# Good: structured error the agent can act on
+def search_web(query):
+    try:
+        results = api.search(query)
+        if not results:
+            return {
+                "status": "no_results",
+                "message": f"No results found for '{query}'.",
+                "suggestion": "Try broader search terms or different keywords."
+            }
+        return {"status": "success", "results": results}
+    except RateLimitError:
+        return {
+            "status": "error",
+            "message": "Search API rate limit exceeded.",
+            "suggestion": "Wait a moment and try again, or use cached results."
+        }
+    except ConnectionError:
+        return {
+            "status": "error",
+            "message": "Cannot connect to search API.",
+            "suggestion": "The search service may be down. Try an alternative approach."
+        }</code></pre>
+
+    <p>The pattern: <strong>status + message + suggestion</strong>. The status lets the agent branch programmatically. The message explains what happened. The suggestion tells the agent how to recover. This is the difference between an agent that gets stuck on errors and one that works around them.</p>
+
+    <h2>Tool Granularity: The Goldilocks Problem</h2>
+
+    <p>How many tools should your agent have? How specific should each one be? This is the hardest design choice in agent tool design.</p>
+
+    <div class="pitfall-box">
+      <strong>Too many tools overwhelms the model.</strong> LLMs degrade when presented with large tool sets. With 5&ndash;10 tools, models pick accurately. With 50+ tools, they start choosing wrong tools, hallucinating parameters, or ignoring tools entirely. If you need many tools, use the router pattern (Chapter 2) to split them across specialized agents.
+    </div>
+
+    <h3>Too Fine-Grained: Death by a Thousand Tools</h3>
+
+    <p>Imagine giving your agent these tools for file operations:</p>
+
+<pre><code># Too fine-grained — 8 tools for basic file operations
+tools = [
+    "open_file",       # Open a file handle
+    "read_line",       # Read one line
+    "read_all",        # Read entire file
+    "write_line",      # Write one line
+    "write_all",       # Write entire file
+    "close_file",      # Close file handle
+    "check_exists",    # Check if file exists
+    "get_file_info"    # Get file metadata
+]</code></pre>
+
+    <p>The agent now has to figure out that it needs <code>check_exists</code> &rarr; <code>open_file</code> &rarr; <code>read_all</code> &rarr; <code>close_file</code> just to read a file. That&rsquo;s four tool calls for one logical operation &mdash; wasted tokens, wasted time, more chances for errors.</p>
+
+    <h3>Too Coarse: The God Tool</h3>
+
+<pre><code># Too coarse — one tool that does everything
+tools = [
+    {
+        "name": "file_operation",
+        "description": "Perform any file operation",
+        "parameters": {
+            "operation": {"type": "string"},  # "read", "write", "delete", "list", ...
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+            "options": {"type": "object"}     # ???
+        }
+    }
+]</code></pre>
+
+    <p>Now the agent has to figure out which &ldquo;operation&rdquo; string to pass, what &ldquo;options&rdquo; means, and which parameters apply to which operations. This is equally bad.</p>
+
+    <h3>Just Right: Task-Oriented Tools</h3>
+
+<pre><code># Just right — one tool per meaningful action
+tools = [
+    "read_file",      # Read an entire file's contents
+    "write_file",     # Write content to a file (creates or overwrites)
+    "list_directory",  # List files in a directory
+    "delete_file",     # Delete a file (with confirmation)
+    "search_files"     # Search for files by name or content
+]</code></pre>
+
+    <p>Five tools, each doing one clear thing at a meaningful level of abstraction. The agent doesn&rsquo;t need to manage file handles or choose operations from a menu. Each tool name tells the model exactly what it does.</p>
+
+    <div class="tip-box">
+      <strong>The sweet spot is 5&ndash;15 tools per agent.</strong> Enough to be useful, few enough for the model to reason about. If you need more, split your tools across specialized agents connected by a router.
+    </div>
+
+    <h2>Dangerous Tools: When Tools Can Hurt</h2>
+
+    <p>Some tools can do real damage: deleting files, sending emails, executing database writes, making purchases. These need special treatment.</p>
+
+    <h3>Strategy 1: Confirmation Parameters</h3>
+
+<pre><code>{
+    "name": "delete_file",
+    "description": "Delete a file permanently. This action cannot be undone. "
+                   "Set confirm=true to actually delete; false for a dry run "
+                   "that shows what would be deleted.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to the file to delete"},
+            "confirm": {
+                "type": "boolean",
+                "description": "Must be true to actually delete. false = dry run."
+            }
+        },
+        "required": ["path", "confirm"]
+    }
+}</code></pre>
+
+    <h3>Strategy 2: Read-Only by Default</h3>
+
+    <p>Give the agent read-only tools by default. Only add write tools when the task requires them. An agent with <code>read_file</code> and <code>search_code</code> can investigate safely. Add <code>write_file</code> only when you actually want it to make changes.</p>
+
+    <h3>Strategy 3: Tool Annotations (MCP)</h3>
+
+    <p>MCP introduced <strong>tool annotations</strong> &mdash; metadata that describes a tool&rsquo;s behavior characteristics:</p>
+
+<pre><code># MCP tool with annotations
+{
+    "name": "drop_table",
+    "description": "Drop a database table and all its data.",
+    "inputSchema": { ... },
+    "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+    }
+}</code></pre>
+
+    <p>The <code>destructiveHint</code> flag tells the agent (and any approval system) that this tool can cause irreversible changes. Frameworks can automatically require human approval for tools marked as destructive &mdash; which is exactly what Claude Code does with its permission model.</p>
+
+    <h2>Agent Trace: Good Tools vs Bad Tools</h2>
+
+    <p>Let&rsquo;s see the difference tool design makes. Here&rsquo;s an agent trying to find and fix a bug, first with bad tools, then with good ones:</p>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>I need to find the file with the login bug. Let me search for it.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>file_operation(operation="search", path="src/", content="login")</code> &mdash; using a poorly-designed god tool</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span><code>Error: 'content' parameter not valid for 'search' operation. Use 'query' instead.</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>file_operation(operation="search", path="src/", query="login")</code> &mdash; guessing the right param name</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span><code>Found 47 matches</code> &mdash; raw count, no file paths or context</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>I got a count but no details. I don&rsquo;t know which files matched. Let me try a different approach&hellip;</span>
+      </div>
+    </div>
+
+    <p>Three tool calls and the agent still has nothing useful. Now with well-designed tools:</p>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>I need to find the file with the login bug. Let me search the codebase.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>search_files(query="authenticate", path="src/", max_results=5)</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span><code>{"results": [{"file": "src/auth/login.py", "line": 42, "snippet": "def authenticate(user, password):"}], "total": 1}</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>read_file(path="src/auth/login.py")</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span>Full file contents with line numbers. Bug found at line 47.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Respond</span>
+        <span>Found the bug in <code>src/auth/login.py:47</code> &mdash; ready to fix it.</span>
+      </div>
+    </div>
+
+    <p>Two tool calls, clear results, bug located. <strong>That&rsquo;s the power of good tool design.</strong></p>
+
+    <h2>Tool Composition: Building Complex from Simple</h2>
+
+    <p>Instead of building one massive tool that does everything, build simple tools that compose well together. The agent figures out the composition.</p>
+
+<pre><code># Simple, composable tools
+tools = [
+    "search_web",       # Find information online
+    "read_page",        # Get full content of a URL
+    "extract_data",     # Pull structured data from text
+    "save_to_file",     # Save content to local file
+]
+
+# The agent composes them naturally:
+# search_web("NVIDIA quarterly earnings 2026")
+#   → read_page("https://investor.nvidia.com/...")
+#     → extract_data(text=page_content, fields=["revenue", "profit", "guidance"])
+#       → save_to_file(path="report.json", content=extracted_data)</code></pre>
+
+    <p>Each tool is simple and testable on its own. Together, they handle complex workflows. The LLM figures out the chaining &mdash; that&rsquo;s exactly the kind of judgment call agents excel at.</p>
+
+    <h2>MCP: The Standard for Tool Distribution</h2>
+
+    <p>Until 2024, every agent framework had its own way to define and connect tools. MCP (Model Context Protocol) changed that.</p>
+
+    <div class="highlight-box">
+      <h3>MCP = USB-C for AI Tools</h3>
+      <p>MCP is an open standard that lets any tool connect to any agent through a common protocol. Define your tools once as an MCP server, and any MCP-compatible agent (Claude, Cursor, VS Code, custom agents) can use them. In 2025, MCP was donated to the Linux Foundation&rsquo;s Agentic AI Foundation with backing from OpenAI, Google, Microsoft, and AWS.</p>
+    </div>
+
+    <p>An MCP server is just a process that exposes tools over a standardized protocol. Here&rsquo;s a minimal example:</p>
+
+<pre><code>from mcp.server import FastMCP
+
+app = FastMCP("my-tools")
+
+@app.tool()
+def search_issues(repo: str, query: str, state: str = "open") -> dict:
+    """Search for GitHub issues in a repository.
+
+    Args:
+        repo: Repository in 'owner/name' format, e.g. 'facebook/react'
+        query: Search terms to match against issue title and body
+        state: Filter by state: 'open', 'closed', or 'all'. Default: 'open'
+
+    Returns:
+        Dict with 'issues' array and 'total_count' integer.
+    """
+    # Your implementation here
+    issues = github_api.search_issues(repo, query, state)
+    return {"issues": issues, "total_count": len(issues)}
+
+app.run()</code></pre>
+
+    <p>The <code>FastMCP</code> helper generates the JSON Schema from your Python type hints and docstring. One definition, usable everywhere. The 2026 MCP roadmap adds OAuth 2.1 authentication, agent-to-agent coordination, and a verified server registry.</p>
+
+    <h2>Testing Tools Before Giving Them to Agents</h2>
+
+    <p><strong>Always test your tools independently before giving them to an agent.</strong> If a tool has a bug, the agent will waste cycles trying to work around it &mdash; and you&rsquo;ll blame the model when the real problem is your tool.</p>
+
+    <ul class="checklist">
+      <li class="checked">Call each tool with valid inputs &mdash; does it return the expected format?</li>
+      <li class="checked">Call each tool with edge-case inputs &mdash; empty strings, nulls, extreme values</li>
+      <li class="checked">Call each tool with invalid inputs &mdash; does it return a useful error message?</li>
+      <li class="checked">Verify the description is complete &mdash; could a stranger use the tool from the description alone?</li>
+      <li class="checked">Check parameter types match actual behavior &mdash; if you say &ldquo;integer,&rdquo; does the tool fail on &ldquo;42&rdquo; (string)?</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>The description test:</strong> show your tool definition (name, description, parameters) to a colleague without any other context. Can they use the tool correctly? If not, neither can the LLM.
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Design a File Manager Agent&rsquo;s Tool Set</h3>
+      <p>Design a complete tool set for an agent that can manage files in a project directory. Define <strong>5 tools</strong> with full JSON schemas. For each tool, provide:</p>
+      <ol>
+        <li>A clear, verb-based name</li>
+        <li>A description following the template (what/when/returns/tips)</li>
+        <li>A complete <code>input_schema</code> with typed, described parameters</li>
+        <li>The expected return format (show an example response)</li>
+        <li>Error cases and how they&rsquo;re returned</li>
+      </ol>
+      <p>Your tool set should cover: reading files, writing files, listing directories, searching file contents, and getting file metadata. Think about:</p>
+      <ul>
+        <li>What parameters are required vs optional?</li>
+        <li>What constraints (enums, min/max) apply?</li>
+        <li>Which tools are &ldquo;dangerous&rdquo; and need safety measures?</li>
+        <li>How should errors be returned so the agent can recover?</li>
+      </ul>
+      <p>Bonus: implement one of your tools in Python and write 3 test cases for it (happy path, edge case, error case).</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now know how to design tools that agents can use reliably. You understand the anatomy of a tool, the golden rules, error handling, granularity, safety, and MCP. It&rsquo;s time to put it all together.</p>
+
+    <p>In <a href="04-first-agent.html">Chapter 4: Your First Agent</a>, we&rsquo;ll build a complete, working research agent from scratch. No frameworks &mdash; just Python, an LLM API, and the tools you now know how to design. You&rsquo;ll have a real agent running on your machine by the end of the chapter.</p>
+
+    <nav class="chapter-nav">
+      <a href="02-agent-architectures.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Agent Architectures</span>
+      </a>
+      <a href="04-first-agent.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Your First Agent</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

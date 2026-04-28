@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Working with Large Codebases &mdash; AI-Driven Development</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Development</span>
+    <div class="nav-links">
+      <a href="11-code-review-quality.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="13-building-full-projects.html">Next &rarr;</a>
+      <a href="maps/12-large-codebases-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Working with Large Codebases</h1>
+    <p class="subtitle">Context strategies, refactoring at scale, migrations, and legacy code archaeology</p>
+  </header>
+
+  <main>
+
+    <!-- The Context Problem -->
+    <section>
+      <h2>The Context Problem at Scale</h2>
+
+      <p>Everything we've covered so far works beautifully on small-to-medium projects. But enterprise codebases are different beasts: hundreds of modules, millions of lines, decades of history. Even with 1M token context windows, you can't fit the whole thing in. And if you could, the model would drown in noise.</p>
+
+      <p>The challenge isn't having too little context &mdash; it's having too much. The skill is knowing what to load, what to summarize, and what to leave out entirely.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">1M</div>
+          <div class="stat-label">Max tokens in context &mdash; roughly 25,000 lines of code, or one medium module of a large codebase</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">10-100x</div>
+          <div class="stat-label">Typical enterprise codebase exceeds context window by this factor</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">80%</div>
+          <div class="stat-label">Of the codebase is irrelevant to any given task &mdash; the art is identifying the 20% that matters</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Strategic Context Loading -->
+    <section>
+      <h2>Strategic Context Loading</h2>
+
+      <p>For large codebases, you need a deliberate strategy for what the AI sees. Think in three tiers:</p>
+
+      <h3>Tier 1: Always Loaded (CLAUDE.md)</h3>
+      <p>Project-level instructions, architecture overview, build commands, conventions. This is your permanent context &mdash; the AI sees it on every invocation. Keep it concise: 500-1000 lines maximum for the root CLAUDE.md.</p>
+
+      <h3>Tier 2: Task-Relevant Files</h3>
+      <p>The files directly involved in the current task plus their immediate dependencies. Let the agent discover these through search rather than pre-loading everything.</p>
+
+      <h3>Tier 3: Reference Only</h3>
+      <p>Example files the AI should follow but doesn't need to modify. Point to them by path ("follow the pattern in src/services/OrderService.ts") rather than loading their contents.</p>
+
+      <pre><code># Good: Let the agent navigate strategically
+$ claude "Add email verification to the signup flow.
+  The relevant code is in:
+  - src/auth/ (authentication module)
+  - src/email/ (email service)
+  Follow the pattern of password reset in src/auth/reset.ts
+  Don't modify anything outside src/auth/ and src/email/"
+
+# Bad: Trying to pre-load everything
+$ claude "Here is our entire auth module [3000 lines],
+  our email module [2000 lines], our user model [500 lines],
+  our config [200 lines], our middleware [800 lines]...
+  Now add email verification."</code></pre>
+
+      <div class="tip-box">
+        <strong>Trust the agent's navigation.</strong> Claude Code can search your codebase, read files on demand, and follow import chains. Don't try to manually load every relevant file into context. Give the agent the starting point and let it explore. It's often better at finding relevant code than you are because it can scan systematically.
+      </div>
+    </section>
+
+    <!-- Architecture Documentation -->
+    <section>
+      <h2>Architecture Documentation as AI Enabler</h2>
+
+      <p>In large codebases, architecture documentation isn't a nice-to-have &mdash; it's the map that makes AI effective. Without it, the AI navigates blind.</p>
+
+      <h3>Essential Documents for Large Projects</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Document</th>
+            <th>Purpose for AI</th>
+            <th>Where to Put It</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Architecture overview</strong></td>
+            <td>Tells AI how modules relate, where boundaries are</td>
+            <td>CLAUDE.md or docs/architecture.md</td>
+          </tr>
+          <tr>
+            <td><strong>Module map</strong></td>
+            <td>Tells AI where to find code for specific domains</td>
+            <td>CLAUDE.md section listing modules</td>
+          </tr>
+          <tr>
+            <td><strong>ADRs</strong></td>
+            <td>Tells AI <em>why</em> decisions were made, preventing it from reverting them</td>
+            <td>docs/adr/ directory</td>
+          </tr>
+          <tr>
+            <td><strong>API contracts</strong></td>
+            <td>Tells AI the interfaces between services</td>
+            <td>OpenAPI specs, protobuf definitions</td>
+          </tr>
+          <tr>
+            <td><strong>Directory CLAUDE.md</strong></td>
+            <td>Module-specific context, conventions, and rules</td>
+            <td>Each major module root</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><span class="profession-tag">Team Lead</span> Invest in Architecture Decision Records (ADRs). When AI encounters a pattern it wants to "improve," an ADR explains why the current approach was chosen: "We use polling instead of WebSockets for notification delivery because our load balancer doesn't support sticky sessions (ADR-047)." Without this context, the AI will helpfully refactor to WebSockets and break your infrastructure.</p>
+
+      <h3>Directory-Level CLAUDE.md</h3>
+
+      <p>For large projects, a single root CLAUDE.md isn't enough. Add CLAUDE.md files to major module directories with module-specific instructions:</p>
+
+      <pre><code># services/payments/CLAUDE.md
+# Module: Payment Processing
+
+## Critical Rules
+- ALL changes require review by the payments team
+- NEVER modify the payment gateway integration without updating
+  the rollback procedure in docs/payments/rollback.md
+- All monetary values use Decimal, NEVER float
+- All API responses must include idempotency_key
+- PCI compliance: no card numbers in logs or error messages
+
+## Architecture
+- Gateway adapter pattern: see adapters/ for Stripe and PayPal
+- All transactions go through TransactionService (single entry point)
+- Event sourcing for audit trail: see events/
+
+## Testing
+- Integration tests require PAYMENT_TEST_MODE=sandbox env var
+- Mock gateway responses are in tests/fixtures/gateway/</code></pre>
+
+      <p><span class="profession-tag">Backend</span> The payments module above has strict rules that a generic CLAUDE.md can't capture. Directory-level instructions ensure the AI respects module-specific constraints even in a massive codebase. The agent loads the relevant CLAUDE.md when it enters that directory.</p>
+    </section>
+
+    <!-- Refactoring at Scale -->
+    <section>
+      <h2>Refactoring with AI at Scale</h2>
+
+      <p>Large-scale refactoring is where AI shines brightest &mdash; and where it's most dangerous. The key is breaking massive changes into safe, incremental steps.</p>
+
+      <h3>The Safe Refactoring Pattern</h3>
+
+      <div class="workflow-steps">
+        <div class="step">Understand</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Plan</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Verify Tests</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Refactor Module</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Run Tests</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Commit</div>
+      </div>
+
+      <ol>
+        <li><strong>Understand:</strong> Ask AI to map the code that will be affected. "Find all usages of UserService.getUser() across the codebase."</li>
+        <li><strong>Plan:</strong> Break the refactoring into independently deployable steps. Each step should leave the codebase in a working state.</li>
+        <li><strong>Verify tests:</strong> Ensure adequate test coverage <em>before</em> refactoring. If coverage is low, generate tests first (Chapter 8).</li>
+        <li><strong>Refactor one module:</strong> Apply the change to one module at a time. Commit each module separately.</li>
+        <li><strong>Run tests:</strong> Full suite after every module. Catch regressions immediately.</li>
+        <li><strong>Commit:</strong> One commit per module. If something breaks, you can revert one module without losing the rest.</li>
+      </ol>
+
+      <pre><code># Example: Rename UserService.getUser() to UserService.findById()
+$ claude "Plan a safe refactoring to rename UserService.getUser()
+  to UserService.findById() across the entire codebase.
+
+  Requirements:
+  - Each module should be updated in a separate commit
+  - Keep backward compatibility during the migration (deprecate old method)
+  - Run tests after each module change
+  - List all files that will be affected before making any changes"</code></pre>
+
+      <div class="warning-box">
+        <strong>Never refactor across the whole codebase in a single commit.</strong> If something breaks, you need to know which module's change caused it. One commit per module gives you precise revert granularity. This is slower but dramatically safer for large codebases.
+      </div>
+    </section>
+
+    <!-- Migration Stories -->
+    <section>
+      <h2>AI-Assisted Migrations</h2>
+
+      <p>Migrations are the most tedious work in software engineering: thousands of files, mechanical changes, occasional tricky edge cases. AI handles the mechanical part; you handle the edge cases.</p>
+
+      <h3><span class="profession-tag">Android Dev</span> Java to Kotlin Migration</h3>
+
+      <pre><code># Phase 1: Identify migration candidates
+$ claude "List all Java files in the project, sorted by dependency count
+  (fewest dependencies first). These are the safest to migrate first."
+
+# Phase 2: Migrate one file at a time
+$ claude "Convert src/data/models/User.java to idiomatic Kotlin.
+  - Use data class where appropriate
+  - Replace nullable types with Kotlin null safety
+  - Use Kotlin property syntax instead of getters/setters
+  - Ensure Java interop (add @JvmStatic, @JvmOverloads where needed)
+  - Run ./gradlew testDebug after conversion"
+
+# Phase 3: Gradually remove Java interop annotations
+# as callers are also migrated to Kotlin</code></pre>
+
+      <h3><span class="profession-tag">Full-Stack</span> REST to GraphQL Migration</h3>
+
+      <pre><code># Strangler fig approach: wrap existing REST in GraphQL
+$ claude "Create a GraphQL schema that mirrors our existing REST API
+  in routes/api/v2/. For each endpoint:
+  1. Create a GraphQL type matching the response model
+  2. Create a resolver that calls the existing service layer
+  3. Add the resolver to the schema
+  Don't modify the REST endpoints — they stay active during migration.
+  Start with the read-only endpoints (GET) before mutations (POST/PUT/DELETE)."</code></pre>
+
+      <p><span class="profession-tag">DevOps</span> For infrastructure migrations (on-prem to cloud, one cloud to another), AI generates the new IaC while you manage the cutover strategy. "Convert this CloudFormation template to Terraform, preserving all resource configurations, tags, and IAM policies. Output a checklist of manual steps needed for the actual migration."</p>
+    </section>
+
+    <!-- Legacy Code Archaeology -->
+    <section>
+      <h2>Legacy Code: AI as Archaeologist</h2>
+
+      <p>Every large codebase has dark corners: modules nobody understands, code written by developers who left years ago, undocumented business logic hidden in 2000-line functions. AI is an excellent archaeologist for these situations.</p>
+
+      <pre><code># Understanding undocumented code
+$ claude "Read src/billing/invoice_calculator.py (800 lines) and:
+  1. Explain what this module does in plain language
+  2. Identify the main public functions and their purposes
+  3. Map the data flow from input to output
+  4. List any business rules embedded in the logic
+  5. Flag any suspicious patterns (hardcoded values, commented-out
+     code, TODO comments, catch-all exception handlers)
+  6. Identify which parts are most fragile (complex conditionals,
+     implicit dependencies, global state mutations)"
+
+# AI reads the code and produces a documentation report.
+# You verify the report against your domain knowledge.
+# The report becomes the starting point for a proper CLAUDE.md
+# or architecture document for this module.</code></pre>
+
+      <div class="tip-box">
+        <strong>AI-generated documentation needs verification.</strong> The AI can describe what the code <em>does</em>, but it can't tell you why certain business rules exist. After AI generates the documentation, review it with someone who understands the domain. The combination of AI's code-reading ability and human domain knowledge produces documentation that neither could create alone.
+      </div>
+    </section>
+
+    <!-- Monorepo Strategies -->
+    <section>
+      <h2>Monorepo Strategies</h2>
+
+      <p>Monorepos amplify the context problem: one repository, many services, shared libraries, different tech stacks in different directories. The key is scoping the AI to the relevant slice.</p>
+
+      <h3>Scoping AI to Modules</h3>
+
+      <pre><code># Navigate to the specific module first
+$ cd services/order-service
+$ claude "Add rate limiting to the order creation endpoint.
+  Only look at code within this module.
+  Use the shared rate-limiter from libs/rate-limiter/."
+
+# Or scope with explicit boundaries
+$ claude "Working only within services/notification-service/:
+  Add support for SMS notifications.
+  Use the Twilio SDK already in our package.json.
+  Follow the email notification pattern in notifiers/email.ts."</code></pre>
+
+      <p><span class="profession-tag">Team Lead</span> For monorepos, establish ownership boundaries in the root CLAUDE.md:</p>
+
+      <pre><code># Root CLAUDE.md excerpt for monorepo
+## Module Ownership
+- services/auth/ — Auth team. Changes require auth-team review.
+- services/payments/ — Payments team. PCI compliance rules apply.
+- services/orders/ — Commerce team.
+- libs/shared/ — Platform team. Changes affect all services.
+- infra/ — DevOps team. All changes need terraform plan output.
+
+## Cross-Module Rules
+- Services communicate ONLY via the API gateway or message queue
+- NEVER import directly from another service's internal modules
+- Shared types go in libs/shared-types/
+- Database schemas are service-private (no shared databases)</code></pre>
+    </section>
+
+    <!-- The Strangler Fig Pattern -->
+    <section>
+      <h2>The Strangler Fig Pattern with AI</h2>
+
+      <p>The strangler fig pattern &mdash; incrementally replacing legacy code with new code while both run in parallel &mdash; pairs perfectly with AI. AI handles the high-volume mechanical work of wrapping and replacing, while you manage the architectural cutover.</p>
+
+      <div class="workflow-steps">
+        <div class="step">Wrap Legacy</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Build New</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Route Traffic</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Verify Parity</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Remove Legacy</div>
+      </div>
+
+      <ol>
+        <li><strong>Wrap:</strong> AI creates adapter interfaces around legacy modules, exposing clean APIs</li>
+        <li><strong>Build:</strong> AI implements the new version behind the same interfaces</li>
+        <li><strong>Route:</strong> Feature flags toggle between legacy and new implementations</li>
+        <li><strong>Verify:</strong> Both implementations run in parallel; compare outputs for parity</li>
+        <li><strong>Remove:</strong> Once parity is confirmed, remove the legacy code and adapters</li>
+      </ol>
+
+      <p><span class="profession-tag">Freelancer</span> The strangler fig is your friend for client projects with legacy codebases. You can modernize incrementally without a risky big-bang rewrite. AI generates the adapters and new implementations; you manage the migration plan and client communication. Each phase delivers visible progress while keeping the existing system running.</p>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <div class="exercise-box">
+        <h3>Exercise: Document an Undocumented Module</h3>
+        <p>Find a poorly documented module in your codebase and use AI to create comprehensive documentation:</p>
+        <ol>
+          <li><strong>Identify the module:</strong> Choose a module or class that lacks documentation and that people on your team find confusing or intimidating.</li>
+          <li><strong>AI archaeology:</strong> Ask Claude Code to read the module and generate:
+            <ul>
+              <li>A plain-language explanation of what it does</li>
+              <li>A list of public functions/classes with descriptions</li>
+              <li>A data flow diagram (described in text)</li>
+              <li>Business rules embedded in the logic</li>
+              <li>Suspicious patterns and potential risks</li>
+            </ul>
+          </li>
+          <li><strong>Verify with domain experts:</strong> Share the AI-generated documentation with someone who knows the business context. What did the AI get right? What did it miss or misunderstand?</li>
+          <li><strong>Create a CLAUDE.md</strong> for the module directory, incorporating the verified documentation. Include conventions, constraints, and warnings for future AI sessions.</li>
+          <li><strong>Test the CLAUDE.md:</strong> Ask Claude Code to make a small change in the module. Does the new CLAUDE.md help it make better decisions?</li>
+        </ol>
+        <p>This exercise produces real value: a previously opaque module becomes documented, and future AI interactions with it become more effective. It's one of the highest-ROI exercises in this book.</p>
+      </div>
+    </section>
+
+    <!-- Further Reading -->
+    <section>
+      <h2>Further Reading</h2>
+      <div class="tip-box">
+        <strong>Recommended resources:</strong>
+        <ul>
+          <li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank">Effective Context Engineering for AI Agents</a> (Anthropic) &mdash; Context curation strategies for large projects</li>
+          <li><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents" target="_blank">Effective Harnesses for Long-Running Agents</a> (Anthropic) &mdash; Managing agents in multi-module codebases</li>
+          <li><a href="https://codescene.com/blog/agentic-ai-coding-best-practice-patterns-for-speed-with-quality" target="_blank">Agentic AI Coding: Best Practice Patterns</a> (CodeScene) &mdash; Code health assessment before AI changes</li>
+        </ul>
+      </div>
+    </section>
+
+    <p>You now know how to apply AI effectively in codebases of any size. The next chapter brings it all together: <strong>building full projects</strong> from idea to deployment using AI at every phase.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="11-code-review-quality.html" class="prev">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Chapter 11: Code Review and Quality</span>
+      </a>
+      <a href="13-building-full-projects.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Chapter 13: Building Full Projects</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

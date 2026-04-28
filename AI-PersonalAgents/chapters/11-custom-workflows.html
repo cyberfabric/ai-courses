@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Building Custom Workflows &amp; Integrations | Personal AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Personal AI Agents For Dummies</span>
+    <div class="nav-links">
+      <a href="10-security-privacy.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="12-multi-agent-life.html">Next &rarr;</a>
+      <a href="maps/11-custom-workflows-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Building Custom Workflows &amp; Integrations</h1>
+    <p class="subtitle">Plugins, webhooks, and multi-service orchestration &mdash; make your agent do anything</p>
+  </header>
+
+  <main>
+
+    <h2>The Integration Mindset</h2>
+
+    <p>In the last chapter you locked down your agent's security. Now it's time to unlock its full potential.</p>
+
+    <p>Up to this point, you've been using OpenClaw's built-in integrations: Home Assistant, email, calendar, weather. Those cover the basics beautifully. But here's the thing &mdash; <strong>every service with an API is a potential agent tool</strong>.</p>
+
+    <p>Your favorite restaurant has an online reservation system? That's an API. Your building's package locker sends email notifications? That's a trigger. Your bank sends SMS alerts? That's data. Your electric company publishes a usage dashboard? That's an integration waiting to happen.</p>
+
+    <p>Think of your agent as a universal remote control. Out of the box it controls a few devices. But with plugins, it can control <em>anything</em>.</p>
+
+    <div class="highlight-box">
+      <h3>What You'll Build in This Chapter</h3>
+      <p>By the end of this chapter, you'll understand how to connect your agent to any service, chain multiple actions into workflows, and trigger automations from external events. You'll go from "my agent does what it was built to do" to "my agent does whatever I need."</p>
+    </div>
+
+    <h2>OpenClaw's Plugin System</h2>
+
+    <p>OpenClaw extends its capabilities through <strong>plugins</strong> (also called tools). Each plugin teaches the agent a new skill. The built-in ones handle weather, reminders, and lists. Custom plugins handle everything else.</p>
+
+    <h3>Anatomy of a Plugin</h3>
+
+    <p>A plugin is a simple file that defines: what the tool does (so the LLM knows when to use it), what inputs it needs, and what code runs when it's called.</p>
+
+    <pre><code>// plugins/restaurant-reservation.js
+module.exports = {
+  name: "reserve_restaurant",
+  description: "Make a restaurant reservation. Use when the user wants to book a table.",
+  parameters: {
+    restaurant: { type: "string", description: "Restaurant name" },
+    date: { type: "string", description: "Date in YYYY-MM-DD format" },
+    time: { type: "string", description: "Time in HH:MM format" },
+    party_size: { type: "number", description: "Number of guests" }
+  },
+  async execute({ restaurant, date, time, party_size }) {
+    // Call the restaurant's booking API
+    const response = await fetch("https://api.opentable.com/v2/reserve", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${process.env.OPENTABLE_KEY}` },
+      body: JSON.stringify({ restaurant, date, time, covers: party_size })
+    });
+    const result = await response.json();
+    return result.confirmation
+      ? `Reservation confirmed: ${restaurant}, ${date} at ${time} for ${party_size}`
+      : `Could not book: ${result.error}. Try a different time?`;
+  }
+};</code></pre>
+
+    <p>That's it. The LLM reads the <code>name</code> and <code>description</code> to decide when to use it. The <code>parameters</code> tell it what information to collect from you. The <code>execute</code> function does the actual work.</p>
+
+    <div class="tip-box">
+      You don't need to be a JavaScript expert to write plugins. The pattern is always the same: describe the tool, define what inputs it needs, call an API, return the result. If you can make a <code>fetch</code> call, you can write a plugin.
+    </div>
+
+    <h3>Registering Plugins</h3>
+
+    <pre><code># config.yaml
+plugins:
+  directory: ./plugins
+  enabled:
+    - restaurant-reservation
+    - package-tracker
+    - electricity-usage
+    - pet-vet-appointments</code></pre>
+
+    <p>Drop a plugin file in the <code>plugins/</code> directory, add it to the enabled list, restart OpenClaw. Your agent now has a new skill.</p>
+
+    <h2>Building a Custom Integration Step by Step</h2>
+
+    <p>Let's build a real plugin from scratch: a <strong>package tracker</strong> that checks delivery status when you ask "where's my package?"</p>
+
+    <h3>Step 1: Define the Tool</h3>
+
+    <pre><code>// plugins/package-tracker.js
+module.exports = {
+  name: "track_package",
+  description: "Track a package delivery status. Use when the user asks about a delivery or package.",
+  parameters: {
+    tracking_number: {
+      type: "string",
+      description: "The tracking number. If not provided, check the most recent package."
+    }
+  },
+  async execute({ tracking_number }) {
+    // Use a tracking API (e.g., AfterShip, 17track, or carrier-specific)
+    const response = await fetch(
+      `https://api.aftership.com/v4/trackings/${tracking_number}`,
+      { headers: { "aftership-api-key": process.env.AFTERSHIP_KEY } }
+    );
+    const data = await response.json();
+    const tracking = data.data.tracking;
+
+    return {
+      carrier: tracking.slug,
+      status: tracking.tag,
+      location: tracking.checkpoints[0]?.location || "Unknown",
+      expected: tracking.expected_delivery,
+      last_update: tracking.checkpoints[0]?.message || "No updates yet"
+    };
+  }
+};</code></pre>
+
+    <h3>Step 2: Test It</h3>
+
+    <div class="agent-chat-box">
+      <div class="user-msg">Where's my package from Amazon?</div>
+      <div class="agent-msg">I found your most recent tracking number (from the order confirmation email last Tuesday):
+
+📦 <strong>Tracking:</strong> BG123456789
+<strong>Carrier:</strong> Speedy
+<strong>Status:</strong> Out for delivery
+<strong>Location:</strong> Sofia distribution center
+<strong>Expected:</strong> Today by 6 PM
+<strong>Last update:</strong> "Package loaded on delivery vehicle" (8:47 AM)
+
+Looks like it'll arrive this afternoon! Want me to remind you to check the locker at 6 PM?</div>
+    </div>
+
+    <p>Notice the agent pulled the tracking number from a previous email (using the email integration from <a href="07-calendar-email-comms.html">Chapter 7</a>). That's the power of connecting integrations &mdash; they build on each other.</p>
+
+    <h2>Webhook-Driven Workflows</h2>
+
+    <p>Plugins let your agent <em>pull</em> information. Webhooks let external services <em>push</em> information to your agent. A webhook is just a URL that, when hit, triggers an action.</p>
+
+    <pre><code># config.yaml
+webhooks:
+  enabled: true
+  port: 3701
+  endpoints:
+    - path: /package-delivered
+      action: "A package was just delivered. Tell me what it is and log the expense."
+    - path: /doorbell
+      action: "Someone rang the doorbell. Check the camera and tell me who it is."
+    - path: /smoke-alarm
+      action: "URGENT: Smoke alarm triggered! Alert all household members immediately."</code></pre>
+
+    <p>Now your smart doorbell can hit <code>http://localhost:3701/doorbell</code> when someone rings, and your agent sends you a Telegram message with the camera snapshot and a guess at who it is (delivery person? Neighbor? Unknown?).</p>
+
+    <div class="warning-box">
+      <strong>Never expose webhook endpoints to the internet.</strong> Keep them on your local network only. If you need external services to trigger webhooks, use a secure tunnel (like Cloudflare Tunnel) with authentication, not a plain port forward.
+    </div>
+
+    <h2>Chaining Actions: The Real Magic</h2>
+
+    <p>Individual plugins are useful. <em>Chained</em> plugins are transformative. Chaining means one event triggers a sequence of actions across multiple services.</p>
+
+    <div class="life-hack-box">
+      <h3>The "Package Delivered" Chain</h3>
+      <p>You get a package delivery notification. Here's what your agent does automatically:</p>
+      <div class="workflow-steps">
+        <div class="step">Delivery Email</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Update Shopping List</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Log Expense</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Notify You</div>
+      </div>
+      <ol>
+        <li><strong>Email detected:</strong> Agent reads "Your order has been delivered" from Amazon</li>
+        <li><strong>Shopping list updated:</strong> The headphones you ordered are removed from your wishlist</li>
+        <li><strong>Expense logged:</strong> 459 BGN → Electronics category → budget updated</li>
+        <li><strong>You're notified:</strong> "Your Roborock Q7 Max was delivered! Expense logged (459 BGN, Electronics). This month's shopping budget: 659/800 BGN."</li>
+      </ol>
+      <p>Four actions from one email, zero effort from you. And if the expense pushes you over the shopping budget, the agent flags it: <em>"Heads up — you're over your monthly shopping budget by 59 BGN. Want to adjust next month's allocation?"</em></p>
+    </div>
+
+    <h3>Defining Chains in Config</h3>
+
+    <pre><code># Workflow chains
+workflows:
+  package_delivered:
+    trigger: "email with subject containing 'delivered' or 'доставена'"
+    steps:
+      - action: "Identify what was delivered and the cost"
+      - action: "Remove item from wishlist or shopping list if present"
+      - action: "Log the expense to the correct category"
+      - action: "Send me a summary notification"
+      - condition: "If this pushes any budget over 90%, include a warning"
+
+  grocery_receipt:
+    trigger: "photo sent with caption containing 'receipt' or 'касова бележка'"
+    steps:
+      - action: "Scan receipt and extract items with prices"
+      - action: "Log total to Groceries expense category"
+      - action: "Check items against the shopping list, mark purchased"
+      - action: "If any item is significantly more expensive than usual, flag it"</code></pre>
+
+    <h2>Scheduled Workflows</h2>
+
+    <p>You've seen scheduled tasks in previous chapters (morning briefings, weekly health summaries). Let's look at the full power of scheduled workflows.</p>
+
+    <pre><code>schedules:
+  daily_briefing:
+    cron: "0 7 * * 1-5"    # Weekday mornings at 7 AM
+    action: |
+      Morning briefing:
+      1. Weather today and tomorrow
+      2. Calendar events for today
+      3. Unread urgent emails (from last night)
+      4. Budget status (anything approaching limit?)
+      5. Medication reminders due today
+      6. One item from my reading list to motivate me
+
+  weekly_review:
+    cron: "0 19 * * 0"     # Sunday 7 PM
+    action: |
+      Weekly life review:
+      1. Financial summary (spending by category, budget status)
+      2. Health summary (weight trend, workouts, sleep, medication)
+      3. Calendar preview for next week
+      4. Open tasks and incomplete reminders
+      5. Subscription renewal alerts for next week
+      6. One positive observation about this week
+
+  monthly_report:
+    cron: "0 20 1 * *"     # First day of month at 8 PM
+    action: |
+      Monthly report:
+      1. Total spending vs budget (with chart description)
+      2. Top 5 expenses this month
+      3. Subscription cost total and any unused services
+      4. Health trends (weight, workout consistency)
+      5. Books read, shows watched, goals progress
+      6. Comparison to last month</code></pre>
+
+    <div class="tip-box">
+      Start with just the daily briefing. Add the weekly review after a week. Add the monthly report after a month. Don't configure everything at once &mdash; you'll get overwhelmed by notifications. Build up gradually as each one proves its value.
+    </div>
+
+    <h2>Conditional Logic</h2>
+
+    <p>Workflows become truly smart when they include conditions &mdash; if/then logic that adapts behavior based on data.</p>
+
+    <pre><code>workflows:
+  smart_grocery_planning:
+    trigger: "Sunday at 5 PM"
+    steps:
+      - action: "Check this week's grocery spending"
+      - condition: "If over 150 BGN"
+        then: "Suggest budget-friendly meal plan for next week using pantry staples"
+        else: "Suggest normal meal plan for next week"
+      - action: "Generate shopping list from the meal plan"
+      - condition: "If any ingredient is on sale at Kaufland or Lidl"
+        then: "Note the deal and suggest buying extra"
+
+  weather_aware_commute:
+    trigger: "Weekday mornings at 6:30 AM"
+    steps:
+      - action: "Check today's weather"
+      - condition: "If rain probability > 50%"
+        then: "Remind me to take an umbrella and suggest leaving 10 min early"
+      - condition: "If temperature drops below 5°C"
+        then: "Remind me to grab a heavy coat"
+      - condition: "If there are traffic alerts on my route"
+        then: "Suggest an alternative route or earlier departure"</code></pre>
+
+    <div class="agent-chat-box">
+      <div class="user-msg">[Sunday 5 PM — automatic trigger]</div>
+      <div class="agent-msg">📊 <strong>Weekly grocery check:</strong> You spent 168 BGN this week (18 over your 150 BGN budget).
+
+Since we're over budget, here's a <strong>budget-friendly meal plan</strong> for next week using what's in your pantry:
+
+<strong>Mon:</strong> Pasta aglio e olio (pantry staples, ~3 BGN)
+<strong>Tue:</strong> Rice and bean bowls with whatever veggies are cheapest (Sam-friendly)
+<strong>Wed:</strong> Egg fried rice with frozen peas (pantry + freezer)
+<strong>Thu:</strong> Lentil soup — book club night, make a big pot (fast, cheap)
+<strong>Fri:</strong> Homemade flatbread pizzas (flour, tomato paste, whatever toppings)
+
+Estimated grocery cost: ~65 BGN (well under budget to compensate).
+
+Also: chicken breast is on sale at Lidl this week (7.99 BGN/kg instead of 12.99). Worth stocking up?
+
+Want me to finalize this plan and generate the list?</div>
+    </div>
+
+    <p>The agent checked spending, detected an overage, automatically switched to budget mode, prioritized pantry ingredients, and spotted a deal. That's conditional logic working across finance, meal planning, and shopping in one workflow.</p>
+
+    <h2>Multi-Service Orchestration</h2>
+
+    <p>The most powerful workflows span 3 or more services. Here are examples that connect everything you've built across this course:</p>
+
+    <h3>The "Dinner Party" Workflow</h3>
+
+    <div class="workflow-steps">
+      <div class="step">Calendar Event</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Guest Dietary Check</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Meal Plan</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Shopping List</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Home Setup</div>
+    </div>
+
+    <pre><code>workflows:
+  dinner_party:
+    trigger: "calendar event with 'dinner party' in title, 4 hours before"
+    steps:
+      - action: "Check guest list and dietary restrictions from contacts"
+      - action: "Verify meal plan accommodates all guests"
+      - action: "Check if all ingredients were purchased (cross-ref shopping list)"
+      - action: "Set home scene: dining lights warm, music jazz playlist"
+      - action: "Pre-heat oven if recipe requires it (Home Assistant)"
+      - action: "Send me a final checklist 2 hours before guests arrive"</code></pre>
+
+    <h3>The "Sick Day" Workflow</h3>
+
+    <pre><code>workflows:
+  sick_day:
+    trigger: "I say 'I'm sick' or 'not feeling well'"
+    steps:
+      - action: "Log symptom to health diary"
+      - action: "Cancel or reschedule today's non-essential calendar events"
+      - action: "Set thermostat to 23°C (comfort mode)"
+      - action: "Suggest easy comfort food from what's in the fridge"
+      - action: "Remind me to stay hydrated every 2 hours"
+      - action: "If symptoms persist 48 hours, suggest calling the doctor"</code></pre>
+
+    <h2>Error Handling</h2>
+
+    <p>Workflows fail. APIs go down. Credentials expire. Your agent needs to handle errors gracefully instead of silently breaking.</p>
+
+    <pre><code># Error handling rules in system prompt
+When a workflow step fails:
+1. DO NOT silently skip the step — tell me what failed and why
+2. Continue with remaining steps if possible
+3. Suggest a manual alternative for the failed step
+4. If the failure is critical (security, health), escalate immediately
+5. Log the error for debugging
+
+Example: If the weather API is down during morning briefing,
+say "Weather check failed (API timeout). I'll try again in
+10 minutes. Here's the rest of your briefing..."</code></pre>
+
+    <div class="tip-box">
+      Add a "workflow health check" to your weekly review: <em>"Were there any workflow failures this week? If so, list them with causes."</em> This catches recurring issues before they become permanent blind spots.
+    </div>
+
+    <h2>Workflow Template Library</h2>
+
+    <p>Here are 10 ready-to-customize workflow templates covering common personal scenarios:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Workflow</th>
+          <th>Trigger</th>
+          <th>Services</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>Morning Briefing</td>
+          <td>7 AM weekdays</td>
+          <td>Weather + Calendar + Email + Health</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>Package Delivered</td>
+          <td>Delivery email</td>
+          <td>Email + Shopping List + Finance</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>Grocery Budget Guard</td>
+          <td>Sunday 5 PM</td>
+          <td>Finance + Meal Plan + Shopping</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>Dinner Party Prep</td>
+          <td>4 hrs before event</td>
+          <td>Calendar + Contacts + Home Assistant + Shopping</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>Travel Countdown</td>
+          <td>3 days before trip</td>
+          <td>Calendar + Weather + Packing + Finance</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td>Sick Day Protocol</td>
+          <td>"I'm sick"</td>
+          <td>Calendar + Home Assistant + Health + Meal Plan</td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td>Bill Due Alert</td>
+          <td>3 days before due date</td>
+          <td>Calendar + Finance + Notification</td>
+        </tr>
+        <tr>
+          <td>8</td>
+          <td>Guest Arrival Prep</td>
+          <td>"Guests arriving"</td>
+          <td>Home Assistant + Calendar + Shopping</td>
+        </tr>
+        <tr>
+          <td>9</td>
+          <td>Monthly Life Report</td>
+          <td>1st of month</td>
+          <td>Finance + Health + Media + Goals</td>
+        </tr>
+        <tr>
+          <td>10</td>
+          <td>Weather-Reactive Commute</td>
+          <td>6:30 AM weekdays</td>
+          <td>Weather + Calendar + Notification</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Testing and Debugging Workflows</h2>
+
+    <p>Before relying on a workflow, test it. OpenClaw has a dry-run mode that simulates the workflow without executing actions:</p>
+
+    <pre><code># Test a workflow without executing
+openclaw workflow test dinner_party --dry-run
+
+# Output:
+# Step 1: [CHECK] Guest dietary restrictions → Would query contacts for "Mila, Stefan"
+# Step 2: [CHECK] Meal plan → Would verify chicken stir-fry (Mila: no allergies, Stefan: vegetarian ⚠️)
+# Step 3: [CHECK] Ingredients → Would cross-reference shopping list (3 items missing)
+# Step 4: [SKIP] Home scene → Dry run, would set lights + music
+# Step 5: [SKIP] Pre-heat oven → Dry run, would send HA command
+# Result: ⚠️ Stefan is vegetarian — meal plan needs adjustment!</code></pre>
+
+    <p>The dry run caught that your dinner plan doesn't work for a vegetarian guest. Better to discover this in testing than when Stefan is sitting at your table.</p>
+
+    <div class="privacy-box">
+      <h3>Workflows and Privacy Creep</h3>
+      <p>As you build more integrations, your agent accumulates access to more services and more data. This is "privacy creep" &mdash; the gradual expansion of what your AI knows about you.</p>
+      <ul>
+        <li><strong>Audit your integrations quarterly.</strong> List every service your agent connects to. Do you still use all of them? Disconnect what you don't need</li>
+        <li><strong>Review webhook endpoints.</strong> Each endpoint is an attack surface. Disable unused ones</li>
+        <li><strong>Check plugin permissions.</strong> Does your restaurant plugin really need access to your contacts? Limit each plugin to the minimum data it needs</li>
+        <li><strong>Workflow chains amplify risk.</strong> A chain that goes Email → Finance → Home Assistant means a compromised email integration could trigger home actions. Review chains with a security mindset from <a href="10-security-privacy.html">Chapter 10</a></li>
+      </ul>
+    </div>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build a 3-Service Workflow</h3>
+      <p>Create a custom workflow that connects at least 3 services:</p>
+      <ol>
+        <li><strong>Choose a trigger.</strong> Pick something that happens regularly: a delivery email, a calendar event, a time of day, or a phrase you say</li>
+        <li><strong>Design the chain.</strong> Write out 3-5 steps that should happen when the trigger fires. Each step should use a different service (email, calendar, finance, home, health, shopping, etc.)</li>
+        <li><strong>Implement it.</strong> Add the workflow to your config.yaml or create a plugin if needed</li>
+        <li><strong>Test with dry-run</strong> first to verify logic</li>
+        <li><strong>Run it for real</strong> and verify each step completes correctly</li>
+        <li><strong>Add error handling:</strong> What should happen if step 2 fails? Add fallback instructions</li>
+      </ol>
+      <p><strong>Suggested starter workflow:</strong> "When I get a delivery email → extract what was delivered → log the expense → update my shopping list → send me a summary." This touches email, finance, and shopping &mdash; three services you've already set up.</p>
+    </div>
+
+    <h2>Coming Up Next</h2>
+
+    <p>You now have a single agent that controls your home, tracks your finances, manages your calendar, monitors your health, and runs custom workflows across multiple services. But as you add more capabilities, one agent doing everything starts to feel like one person doing every job in a company. In <a href="12-multi-agent-life.html"><strong>Chapter 12: Multi-Agent Orchestration &amp; Your AI-Powered Life</strong></a>, you'll learn how to split your single agent into a team of specialists &mdash; a home agent, a finance agent, a health agent &mdash; all coordinated by a master agent. It's the capstone chapter, and it's where everything comes together.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-security-privacy.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Security, Privacy &amp; Trust</span>
+      </a>
+      <a href="12-multi-agent-life.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Multi-Agent Orchestration &amp; Your AI-Powered Life</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

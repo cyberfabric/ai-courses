@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3 &mdash; Android Lint, Properly Configured | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="02-auditing-and-baselining.html">&larr; Prev</a>
+      <a href="04-detekt-and-konsist.html">Next &rarr;</a>
+      <a href="maps/03-android-lint-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Android Lint, Properly Configured</h1>
+    <p class="subtitle">The linter that came with AGP knows things detekt and ktlint will never know. Stop ignoring it.</p>
+  </header>
+
+  <main>
+
+    <h2>The free linter you've been ignoring for six years</h2>
+
+    <p>Android Lint shipped with the Android Gradle Plugin. You did not install it. You probably did not configure it. You almost certainly do not look at its output. And yet it is the only static analyzer in the entire stack that knows what an <code>AndroidManifest.xml</code> is, that knows what your <code>minSdk</code> is, that knows your strings are user-facing, and that knows which APIs were added in which platform version.</p>
+
+    <p>This chapter is about turning Android Lint from a Gradle task you have never run into a high-signal first line of defense, with a baseline file and a CI gate, in roughly an afternoon.</p>
+
+    <div class="tool-profile-box">
+      <div class="tool-name">Android Lint</div>
+      <dl>
+        <dt>What it catches</dt>
+        <dd>Android-specific issues other linters can't see: <code>NewApi</code> calls without <code>SDK_INT</code> guards, <code>MissingPermission</code>, <code>HardcodedText</code> in user-facing strings, <code>ContentDescription</code> for accessibility, deprecated APIs, manifest problems, <code>WrongConstant</code> on annotations, R8 keep-rule incompatibilities. Around 400 built-in checks; many ship with the AndroidX/Compose libraries you already depend on.</dd>
+
+        <dt>Install</dt>
+        <dd>Already installed. It comes with AGP. The work is configuration, not installation.</dd>
+
+        <dt>Run cost</dt>
+        <dd><code>./gradlew :app:lintDebug</code> typically 30s&ndash;3 min on a medium app, fully cacheable. <code>:app:lintRelease</code> can be a bit slower because it analyzes more variants.</dd>
+
+        <dt>When to skip</dt>
+        <dd>Never. You already have it. The only question is whether you've turned it into something useful.</dd>
+      </dl>
+    </div>
+
+    <h2>Why the default output is ignored</h2>
+
+    <p>If you've ever run <code>./gradlew lint</code> on a real project, you know the experience: thousands of findings, mostly yellow, mixed severity, scattered across modules, no clear &ldquo;these are the bugs.&rdquo; You scroll, you sigh, you close the report. That is the default state. We are going to fix all three reasons it happens.</p>
+
+    <ul>
+      <li><strong>Volume</strong> &mdash; default lint runs every check at default severity. The signal-to-noise ratio is bad without tuning.</li>
+      <li><strong>Severity</strong> &mdash; defaults are mostly <code>warning</code>. Warnings don't fail builds. If nothing fails the build, nobody fixes anything.</li>
+      <li><strong>No CI gate</strong> &mdash; if lint isn't a merge blocker, it's homework. Homework doesn't get done.</li>
+    </ul>
+
+    <p>The fix is the same three knobs in reverse: tune the rules with <code>lint.xml</code>, configure failure modes in <code>build.gradle.kts</code>, and put it in CI. Let's do them in order.</p>
+
+    <h2>The <code>lint {}</code> block in <code>build.gradle.kts</code></h2>
+
+    <p>Step one is wiring up failure behavior in your app module's <code>build.gradle.kts</code>. This is the contract between Lint and Gradle: which findings stop the build, which reports get generated, where the baseline lives.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/build.gradle.kts</div>
+<pre><code>android {
+  // ...
+
+  lint {
+    // Stop the build on errors. This is the only way new errors actually get fixed.
+    abortOnError = true
+
+    // Don't escalate warnings yet &mdash; we'll tune severity per-issue in lint.xml.
+    warningsAsErrors = false
+
+    // Run lint on the release variant too. Catches release-only issues like
+    // ProGuard/R8 incompatibilities and resource problems.
+    checkReleaseBuilds = true
+
+    // The baseline file: existing findings live here, new ones fail the build.
+    baseline = file("lint-baseline.xml")
+
+    // Reports for both humans and CI. The HTML is for you; the XML is for CI tools.
+    htmlReport = true
+    htmlOutput = file("$buildDir/reports/lint/lint-results.html")
+    xmlReport  = true
+    xmlOutput  = file("$buildDir/reports/lint/lint-results.xml")
+
+    // Severity-by-issue lives in lint.xml &mdash; these are project-wide overrides only
+    // for issues you really want to globally turn off (e.g., a rule that's broken).
+    disable += setOf("MissingTranslation")  // Example only &mdash; only disable if you're sure.
+
+    // Make these issues fatal regardless of their default severity.
+    fatal += setOf("StopShip")
+  }
+}</code></pre>
+      <div class="recipe-note">Most teams don't need <code>disable</code> at all. Reach for it only when a rule is misfiring on your codebase &mdash; and prefer per-issue severity in <code>lint.xml</code> for everything else.</div>
+    </div>
+
+    <h2>The <code>lint.xml</code> file &mdash; per-issue severity</h2>
+
+    <p>The <code>lint {}</code> block sets global behavior. The <code>lint.xml</code> file in your module root sets per-issue severity. This is where most of the actual tuning happens. The structure is XML, the schema is forgiving, the file is checked into source control.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/lint.xml</div>
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;lint&gt;
+  &lt;!-- Promote: showstoppers must fail the build, not whisper a warning --&gt;
+  &lt;issue id="NewApi"            severity="error" /&gt;
+  &lt;issue id="MissingPermission" severity="error" /&gt;
+  &lt;issue id="WrongConstant"     severity="error" /&gt;
+  &lt;issue id="InvalidPackage"    severity="error" /&gt;
+  &lt;issue id="HardcodedText"     severity="error" /&gt;
+
+  &lt;!-- Demote: things you don't currently care about (be honest, not lazy) --&gt;
+  &lt;issue id="IconLauncherShape" severity="ignore" /&gt;
+
+  &lt;!-- Scope a rule to specific files: don't lint generated code --&gt;
+  &lt;issue id="HardcodedText"&gt;
+    &lt;ignore path="**/build/generated/**" /&gt;
+    &lt;ignore path="**/test/**" /&gt;
+  &lt;/issue&gt;
+
+  &lt;!-- Per-file regex ignores when one file is a legitimate exception --&gt;
+  &lt;issue id="ObsoleteSdkInt"&gt;
+    &lt;ignore regexp=".*LegacyCompat\.kt" /&gt;
+  &lt;/issue&gt;
+&lt;/lint&gt;</code></pre>
+      <div class="recipe-note">Place <code>lint.xml</code> next to your module's <code>build.gradle.kts</code>. Lint discovers it automatically. For multi-module repos you can also put a shared <code>lint.xml</code> at the root and reference it via <code>lintConfig = file(...)</code>.</div>
+    </div>
+
+    <h2>Generating the baseline</h2>
+
+    <p>You have a tuned config but a four-year-old codebase that will produce thousands of findings. The baseline file is what makes that survivable. Generate it once, commit it, and Lint will read it forever after &mdash; failing only on <em>new</em> findings.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">Generate the baseline</div>
+<pre><code># AGP 8.1+ &mdash; recommended task name
+./gradlew :app:updateLintBaseline
+
+# Older: just delete the existing baseline file and run lint &mdash; it auto-creates
+rm app/lint-baseline.xml
+./gradlew :app:lintDebug
+git add app/lint-baseline.xml
+git commit -m "chore: lint baseline"</code></pre>
+      <div class="recipe-note">The baseline file ends up at <code>app/lint-baseline.xml</code> by default. Commit it. Yes, it's noisy. Yes, that's fine. Configure your repo's <code>.gitattributes</code> to mark it as <code>linguist-generated=true</code> so GitHub stops counting its lines in your stats.</div>
+    </div>
+
+    <div class="warning-box">
+      <p>The baseline only suppresses findings that match the existing entries exactly. If you move a class to a new file, Lint may treat the same finding as new and fail the build. Treat occasional baseline regenerations (e.g. quarterly) as normal &mdash; not as a failure of the workflow.</p>
+    </div>
+
+    <h2>Severity tuning &mdash; the strategy</h2>
+
+    <p>You have four severity levels: <code>fatal</code>, <code>error</code>, <code>warning</code>, <code>informational</code>. Most teams use too many. The strategy that survives contact with reality:</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <h4>🛑 error</h4>
+        <p>Showstoppers. Things that will crash, leak, or violate a platform contract. <code>NewApi</code>, <code>MissingPermission</code>, <code>WrongConstant</code>, <code>InvalidPackage</code>, <code>HardcodedText</code>. Fail the build.</p>
+      </div>
+      <div class="tool-card">
+        <h4>⚠️ warning</h4>
+        <p>Real issues, but not always actionable in the immediate context. <code>UnusedResources</code>, <code>ContentDescription</code>, <code>SetTextI18n</code>. Visible in IDE; visible in CI report; doesn't block merge.</p>
+      </div>
+      <div class="tool-card">
+        <h4>ℹ️ informational</h4>
+        <p>Taste rules, edge cases, opt-in checks. Most teams should leave the default here. If a rule is informational by default, don't promote it without a reason.</p>
+      </div>
+      <div class="tool-card">
+        <h4>🔇 ignore</h4>
+        <p>Rules that are wrong for your codebase. Be honest: if you're not going to fix it, ever, ignore it. Don't pretend it's a warning &mdash; that's just permanent log noise.</p>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <p>Anti-pattern: every team I've audited has at least one <code>warning</code>-level rule that is silently producing 200+ findings nobody will ever fix. Either fix the rule (promote to error and clear it) or ignore it (admit you're not going to fix it). Permanent yellow is just rot.</p>
+    </div>
+
+    <h2>The five categories worth promoting today</h2>
+
+    <p>If you do nothing else after reading this chapter, promote these five. They catch real bugs that ship to real users. None of them are stylistic.</p>
+
+    <table>
+      <thead>
+        <tr><th>Issue ID</th><th>What it catches</th><th>Default</th><th>Should be</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>NewApi</code></td><td>API call available only on a higher SDK than your <code>minSdk</code></td><td>error</td><td>error (verify it is)</td></tr>
+        <tr><td><code>MissingPermission</code></td><td>Permission required by the API not declared in manifest</td><td>error</td><td>error (verify it is)</td></tr>
+        <tr><td><code>WrongConstant</code></td><td>Passing a non-flag int where an annotated <code>@IntDef</code> is expected</td><td>error</td><td>error</td></tr>
+        <tr><td><code>HardcodedText</code></td><td>Strings in XML that should be in <code>strings.xml</code> for localization</td><td>warning</td><td>error</td></tr>
+        <tr><td><code>InvalidPackage</code></td><td>Library uses APIs not allowed in your minSdk environment</td><td>error</td><td>error (verify it is)</td></tr>
+      </tbody>
+    </table>
+
+    <p>Some of these are already <code>error</code> by default. Re-declare them anyway; future AGP versions sometimes change defaults, and being explicit in your <code>lint.xml</code> means the team is in control of the contract.</p>
+
+    <h2>A short detour: custom lint checks</h2>
+
+    <p>Lint is extensible. You can write your own checks in Kotlin, package them as a separate module, and the AGP will pick them up automatically. The reasons to do this are narrow but valuable: enforcing in-house API rules (&ldquo;don't call <code>SimpleDateFormat</code> directly &mdash; use <code>SafeDateFormat</code>&rdquo;), catching leaks specific to your architecture, banning a deprecated internal API.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">lint-rules/build.gradle.kts (skeleton)</div>
+<pre><code>plugins {
+  alias(libs.plugins.kotlin.jvm)
+  alias(libs.plugins.android.lint)
+}
+
+dependencies {
+  compileOnly("com.android.tools.lint:lint-api:31.4.0")
+  compileOnly("com.android.tools.lint:lint-checks:31.4.0")
+}
+
+// And in your :app module:
+// dependencies { lintChecks(project(":lint-rules")) }</code></pre>
+      <div class="recipe-note">Don't write a custom rule until you've felt the pain three times. The setup is small but maintaining it indefinitely is real work. Detekt (Chapter 4) is usually a better home for in-house Kotlin smells.</div>
+    </div>
+
+    <h2>AI-Assisted Setup: <code>/triage-lint-baseline</code></h2>
+
+    <p>Your first lint baseline is going to be hundreds or thousands of entries. Reading through it manually is morale-destroying. This is exactly the kind of structured-text triage that Claude Code does well &mdash; we'll build a reusable skill that takes the baseline, groups findings, and produces a punch list ranked by likely effort.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">.claude/commands/triage-lint-baseline.md</div>
+<pre><code>---
+description: Triage a lint baseline by category, severity, and likely effort
+---
+
+You are looking at the file `app/lint-baseline.xml`. Read it.
+
+Produce a markdown report with these sections:
+
+  ## Summary
+    - total entries
+    - top 5 issue IDs by count
+
+  ## By category (one section per top-5 issue ID)
+    For each: count, 3 representative file paths, 1-2 sentence description
+    of the rule, estimated effort to clear all instances (S/M/L), and
+    whether the rule is currently a warning or error in lint.xml.
+
+  ## Quick wins
+    Categories where effort is S and impact is real. List up to 3.
+
+  ## Recommend severity changes
+    Issue IDs that are currently warning but should be error based on what
+    you see in the baseline (e.g., HardcodedText with 400+ entries means
+    the team has been ignoring localization &mdash; promote and bulk-fix).
+
+Be terse. The whole report should fit on one printed page.</code></pre>
+      <div class="recipe-note">The first time you run this on a real baseline, you'll typically discover one or two categories you didn't realize were dominant. Those are your quick wins.</div>
+    </div>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Good prompt</div>
+      <div class="prompt-text">/triage-lint-baseline
+
+Project is a 5-year-old Kotlin Android app. minSdk 24, targetSdk 34.
+Currently 1,847 entries in app/lint-baseline.xml. We want the top
+3 quick wins for next sprint.</div>
+    </div>
+
+    <h2>The CI hook</h2>
+
+    <p>Lint that runs on your machine is lint that runs nowhere. The CI gate is what turns &ldquo;I tuned lint.xml&rdquo; into &ldquo;the team has lint.&rdquo; The minimum useful CI job runs lint on the release variant on every PR and surfaces the report.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">.github/workflows/lint.yml</div>
+<pre><code>name: Android Lint
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      # The actual gate: lint on the release variant, abortOnError=true
+      # means a new finding fails the build, blocking the merge.
+      - name: Run Android Lint
+        run: ./gradlew :app:lintRelease
+
+      # Always upload the report &mdash; even on success &mdash; so reviewers can read it.
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint/</code></pre>
+      <div class="recipe-note">Once this job is green on <code>main</code>, enable branch protection: Settings &rarr; Branches &rarr; Branch protection rule &rarr; Require status checks &rarr; tick "Android Lint." Now the gate is real.</div>
+    </div>
+
+    <h2>IDE integration &mdash; close the loop</h2>
+
+    <p>Android Studio runs Lint inspections in real time as you type. The catch: by default it does not respect your project's <code>lint.xml</code> severities. Until you tell it to, the IDE shows <code>HardcodedText</code> as a warning while CI rejects it as an error &mdash; a confusing developer experience.</p>
+
+    <p>Two settings to flip per developer machine (or commit to <code>.idea/inspectionProfiles/</code> if you want it standardized):</p>
+
+    <ul>
+      <li><strong>Settings &rarr; Editor &rarr; Inspections &rarr; Android &rarr; Lint</strong> &mdash; tick &ldquo;Use lint settings from <code>lint.xml</code>.&rdquo; This makes the IDE match the build's severities exactly.</li>
+      <li><strong>Settings &rarr; Tools &rarr; Actions on Save</strong> &mdash; enable &ldquo;Run code cleanup&rdquo; and &ldquo;Reformat code.&rdquo; Lint findings show up as save-time fixes the developer sees before they even commit.</li>
+    </ul>
+
+    <div class="tip-box">
+      <p>If you commit <code>.idea/inspectionProfiles/Project_Default.xml</code>, the whole team gets the same IDE inspection severities automatically. Most teams gitignore the entire <code>.idea/</code> folder &mdash; you don't have to. Selectively committing the inspection profile is a high-leverage move.</p>
+    </div>
+
+    <h2>Common lint config pitfalls</h2>
+
+    <p>Three traps every team falls into at least once:</p>
+
+    <ul>
+      <li><strong>Globally disabling a rule because one file misfires it.</strong> Use <code>&lt;ignore path="..."&gt;</code> in <code>lint.xml</code> instead. Disabling a rule project-wide because one legacy file violates it disables it for all your future code, too.</li>
+      <li><strong>Regenerating the baseline on every CI run.</strong> Some teams add <code>./gradlew :app:updateLintBaseline</code> to CI &ldquo;to keep it fresh.&rdquo; This silently absorbs every new finding and defeats the entire point. The baseline is generated locally, intentionally, and committed by a human.</li>
+      <li><strong>Treating <code>warningsAsErrors = true</code> as the goal.</strong> It sounds rigorous; in practice it produces a fragile build that breaks on every new AGP minor that adds checks. Use per-issue severity in <code>lint.xml</code>. Be explicit about what blocks merges.</li>
+    </ul>
+
+    <div class="warning-box">
+      <p>If your lint job in CI is taking 8+ minutes, you've probably enabled <code>checkDependencies = true</code>. That recursively lints every library module from your app module &mdash; useful for shared rule enforcement, but expensive. For most repos the default (off) is correct.</p>
+    </div>
+
+    <p>And one bad-prompt example, just to show the contrast:</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Bad prompt</div>
+      <div class="prompt-text">Triage my lint baseline.</div>
+    </div>
+
+    <p>Without context (project age, current severity config, what &ldquo;triage&rdquo; means in your team's language) the answer is generic. The skill version above gives Claude the structure to follow and the constraints to optimize for &mdash; and you can run it on every project.</p>
+
+    <h2>The adoption ladder</h2>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        <p>Add the <code>lint {}</code> block. Add a minimal <code>lint.xml</code> promoting the five high-signal categories. Generate the baseline. Commit. <strong>2&ndash;4 hours.</strong></p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        <p>Run <code>/triage-lint-baseline</code>. Pick one quick-win category. Fix it across the codebase, regenerate baseline. Enable IDE inspections to match the lint.xml severity for the whole team.</p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        <p>Add the GitHub Actions workflow. Enable branch protection requiring it. Optionally write your first custom lint check (only if you have a clear use case). Re-audit the baseline shrinkage in <code>quality-debt.md</code>.</p>
+      </div>
+    </div>
+
+    <h2>Exercise: turn lint into a merge blocker</h2>
+
+    <div class="exercise-box">
+      <h3>Promote and gate, in one PR</h3>
+      <p>Set aside a half-day. From your project root:</p>
+      <ol>
+        <li>Add the <code>lint {}</code> block from earlier in this chapter to your app module's <code>build.gradle.kts</code>. Adjust paths if your output dir differs.</li>
+        <li>Create <code>app/lint.xml</code> with the five promoted categories: <code>NewApi</code>, <code>MissingPermission</code>, <code>WrongConstant</code>, <code>HardcodedText</code>, <code>InvalidPackage</code>.</li>
+        <li>Run <code>./gradlew :app:updateLintBaseline</code>. Verify <code>app/lint-baseline.xml</code> exists and has entries.</li>
+        <li>Run <code>./gradlew :app:lintDebug</code> &mdash; it should pass (the baseline absorbs everything).</li>
+        <li>Save <code>.claude/commands/triage-lint-baseline.md</code> from this chapter. Run <code>/triage-lint-baseline</code> on your real baseline. Read the report.</li>
+        <li>Add the GitHub Actions workflow. Push the branch. Verify the CI job runs and is green.</li>
+        <li>Open the PR. Title: &ldquo;chore(lint): tune severity, baseline existing findings, gate in CI.&rdquo;</li>
+      </ol>
+      <p><strong>Done.</strong> The day you merge this PR, every new <code>HardcodedText</code> in the codebase is a build failure. That is what enforcement looks like.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>Chapter 4 adds detekt &mdash; the Kotlin-aware static analyzer that picks up where Android Lint stops. Lint knows Android; detekt knows Kotlin. Together they catch most of the codebase debt category from your audit. We'll install detekt, generate its baseline, enable type resolution, and look at the rules worth promoting on day one.</p>
+
+    <footer class="chapter-nav">
+      <a href="02-auditing-and-baselining.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Auditing &amp; Baselining</span>
+      </a>
+      <a href="04-detekt-and-konsist.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Detekt + Konsist</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

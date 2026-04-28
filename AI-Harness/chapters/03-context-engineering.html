@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Context Engineering — AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-anatomy-of-a-harness.html">Prev</a>
+      <a href="04-tools-and-tool-use.html">Next</a>
+      <a href="maps/03-context-engineering-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Context Engineering</h1>
+    <p class="subtitle">How the right information gets into the window &mdash; the most critical job a harness performs</p>
+  </header>
+
+  <main>
+
+    <p>
+      In Chapter 2, we called context engineering the "ingredient prep station" in our restaurant kitchen. The chef doesn't walk into a warehouse of 10,000 ingredients. Someone curates what's on the station for today's dish.
+    </p>
+
+    <p>
+      That analogy understates it. Context engineering is arguably <strong>the single most impactful thing a harness does.</strong> Get it right, and a mediocre model produces great results. Get it wrong, and the best model in the world hallucinates, misses files, and makes changes that break your project.
+    </p>
+
+    <p>
+      This chapter is about what goes into that context window, why most of it isn't your prompt, and the techniques harnesses use to make every token count.
+    </p>
+
+    <!-- The Window Is Prime Real Estate -->
+    <h2>The Context Window Is Prime Real Estate</h2>
+
+    <p>
+      Every model has a context window &mdash; a fixed amount of text it can "see" at once. Think of it as the model's working desk. Everything it needs to think about must fit on this desk.
+    </p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">200K</span>
+        <span class="stat-label">Tokens in Claude's context window (~150,000 words)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">1M</span>
+        <span class="stat-label">Tokens in Claude's extended context (available to some tools)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5%</span>
+        <span class="stat-label">How much of the window your actual prompt typically fills</span>
+      </div>
+    </div>
+
+    <p>
+      That last number is the important one. When you type a one-line request in Claude Code, your words might be 50&ndash;100 tokens. But the full API request sent to the model could be 20,000+ tokens. The other 95% is context the harness assembled: system prompt, conversation history, tool descriptions, project files, system reminders.
+    </p>
+
+    <p>
+      Here's the analogy that makes this click: context engineering is like <strong>packing a suitcase for a trip</strong>. You can't take your entire wardrobe. You have a fixed amount of space. So you pick what matters most for <em>this specific trip</em> &mdash; the weather, the activities, the dress code. Pack wrong, and you're stuck at a business dinner in hiking boots.
+    </p>
+
+    <!-- What Goes Into the Window -->
+    <h2>What Actually Goes Into the Window</h2>
+
+    <p>
+      Let's be specific about what fills that context window for a typical Claude Code request. The harness assembles these pieces, in roughly this order:
+    </p>
+
+    <ol>
+      <li><strong>System prompt</strong> &mdash; Identity, rules, tone, tool descriptions. This alone can be 5,000&ndash;10,000 tokens.</li>
+      <li><strong>CLAUDE.md content</strong> &mdash; Your project instructions, architecture notes, coding standards. Loaded fresh every turn.</li>
+      <li><strong>Conversation history</strong> &mdash; Every message you've sent and every response, plus every tool call and its result.</li>
+      <li><strong>Tool results</strong> &mdash; The contents of files read, search results returned, command outputs. These accumulate fast.</li>
+      <li><strong>System reminders</strong> &mdash; Re-injected instructions at intervals throughout the conversation.</li>
+    </ol>
+
+    <p>
+      Notice what's happening: a long conversation with many tool calls will fill the window quickly. Read three large files, run a few searches, and you might already be at 50% capacity &mdash; before any actual reasoning happens.
+    </p>
+
+    <div class="warning-box">
+      <strong>Every unnecessary token actively degrades performance.</strong> It's not just about fitting within the limit &mdash; models perform worse when the context is cluttered with irrelevant information. A 50,000-token context with high signal beats a 200,000-token context stuffed with noise. The harness's job isn't to fill the window &mdash; it's to curate the <em>smallest, highest-signal</em> set of tokens.
+    </div>
+
+    <!-- The Curation Problem -->
+    <h2>The Curation Problem</h2>
+
+    <p>
+      Your codebase is 500,000 lines. The context window holds maybe 200,000 tokens. Even if you could convert lines to tokens one-to-one (you can't &mdash; it's roughly 1 line = 5&ndash;15 tokens), you still couldn't fit the whole codebase.
+    </p>
+
+    <p>
+      So what do you include? This is the curation problem, and different harnesses solve it differently:
+    </p>
+
+    <h3>Strategy 1: User-Driven Retrieval</h3>
+    <p>
+      The simplest approach &mdash; the model reads files when it decides it needs them. In Claude Code, the model calls the <code>Read</code> tool to fetch a file, the <code>Grep</code> tool to search for a pattern, or the <code>Glob</code> tool to find files by name. The model is the curator, guided by the system prompt.
+    </p>
+
+    <h3>Strategy 2: Automatic Context Scanning</h3>
+    <p>
+      Some harnesses scan your project automatically. Cursor indexes your codebase and uses semantic code search to pull in relevant files before the model even starts reasoning. Windsurf tracks your edits, terminal commands, and clipboard in real-time to infer what context is relevant.
+    </p>
+
+    <h3>Strategy 3: Static Project Files</h3>
+    <p>
+      CLAUDE.md and AGENTS.md are context you curate yourself. They're loaded into every request automatically, so they're always available. This is the most reliable method &mdash; but it only works for information that's always relevant.
+    </p>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Claude Code</div>
+        <p><strong>Context strategy:</strong> Model-driven retrieval. The model decides what to read using tools (Read, Grep, Glob). CLAUDE.md is loaded automatically. System reminders re-inject key instructions.</p>
+        <p><strong>Strength:</strong> Precise &mdash; only loads what's needed for the task.</p>
+        <p><strong>Weakness:</strong> The model might miss relevant files it doesn't know to look for.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Cursor</div>
+        <p><strong>Context strategy:</strong> Automatic indexing + semantic search. Cursor pre-indexes your codebase and retrieves relevant snippets before the model reasons. Combines lexical search (for identifiers) with vector search (for concepts).</p>
+        <p><strong>Strength:</strong> Finds relevant code the model didn't explicitly ask for.</p>
+        <p><strong>Weakness:</strong> May include irrelevant snippets, wasting tokens.</p>
+      </div>
+    </div>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Codex</div>
+        <p><strong>Context strategy:</strong> AGENTS.md with progressive disclosure. Starts with top-level AGENTS.md, loads subdirectory files as needed. Optimizes repositories for agent consumption with structured documentation.</p>
+        <p><strong>Strength:</strong> Scales well for large monorepos with clear documentation.</p>
+        <p><strong>Weakness:</strong> Requires upfront effort to write and maintain AGENTS.md files.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Windsurf</div>
+        <p><strong>Context strategy:</strong> Real-time awareness. Tracks your edits, terminal commands, clipboard activity, and conversation history continuously. Infers intent from your actions.</p>
+        <p><strong>Strength:</strong> Context updates automatically as you work &mdash; no explicit retrieval needed.</p>
+        <p><strong>Weakness:</strong> Can include noise from unrelated actions in the same session.</p>
+      </div>
+    </div>
+
+    <!-- CLAUDE.md and AGENTS.md -->
+    <h2>CLAUDE.md and AGENTS.md: Your Context Files</h2>
+
+    <p>
+      These are context files <em>you</em> write that the harness loads automatically. They're the most powerful context tool you have direct control over.
+    </p>
+
+    <p>
+      <strong>CLAUDE.md</strong> lives in your project root and becomes part of Claude Code's system prompt on every turn. It tells the model about your project without you having to explain it in every conversation.
+    </p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Effective CLAUDE.md (excerpt)</p>
+      <div class="prompt-text"># Project: API Gateway Service
+
+## Stack
+- Node.js 20 with TypeScript (strict mode)
+- Express 4.x with Zod validation
+- PostgreSQL 16 via Drizzle ORM
+- Jest for testing, Biome for linting
+
+## Key Commands
+- `npm test` — run all tests
+- `npm run lint` — check with Biome
+- `npm run db:migrate` — apply migrations
+
+## Architecture
+- Routes in src/routes/, one file per resource
+- Business logic in src/services/
+- Database queries in src/repositories/
+- All errors go through src/middleware/error-handler.ts
+
+## Rules
+- Never use `any` type — use `unknown` and narrow
+- All new endpoints need integration tests
+- Migrations must be backward-compatible</div>
+      <p class="prompt-explanation">This gives the model project context on every turn. No need to explain your stack, conventions, or test commands in every conversation.</p>
+    </div>
+
+    <p>
+      <strong>AGENTS.md</strong> is the equivalent for OpenAI's Codex and a growing cross-tool standard. Same idea: structured project context that agents load automatically.
+    </p>
+
+    <div class="tip-box">
+      Recent research from ETH Zurich suggests a nuance: <strong>only include information the model can't figure out on its own.</strong> Things like "this project uses TypeScript" are redundant &mdash; the model can see that from the files. Focus on things the model <em>can't</em> infer: custom build commands, non-obvious conventions, specific tooling decisions, and architectural rules that aren't visible in the code.
+    </div>
+
+    <!-- System Reminders -->
+    <h2>System Reminders: Fighting Instruction Fade</h2>
+
+    <p>
+      Here's a problem: when a context window gets long, the model starts "forgetting" the instructions from the beginning. Not literally forgetting &mdash; the tokens are still there &mdash; but paying less attention to them. Researchers call this <strong>"lost in the middle."</strong>
+    </p>
+
+    <p>
+      Stanford researchers found that LLM performance degrades by more than 30% when relevant information is in the middle of a long context. Models show a U-shaped attention curve &mdash; they pay the most attention to the <strong>beginning</strong> and <strong>end</strong>, and the least to the middle.
+    </p>
+
+    <p>
+      Claude Code's solution: <strong>system reminders</strong>. These are key instructions re-injected at intervals throughout the conversation. It's not just the system prompt at the top &mdash; the harness periodically inserts reminders like:
+    </p>
+
+<pre><code>&lt;system-reminder&gt;
+Remember: prefer editing existing files over creating new ones.
+Only create commits when requested by the user.
+Use the Read tool before editing a file you haven't read.
+The following deferred tools are now available: WebSearch, WebFetch
+&lt;/system-reminder&gt;</code></pre>
+
+    <p>
+      Think of it as a meeting facilitator who periodically restates the agenda. Without reminders, the model drifts. With them, it stays on track even in conversations that span hundreds of turns.
+    </p>
+
+    <!-- Context Compaction -->
+    <h2>Context Compaction: When the Suitcase Is Full</h2>
+
+    <p>
+      Long conversations fill up. You read files, run commands, get search results &mdash; and suddenly you're at 90% capacity. What happens next?
+    </p>
+
+    <p>
+      The harness <strong>compacts</strong> the conversation. It takes the existing history, summarizes it into a condensed form, and uses that summary as the starting point for a fresh context window. The old details are gone, but the essential information &mdash; what was done, what's in progress, what constraints matter &mdash; survives.
+    </p>
+
+    <p>
+      Claude Code triggers auto-compaction at roughly <strong>95% capacity</strong>. You can also trigger it manually with the <code>/compact</code> command. Here's what a good compaction preserves:
+    </p>
+
+    <ul class="checklist">
+      <li class="checked">What tasks have been completed</li>
+      <li class="checked">Current state of the work in progress</li>
+      <li class="checked">Files that were modified and why</li>
+      <li class="checked">Constraints and rules that are still active</li>
+      <li class="checked">Next steps the model was planning</li>
+      <li>Individual tool call details (summarized away)</li>
+      <li>Exact file contents that were read (summarized away)</li>
+      <li>Exploratory dead-ends (summarized away)</li>
+    </ul>
+
+    <p>
+      The unchecked items are what gets dropped. This is a trade-off: you lose precision but gain space. The model's understanding after compaction is like reading meeting notes instead of the full transcript &mdash; you get the decisions, not the discussion.
+    </p>
+
+    <div class="warning-box">
+      <strong>Compaction is lossy.</strong> If the model read a file earlier and the details were compacted away, it may need to re-read that file. This is why Claude Code's system prompt tells the model to read files before editing them &mdash; it can't trust that earlier file reads are still in the context.
+    </div>
+
+    <!-- Lost in the Middle -->
+    <h2>The "Lost in the Middle" Problem</h2>
+
+    <p>
+      We mentioned the U-shaped attention curve. Let's look at why it matters practically.
+    </p>
+
+    <p>
+      Imagine you're in turn 50 of a conversation. The system prompt is at the beginning. Your latest message is at the end. But that critical file you read in turn 12? It's buried in the middle &mdash; and the model is paying the least attention to it.
+    </p>
+
+    <p>
+      This is why harnesses employ several counter-strategies:
+    </p>
+
+    <ul>
+      <li><strong>System reminders</strong> &mdash; Re-inject critical instructions near the end of the context, where attention is highest.</li>
+      <li><strong>Compaction</strong> &mdash; Summarize away the bulky middle, so there's less "middle" to get lost in.</li>
+      <li><strong>Strategic placement</strong> &mdash; Put the most important context at the beginning (system prompt) and end (recent messages). Let the middle hold conversation history that serves as background.</li>
+      <li><strong>CLAUDE.md reload</strong> &mdash; Project instructions are re-loaded on every turn, typically near the top, not left to drift into the middle.</li>
+    </ul>
+
+    <p>
+      As a user, you can work with this: if you need the model to pay attention to something specific in a long conversation, mention it again in your latest message. Don't assume it remembers turn 5 when you're on turn 50.
+    </p>
+
+    <!-- The Hashline Technique -->
+    <h2>The Hashline Technique: Format Changes That Change Everything</h2>
+
+    <p>
+      Here's a story that perfectly illustrates why context engineering matters more than model engineering.
+    </p>
+
+    <p>
+      In 2025&ndash;2026, researchers discovered that simply <strong>changing how code is formatted</strong> in the context window dramatically improved coding success rates. The technique, called <strong>Hashline</strong>, adds structured delimiters and line numbers to code before sending it to the model.
+    </p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Standard format</p>
+        <div class="prompt-text">function login(user, pass) {
+  db.query('SELECT * FROM users', (err, rows) => {
+    if (err) callback(err);
+    const match = rows.find(r => r.name === user);
+    callback(null, match);
+  });
+}</div>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Hashline format</p>
+        <div class="prompt-text">### src/auth.js
+1 | function login(user, pass) {
+2 |   db.query('SELECT * FROM users', (err, rows) => {
+3 |     if (err) callback(err);
+4 |     const match = rows.find(r => r.name === user);
+5 |     callback(null, match);
+6 |   });
+7 | }</div>
+      </div>
+    </div>
+
+    <p>
+      The results were staggering: one model went from <strong>6.7% success to 68.3%</strong> &mdash; a tenfold improvement &mdash; just from reformatting the code. The model's intelligence didn't change. The harness changed how information was presented.
+    </p>
+
+    <p>
+      Why does this work? Because the problem often isn't the model's ability to understand code &mdash; it's the model's ability to <strong>express precise edits</strong>. Line numbers give the model a coordinate system. Structured delimiters clarify file boundaries. The model can say "replace lines 2&ndash;5" instead of trying to reproduce the exact surrounding code from memory.
+    </p>
+
+    <div class="highlight-box">
+      <h3>The Harness Engineering Lesson</h3>
+      <p>
+        The Hashline discovery is the purest example of context engineering in action. Same model, same task, same code &mdash; different formatting, dramatically different success rate. This is why harness engineering delivers returns that rival model improvements. <strong>How you present information matters as much as what information you present.</strong>
+      </p>
+    </div>
+
+    <!-- Inside the Harness -->
+    <h2>Inside the Harness: Opening a Project in Claude Code</h2>
+
+    <p>
+      Let's trace what Claude Code puts into the context window when you open a project and type your first message.
+    </p>
+
+    <div class="inside-look-box">
+      <p><strong>Before your message reaches the model, the harness assembles:</strong></p>
+      <ol>
+        <li><strong>Base system prompt</strong> (~5,000&ndash;10,000 tokens) &mdash; Conditional fragments activate based on your OS, shell, permission mode, and available tools.</li>
+        <li><strong>Tool descriptions</strong> (~2,000&ndash;4,000 tokens) &mdash; Every registered tool with its name, description, and parameter schema. Deferred tools get lighter descriptions to save space.</li>
+        <li><strong>CLAUDE.md chain</strong> &mdash; Global (~/.claude/CLAUDE.md), then project (./CLAUDE.md), then any directory-level overrides. All concatenated into the context.</li>
+        <li><strong>Memory files</strong> &mdash; If you have persistent memory configured, relevant memories are loaded based on the current project.</li>
+        <li><strong>Your message</strong> &mdash; Finally, your actual prompt. Often the smallest piece of the puzzle.</li>
+      </ol>
+      <p>
+        For a first message in a project with a well-written CLAUDE.md and 18 registered tools, the context might already be <strong>15,000&ndash;20,000 tokens</strong> before the model processes your request. Your 20-word prompt is riding on a foundation of carefully assembled context.
+      </p>
+      <p>
+        On subsequent turns, <strong>conversation history</strong> gets added &mdash; every previous message, tool call, and tool result. By turn 20 with several file reads, you could easily be at 100,000+ tokens. This is when compaction becomes critical.
+      </p>
+    </div>
+
+    <!-- Exercise -->
+    <h2>Try It Yourself</h2>
+
+    <div class="exercise-box">
+      <p><strong>Write a CLAUDE.md (or AGENTS.md) for Your Project</strong></p>
+      <p>
+        Pick a project you work on regularly. Create a <code>CLAUDE.md</code> file in the project root with:
+      </p>
+      <ol>
+        <li><strong>Stack description</strong> &mdash; Language, framework, database, key libraries.</li>
+        <li><strong>Key commands</strong> &mdash; How to run tests, lint, build, and deploy.</li>
+        <li><strong>Architecture overview</strong> &mdash; Where different types of code live (routes, services, models).</li>
+        <li><strong>Non-obvious rules</strong> &mdash; Things the model can't figure out from the code. Custom conventions, forbidden patterns, specific tooling decisions.</li>
+      </ol>
+      <p>
+        <strong>Skip</strong> things the model can infer: "this is a TypeScript project" (it can see that), "use camelCase for variables" (it can see that too). Focus on what's <em>invisible</em> in the code.
+      </p>
+      <p>
+        Then test it: ask Claude Code (or your tool of choice) a question about your project <em>without</em> the context file, and then <em>with</em> it. Notice the difference in answer quality &mdash; especially for questions about conventions, architecture decisions, and "how do we do X here?"
+      </p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What's Next</h2>
+
+    <p>
+      Context engineering decides what the model <em>sees</em>. But seeing isn't doing. In <strong>Chapter 4: Tools and Tool Use</strong>, we'll explore how LLMs actually <em>act</em> on the world &mdash; the mechanism that turns a text generator into an agent that reads files, edits code, runs tests, and searches the web.
+    </p>
+
+    <p>
+      You'll see the full tool-use loop, understand how the model decides which tool to call, and learn why tool descriptions are one of the most underrated pieces of harness engineering.
+    </p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-anatomy-of-a-harness.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">2. The Anatomy of a Harness</span>
+      </a>
+      <a href="04-tools-and-tool-use.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">4. Tools and Tool Use</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

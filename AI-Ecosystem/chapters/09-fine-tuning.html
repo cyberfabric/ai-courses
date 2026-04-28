@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Fine-Tuning — LoRA &amp; QLoRA | The AI Developer's Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The AI Developer's Toolkit</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-gradio.html">&larr; Previous</a>
+      <a href="10-n8n.html">Next &rarr;</a>
+      <a href="maps/09-fine-tuning-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Fine-Tuning: LoRA &amp; QLoRA</h1>
+    <p class="subtitle">Making AI models your own &mdash; when generic isn't enough, but retraining from scratch is insane</p>
+  </header>
+
+  <main>
+
+    <h2>The One-Sentence Version</h2>
+
+    <p><strong>Fine-tuning takes a pre-trained model and trains it further on your specific data so it learns your style, your format, or your domain expertise.</strong></p>
+
+    <p>In Chapter 4, you learned RAG &mdash; giving the model access to your data at query time. RAG is about <em>what the model sees</em>. Fine-tuning is about <em>how the model behaves</em>. They solve different problems, and knowing when to use which (or both) is one of the most important decisions in AI development.</p>
+
+    <div class="why-care-box">
+      Most developers will never need to fine-tune a model. RAG and prompt engineering handle the majority of use cases. But when they don't &mdash; when you need the model to consistently follow a specific format, use domain-specific language correctly, or behave in a way that no amount of prompting achieves &mdash; fine-tuning is the answer. And thanks to LoRA and QLoRA, it's gone from "you need a GPU cluster" to "you can do this on a single GPU over lunch."
+    </div>
+
+    <h2>Why Fine-Tune?</h2>
+
+    <p>General-purpose models like GPT-4 or Llama are trained to be helpful across all topics. But sometimes you need a specialist, not a generalist. Here are the signs that prompt engineering and RAG aren't enough:</p>
+
+    <ul>
+      <li><strong>Consistent format:</strong> You need every response in a specific JSON schema, a particular report template, or a defined structure. Prompting gets you 90% there; fine-tuning gets you 99%.</li>
+      <li><strong>Domain language:</strong> Medical, legal, or technical terminology that the model gets subtly wrong. Fine-tuning teaches it the correct usage.</li>
+      <li><strong>Brand voice:</strong> Every response should sound like your company &mdash; not generic, not ChatGPT-ish. Fine-tuning on examples of your actual writing style works remarkably well.</li>
+      <li><strong>Specific behavior:</strong> "Always respond in bullet points," "never use markdown," "always include a confidence score." When system prompts are unreliable, fine-tuning makes the behavior default.</li>
+      <li><strong>Smaller, faster model:</strong> A fine-tuned 7B model that's specialized for your task can match a general 70B model on <em>that specific task</em>, at 10x the speed and 1/10th the cost.</li>
+    </ul>
+
+    <h2>The Old Way vs The New Way</h2>
+
+    <h3>Full Fine-Tuning (The Old Way)</h3>
+
+    <p>Traditional fine-tuning updates <em>every weight</em> in the model. For a 7B parameter model, that means modifying 7 billion numbers. This requires:</p>
+
+    <ul>
+      <li>Multiple high-end GPUs (80+ GB VRAM total)</li>
+      <li>Days of training time</li>
+      <li>Hundreds or thousands of dollars in cloud GPU costs</li>
+      <li>A complete copy of the model for each fine-tune (14+ GB per version)</li>
+    </ul>
+
+    <p>This is still how frontier models are trained, but for most developers it's impractical and unnecessary.</p>
+
+    <h3>LoRA: The Breakthrough</h3>
+
+    <div class="tool-card">
+      <div class="tool-icon">Lo</div>
+      <div class="tool-info">
+        <div class="tool-name">LoRA (Low-Rank Adaptation)</div>
+        <div class="tool-desc">Instead of modifying all 7 billion weights, LoRA adds tiny "adapter" matrices alongside the frozen model. Only the adapters are trained &mdash; typically 0.1-1% of the model's parameters.</div>
+      </div>
+    </div>
+
+    <p>The insight is elegant: most of the knowledge in a pre-trained model is already useful. You don't need to change the whole brain &mdash; you just need to add a small, specialized module that adjusts the model's behavior for your use case.</p>
+
+    <p>Think of it like this: the base model is a fully trained chef. LoRA doesn't retrain the chef from scratch. It gives them a recipe card with your specific preferences &mdash; "less salt, always use fresh herbs, plate it this way." The chef's core skills are unchanged; they just adapt their output to your taste.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">0.1-1%</span>
+        <span class="stat-label">Parameters trained (vs 100% for full fine-tuning)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">10-100 MB</span>
+        <span class="stat-label">Adapter size (vs 14+ GB for full model)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">1 GPU</span>
+        <span class="stat-label">Minimum hardware (16 GB VRAM for 7B models)</span>
+      </div>
+    </div>
+
+    <h3>QLoRA: Even More Accessible</h3>
+
+    <div class="tool-card">
+      <div class="tool-icon">QL</div>
+      <div class="tool-info">
+        <div class="tool-name">QLoRA (Quantized LoRA)</div>
+        <div class="tool-desc">Combines LoRA with quantization: the base model is loaded in 4-bit precision (75% less memory), while the LoRA adapters are trained in full precision. Same quality, much less VRAM.</div>
+      </div>
+    </div>
+
+    <p>QLoRA is what made fine-tuning truly accessible to individual developers. With QLoRA, you can fine-tune a 7B model on a single consumer GPU with 16 GB VRAM. You can even fine-tune 13B or 30B models on a 24 GB GPU. Before QLoRA, this was unthinkable.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Method</th>
+          <th>VRAM for 7B Model</th>
+          <th>VRAM for 13B Model</th>
+          <th>Quality</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Full Fine-Tuning</strong></td>
+          <td>~60 GB</td>
+          <td>~100+ GB</td>
+          <td>Best (but often overkill)</td>
+        </tr>
+        <tr>
+          <td><strong>LoRA</strong></td>
+          <td>~16 GB</td>
+          <td>~28 GB</td>
+          <td>Excellent (very close to full)</td>
+        </tr>
+        <tr>
+          <td><strong>QLoRA</strong></td>
+          <td>~8 GB</td>
+          <td>~16 GB</td>
+          <td>Very good (slight trade-off)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      For most developers, <strong>QLoRA is the right choice</strong>. The quality difference between QLoRA and full LoRA is negligible for most tasks, and the memory savings are massive. Start with QLoRA; only move to full LoRA if you can measure a quality gap.
+    </div>
+
+    <h2>The Fine-Tuning Workflow</h2>
+
+    <div class="workflow-steps">
+      <span class="step">Prepare Data</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Choose Base Model</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Configure LoRA</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Train</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Merge &amp; Test</span>
+    </div>
+
+    <h3>Step 1: Prepare Your Data (The Hard Part)</h3>
+
+    <p>This is where most fine-tuning projects succeed or fail. You need examples of the behavior you want &mdash; input/output pairs in the right format:</p>
+
+    <pre><code># Training data format (JSON Lines)
+{"messages": [
+    {"role": "system", "content": "You are a medical documentation assistant."},
+    {"role": "user", "content": "Patient presents with persistent cough for 3 weeks."},
+    {"role": "assistant", "content": "Assessment: Chronic cough (>3 weeks duration).\nDifferential: Post-nasal drip, asthma, GERD, ACE inhibitor side effect.\nRecommended workup: Chest X-ray, spirometry, trial of PPI."}
+]}</code></pre>
+
+    <p>You typically need <strong>100-1000 high-quality examples</strong>. The emphasis is on <em>quality</em> &mdash; 200 perfect examples beat 5000 sloppy ones. Each example should demonstrate exactly the behavior you want the model to learn.</p>
+
+    <div class="warning-box">
+      Data preparation is genuinely 70-80% of the work in fine-tuning. Collecting, cleaning, and formatting examples takes far longer than the actual training. Budget your time accordingly. If you don't have good training data, fine-tuning won't help &mdash; garbage in, garbage out.
+    </div>
+
+    <h3>Step 2: Choose a Base Model</h3>
+
+    <p>Pick a model from HuggingFace (Chapter 2) that's closest to what you need. Common choices:</p>
+
+    <ul>
+      <li><strong>Llama 3.1 8B Instruct</strong> &mdash; great all-rounder for most fine-tuning tasks</li>
+      <li><strong>Mistral 7B Instruct</strong> &mdash; strong at following instructions, Apache 2.0 license</li>
+      <li><strong>Phi-3 Mini</strong> &mdash; when you want a tiny, fast model for a focused task</li>
+      <li><strong>CodeLlama</strong> &mdash; if your task is code-related</li>
+    </ul>
+
+    <p>Always start with an <strong>Instruct</strong> model (not Base). Instruct models already know how to follow instructions and have conversations. You're teaching them your <em>specific</em> style, not starting from zero.</p>
+
+    <h3>Step 3: Configure and Train</h3>
+
+    <p>Here's what the training code looks like with the popular <code>trl</code> and <code>peft</code> libraries:</p>
+
+    <pre><code>from peft import LoraConfig
+from trl import SFTTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+# Load model in 4-bit (QLoRA)
+model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct",
+    quantization_config=BitsAndBytesConfig(load_in_4bit=True))
+
+# Configure LoRA — these are the tiny adapter layers
+lora_config = LoraConfig(r=16, lora_alpha=32, target_modules=["q_proj", "v_proj"],
+                          lora_dropout=0.05, task_type="CAUSAL_LM")
+
+# Train
+trainer = SFTTrainer(model=model, train_dataset=dataset,
+                      peft_config=lora_config, max_seq_length=512)
+trainer.train()  # Takes 30 min to a few hours depending on data size
+trainer.save_model("my-custom-adapter")</code></pre>
+
+    <p>The output is a small adapter file (10-100 MB) that you can load on top of the base model at inference time. You don't modify the original model at all &mdash; you just add your adapter.</p>
+
+    <h3>Step 4: Merge and Test</h3>
+
+    <p>After training, you can either:</p>
+
+    <ul>
+      <li><strong>Load the adapter at runtime</strong> &mdash; keep the base model and adapter separate. Useful when you have multiple adapters for different tasks.</li>
+      <li><strong>Merge the adapter into the base model</strong> &mdash; create a single model file. Simpler to deploy, slightly faster inference.</li>
+    </ul>
+
+    <p>Then test extensively. Fine-tuned models can be great at what you trained them on but worse at everything else (this is called <strong>catastrophic forgetting</strong>). Make sure your model still handles general tasks acceptably.</p>
+
+    <h2>RAG vs Fine-Tuning: The Decision Tree</h2>
+
+    <p>This comes up so often that it deserves a clear framework. We touched on this in Chapter 4; here's the detailed version:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Use RAG When</p>
+        <p class="prompt-text">• The model needs ACCESS to data it doesn't have
+• Your data changes frequently
+• You need to cite sources
+• The answer exists in your documents
+• "What does our API do?" → RAG finds the docs
+• Setup: hours, no GPU needed</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Use Fine-Tuning When</p>
+        <p class="prompt-text">• The model needs to BEHAVE differently
+• You need consistent format/style/tone
+• Domain-specific language or terminology
+• Making a smaller model match a larger one on specific tasks
+• "Always respond like our brand" → fine-tune
+• Setup: days, GPU needed</p>
+      </div>
+    </div>
+
+    <div class="highlight-box">
+      <h3>The Decision Flowchart</h3>
+      <p><strong>"Does the model know the answer but says it wrong?"</strong> &rarr; Fine-tune (it's a behavior problem)</p>
+      <p><strong>"Does the model not know the answer at all?"</strong> &rarr; RAG (it's a knowledge problem)</p>
+      <p><strong>"Both?"</strong> &rarr; Use both. Fine-tune for behavior + RAG for knowledge. This is the most powerful combination.</p>
+    </div>
+
+    <h2>Common Fine-Tuning Use Cases</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Use Case</th>
+          <th>What You're Teaching</th>
+          <th>Training Data Examples</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Structured output</strong></td>
+          <td>Always respond in a specific JSON format</td>
+          <td>200+ input/output pairs in your schema</td>
+        </tr>
+        <tr>
+          <td><strong>Brand voice</strong></td>
+          <td>Match your company's writing style</td>
+          <td>500+ examples of your actual content</td>
+        </tr>
+        <tr>
+          <td><strong>Domain expertise</strong></td>
+          <td>Medical, legal, or technical terminology</td>
+          <td>1000+ domain-specific Q&A pairs</td>
+        </tr>
+        <tr>
+          <td><strong>Code style</strong></td>
+          <td>Follow your team's coding conventions</td>
+          <td>500+ code samples in your style</td>
+        </tr>
+        <tr>
+          <td><strong>Classification</strong></td>
+          <td>Categorize inputs consistently</td>
+          <td>500+ labeled examples</td>
+        </tr>
+        <tr>
+          <td><strong>Model distillation</strong></td>
+          <td>Teach a small model to mimic a large one on specific tasks</td>
+          <td>1000+ GPT-4 responses as training targets</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Platforms and Tools</h2>
+
+    <p>You don't have to set up everything from scratch. Here are the main options:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">HF</div>
+      <div class="tool-info">
+        <div class="tool-name">HuggingFace + PEFT/TRL</div>
+        <div class="tool-desc">The open-source standard. Full control, free (you provide the GPU). Best for developers who want to understand every step.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">AX</div>
+      <div class="tool-info">
+        <div class="tool-name">Axolotl</div>
+        <div class="tool-desc">A wrapper that simplifies fine-tuning configuration. Define everything in a YAML file instead of writing Python. Great for quick iteration.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">OA</div>
+      <div class="tool-info">
+        <div class="tool-name">OpenAI Fine-Tuning API</div>
+        <div class="tool-desc">Upload your data, click a button, get a fine-tuned GPT model. No GPU needed but costs money and you're locked to OpenAI. Simplest option.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">TG</div>
+      <div class="tool-info">
+        <div class="tool-name">Together AI / Anyscale</div>
+        <div class="tool-desc">Cloud platforms for fine-tuning open-source models. You get the convenience of a managed service with the flexibility of open models.</div>
+      </div>
+    </div>
+
+    <h2>Cost and Time: What to Expect</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Approach</th>
+          <th>Hardware</th>
+          <th>Time</th>
+          <th>Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>QLoRA on your GPU</strong></td>
+          <td>1x GPU (16+ GB VRAM)</td>
+          <td>1-4 hours</td>
+          <td>Free (electricity only)</td>
+        </tr>
+        <tr>
+          <td><strong>QLoRA on cloud GPU</strong></td>
+          <td>1x A100 or similar</td>
+          <td>1-4 hours</td>
+          <td>$2-15</td>
+        </tr>
+        <tr>
+          <td><strong>OpenAI fine-tuning</strong></td>
+          <td>None (managed)</td>
+          <td>Minutes to hours</td>
+          <td>$5-50+ (depends on data size)</td>
+        </tr>
+        <tr>
+          <td><strong>Full fine-tuning (7B)</strong></td>
+          <td>4x A100 GPUs</td>
+          <td>Hours to days</td>
+          <td>$50-500+</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The numbers that surprise most people: QLoRA fine-tuning of a 7B model on 500 examples takes about <strong>1-2 hours on a single GPU and costs under $10 on cloud</strong>. That's not a typo. Fine-tuning went from "enterprise only" to "side project budget" in the span of two years.</p>
+
+    <h2>Connection to Android Development</h2>
+
+    <p>Fine-tuned models connect to Android in two ways:</p>
+
+    <ul>
+      <li><strong>Backend specialization:</strong> Fine-tune a model for your app's domain (e.g., cooking, fitness, legal advice). Run it on your backend. Your Android app calls the same API as always, but the responses are better-tailored to your users because the model has been fine-tuned for your specific use case.</li>
+      <li><strong>On-device models:</strong> Fine-tune a small model (1-3B) with LoRA, merge the adapter, quantize the result, and deploy it on-device. This is how specialized on-device AI features work &mdash; a small model that's been fine-tuned to be excellent at one specific task (text classification, entity extraction, intent detection).</li>
+    </ul>
+
+    <p>The on-device path is particularly exciting for Android. A fine-tuned 1B model that does one thing really well can run in real-time on modern phones and provide AI features without any network connection.</p>
+
+    <div class="use-skip-box">
+      <div class="use-it">
+        <ul>
+          <li>You need consistent output format/style that prompting can't reliably achieve</li>
+          <li>Domain-specific language or terminology that the model gets wrong</li>
+          <li>You want a smaller, cheaper model that matches a larger one on your specific task</li>
+          <li>You have high-quality training data (100+ examples minimum)</li>
+          <li>Your use case is well-defined and repeatable</li>
+        </ul>
+      </div>
+      <div class="skip-it">
+        <ul>
+          <li>Your problem is knowledge access, not behavior &mdash; use RAG instead</li>
+          <li>Prompt engineering hasn't been fully explored yet &mdash; try that first</li>
+          <li>You don't have good training data (and can't create it)</li>
+          <li>Your needs change frequently &mdash; fine-tuning is a snapshot; RAG is live</li>
+          <li>A cloud API already gives you good enough results</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <strong>RAG, Fine-Tuning, or Both?</strong>
+      <p>For each scenario below, decide whether you'd use RAG, fine-tuning, or both. Justify your choice:</p>
+      <ol>
+        <li>A customer support chatbot that needs to know your product's documentation and always respond in a friendly, specific brand voice.</li>
+        <li>A code assistant that should follow your team's coding conventions (naming, architecture patterns) when generating code.</li>
+        <li>A medical note generator that needs to use correct terminology and follow a specific template, using the patient's chart data.</li>
+        <li>An app that classifies user feedback into categories (bug, feature request, complaint, praise).</li>
+        <li>A search feature that finds relevant articles from your company's blog when users ask questions.</li>
+      </ol>
+      <p><em>Answers: (1) Both &mdash; RAG for docs, fine-tune for voice. (2) Fine-tuning &mdash; it's a behavior/style issue. (3) Both &mdash; fine-tune for format/terminology, RAG for patient data. (4) Fine-tuning &mdash; classification is a behavior task. (5) RAG only &mdash; it's a knowledge access problem.</em></p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>We've covered tools that require code &mdash; Python libraries, frameworks, command-line tools. But not every AI workflow needs a developer. In <strong>Chapter 10: n8n</strong>, we'll explore visual, no-code AI automation. Drag-and-drop workflows that connect AI to your business processes &mdash; email classification, automated responses, data extraction &mdash; without writing a single line of code. It's the fastest way to add AI to repetitive business tasks.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-gradio.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">&larr; Gradio: Building AI Interfaces in Minutes</span>
+      </a>
+      <a href="10-n8n.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">n8n: AI Workflow Automation &rarr;</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

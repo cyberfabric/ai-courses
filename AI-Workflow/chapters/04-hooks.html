@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Hooks That Work For You | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-custom-skills.html">&larr; Prev</a>
+      <a href="05-code-review.html">Next &rarr;</a>
+      <a href="maps/04-hooks-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Hooks That Work For You</h1>
+    <p class="subtitle">Event-driven automation that fires without you lifting a finger</p>
+  </header>
+
+  <main>
+
+    <h2>From On-Demand to Always-On</h2>
+
+    <p>In Chapter 3, you built skills &mdash; powerful /commands that save time every time you invoke them. But there&rsquo;s a catch: you still have to <em>remember</em> to invoke them.</p>
+
+    <p>Hooks eliminate that last manual step. They&rsquo;re event listeners for Claude Code. When Claude Code edits a file, a hook can auto-lint it. When it writes Kotlin, a hook can auto-format it. When it runs a dangerous command, a hook can block it.</p>
+
+    <p>Think of hooks like a home automation system. You don&rsquo;t flip the porch light on every evening &mdash; the motion sensor does it for you. Hooks are the motion sensors of your dev workflow.</p>
+
+    <h2>How Hooks Work</h2>
+
+    <p>A hook is a shell command that runs when a specific Claude Code event fires. Hooks live in <code>settings.json</code> &mdash; user-level or project-level. Each hook receives a JSON payload on stdin describing the event (tool name, file path, command, cwd, session ID, and so on), and your script uses <code>jq</code> to grab the fields it cares about.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Claude Code Event</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Matcher Checks</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Hook Runs</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Result Fed Back</div>
+    </div>
+
+    <p>The basic structure in <code>settings.json</code>:</p>
+
+    <pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/your-script.sh"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+
+    <p>The schema: an event (e.g. <code>PostToolUse</code>), an optional matcher, and one or more handlers under the inner <code>hooks</code> array. Each handler has a <code>type</code> (almost always <code>command</code>) and a <code>command</code> string. <code>$CLAUDE_PROJECT_DIR</code> points at your project root &mdash; always quote it so paths with spaces work.</p>
+
+    <p>The JSON your script sees on stdin includes <code>hook_event_name</code>, <code>tool_name</code>, <code>cwd</code>, <code>session_id</code>, and a <code>tool_input</code> object. For an <code>Edit</code>, that&rsquo;s <code>tool_input.file_path</code>, <code>old_string</code>, <code>new_string</code>; for <code>Bash</code> it&rsquo;s <code>tool_input.command</code>. So when you see <code>jq -r '.tool_input.file_path'</code> later in the chapter, that&rsquo;s how a script grabs the file Claude just edited.</p>
+
+    <h2>Hook Types: When Things Fire</h2>
+
+    <p>Claude Code fires hooks at many points in a session. Here are the ones you&rsquo;ll reach for most often:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Hook Type</th>
+          <th>Fires When</th>
+          <th>Can Block?</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>PreToolUse</code></td>
+          <td>Before a tool is used</td>
+          <td>Yes</td>
+          <td>Guardrails, validation, blocking dangerous actions</td>
+        </tr>
+        <tr>
+          <td><code>PostToolUse</code></td>
+          <td>After a tool is used</td>
+          <td>No</td>
+          <td>Linting, formatting, testing, logging</td>
+        </tr>
+        <tr>
+          <td><code>Notification</code></td>
+          <td>Claude Code sends a notification</td>
+          <td>No</td>
+          <td>Alerts to Slack, sounds, desktop notifications</td>
+        </tr>
+        <tr>
+          <td><code>Stop</code></td>
+          <td>Claude Code finishes its turn</td>
+          <td>No</td>
+          <td>Session summaries, final checks, logging</td>
+        </tr>
+        <tr>
+          <td><code>SubagentStop</code></td>
+          <td>A subagent finishes</td>
+          <td>No</td>
+          <td>Collecting results from parallel agents</td>
+        </tr>
+        <tr>
+          <td><code>UserPromptSubmit</code></td>
+          <td>You submit a prompt, before Claude reads it</td>
+          <td>Yes</td>
+          <td>Prompt rewriting, guardrails, injecting context</td>
+        </tr>
+        <tr>
+          <td><code>SessionStart</code></td>
+          <td>A new or resumed session begins</td>
+          <td>No</td>
+          <td>Setting env vars, loading project state, warm-up checks</td>
+        </tr>
+        <tr>
+          <td><code>SessionEnd</code></td>
+          <td>The session terminates</td>
+          <td>No</td>
+          <td>Final logs, cleanup, off-boarding metrics</td>
+        </tr>
+        <tr>
+          <td><code>PreCompact</code></td>
+          <td>Before Claude compacts the conversation</td>
+          <td>Yes</td>
+          <td>Persisting context to disk before it&rsquo;s summarized</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><em>Even more events exist</em> (<code>UserPromptExpansion</code>, <code>PostCompact</code>, <code>SubagentStart</code>, <code>PostToolUseFailure</code>, <code>CwdChanged</code>, and others) &mdash; see the <a href="https://code.claude.com/docs/en/hooks">hooks reference</a> for the full list. Most workflows only need the rows above.</p>
+
+    <div class="tip-box">
+      <p><strong>PreToolUse is special.</strong> It&rsquo;s the headline hook for blocking actions. Traditional way: exit <code>2</code> and the action is blocked, with stderr shown to Claude. Modern way: exit <code>0</code> and print a JSON object with <code>{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "..."}}</code>. JSON is preferred &mdash; it also supports <code>"allow"</code>, <code>"ask"</code>, and rewriting the tool input via <code>updatedInput</code>. Pick one approach per script; don&rsquo;t mix.</p>
+    </div>
+
+    <h2>Matchers: Targeting Specific Tools</h2>
+
+    <p>Without a matcher, a hook fires on <em>every</em> tool use. That&rsquo;s rarely what you want. Matchers let you target specific tools:</p>
+
+    <pre><code>{ "matcher": "Edit",       "hooks": [...] }   // exact tool
+{ "matcher": "Edit|Write", "hooks": [...] }   // pipe = OR
+{ "matcher": "Bash",       "hooks": [...] }   // any Bash command
+{ "matcher": "*",          "hooks": [...] }   // every tool</code></pre>
+
+    <p>The matcher checks the tool name. Most common: <code>Edit</code> (modify a file), <code>Write</code> (create a new file), <code>Bash</code> (run a shell command), <code>Read</code> (read a file). It also accepts regex (<code>^Notebook</code>) and MCP-style globs (<code>mcp__memory__.*</code>).</p>
+
+    <h2>Your First Hook: Lint on Save</h2>
+
+    <p>Let&rsquo;s build the most universally useful hook: auto-linting every file Claude Code touches.</p>
+
+    <div class="recipe-box">
+      <h3>Setting Up Auto-Lint with ktlint</h3>
+      <ol>
+        <li><strong>Create the lint script.</strong> Save this as <code>scripts/lint-changed.sh</code> in your project:</li>
+      </ol>
+      <pre><code>#!/bin/bash
+# scripts/lint-changed.sh — Lint a file if it's Kotlin
+FILE=$(jq -r '.tool_input.file_path')
+if [[ "$FILE" == *.kt || "$FILE" == *.kts ]]; then
+  ktlint --format "$FILE" 2>&amp;1
+  if [ $? -ne 0 ]; then
+    echo "ktlint found issues in $FILE"
+  fi
+fi</code></pre>
+      <ol start="2">
+        <li><strong>Make it executable:</strong> <code>chmod +x scripts/lint-changed.sh</code></li>
+        <li><strong>Add the hook.</strong> In <code>.claude/settings.json</code>:</li>
+      </ol>
+      <pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/lint-changed.sh"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+      <ol start="4">
+        <li><strong>Test it.</strong> Ask Claude Code to edit a Kotlin file. After the edit, the hook runs ktlint automatically. If there are issues, Claude Code sees them and can fix them immediately.</li>
+      </ol>
+    </div>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Without the Lint Hook</h4>
+        <ol>
+          <li>Claude Code edits <code>UserViewModel.kt</code></li>
+          <li>You remember to run ktlint (or forget)</li>
+          <li>Linter finds 3 style issues</li>
+          <li>You ask Claude Code to fix them</li>
+          <li>You run ktlint again to verify</li>
+          <li>Repeat for the next file</li>
+        </ol>
+        <p><strong>3&ndash;5 minutes per file, easy to skip</strong></p>
+      </div>
+      <div class="after">
+        <h4>With the Lint Hook</h4>
+        <ol>
+          <li>Claude Code edits <code>UserViewModel.kt</code></li>
+          <li>Hook auto-lints &mdash; issues fixed inline</li>
+          <li>You never think about linting again</li>
+        </ol>
+        <p><strong>0 seconds of your time, never skipped</strong></p>
+      </div>
+    </div>
+
+    <h2>Format on Save</h2>
+
+    <p>Linting catches issues. Formatting fixes style. If your team uses Spotless (common in Android projects), you can auto-format every file Claude Code touches:</p>
+
+    <pre><code>// In .claude/settings.json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/format-changed.sh" }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+
+    <pre><code>#!/bin/bash
+# scripts/format-changed.sh — Format a file if it's Kotlin or Java
+FILE=$(jq -r '.tool_input.file_path')
+if [[ "$FILE" == *.kt || "$FILE" == *.java ]]; then
+  # Use spotless to format just this file
+  ./gradlew spotlessApply -PspotlessFiles="$FILE" --quiet 2>&amp;1
+fi</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Combine lint and format into one hook.</strong> Rather than having two separate PostToolUse hooks, create a single <code>scripts/post-edit.sh</code> that runs format first, then lint. Order matters &mdash; format fixes style, then lint catches logic issues.</p>
+    </div>
+
+    <h2>Test on Change</h2>
+
+    <p>This one is transformative. Every time Claude Code modifies a source file, automatically find and run the relevant tests:</p>
+
+    <pre><code>#!/bin/bash
+# scripts/test-changed.sh — Run tests related to a changed file
+FILE=$(jq -r '.tool_input.file_path')
+
+# Only for Kotlin source files (not test files themselves)
+if [[ "$FILE" == *.kt &amp;&amp; "$FILE" != *Test.kt &amp;&amp; "$FILE" != *test* ]]; then
+  # Derive the test file path
+  TEST_FILE="${FILE/main/test}"
+  TEST_FILE="${TEST_FILE%.kt}Test.kt"
+
+  if [ -f "$TEST_FILE" ]; then
+    # Extract the test class name for Gradle
+    CLASS_NAME=$(basename "$TEST_FILE" .kt)
+    echo "Running tests: $CLASS_NAME"
+    ./gradlew test --tests "*$CLASS_NAME" --quiet 2>&amp;1
+  else
+    echo "No test file found for $FILE"
+  fi
+fi</code></pre>
+
+    <pre><code>// In .claude/settings.json — add to existing PostToolUse array
+{
+  "matcher": "Edit|Write",
+  "hooks": [
+    { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/test-changed.sh" }
+  ]
+}</code></pre>
+
+    <div class="automation-box">
+      <p><strong>The test-on-change hook creates a tight feedback loop.</strong> Claude Code edits a file &rarr; tests run instantly &rarr; if they fail, Claude Code sees the failure and can fix it immediately, in the same session. No more &ldquo;I&rsquo;ll run tests later&rdquo; &mdash; later is <em>right now</em>, automatically.</p>
+    </div>
+
+    <h2>Safety Guardrails: PreToolUse Hooks</h2>
+
+    <p>PostToolUse hooks react to what happened. PreToolUse hooks <em>prevent</em> things from happening. This is your safety net.</p>
+
+    <h3>Block force-push to main</h3>
+
+    <pre><code>#!/bin/bash
+# scripts/guard-main.sh — Prevent dangerous operations on main/master
+# Uses the JSON-decision pattern: exit 0 with permissionDecision=deny.
+COMMAND=$(jq -r '.tool_input.command')
+deny() {
+  jq -n --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
+  exit 0
+}
+
+if echo "$COMMAND" | grep -qE 'git\s+push\s+.*--force.*(main|master)'; then
+  deny "Force push to main/master is not allowed. Use a feature branch and open a PR."
+fi
+
+BRANCH=$(git branch --show-current 2>/dev/null)
+if [[ ("$BRANCH" == "main" || "$BRANCH" == "master") ]] &amp;&amp; echo "$COMMAND" | grep -qE 'git\s+commit'; then
+  deny "Direct commits to $BRANCH are not allowed. Create a feature branch first."
+fi</code></pre>
+
+    <pre><code>// In .claude/settings.json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/guard-main.sh" }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+
+    <p>Now Claude Code physically cannot force-push to main or commit directly to it. The hook blocks the action before it happens and explains why.</p>
+
+    <h3>Enforce conventional commits</h3>
+
+    <pre><code>#!/bin/bash
+# scripts/check-commit-msg.sh — Enforce conventional commits format
+COMMAND=$(jq -r '.tool_input.command')
+
+# Only check git commit commands
+if echo "$COMMAND" | grep -qE 'git\s+commit'; then
+  # Extract the commit message
+  MSG=$(echo "$COMMAND" | grep -oP '(?&lt;=-m\s")[^"]+')
+  if [ -n "$MSG" ]; then
+    # Check conventional commits format: type(scope): description
+    if ! echo "$MSG" | grep -qE '^(feat|fix|docs|style|refactor|test|chore|ci|perf)(\(.+\))?: .+'; then
+      echo "BLOCKED: Commit message doesn't follow conventional commits format." &gt;&amp;2
+      echo "Expected: type(scope): description" &gt;&amp;2
+      echo "Examples: feat(auth): add login screen" &gt;&amp;2
+      echo "          fix(api): handle timeout errors" &gt;&amp;2
+      exit 2  # exit 2 = block the tool call, send stderr back to Claude
+    fi
+  fi
+fi</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Keep PreToolUse hooks fast.</strong> They run before every matched tool use, so a slow hook slows down everything. Aim for under 100ms. If your check needs to do something heavy (like running Gradle), use a PostToolUse hook instead &mdash; it won&rsquo;t block the action.</p>
+    </div>
+
+    <h2>Combining Multiple Hooks</h2>
+
+    <p>You can (and should) stack multiple handlers per matcher &mdash; they run in the order listed. Cluster all your <code>Edit|Write</code> reactions into a single inner <code>hooks</code> array:</p>
+
+    <pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/format-changed.sh" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/lint-changed.sh" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/test-changed.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/guard-main.sh" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/check-commit-msg.sh" }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+
+    <h2>Hook Debugging</h2>
+
+    <p>When a hook doesn&rsquo;t do what you expect, here&rsquo;s how to figure out why:</p>
+
+    <h3>1. Add logging to your hook script</h3>
+
+    <pre><code>#!/bin/bash
+# Capture stdin once, log it, then re-feed it to your real logic.
+INPUT=$(cat)
+echo "[HOOK $(date)] $0 — $INPUT" &gt;&gt; /tmp/claude-hooks.log
+echo "$INPUT" | jq .</code></pre>
+
+    <h3>2. Common issues and fixes</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Symptom</th>
+          <th>Likely Cause</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Hook never fires</td>
+          <td>Wrong matcher or settings file location</td>
+          <td>Check matcher matches the tool name exactly; verify settings.json path</td>
+        </tr>
+        <tr>
+          <td>Hook fires but does nothing</td>
+          <td>Script not executable or wrong path</td>
+          <td>Run <code>chmod +x</code> on the script; use relative path from project root</td>
+        </tr>
+        <tr>
+          <td>Hook breaks Claude Code flow</td>
+          <td>Script has an error or hangs</td>
+          <td>Test the script manually first: <code>./scripts/lint-changed.sh test.kt</code></td>
+        </tr>
+        <tr>
+          <td>PreToolUse blocks unexpectedly</td>
+          <td>Matcher is too broad</td>
+          <td>Make the grep pattern more specific, or add an early exit for safe commands</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>3. Test hooks in isolation</h3>
+
+    <p>Before adding a hook to settings.json, always test the script by hand &mdash; pipe in a fake JSON payload that mimics what Claude Code would send:</p>
+
+    <pre><code># Test the lint hook with a fake Edit payload
+echo '{"tool_input":{"file_path":"src/main/java/com/myapp/UserViewModel.kt"}}' \
+  | ./scripts/lint-changed.sh
+
+# Test the guard hook with a simulated Bash payload
+echo '{"tool_input":{"command":"git push --force origin main"}}' \
+  | ./scripts/guard-main.sh
+# Should print a JSON deny decision and exit 0</code></pre>
+
+    <h2>Hook Performance: Keep It Snappy</h2>
+
+    <p>Hooks run synchronously. A slow hook means Claude Code pauses every time it edits a file. Here&rsquo;s how to keep things fast:</p>
+
+    <div class="highlight-box">
+      <h3>Hook Performance Rules</h3>
+      <p><strong>PreToolUse hooks:</strong> Must be under 100ms. Use simple grep/regex checks, never Gradle or network calls.</p>
+      <p><strong>PostToolUse hooks:</strong> Aim for under 5 seconds. Lint one file, not the whole project. Run one test class, not the full suite.</p>
+      <p><strong>Stop hooks:</strong> Can take longer since they run at the end. Good for summaries and full-suite tests.</p>
+    </div>
+
+    <ul>
+      <li><strong>Lint one file, not the project.</strong> <code>ktlint &quot;$FILE&quot;</code> takes 200ms. <code>ktlint</code> on the whole project takes 10 seconds.</li>
+      <li><strong>Run targeted tests, not the full suite.</strong> <code>--tests &quot;*UserViewModelTest&quot;</code> takes 3 seconds. The full suite takes 2 minutes.</li>
+      <li><strong>Early-exit when irrelevant.</strong> If the file isn&rsquo;t Kotlin, exit immediately. Don&rsquo;t run any checks.</li>
+      <li><strong>Use <code>--quiet</code> flags.</strong> Verbose output from Gradle or linters slows things down and clutters the context.</li>
+    </ul>
+
+    <h2>Project-Level vs. User-Level Hooks</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Setting</th>
+          <th>Location</th>
+          <th>Shared?</th>
+          <th>Use for</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Project hooks</td>
+          <td><code>.claude/settings.json</code></td>
+          <td>Yes (checked in)</td>
+          <td>Team standards: lint, format, guardrails</td>
+        </tr>
+        <tr>
+          <td>User hooks</td>
+          <td><code>~/.claude/settings.json</code></td>
+          <td>No (personal)</td>
+          <td>Personal preferences: notifications, logging</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Team guardrails (no force-push to main, conventional commits) belong in <strong>project-level</strong> settings. Personal preferences (desktop notification sounds, session logging) belong in <strong>user-level</strong> settings.</p>
+
+    <h2>Real-World Hook Recipes</h2>
+
+    <h3>Notification when Claude Code finishes a long task</h3>
+
+    <pre><code>// User-level: ~/.claude/settings.json
+{
+  "hooks": {
+    "Notification": [
+      { "hooks": [
+        { "type": "command",
+          "command": "bash -c 'MSG=$(jq -r .message); notify-send \"Claude Code\" \"$MSG\"'" }
+      ] }
+    ]
+  }
+}</code></pre>
+
+    <h3>Log every Claude Code session</h3>
+
+    <pre><code>// .claude/settings.json — fire SessionEnd to capture exit time
+{
+  "hooks": {
+    "SessionEnd": [
+      { "hooks": [
+        { "type": "command",
+          "command": "bash -c 'echo \"$(date +%Y-%m-%d\\ %H:%M) — done\" &gt;&gt; \"$CLAUDE_PROJECT_DIR\"/.claude/activity.log'" }
+      ] }
+    ]
+  }
+}</code></pre>
+
+    <h2>Exercise: Set Up Your Hook Stack</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Configure Three Hooks for Your Project</h3>
+      <p>Set up these hooks now. Total time: about 15 minutes.</p>
+
+      <h4>Hook 1: PostToolUse &mdash; Auto-lint</h4>
+      <ol>
+        <li>Create <code>scripts/lint-changed.sh</code> (copy from the recipe above)</li>
+        <li>Make it executable: <code>chmod +x scripts/lint-changed.sh</code></li>
+        <li>Add the PostToolUse hook to <code>.claude/settings.json</code></li>
+        <li>Test: ask Claude Code to edit a Kotlin file and watch the lint run automatically</li>
+      </ol>
+
+      <h4>Hook 2: PreToolUse &mdash; Guard main branch</h4>
+      <ol>
+        <li>Create <code>scripts/guard-main.sh</code> (copy from above)</li>
+        <li>Make it executable</li>
+        <li>Add the PreToolUse hook for Bash commands</li>
+        <li>Test: switch to main and ask Claude Code to make a commit &mdash; it should be blocked</li>
+      </ol>
+
+      <h4>Hook 3: Stop &mdash; Session log</h4>
+      <ol>
+        <li>Add the Stop hook that logs session completion</li>
+        <li>Run a Claude Code session and verify the log file was created</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Create a <code>scripts/post-edit.sh</code> that combines formatting, linting, and test-running into a single hook script. Use if/else to handle different file types (Kotlin, XML, Gradle).</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now have skills for on-demand automation and hooks for always-on automation. Together, they handle most of your daily workflow. But there&rsquo;s one workflow that deserves its own chapter: <strong>code review.</strong></p>
+
+    <p>In <strong>Chapter 5: AI-Powered Code Review</strong>, you&rsquo;ll build a review system that checks every PR for bugs, security issues, style violations, and Android-specific pitfalls. Automated, consistent, and fast &mdash; no more waiting days for a human reviewer to find time.</p>
+
+    <p>Let&rsquo;s make code review instant.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-custom-skills.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Custom Claude Code Skills</span>
+      </a>
+      <a href="05-code-review.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">AI-Powered Code Review</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

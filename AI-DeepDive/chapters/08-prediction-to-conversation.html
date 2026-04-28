@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: From Prediction to Conversation | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-full-transformer.html">&larr; Prev</a>
+      <a href="09-sampling-strategies.html">Next &rarr;</a>
+      <a href="maps/08-prediction-to-conversation-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>From Prediction to Conversation</h1>
+    <p class="chapter-subtitle">Autoregressive generation traced token by token &mdash; how sentences form one prediction at a time</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/06-text-generation.html">AI-Intro Ch 6: Text Generation</a>. There you learned the loop. Now you&rsquo;ll trace every probability distribution and selection step with real numbers.
+    </div>
+
+    <p>You now know everything that happens inside a transformer: tokenization (Chapter 5), attention (Chapter 6), and the full block with residual connections, layer norm, and FFN (Chapter 7). But there&rsquo;s a crucial question left: <strong>how does all of that produce a sentence?</strong></p>
+
+    <p>The answer is surprisingly simple: predict one token, append it, repeat. In this chapter, you&rsquo;ll trace this loop with real numbers and see how different decoding strategies shape the output.</p>
+
+    <!-- ============================================== -->
+    <h2>The Fundamental Loop</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>Autoregressive Generation</h4>
+      <p>The model predicts <strong>one token at a time</strong>. After each prediction, the new token is appended to the input, and the model runs again to predict the next one. This continues until a stop condition is met.</p>
+      <p>The key word is <em>autoregressive</em>: each output becomes part of the input for the next step. The model &ldquo;feeds itself&rdquo; its own predictions.</p>
+    </div>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Prompt</h4>
+        <p>[The, cat, sat]</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Predict</h4>
+        <p>Get probability for every token</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. Select</h4>
+        <p>Pick one token</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Append</h4>
+        <p>[The, cat, sat, <strong>on</strong>]</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>5. Repeat</h4>
+        <p>Go to step 2</p>
+      </div>
+    </div>
+
+    <p>That&rsquo;s it. Every chatbot response, every code completion, every AI-generated story is produced by this loop. The only difference between strategies is step 3: <em>how</em> you pick the next token.</p>
+
+    <!-- ============================================== -->
+    <h2>Tracing Generation: 5 Tokens Step by Step</h2>
+    <!-- ============================================== -->
+
+    <p>Let&rsquo;s trace the generation of a short sentence. We&rsquo;ll use a tiny vocabulary of 8 tokens to keep things readable:</p>
+
+    <table>
+      <thead><tr><th>ID</th><th>Token</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td><code>The</code></td></tr>
+        <tr><td>1</td><td><code>cat</code></td></tr>
+        <tr><td>2</td><td><code>sat</code></td></tr>
+        <tr><td>3</td><td><code>on</code></td></tr>
+        <tr><td>4</td><td><code>the</code></td></tr>
+        <tr><td>5</td><td><code>mat</code></td></tr>
+        <tr><td>6</td><td><code>dog</code></td></tr>
+        <tr><td>7</td><td><code>&lt;EOS&gt;</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>Our prompt is: <code>[The, cat, sat]</code> (token IDs: [0, 1, 2]).</p>
+
+    <div class="math-walkthrough">
+      <h4>Generation Step 1: What comes after &ldquo;The cat sat&rdquo;?</h4>
+
+      <p>The transformer processes all 3 tokens and outputs a probability distribution over the entire vocabulary for the next position:</p>
+
+      <table>
+        <thead><tr><th>Token</th><th>Probability</th></tr></thead>
+        <tbody>
+          <tr><td><code>The</code></td><td><code>0.02</code></td></tr>
+          <tr><td><code>cat</code></td><td><code>0.03</code></td></tr>
+          <tr><td><code>sat</code></td><td><code>0.01</code></td></tr>
+          <tr><td><code>on</code></td><td><strong><code>0.55</code></strong></td></tr>
+          <tr><td><code>the</code></td><td><code>0.08</code></td></tr>
+          <tr><td><code>mat</code></td><td><code>0.04</code></td></tr>
+          <tr><td><code>dog</code></td><td><code>0.02</code></td></tr>
+          <tr><td><code>&lt;EOS&gt;</code></td><td><code>0.25</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Greedy selection:</strong> Pick the highest probability &rarr; <code>on</code> (0.55).</p>
+      <p><strong>New sequence:</strong> <code>[The, cat, sat, <strong>on</strong>]</code></p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Generation Step 2: What comes after &ldquo;The cat sat on&rdquo;?</h4>
+
+      <table>
+        <thead><tr><th>Token</th><th>Probability</th></tr></thead>
+        <tbody>
+          <tr><td><code>The</code></td><td><code>0.01</code></td></tr>
+          <tr><td><code>cat</code></td><td><code>0.02</code></td></tr>
+          <tr><td><code>sat</code></td><td><code>0.01</code></td></tr>
+          <tr><td><code>on</code></td><td><code>0.01</code></td></tr>
+          <tr><td><code>the</code></td><td><strong><code>0.72</code></strong></td></tr>
+          <tr><td><code>mat</code></td><td><code>0.08</code></td></tr>
+          <tr><td><code>dog</code></td><td><code>0.05</code></td></tr>
+          <tr><td><code>&lt;EOS&gt;</code></td><td><code>0.10</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Selection:</strong> <code>the</code> (0.72). <strong>New sequence:</strong> <code>[The, cat, sat, on, <strong>the</strong>]</code></p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Generation Steps 3&ndash;5</h4>
+
+      <table>
+        <thead><tr><th>Step</th><th>Input Sequence</th><th>Top Token</th><th>Prob</th></tr></thead>
+        <tbody>
+          <tr><td>3</td><td>[The, cat, sat, on, the]</td><td><code>mat</code></td><td>0.68</td></tr>
+          <tr><td>4</td><td>[The, cat, sat, on, the, mat]</td><td><code>&lt;EOS&gt;</code></td><td>0.85</td></tr>
+          <tr><td>5</td><td>&mdash;</td><td colspan="2"><em>Stop: EOS generated</em></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Final output:</strong> &ldquo;The cat sat on the mat.&rdquo;</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Every token sees everything before it</h4>
+      <p>At step 3, the model processes all 5 tokens [The, cat, sat, on, the] through the transformer. The causal mask (Chapter 7) ensures each token attends only to previous tokens. The last position&rsquo;s output gives the probability distribution for the next token. <strong>The model doesn&rsquo;t &ldquo;remember&rdquo; step 1 &mdash; it reprocesses the entire sequence every time.</strong></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Greedy Decoding: Always Pick the Best</h2>
+    <!-- ============================================== -->
+
+    <div class="operation-box">
+      <h4>Greedy Decoding</h4>
+      <p>At each step, pick the token with the <strong>highest probability</strong>. No randomness. The same prompt always produces the same output.</p>
+    </div>
+
+    <p>Greedy decoding is fast (one forward pass per token) and deterministic. But it has a problem: it can get stuck in repetitive loops.</p>
+
+    <div class="math-walkthrough">
+      <h4>Greedy decoding can get boring</h4>
+
+      <p>Consider a model generating a story. At each step, the most likely continuation is the most generic one:</p>
+
+      <table>
+        <thead><tr><th>Step</th><th>Generated</th><th>Top token (greedy)</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>The weather was</td><td><code>nice</code> (0.35)</td></tr>
+          <tr><td>2</td><td>The weather was nice</td><td><code>and</code> (0.40)</td></tr>
+          <tr><td>3</td><td>The weather was nice and</td><td><code>the</code> (0.30)</td></tr>
+          <tr><td>4</td><td>The weather was nice and the</td><td><code>weather</code> (0.25)</td></tr>
+          <tr><td>5</td><td>The weather was nice and the weather</td><td><code>was</code> (0.35)</td></tr>
+          <tr><td>6</td><td>The weather was nice and the weather was</td><td><code>nice</code> (0.40)</td></tr>
+        </tbody>
+      </table>
+
+      <p>The model is stuck in a loop! Each individual choice is the most probable, but the sequence is terrible. This is the <strong>greedy trap</strong>: local optima don&rsquo;t guarantee a globally good sequence.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Checkpoint</h4>
+      <p>If the model always picks the most probable next token, will it always generate good text?</p>
+      <p><em>Answer: No. Greedy decoding can produce repetitive, boring, or looping text. The highest-probability token at each step doesn&rsquo;t guarantee the best overall sequence.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Beam Search: Keeping Multiple Options Open</h2>
+    <!-- ============================================== -->
+
+    <p>Beam search addresses the greedy trap by exploring multiple candidate sequences simultaneously. Instead of committing to one token at each step, it keeps the top <em>B</em> best sequences (called <strong>beams</strong>).</p>
+
+    <div class="operation-box">
+      <h4>Beam Search</h4>
+      <p>At each step: expand every beam with all possible next tokens, score each expanded sequence by its total probability, keep only the top B sequences. Continue until all beams produce EOS or reach max length.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Beam search with beam width B=2</h4>
+
+      <p><strong>Start:</strong> Prompt = &ldquo;The cat&rdquo;</p>
+
+      <p><strong>Step 1:</strong> Get probabilities for next token. Keep top 2:</p>
+      <table>
+        <thead><tr><th>Beam</th><th>Sequence</th><th>P(next)</th><th>Total Score</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>The cat <strong>sat</strong></td><td>0.45</td><td>log(0.45) = -0.80</td></tr>
+          <tr><td>B</td><td>The cat <strong>is</strong></td><td>0.30</td><td>log(0.30) = -1.20</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 2:</strong> Expand each beam. Beam A tries all tokens, Beam B tries all tokens. That&rsquo;s 2 &times; 8 = 16 candidates. Keep top 2:</p>
+      <table>
+        <thead><tr><th>Beam</th><th>Sequence</th><th>P(new)</th><th>Cumulative Score</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>The cat sat <strong>on</strong></td><td>0.55</td><td>-0.80 + (-0.60) = <strong>-1.40</strong></td></tr>
+          <tr><td>B</td><td>The cat is <strong>sleeping</strong></td><td>0.40</td><td>-1.20 + (-0.92) = <strong>-2.12</strong></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 3:</strong> Expand again. Keep top 2:</p>
+      <table>
+        <thead><tr><th>Beam</th><th>Sequence</th><th>Cumulative Score</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>The cat sat on <strong>the</strong></td><td><strong>-1.73</strong></td></tr>
+          <tr><td>B</td><td>The cat sat on <strong>a</strong></td><td><strong>-2.30</strong></td></tr>
+        </tbody>
+      </table>
+
+      <p><em>Notice: &ldquo;The cat is sleeping&rdquo; was pruned because both extensions of beam A scored better.</em></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why beam search helps</h4>
+      <p>Greedy would commit to &ldquo;sat&rdquo; immediately and never explore &ldquo;is sleeping.&rdquo; Beam search keeps both options alive until it has enough information to decide. It finds sequences that are globally better, not just locally best. The tradeoff: B beams means B forward passes per step &mdash; it&rsquo;s B times slower than greedy.</p>
+    </div>
+
+    <p>Beam search is common in translation and summarization, where accuracy matters more than creativity. For chat and creative writing, sampling (Chapter 9) is usually preferred.</p>
+
+    <!-- ============================================== -->
+    <h2>When Does Generation Stop?</h2>
+    <!-- ============================================== -->
+
+    <p>Three conditions can end generation:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Stop Condition</th><th>How It Works</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>EOS token</strong></td>
+            <td>Model generates the special <code>&lt;EOS&gt;</code> token</td>
+            <td>Natural end of a response</td>
+          </tr>
+          <tr>
+            <td><strong>Max length</strong></td>
+            <td>Hit the maximum token limit (e.g., 4096)</td>
+            <td>Response is cut off mid-sentence</td>
+          </tr>
+          <tr>
+            <td><strong>Stop sequence</strong></td>
+            <td>A specific string appears (e.g., <code>&lt;/answer&gt;</code>)</td>
+            <td>Structured output formats</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>If you&rsquo;ve ever seen a chatbot response end mid-sentence, the likely cause is hitting the max length limit before generating an EOS token.</p>
+
+    <!-- ============================================== -->
+    <h2>How Chat Actually Works</h2>
+    <!-- ============================================== -->
+
+    <p>When you send a message to Claude or ChatGPT, it doesn&rsquo;t maintain a separate conversation state. Instead, the <strong>entire conversation history is concatenated into one long sequence</strong> every time:</p>
+
+    <div class="math-walkthrough">
+      <h4>What the model actually sees</h4>
+
+      <pre><code>&lt;BOS&gt; [system prompt: ~500 tokens]
+[user turn 1: ~50 tokens]
+[assistant turn 1: ~200 tokens]
+[user turn 2: ~30 tokens]
+[assistant turn 2: ← generating here]</code></pre>
+
+      <p>Total input for turn 2: ~780 tokens. The model processes all of them through every transformer block just to generate the first token of the response.</p>
+
+      <p>By turn 20 of a conversation, the input might be 15,000+ tokens. Every single one is processed through attention in every layer, every time you get a response.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Memory is an illusion</h4>
+      <p>The model doesn&rsquo;t &ldquo;remember&rdquo; the conversation. It <em>re-reads</em> the entire history every time. What feels like memory is actually the conversation text being fed back in as input. This is why conversations have a context window limit &mdash; eventually the history gets too long to fit. It&rsquo;s also why the model can&rsquo;t learn from past conversations: each interaction starts fresh.</p>
+    </div>
+
+    <div class="warning-box">
+      <h4>The attention mask in chat</h4>
+      <p>The causal mask (Chapter 7) still applies: each token can only attend to tokens before it. But the system prompt tokens, all previous user messages, and all previous assistant responses are all visible. This means the system prompt influences <em>every</em> token the assistant generates &mdash; it shapes the &ldquo;personality&rdquo; consistently across the entire conversation.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Token-by-Token Streaming</h2>
+    <!-- ============================================== -->
+
+    <p>When you chat with Claude, you see text appearing one chunk at a time. This isn&rsquo;t a dramatic effect &mdash; it&rsquo;s literally how the model works.</p>
+
+    <div class="math-walkthrough">
+      <h4>Streaming timeline</h4>
+
+      <table>
+        <thead><tr><th>Time</th><th>Action</th><th>User Sees</th></tr></thead>
+        <tbody>
+          <tr><td>0 ms</td><td>Receive prompt (780 tokens)</td><td><em>Thinking...</em></td></tr>
+          <tr><td>800 ms</td><td>Process all 780 tokens (prefill)</td><td><em>Thinking...</em></td></tr>
+          <tr><td>830 ms</td><td>Generate token 1: &ldquo;The&rdquo;</td><td><code>The</code></td></tr>
+          <tr><td>860 ms</td><td>Generate token 2: &ldquo; answer&rdquo;</td><td><code>The answer</code></td></tr>
+          <tr><td>890 ms</td><td>Generate token 3: &ldquo; is&rdquo;</td><td><code>The answer is</code></td></tr>
+          <tr><td>920 ms</td><td>Generate token 4: &ldquo; 42&rdquo;</td><td><code>The answer is 42</code></td></tr>
+          <tr><td>950 ms</td><td>Generate token 5: &ldquo;.&rdquo;</td><td><code>The answer is 42.</code></td></tr>
+          <tr><td>980 ms</td><td>Generate <code>&lt;EOS&gt;</code></td><td><em>(done)</em></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Two phases of latency</h4>
+      <p>There are two distinct delays:</p>
+      <ul>
+        <li><strong>Time to first token (TTFT):</strong> Processing the entire prompt through the transformer. Longer prompts = longer wait. This is the &ldquo;thinking&rdquo; phase.</li>
+        <li><strong>Tokens per second (TPS):</strong> Once generation starts, each new token takes roughly the same time (~30ms for a fast model). This is constant regardless of prompt length (thanks to the KV cache, which we&rsquo;ll cover in Chapter 10).</li>
+      </ul>
+      <p>A 10,000-token prompt might take 2 seconds before you see anything, but then tokens flow at the same speed as a 100-token prompt.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Sampling vs. Greedy: A Preview</h2>
+    <!-- ============================================== -->
+
+    <p>We traced greedy decoding above, but most chat models use <strong>sampling</strong>: randomly selecting from the probability distribution instead of always picking the top token.</p>
+
+    <div class="math-walkthrough">
+      <h4>Greedy vs. sampling: same distribution, different choices</h4>
+
+      <p>Distribution after &ldquo;The cat sat on the&rdquo;:</p>
+      <table>
+        <thead><tr><th>Token</th><th>Prob</th><th>Greedy Pick?</th><th>Sample Pick?</th></tr></thead>
+        <tbody>
+          <tr><td><code>mat</code></td><td><code>0.40</code></td><td><strong>Yes</strong> (highest)</td><td>40% chance</td></tr>
+          <tr><td><code>floor</code></td><td><code>0.25</code></td><td>No</td><td>25% chance</td></tr>
+          <tr><td><code>table</code></td><td><code>0.15</code></td><td>No</td><td>15% chance</td></tr>
+          <tr><td><code>bed</code></td><td><code>0.10</code></td><td>No</td><td>10% chance</td></tr>
+          <tr><td><code>roof</code></td><td><code>0.05</code></td><td>No</td><td>5% chance</td></tr>
+          <tr><td><em>others</em></td><td><code>0.05</code></td><td>No</td><td>5% chance</td></tr>
+        </tbody>
+      </table>
+
+      <p>Greedy always picks &ldquo;mat.&rdquo; Sampling might pick &ldquo;floor&rdquo; or &ldquo;table&rdquo; &mdash; still reasonable, but more varied. Each time you run the same prompt, you get a different response.</p>
+    </div>
+
+    <p>Chapter 9 dives deep into sampling: temperature, top-k, top-p, and penalties. For now, just know that <strong>sampling introduces controlled randomness</strong> to avoid the repetitive monotony of greedy decoding.</p>
+
+    <!-- ============================================== -->
+    <h2>The Committee Analogy</h2>
+    <!-- ============================================== -->
+
+    <p>Autoregressive generation is like writing a story by committee where each committee member only gets to add <strong>one word</strong>:</p>
+
+    <ol>
+      <li>Committee member 1 reads the prompt and writes one word.</li>
+      <li>Committee member 2 reads the prompt + word 1 and writes one word.</li>
+      <li>Committee member 3 reads everything so far and writes one word.</li>
+      <li>And so on, until someone writes &ldquo;THE END.&rdquo;</li>
+    </ol>
+
+    <p>Here&rsquo;s the twist: <strong>every committee member is the same person.</strong> They just don&rsquo;t remember what they were thinking last time &mdash; they only see what was written. The model has no hidden state between tokens. Its entire &ldquo;thinking&rdquo; is captured in the sequence of tokens it can see.</p>
+
+    <!-- ============================================== -->
+    <h2>Why This Architecture Works So Well</h2>
+    <!-- ============================================== -->
+
+    <p>It seems crude: predict one token at a time, with no memory, no planning ahead. And yet this produces coherent essays, working code, and nuanced conversations. Why?</p>
+
+    <div class="highlight-box">
+      <ul>
+        <li><strong>Enormous context:</strong> With 128K+ tokens of context, the model can &ldquo;see&rdquo; massive amounts of preceding text.</li>
+        <li><strong>Attention is powerful:</strong> Each token can attend to any relevant token in the entire context, no matter how far back.</li>
+        <li><strong>Training on trillions of tokens:</strong> The model has seen virtually every common pattern in human language.</li>
+        <li><strong>The next token is surprisingly informative:</strong> Predicting the next word well requires understanding grammar, facts, logic, style, and intent. It&rsquo;s a simple objective that requires deep understanding to optimize.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Full Pipeline: Prompt to Response</h2>
+    <!-- ============================================== -->
+
+    <p>Here&rsquo;s the complete journey from your typed message to a streaming response:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Tokenize</h4>
+        <p>Text &rarr; token IDs (Ch 5)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Embed + Position</h4>
+        <p>IDs &rarr; vectors (Ch 7)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. Transform</h4>
+        <p>96 blocks of attention + FFN (Ch 6&ndash;7)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Predict</h4>
+        <p>Output &rarr; probabilities over vocab</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>5. Select + Stream</h4>
+        <p>Pick token, send it, repeat</p>
+      </div>
+    </div>
+
+    <p>Steps 2&ndash;5 repeat for every single token in the response. A 500-token response means 500 forward passes through the entire transformer.</p>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Trace Greedy and Sample Decoding</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your turn: generate 4 tokens</h4>
+
+      <p>Given this 5-token vocabulary and probability distributions at each step, trace both greedy and one possible sampled sequence:</p>
+
+      <p><strong>Vocabulary:</strong> {A, B, C, D, &lt;EOS&gt;}</p>
+
+      <p><strong>Step 1 probabilities:</strong> A=0.10, B=0.45, C=0.30, D=0.10, EOS=0.05</p>
+      <p><strong>Step 2 (if B selected):</strong> A=0.05, B=0.10, C=0.60, D=0.15, EOS=0.10</p>
+      <p><strong>Step 2 (if C selected):</strong> A=0.40, B=0.05, C=0.10, D=0.35, EOS=0.10</p>
+      <p><strong>Step 3 (if B,C):</strong> A=0.15, B=0.10, C=0.05, D=0.20, EOS=0.50</p>
+      <p><strong>Step 3 (if C,A):</strong> A=0.05, B=0.55, C=0.10, D=0.20, EOS=0.10</p>
+
+      <p><strong>Questions:</strong></p>
+      <ol>
+        <li>What does greedy decoding produce for 3 tokens?</li>
+        <li>If sampling picks C at step 1, then A at step 2, then B at step 3, what&rsquo;s the sequence?</li>
+        <li>Which sequence is &ldquo;better&rdquo;?</li>
+      </ol>
+
+      <p><strong>Solutions:</strong></p>
+      <ol>
+        <li>Greedy: step 1 picks B (0.45), step 2 picks C (0.60), step 3 picks EOS (0.50). Output: <strong>B, C, &lt;EOS&gt;</strong></li>
+        <li>Sampled: C, A, B. Output: <strong>C, A, B</strong> (continues generating &mdash; no EOS yet)</li>
+        <li>Trick question! &ldquo;Better&rdquo; depends on the task. For factual Q&amp;A, the greedy sequence (higher overall probability) might be more reliable. For creative writing, the sampled sequence adds variety. There&rsquo;s no universal &ldquo;better&rdquo; &mdash; which is why Chapter 9 covers how to tune this.</li>
+      </ol>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Key Takeaways</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <ul>
+        <li><strong>Autoregressive generation:</strong> predict one token, append, repeat. The model feeds itself its own output.</li>
+        <li><strong>Greedy decoding</strong> always picks the highest-probability token. Fast but prone to repetition.</li>
+        <li><strong>Beam search</strong> keeps multiple candidates alive, finding globally better sequences at B&times; the cost.</li>
+        <li><strong>Sampling</strong> introduces randomness for more varied, natural-sounding output.</li>
+        <li><strong>Chat = concatenation:</strong> the entire conversation history is re-sent every turn. &ldquo;Memory&rdquo; is an illusion.</li>
+        <li><strong>Streaming</strong> sends each token as it&rsquo;s generated &mdash; what you see is literally the model working in real time.</li>
+        <li><strong>Two latency phases:</strong> TTFT (processing the prompt) and TPS (generating tokens). Long prompts increase TTFT but not TPS.</li>
+        <li><strong>Stop conditions:</strong> EOS token, max length, or stop sequence.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>We&rsquo;ve been selecting tokens with greedy decoding, but real models use much more sophisticated strategies. How does temperature make models more &ldquo;creative&rdquo;? What do top-k and top-p actually do to the probability distribution?</p>
+
+    <p>In <a href="09-sampling-strategies.html">Chapter 9: Sampling Strategies &mdash; The Numbers Behind Creativity</a>, you&rsquo;ll see the exact numbers: the same logits processed at different temperatures, top-k cutoffs, and top-p thresholds. You&rsquo;ll understand exactly why the same model can produce deterministic code and wildly creative fiction.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="07-full-transformer.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">The Full Transformer Architecture</span>
+    </a>
+    <a href="09-sampling-strategies.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Sampling Strategies</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

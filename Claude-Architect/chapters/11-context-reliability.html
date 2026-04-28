@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Context Management &amp; Reliability | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-structured-output.html">&larr; Prev</a>
+      <a href="12-exam-scenarios.html">Next &rarr;</a>
+      <a href="maps/11-context-reliability-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 11</div>
+    <h1>Context Management &amp; Reliability</h1>
+    <p class="subtitle">Token budgets, compaction, escalation, graceful degradation &mdash; keeping agents on track when things get messy</p>
+  </header>
+
+  <main>
+
+    <h2>Domain 5: The Final Domain</h2>
+
+    <p>This chapter covers <strong>Domain 5: Context Management &amp; Reliability</strong>, which makes up <strong>15% of the exam (~9 questions)</strong>. It's the lightest domain by weight, but don't underestimate it. Context management questions are tricky because they test nuance &mdash; there's rarely a single right answer, and the distractors are plausible.</p>
+
+    <p>This domain is about what happens when things don't go perfectly: the context window fills up, the API returns an error, the agent can't handle a request, or a conversation runs for 50 turns. Production systems need strategies for all of these.</p>
+
+    <div class="highlight-box">
+      <h3>Domain 5 on the Exam</h3>
+      <p>This domain covers context degradation prevention, escalation design, error propagation in multi-agent systems, and human-in-the-loop review workflows. The exam scenarios most tied to this chapter are <strong>Customer Support</strong> (long conversations, escalation) and <strong>Multi-Agent Research</strong> (context across agents).</p>
+    </div>
+
+    <h2>Context Window Arithmetic</h2>
+
+    <p>Every Claude request has a token budget. Understanding how it's consumed is fundamental:</p>
+
+    <pre><code>Total context = System prompt
+             + Conversation history (all messages)
+             + Tool definitions
+             + Tool results
+             + Current input
+             ─────────────────
+             Must fit within model's context window</code></pre>
+
+    <p>Current context windows:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">200K</span>
+        <span class="stat-label">Standard context (Opus 4.6, Sonnet 4.6)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">1M</span>
+        <span class="stat-label">Extended context (Opus 4.6 with 1M)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~346</span>
+        <span class="stat-label">Tokens added by tool use system prompt</span>
+      </div>
+    </div>
+
+    <p>The key insight: <strong>every token matters in long-running agent sessions.</strong> A system prompt uses tokens on every request. Tool definitions use tokens on every request. Conversation history grows with every turn. In a 50-turn customer support conversation, the conversation history alone might consume 80% of the context window.</p>
+
+    <div class="exam-tip-box">
+      The exam tests context window arithmetic. A question might describe: "An agent has a 200K context window, a 3K system prompt, 5 tools at ~500 tokens each, and a 40-turn conversation averaging 2K tokens per turn. Is the agent approaching its context limit?" You need to calculate: 3K + 2.5K + 80K + 346 = ~86K tokens. That's 43% used &mdash; plenty of room. But if it says 120-turn conversation: 3K + 2.5K + 240K + 346 = ~246K. That exceeds the 200K limit. Know how to do this math quickly.
+    </div>
+
+    <h2>The "Lost in the Middle" Problem</h2>
+
+    <p>Language models have better recall for information at the <strong>beginning and end</strong> of the context window. Information in the middle gets weaker attention &mdash; the so-called "lost in the middle" problem.</p>
+
+    <p>In practice, this means:</p>
+    <ul>
+      <li>System prompt (at the beginning) is always well-attended to</li>
+      <li>Recent messages (at the end) get strong attention</li>
+      <li>Messages from 30 turns ago (in the middle) may be forgotten or misremembered</li>
+    </ul>
+
+    <p>This has real architectural implications. In the <strong>Customer Support</strong> scenario, a customer mentions their order number in turn 3, and by turn 40 the agent may have lost track of it because it's buried in the middle of the conversation.</p>
+
+    <div class="architect-box">
+      <strong>Design pattern: critical information at the edges.</strong> Place the most important context in positions where recall is strongest:
+      <br><br>
+      <strong>Beginning (system prompt):</strong> Agent identity, constraints, business rules, tool descriptions
+      <br><br>
+      <strong>End (recent turns):</strong> Current task, recent tool results, active conversation context
+      <br><br>
+      <strong>For critical middle-context:</strong> Use summarization to resurface important early information near the end of the conversation. Or store key facts (customer ID, order number) in the system prompt dynamically.
+    </div>
+
+    <h2>Compaction Strategies</h2>
+
+    <p>When context grows too large, you need to compress it. This is called <strong>compaction</strong>. Claude Code has automatic compaction built in; for custom agents, you implement it yourself.</p>
+
+    <h3>1. Summarization</h3>
+    <p>Replace older conversation turns with a summary. A 20-turn exchange becomes a 500-token summary. This preserves the key information while freeing up context space.</p>
+
+    <pre><code># Summarization compaction
+if token_count(messages) > THRESHOLD:
+    old_messages = messages[:-10]  # Keep last 10 turns intact
+    summary = claude_summarize(old_messages)
+    messages = [
+        {"role": "user", "content": f"[Previous conversation summary: {summary}]"},
+        *messages[-10:]  # Recent turns preserved in full
+    ]</code></pre>
+
+    <h3>2. Truncation</h3>
+    <p>Simply drop the oldest messages. Fast and simple, but you lose information permanently. Use when the old context is genuinely irrelevant.</p>
+
+    <h3>3. Sliding Window</h3>
+    <p>Keep only the last N turns. As new turns arrive, the oldest drop off. Good for conversations where recent context is all that matters.</p>
+
+    <h3>4. Selective Pruning</h3>
+    <p>Remove specific types of content: verbose tool results, intermediate reasoning, or repeated information. Keep high-value content (decisions, user requests, key data) and prune low-value content (raw API responses, exploratory tool calls).</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Preserves Info?</th>
+          <th>Complexity</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Summarization</td>
+          <td>Mostly yes</td>
+          <td>High (needs LLM call)</td>
+          <td>Long, information-dense conversations</td>
+        </tr>
+        <tr>
+          <td>Truncation</td>
+          <td>No</td>
+          <td>Low</td>
+          <td>Conversations where old context is irrelevant</td>
+        </tr>
+        <tr>
+          <td>Sliding window</td>
+          <td>Partial</td>
+          <td>Low</td>
+          <td>Real-time interactions, chat</td>
+        </tr>
+        <tr>
+          <td>Selective pruning</td>
+          <td>Mostly yes</td>
+          <td>Medium</td>
+          <td>Tool-heavy agent sessions</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="exam-tip-box">
+      The exam frequently asks: "An agent is approaching its context limit after a long customer support interaction. What's the best compaction strategy?" The answer depends on what's important. If the customer's issue details matter: <strong>summarization</strong> (preserves key info). If only the recent discussion matters: <strong>sliding window</strong>. If tool results are bloating context: <strong>selective pruning</strong>. The exam tests whether you can match the strategy to the scenario.
+    </div>
+
+    <h3>Claude Code's Built-in Compaction</h3>
+
+    <p>Claude Code automatically compacts context when approaching the window limit. It summarizes the conversation history and continues seamlessly. You can customize what's preserved using the <code>PreCompact</code> hook (from Chapter 7) to ensure critical information survives compaction.</p>
+
+    <pre><code># PreCompact hook: preserve critical context
+{
+  "hooks": {
+    "PreCompact": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "echo 'IMPORTANT: Preserve customer ID, order numbers, and escalation decisions.'"
+      }]
+    }]
+  }
+}</code></pre>
+
+    <h2>Escalation Patterns</h2>
+
+    <p>We covered escalation triggers in Chapter 4. Now let's go deeper into the <em>architecture</em> of escalation &mdash; how agent-to-human handoff actually works in production.</p>
+
+    <h3>Tiered Support Architecture</h3>
+
+    <div class="workflow-steps">
+      <div class="step">Tier 1: Agent</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Tier 2: Specialist Agent</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Tier 3: Human Agent</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Tier 4: Manager</div>
+    </div>
+
+    <p>Each tier handles progressively more complex issues:</p>
+    <ul>
+      <li><strong>Tier 1 (AI agent):</strong> Handles common questions &mdash; password resets, order status, FAQ lookups. Resolves 70-80% of tickets.</li>
+      <li><strong>Tier 2 (specialist agent):</strong> Handles complex issues requiring multiple tool calls &mdash; billing disputes, technical troubleshooting.</li>
+      <li><strong>Tier 3 (human agent):</strong> Issues requiring judgment, policy exceptions, or empathy that AI can't provide.</li>
+      <li><strong>Tier 4 (manager):</strong> Escalation authority for high-value customers or policy changes.</li>
+    </ul>
+
+    <h3>The Escalation Handoff</h3>
+
+    <p>When escalating, the agent must pass enough context for the next tier to continue without re-asking the customer. The handoff payload should include:</p>
+
+    <pre><code>{
+  "escalation": {
+    "from": "tier-1-agent",
+    "to": "tier-3-human",
+    "reason": "refund_exceeds_policy_limit",
+    "customer_id": "C-12345",
+    "conversation_summary": "Customer reports double charge of $299.99 on order #O-789. Verified duplicate in billing system. Refund amount ($299.99) exceeds tier-1 limit ($200).",
+    "actions_taken": [
+      "Verified customer identity",
+      "Confirmed duplicate charge in billing system",
+      "Attempted standard refund — blocked by limit"
+    ],
+    "recommended_action": "Approve $299.99 refund for duplicate charge",
+    "full_transcript_id": "session-abc-123"
+  }
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Escalation anti-pattern: the "cold handoff."</strong> The agent transfers to a human with just "Customer needs help." The human has no context, asks the customer to repeat everything, and the customer is frustrated. Always include a summary, actions taken, and recommendation. The exam specifically tests the quality of escalation handoffs.
+    </div>
+
+    <h2>Error Handling and Retry Logic</h2>
+
+    <p>Production agents encounter errors constantly: API timeouts, rate limits, tool failures, invalid responses. Here's the standard approach:</p>
+
+    <h3>Exponential Backoff</h3>
+    <pre><code>import time
+
+def retry_with_backoff(func, max_retries=3, base_delay=1):
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except RateLimitError:
+            delay = base_delay * (2 ** attempt)  # 1s, 2s, 4s
+            time.sleep(delay)
+        except PermanentError:
+            raise  # Don't retry permanent errors
+    raise MaxRetriesExceeded()</code></pre>
+
+    <h3>Circuit Breaker Pattern</h3>
+    <p>If a service fails repeatedly, stop trying for a cooldown period. This prevents cascading failures and gives the service time to recover.</p>
+
+    <pre><code># Circuit breaker states
+CLOSED  → requests flow normally
+OPEN    → all requests fail immediately (after N consecutive failures)
+HALF-OPEN → allow one test request; if it succeeds, close the circuit</code></pre>
+
+    <div class="architect-box">
+      <strong>The reliability stack for production agents.</strong>
+      <br><br>
+      <strong>Layer 1 &mdash; Retry with backoff:</strong> For transient errors (timeouts, rate limits). 3 retries, exponential backoff.
+      <br><br>
+      <strong>Layer 2 &mdash; Circuit breaker:</strong> For persistent service failures. Stop retrying, return a fallback response.
+      <br><br>
+      <strong>Layer 3 &mdash; Graceful degradation:</strong> When a capability is unavailable, provide reduced functionality rather than failing completely.
+      <br><br>
+      <strong>Layer 4 &mdash; Escalation:</strong> When all else fails, hand off to a human with full context.
+      <br><br>
+      These four layers are how you build a system that stays up even when individual components fail. The exam tests whether you know which layer to apply for which failure type.
+    </div>
+
+    <h2>Graceful Degradation</h2>
+
+    <p>When a component fails, the system should degrade gracefully rather than crash completely:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Failure</th>
+          <th>Graceful Response</th>
+          <th>Bad Response</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Knowledge base unavailable</td>
+          <td>Answer from general knowledge, flag as "unverified"</td>
+          <td>Crash or return empty response</td>
+        </tr>
+        <tr>
+          <td>Context window overflow</td>
+          <td>Compact and continue with summary</td>
+          <td>Drop the entire conversation</td>
+        </tr>
+        <tr>
+          <td>Tool call fails</td>
+          <td>Try alternative tool or ask user directly</td>
+          <td>Stop processing without explanation</td>
+        </tr>
+        <tr>
+          <td>Rate limit hit</td>
+          <td>Queue request, inform user of delay</td>
+          <td>Return error to customer</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="exam-tip-box">
+      When the exam presents a failure scenario, the correct answer almost always involves <strong>continuing with reduced capability</strong> rather than stopping entirely. "The knowledge base is temporarily unavailable. What should the agent do?" The answer is <strong>not</strong> "tell the customer to try later." It's "answer from available context, mark the response as unverified, and offer to follow up when the KB is available."
+    </div>
+
+    <h2>Rate Limiting and Quota Management</h2>
+
+    <p>Claude API has rate limits (requests per minute) and spending limits. Production agents must handle both:</p>
+
+    <ul>
+      <li><strong>Request queuing:</strong> When approaching rate limits, queue requests instead of dropping them</li>
+      <li><strong>Priority queuing:</strong> High-priority requests (escalations, VIP customers) skip the queue</li>
+      <li><strong>Token tracking:</strong> Monitor token usage per session and per day for cost control</li>
+      <li><strong>Model fallback:</strong> If Opus hits its limit, fall back to Sonnet for non-critical tasks</li>
+    </ul>
+
+    <h2>Monitoring and Observability</h2>
+
+    <p>You can't fix what you can't see. Production agent systems need monitoring at three levels:</p>
+
+    <h3>1. Agent-Level Metrics</h3>
+    <ul>
+      <li>Tokens consumed per session</li>
+      <li>Tool call success/failure rates</li>
+      <li>Average turns to resolution</li>
+      <li>Escalation rate</li>
+    </ul>
+
+    <h3>2. System-Level Metrics</h3>
+    <ul>
+      <li>API latency (p50, p95, p99)</li>
+      <li>Error rates by type (rate limit, timeout, validation failure)</li>
+      <li>Context window utilization</li>
+      <li>Cost per interaction</li>
+    </ul>
+
+    <h3>3. Business-Level Metrics</h3>
+    <ul>
+      <li>Customer satisfaction score</li>
+      <li>First-contact resolution rate</li>
+      <li>Time to resolution</li>
+      <li>Cost per resolution vs. human agent cost</li>
+    </ul>
+
+    <div class="tip-box">
+      The exam doesn't test specific monitoring tools, but it does test whether you understand <strong>what to monitor</strong>. If a question asks "How would you detect that an agent is degrading in performance?", the answer involves metrics like increasing escalation rate, growing token usage per session, or declining first-contact resolution rate &mdash; not specific dashboards or tools.
+    </div>
+
+    <h2>Long-Running Interactions</h2>
+
+    <p>Some agent sessions run for hours or span multiple days. Session persistence and state management are critical:</p>
+
+    <h3>Session Persistence Strategies</h3>
+    <ul>
+      <li><strong>Full transcript storage:</strong> Save the entire conversation history. Resume by replaying it. Accurate but context-expensive.</li>
+      <li><strong>State snapshot:</strong> Save a summary + key state variables (customer ID, issue status, actions taken). Resume from the snapshot. More efficient.</li>
+      <li><strong>External state store:</strong> Keep conversation state in a database. The agent reads/writes state on each turn. Scales to indefinite sessions.</li>
+    </ul>
+
+    <p>Claude Code's session management (from Chapter 8) uses full transcript storage with automatic compaction. For custom agents, state snapshots are often the best balance of accuracy and efficiency.</p>
+
+    <h2>Scenario Connections</h2>
+
+    <ul>
+      <li><strong>Customer Support:</strong> Long conversations that push context limits. Escalation to human agents. Graceful degradation when knowledge base is down. Token budget management across many turns.</li>
+      <li><strong>Multi-Agent Research:</strong> Context isolation between agents prevents one agent's work from polluting another's context. Result aggregation must fit in the orchestrator's context window.</li>
+      <li><strong>CI/CD:</strong> Rate limiting when many PRs trigger Claude reviews simultaneously. Circuit breaker for API outages. Cost monitoring for automated pipelines.</li>
+      <li><strong>Data Extraction:</strong> Batch processing with token budget awareness. Graceful handling of documents that exceed single-context capacity (multi-pass extraction).</li>
+    </ul>
+
+    <div class="exercise-box">
+      <strong>Exercise: Design a Reliability Strategy</strong>
+      <p>You're building a Customer Support agent that handles 1,000 tickets per day. Design the reliability strategy:</p>
+      <ol>
+        <li>What compaction strategy do you use when conversations exceed 50 turns?</li>
+        <li>How do you handle the scenario where the billing API goes down for 30 minutes?</li>
+        <li>Design the escalation tiers &mdash; what triggers each level?</li>
+        <li>What metrics would you monitor? List 5 specific metrics with alert thresholds.</li>
+        <li>How do you handle a sudden spike to 5,000 tickets when your rate limit is 1,000 RPM?</li>
+      </ol>
+      <p><strong>Check yourself:</strong> Summarization compaction (preserve customer context). Circuit breaker on billing API + graceful degradation ("I can't check billing right now, but I can help with other issues"). Tier 1 (agent, <$200 refunds), Tier 2 (specialist, complex billing), Tier 3 (human, policy exceptions). Metrics: escalation rate (alert >30%), avg tokens/session (alert >100K), first-contact resolution (alert <60%), API error rate (alert >5%), cost/ticket (alert >$2). Priority queue + model fallback (Sonnet for simple queries) for the spike.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Context arithmetic: system prompt + history + tools + input must fit the window &mdash; long conversations are the biggest consumer</li>
+      <li>"Lost in the middle": information at the edges gets better recall &mdash; place critical context in system prompt (beginning) or recent turns (end)</li>
+      <li>Compaction strategies: summarization (preserves info), truncation (loses info), sliding window (recent only), selective pruning (remove low-value content)</li>
+      <li>Reliability stack: retry with backoff &rarr; circuit breaker &rarr; graceful degradation &rarr; escalation to human</li>
+      <li>Escalation handoffs must include summary, actions taken, and recommendation &mdash; never do a "cold handoff"</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>All five domains are covered! In <strong>Chapter 12: Exam Day &mdash; Scenarios &amp; Final Review</strong>, we bring everything together. You'll walk through all 6 exam scenarios with detailed strategies, tackle 10 practice questions, and get your final exam-day game plan. This is the capstone &mdash; where knowledge becomes exam performance.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-structured-output.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Structured Output &amp; Validation</span>
+      </a>
+      <a href="12-exam-scenarios.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Exam Day: Scenarios &amp; Final Review</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

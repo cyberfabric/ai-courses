@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: The Presentation Layer: MVI With AI | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="06-data-layer.html">&larr; Prev</a>
+      <a href="08-dependency-injection.html">Next &rarr;</a>
+      <a href="maps/07-presentation-layer-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>The Presentation Layer: MVI With AI</h1>
+    <p class="subtitle">ViewModels with Contract pattern, Compose screens, and the reducer pattern</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Painting the Walls</h2>
+
+      <p>Foundation poured. Plumbing installed. Now it's time for the part everyone actually sees &mdash; the walls, the paint, the fixtures. In app terms: ViewModels, state management, and Compose screens.</p>
+
+      <p>The presentation layer is where AI makes the most mistakes. It's also where AI saves the most time. A God Activity with 800 lines of UI logic, state management, navigation, and business rules can be decomposed into a ViewModel + Contract + Composable in minutes &mdash; if AI has the right constraints.</p>
+
+      <p>This chapter fills the <code>:feature:recipe</code> and <code>:feature:books</code> modules with ViewModels and Compose screens, consuming the domain use cases from Chapter 5.</p>
+    </section>
+
+    <section>
+      <h2>The MVI Contract Pattern</h2>
+
+      <p>Every screen in the rewritten app follows the same pattern: a Contract interface that defines the screen's State, Events, and Effects. This is the single most important constraint for AI-generated presentation code.</p>
+
+      <div class="rule-callout">
+        <h4>Rule PRES-001: Contract Pattern</h4>
+        <p>Every screen MUST have a Contract interface containing: (1) a single immutable <code>data class State</code>, (2) a <code>sealed interface Event</code> for user actions, and (3) a <code>sealed interface Effect</code> for one-shot side effects (navigation, snackbar, etc.).</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule PRES-002: Single State Source</h4>
+        <p>Each ViewModel MUST expose exactly one <code>StateFlow&lt;State&gt;</code>. No scattered MutableStateFlows. No LiveData. The Contract's State data class is the single source of truth for everything the screen displays.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule PRES-003: Effects via Channel</h4>
+        <p>One-shot side effects (navigation, toasts, snackbars) MUST use a <code>Channel&lt;Effect&gt;</code> collected as a Flow in the Composable. Never put one-shot events in State &mdash; they'll replay on configuration change.</p>
+      </div>
+
+      <div class="highlight-box">
+        <h4>The Contract Template</h4>
+        <pre><code>interface RecipeListContract {
+    data class State(
+        val recipes: List&lt;Recipe&gt; = emptyList(),
+        val searchQuery: String = "",
+        val isLoading: Boolean = false,
+        val error: String? = null
+    )
+
+    sealed interface Event {
+        data class SearchQueryChanged(val query: String) : Event
+        data class RecipeClicked(val id: Long) : Event
+        data class DeleteRequested(val id: Long) : Event
+        data class FavoriteToggled(val id: Long) : Event
+        data object RetryClicked : Event
+    }
+
+    sealed interface Effect {
+        data class NavigateToDetail(val id: Long) : Effect
+        data class ShowSnackbar(val message: String) : Effect
+    }
+}</code></pre>
+      </div>
+
+      <p>This template goes into every AI prompt that generates a ViewModel. It constrains the output format so tightly that AI produces consistent, reviewable code every time.</p>
+    </section>
+
+    <section>
+      <h2>From God Activity to ViewModel</h2>
+
+      <p>The monolith's <code>RecipeListActivity</code> does everything: loads data, manages state, handles clicks, navigates, shows errors, and manages the search bar. AI needs to see this mess to decompose it correctly.</p>
+
+      <div class="migration-step">
+        <h4>Migration: God Activity &rarr; ViewModel + Contract</h4>
+
+        <div class="before-code">
+          <h5>Before: RecipeListActivity (800+ lines, excerpt)</h5>
+          <pre><code>class RecipeListActivity : AppCompatActivity() {
+    private var recipes = mutableListOf&lt;Map&lt;String, Any&gt;&gt;()
+    private var isLoading = false
+    private var searchQuery = ""
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        setContentView(R.layout.activity_recipe_list)
+        loadRecipes()
+        searchInput.addTextChangedListener { text ->
+            searchQuery = text.toString()
+            if (searchQuery.length >= 2) searchRecipes(searchQuery)
+            else loadRecipes()
+        }
+        adapter.setOnItemClickListener { position ->
+            val id = recipes[position]["id"] as Long
+            startActivity(Intent(this, RecipeDetailActivity::class.java)
+                .putExtra("recipe_id", id))
+        }
+    }
+
+    private fun loadRecipes() {
+        isLoading = true
+        progressBar.visibility = View.VISIBLE
+        // Raw SQL query, UI update, error handling... all here
+    }
+}</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: RecipeListViewModel in :feature:recipe</h5>
+          <pre><code>class RecipeListViewModel(
+    private val getRecipes: GetRecipesUseCase,
+    private val searchRecipes: SearchRecipesUseCase,
+    private val toggleFavorite: ToggleFavoriteUseCase,
+    private val deleteRecipe: DeleteRecipeUseCase
+) : ViewModel() {
+
+    private val _state = MutableStateFlow(RecipeListContract.State())
+    val state: StateFlow&lt;RecipeListContract.State&gt; = _state.asStateFlow()
+
+    private val _effects = Channel&lt;RecipeListContract.Effect&gt;()
+    val effects: Flow&lt;RecipeListContract.Effect&gt; = _effects.receiveAsFlow()
+
+    init { loadRecipes() }
+
+    fun onEvent(event: RecipeListContract.Event) {
+        when (event) {
+            is Event.SearchQueryChanged -> onSearchChanged(event.query)
+            is Event.RecipeClicked -> viewModelScope.launch {
+                _effects.send(Effect.NavigateToDetail(event.id))
+            }
+            is Event.DeleteRequested -> deleteRecipe(event.id)
+            is Event.FavoriteToggled -> toggleFavorite(event.id)
+            is Event.RetryClicked -> loadRecipes()
+        }
+    }
+
+    private fun loadRecipes() {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true, error = null) }
+            getRecipes().onSuccess { recipes ->
+                _state.update { it.copy(recipes = recipes, isLoading = false) }
+            }.onError { msg, _ ->
+                _state.update { it.copy(error = msg, isLoading = false) }
+            }
+        }
+    }
+    // ... other private methods follow same pattern
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The ViewModel Generation Prompt</h2>
+
+      <p>This is the prompt template that produces consistently correct ViewModels. The key is loading both the Contract template and the presentation rules as context.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: ViewModel Generation Prompt</h4>
+        <pre>Generate a ViewModel for the Recipe List screen in :feature:recipe.
+
+CONTRACT (already defined):
+[paste RecipeListContract with State, Event, Effect]
+
+USE CASES AVAILABLE:
+- GetRecipesUseCase: () → Result&lt;List&lt;Recipe&gt;&gt;
+- SearchRecipesUseCase: (query: String) → Result&lt;List&lt;Recipe&gt;&gt;
+- ToggleFavoriteUseCase: (id: Long) → Result&lt;Recipe&gt;
+- DeleteRecipeUseCase: (id: Long) → Result&lt;Unit&gt;
+
+PRESENTATION RULES:
+- Single MutableStateFlow&lt;State&gt;, exposed as StateFlow
+- Channel&lt;Effect&gt; for one-shot events, exposed as Flow
+- onEvent(Event) dispatches all user actions
+- State updates via _state.update { it.copy(...) }
+- No Android imports except ViewModel and viewModelScope
+- No business logic — delegate to use cases
+- Constructor injection for all use cases
+
+Package: com.example.recipes.feature.recipe.list</pre>
+      </div>
+
+      <div class="prompt-example bad">
+        <h4>Bad: Unconstrained ViewModel Prompt</h4>
+        <pre>Create a ViewModel for the recipe list screen.</pre>
+        <p>No Contract, no rules, no use case signatures. AI will invent its own state management pattern, probably mix LiveData with StateFlow, and put business logic in the ViewModel.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The Reducer Pattern</h2>
+
+      <p>For complex screens, extract state transitions into a pure function. This makes the ViewModel testable without coroutines or flows &mdash; just input state + event = output state + effects.</p>
+
+      <div class="highlight-box">
+        <h4>Reducer as Pure Function</h4>
+        <pre><code>// Pure function — no side effects, no coroutines, fully testable
+object RecipeListReducer {
+    data class ReduceResult(
+        val state: RecipeListContract.State,
+        val effects: List&lt;RecipeListContract.Effect&gt; = emptyList()
+    )
+
+    fun reduce(
+        current: RecipeListContract.State,
+        event: RecipeListContract.Event
+    ): ReduceResult = when (event) {
+        is Event.SearchQueryChanged -> ReduceResult(
+            state = current.copy(searchQuery = event.query)
+        )
+        is Event.RecipeClicked -> ReduceResult(
+            state = current,
+            effects = listOf(Effect.NavigateToDetail(event.id))
+        )
+        is Event.RetryClicked -> ReduceResult(
+            state = current.copy(isLoading = true, error = null)
+        )
+        // ... other events
+    }
+}</code></pre>
+      </div>
+
+      <div class="tip-box">
+        <h4>When to Use a Reducer</h4>
+        <p>Simple screens (3-4 events) don't need a separate reducer &mdash; the <code>when</code> block inside <code>onEvent()</code> is fine. Extract to a reducer when: (1) the screen has 6+ events, (2) state transitions are complex, or (3) you want to test transitions without coroutines. For the recipes app, RecipeList and RecipeEdit get reducers; RecipeDetail doesn't.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>From Activity XML to Composable</h2>
+
+      <p>The second transformation: converting XML layouts and Activity UI logic into Compose screens. AI needs the Contract, the State shape, and the design system tokens.</p>
+
+      <div class="migration-step">
+        <h4>Migration: Activity + XML &rarr; Composable</h4>
+
+        <div class="before-code">
+          <h5>Before: XML layout + Activity UI logic</h5>
+          <pre><code>&lt;!-- activity_recipe_list.xml --&gt;
+&lt;LinearLayout&gt;
+    &lt;EditText android:id="@+id/searchInput" /&gt;
+    &lt;ProgressBar android:id="@+id/progressBar" /&gt;
+    &lt;RecyclerView android:id="@+id/recipeList" /&gt;
+    &lt;TextView android:id="@+id/emptyState" /&gt;
+    &lt;TextView android:id="@+id/errorText" /&gt;
+&lt;/LinearLayout&gt;
+
+// In Activity: manual visibility toggling
+progressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
+errorText.visibility = if (error != null) View.VISIBLE else View.GONE
+emptyState.visibility = if (recipes.isEmpty()) View.VISIBLE else View.GONE</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: Compose screen driven by State</h5>
+          <pre><code>@Composable
+fun RecipeListScreen(
+    viewModel: RecipeListViewModel = hiltViewModel(),
+    onNavigateToDetail: (Long) -&gt; Unit
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                is Effect.NavigateToDetail -> onNavigateToDetail(effect.id)
+                is Effect.ShowSnackbar -> { /* snackbar host */ }
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        SearchBar(
+            query = state.searchQuery,
+            onQueryChange = { viewModel.onEvent(Event.SearchQueryChanged(it)) }
+        )
+        when {
+            state.isLoading -> LoadingIndicator()
+            state.error != null -> ErrorState(
+                message = state.error!!,
+                onRetry = { viewModel.onEvent(Event.RetryClicked) }
+            )
+            state.recipes.isEmpty() -> EmptyState()
+            else -> RecipeList(
+                recipes = state.recipes,
+                onRecipeClick = { viewModel.onEvent(Event.RecipeClicked(it)) },
+                onFavoriteToggle = { viewModel.onEvent(Event.FavoriteToggled(it)) }
+            )
+        }
+    }
+}</code></pre>
+        </div>
+      </div>
+
+      <p>Manual visibility toggling is gone. The <code>when</code> block renders exactly one state at a time. Every user action flows through <code>onEvent()</code>. The Composable is a pure function of State &mdash; no logic, no side effects, no database calls.</p>
+    </section>
+
+    <section>
+      <h2>Compose Screen Generation Prompt</h2>
+
+      <div class="prompt-example good">
+        <h4>Good: Composable Generation Prompt</h4>
+        <pre>Generate a Compose screen for RecipeList in :feature:recipe.
+
+STATE SHAPE: [paste RecipeListContract.State]
+EVENTS: [paste RecipeListContract.Event]
+EFFECTS: [paste RecipeListContract.Effect]
+
+RULES:
+- Composable receives ViewModel via hiltViewModel()
+- Collect state with collectAsStateWithLifecycle()
+- Collect effects in LaunchedEffect(Unit)
+- All user actions → viewModel.onEvent(Event.Xxx)
+- No business logic in Composables. Zero.
+- Use design system components from :core:design-system
+- Navigation callbacks as lambda parameters (onNavigateToDetail)
+- Package: com.example.recipes.feature.recipe.list</pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>Watch: Business Logic in Composables</h4>
+        <p>AI's #1 presentation mistake: putting logic in Composables. If you see <code>if (recipes.size > 10)</code>, filtering, sorting, formatting, or any <code>remember { calculation }</code> that transforms data &mdash; it belongs in the ViewModel or a use case. Composables render State. Period.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>State Management Patterns</h2>
+
+      <p>AI generates several state management anti-patterns. Load these rules to prevent them.</p>
+
+      <div class="highlight-box">
+        <h4>State Update Patterns</h4>
+        <pre><code>// ✅ CORRECT: Single atomic update via copy()
+_state.update { it.copy(isLoading = true, error = null) }
+
+// ❌ WRONG: Multiple separate updates = intermediate invalid states
+_state.value = _state.value.copy(isLoading = true)
+_state.value = _state.value.copy(error = null)  // Renders between these!
+
+// ✅ CORRECT: Derive display values in State data class
+data class State(
+    val recipes: List&lt;Recipe&gt; = emptyList(),
+    val searchQuery: String = ""
+) {
+    val filteredRecipes: List&lt;Recipe&gt;  // Derived in State, not Composable
+        get() = if (searchQuery.length &gt;= 2)
+            recipes.filter { it.title.contains(searchQuery, ignoreCase = true) }
+        else recipes
+}
+
+// ❌ WRONG: Deriving in the Composable
+val filtered = remember(state.recipes, state.searchQuery) {
+    state.recipes.filter { ... }  // Logic in UI layer!
+}</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>AI Review: Presentation Compliance</h2>
+
+      <div class="ai-review-box">
+        <h4>Presentation Layer Review Checklist</h4>
+        <pre>Review generated presentation code:
+
+✅ PASS: Contract with State + Event + Effect | Single StateFlow&lt;State&gt;
+| Channel&lt;Effect&gt; for one-shots | onEvent() dispatches all actions
+| State updates via .copy() | No business logic in Composables
+| collectAsStateWithLifecycle() | Navigation via lambda callbacks
+
+❌ FAIL: Multiple StateFlows | LiveData | Mutable state in Composable
+| Business logic in Composable | SharedFlow for effects (replays)
+| Direct navigation in ViewModel | Android imports beyond ViewModel</pre>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">Contracts</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">ViewModels</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">Compose screens</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">2</div>
+          <div class="stat-label">Reducers</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Common AI Mistakes in the Presentation Layer</h2>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Mistake</th>
+            <th>What AI Does</th>
+            <th>Rule / Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Mutable state</td>
+            <td><code>var isLoading by mutableStateOf()</code> in ViewModel</td>
+            <td>PRES-002: Single immutable StateFlow&lt;State&gt;</td>
+          </tr>
+          <tr>
+            <td>SharedFlow for effects</td>
+            <td>Uses SharedFlow instead of Channel</td>
+            <td>PRES-003: Channel prevents replay on config change</td>
+          </tr>
+          <tr>
+            <td>Logic in Composable</td>
+            <td>Filtering, sorting, formatting in @Composable</td>
+            <td>Composables render State. Logic in ViewModel.</td>
+          </tr>
+          <tr>
+            <td>Multiple StateFlows</td>
+            <td>Separate flows for recipes, loading, error</td>
+            <td>PRES-002: single State data class, single flow</td>
+          </tr>
+          <tr>
+            <td>Direct navigation</td>
+            <td><code>navController.navigate()</code> in ViewModel</td>
+            <td>Effects → Composable → navigation callback</td>
+          </tr>
+          <tr>
+            <td>Missing lifecycle</td>
+            <td><code>collectAsState()</code> without lifecycle</td>
+            <td>Always <code>collectAsStateWithLifecycle()</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>The Package Structure</h2>
+
+      <div class="module-map">
+        <h4>:feature:recipe Structure</h4>
+        <pre>feature/recipe/
+├── list/
+│   ├── RecipeListContract.kt
+│   ├── RecipeListViewModel.kt
+│   ├── RecipeListReducer.kt
+│   └── RecipeListScreen.kt
+├── detail/
+│   ├── RecipeDetailContract.kt
+│   ├── RecipeDetailViewModel.kt
+│   └── RecipeDetailScreen.kt
+└── edit/
+    ├── RecipeEditContract.kt
+    ├── RecipeEditViewModel.kt
+    ├── RecipeEditReducer.kt
+    └── RecipeEditScreen.kt</pre>
+      </div>
+
+      <p>Every screen follows the same 3-4 file pattern: Contract, ViewModel, optional Reducer, Screen. AI generates consistent output because the pattern is rigid and well-constrained.</p>
+    </section>
+
+    <section>
+      <h2>Try It: Convert Your Screens</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: From God Activities to MVI</h3>
+
+        <ol>
+          <li><strong>Define the Contract:</strong> For your main screen, write State (all display data), Event (all user actions), Effect (navigation + one-shots).</li>
+          <li><strong>Generate the ViewModel:</strong> Feed AI the Contract + use case signatures + PRES rules. Verify: single StateFlow, Channel for effects, onEvent() dispatches all.</li>
+          <li><strong>Extract the Reducer:</strong> If the screen has 6+ events, extract state transitions to a pure function. Test it without coroutines.</li>
+          <li><strong>Generate the Compose screen:</strong> Feed AI the Contract + State shape. Verify: collectAsStateWithLifecycle(), no logic, navigation via lambdas.</li>
+          <li><strong>Run the review checklist:</strong> Check PRES-001, PRES-002, PRES-003. No mutable state, no shared effects, no logic in Composables.</li>
+          <li><strong>Repeat:</strong> For each screen in your app. The pattern is identical &mdash; only the Contract changes.</li>
+        </ol>
+
+        <p><strong>Deliverable:</strong> Feature modules with Contract + ViewModel + Screen for every screen. All consuming domain use cases. All following the same MVI pattern.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The walls are painted. Every screen has a Contract, a ViewModel, and a Composable. Domain use cases feed data through repositories into state. But nothing is wired together yet &mdash; use cases don't know which repository implementation to use, ViewModels don't know which use cases to get.</p>
+
+      <p>In <a href="08-dependency-injection.html">Chapter 8: Dependency Injection: Hilt Modules With AI</a>, AI will generate the Hilt modules that wire everything together. One @Module per Gradle module, correct scopes, @Binds for interfaces. The glue that makes all the layers actually talk to each other.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="06-data-layer.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Building the Data Layer With AI</span>
+    </a>
+    <a href="08-dependency-injection.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Dependency Injection: Hilt Modules With AI</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

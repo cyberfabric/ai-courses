@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Model Architectures Compared | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-training-at-scale.html">&larr; Prev</a>
+      <a href="maps/13-architectures-compared-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Model Architectures Compared</h1>
+    <p class="chapter-subtitle">Encoder-only, decoder-only, MoE, diffusion, ViT &mdash; the landscape of model architectures explained</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/10-models-and-industry.html">AI-Intro Ch 10: Models &amp; Industry</a>. There you surveyed the major model providers. Now you&rsquo;ll understand the <em>architecture</em> behind each type &mdash; what makes BERT different from GPT, how MoE works mechanically, and why diffusion models create images from noise.
+    </div>
+
+    <p>Throughout this course, we&rsquo;ve focused on decoder-only transformers &mdash; the architecture behind GPT, Claude, and Llama. But that&rsquo;s only one branch of a much larger family tree. Different tasks call for different architectures, and understanding why helps you pick the right tool for the job.</p>
+
+    <div class="highlight-box">
+      <p><strong>The vehicle analogy:</strong> Model architectures are like different types of vehicles. Encoder-only is a <strong>scanner</strong> (analyzes input). Decoder-only is a <strong>printer</strong> (generates output). Encoder-decoder is a <strong>translator</strong> (reads input, writes output). MoE is a <strong>team of specialists</strong> (only relevant experts work on each task). Diffusion is a <strong>sculptor</strong> (starts with a block of marble/noise and carves away).</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Transformer Family</h2>
+    <!-- ============================================== -->
+
+    <p>The original 2017 &ldquo;Attention Is All You Need&rdquo; paper introduced <em>both</em> an encoder and a decoder. Since then, researchers have found that each half is powerful on its own. This created three branches:</p>
+
+    <table>
+      <thead>
+        <tr><th>Architecture</th><th>Sees Input</th><th>Produces Output</th><th>Key Models</th><th>Best For</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Encoder-Only</strong></td>
+          <td>All tokens at once (bidirectional)</td>
+          <td>Representations (not text)</td>
+          <td>BERT, RoBERTa, DeBERTa</td>
+          <td>Classification, embeddings, search</td>
+        </tr>
+        <tr>
+          <td><strong>Decoder-Only</strong></td>
+          <td>Previous tokens only (causal)</td>
+          <td>Text, token by token</td>
+          <td>GPT, Claude, Llama, Mistral</td>
+          <td>Chat, code, general generation</td>
+        </tr>
+        <tr>
+          <td><strong>Encoder-Decoder</strong></td>
+          <td>All input tokens (encoder), then generates (decoder)</td>
+          <td>Text, conditioned on encoded input</td>
+          <td>T5, BART, original Transformer</td>
+          <td>Translation, summarization</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============================================== -->
+    <h2>Encoder-Only: BERT and Understanding</h2>
+    <!-- ============================================== -->
+
+    <p>BERT (Bidirectional Encoder Representations from Transformers) was a breakthrough in 2018. Its key innovation: <strong>bidirectional attention</strong>. Every token can attend to every other token, including tokens that come <em>after</em> it.</p>
+
+    <div class="operation-box">
+      <h4>Masked Language Modeling (MLM)</h4>
+      <p>BERT&rsquo;s training task: randomly hide 15% of tokens in a sentence, then predict the hidden ones. Unlike GPT (which can only look left), BERT can look in both directions to figure out the masked word.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>BERT&rsquo;s Masked Prediction</h4>
+
+      <p>Sentence: &ldquo;The cat sat on the [MASK]&rdquo;</p>
+
+      <p><strong>What BERT sees:</strong> all surrounding tokens simultaneously</p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Attends To</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>The</td><td>cat, sat, on, the, [MASK]</td></tr>
+          <tr><td>cat</td><td>The, sat, on, the, [MASK]</td></tr>
+          <tr><td>[MASK]</td><td>The, cat, sat, on, the</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Prediction distribution for [MASK]:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>mat</td><td><code>0.42</code></td></tr>
+          <tr><td>floor</td><td><code>0.28</code></td></tr>
+          <tr><td>bed</td><td><code>0.12</code></td></tr>
+          <tr><td>table</td><td><code>0.08</code></td></tr>
+          <tr><td>...</td><td>...</td></tr>
+        </tbody>
+      </table>
+
+      <p>Because BERT sees &ldquo;cat&rdquo; and &ldquo;sat on,&rdquo; it strongly predicts &ldquo;mat.&rdquo; A left-to-right model could only see &ldquo;The cat sat on the&rdquo; &mdash; it can&rsquo;t use context from the right.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why Bidirectional Matters for Understanding</h4>
+      <p>Consider: &ldquo;The bank by the river was flooded.&rdquo; To understand that &ldquo;bank&rdquo; means riverbank (not financial bank), you need the word &ldquo;river&rdquo; that comes <em>after</em> it. BERT sees both directions, making it much better at <strong>understanding</strong> meaning. But this same property means BERT can&rsquo;t generate text &mdash; it would need to see words that don&rsquo;t exist yet.</p>
+    </div>
+
+    <p>BERT is still widely used for classification (spam detection, sentiment analysis), semantic search (embedding queries and documents), and named entity recognition. It&rsquo;s fast, efficient, and excels at tasks where you need to <em>understand</em> text rather than <em>produce</em> it.</p>
+
+    <!-- ============================================== -->
+    <h2>Decoder-Only: GPT and Generation</h2>
+    <!-- ============================================== -->
+
+    <p>You&rsquo;ve spent 12 chapters studying this architecture. Here&rsquo;s the recap in context of the full family:</p>
+
+    <div class="operation-box">
+      <h4>The Decoder-Only Formula</h4>
+      <p><strong>Causal attention</strong> (each token only sees previous tokens) + <strong>autoregressive generation</strong> (predict one token, append, repeat). The causal mask from Chapter 7 is what makes this work &mdash; future tokens are hidden.</p>
+    </div>
+
+    <p>Why did decoder-only win the chatbot race?</p>
+
+    <ul>
+      <li><strong>Simpler architecture:</strong> One stack of transformer blocks instead of two (encoder + decoder). Easier to scale.</li>
+      <li><strong>Universal interface:</strong> Generation handles everything &mdash; Q&amp;A, code, translation, summarization. You don&rsquo;t need a separate architecture per task.</li>
+      <li><strong>Scaling behavior:</strong> Decoder-only models benefit more from scaling (more parameters, more data) than encoder-only models.</li>
+      <li><strong>In-context learning:</strong> Large decoder models can learn new tasks from examples in the prompt, without retraining.</li>
+    </ul>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>Can a decoder-only model do classification (like BERT)?</p>
+      <p><strong>Answer:</strong> Yes! You can frame classification as generation: &ldquo;Is this email spam? Answer yes or no.&rdquo; The model generates &ldquo;yes&rdquo; or &ldquo;no.&rdquo; Less efficient than BERT for pure classification, but it works and requires no task-specific fine-tuning.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Encoder-Decoder: The Original Design</h2>
+    <!-- ============================================== -->
+
+    <p>The original Transformer was encoder-decoder. The <strong>encoder</strong> processes the entire input (bidirectional, like BERT). The <strong>decoder</strong> generates the output one token at a time, attending to both its own previous output and the encoder&rsquo;s representation of the input.</p>
+
+    <p>This is ideal for tasks with a clear input-output structure:</p>
+    <ul>
+      <li><strong>Translation:</strong> Read English sentence (encoder), generate French sentence (decoder)</li>
+      <li><strong>Summarization:</strong> Read long document (encoder), generate short summary (decoder)</li>
+    </ul>
+
+    <p>T5 (&ldquo;Text-to-Text Transfer Transformer&rdquo;) made this popular by framing every NLP task as text-to-text: classification becomes &ldquo;classify: [input]&rdquo; &rarr; &ldquo;positive.&rdquo;</p>
+
+    <p>Encoder-decoder is less common today because decoder-only models handle these tasks well enough and are simpler to train at scale. But for specialized applications like machine translation, encoder-decoder still holds its own.</p>
+
+    <!-- ============================================== -->
+    <h2>Mixture of Experts (MoE): Selective Activation</h2>
+    <!-- ============================================== -->
+
+    <p>What if you could have a massive model but only use a fraction of it for each token? That&rsquo;s the idea behind <strong>Mixture of Experts</strong>.</p>
+
+    <div class="operation-box">
+      <h4>How MoE Works</h4>
+      <p>Replace the single FFN (feed-forward network) in each transformer block with <strong>N expert FFNs</strong>. A small <strong>router</strong> network decides which experts to activate for each token. Typically, only the top 2 experts (out of 8 or more) are used per token.</p>
+      <p>Result: the model has many more total parameters, but each token only activates a small subset. More knowledge, same compute per token.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>MoE Routing: 8 Experts, Pick Top 2</h4>
+
+      <p>A token arrives at an MoE layer. The router computes a score for each expert:</p>
+      <table>
+        <thead>
+          <tr><th>Expert</th><th>Router Score</th><th>Selected?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Expert 1 (grammar)</td><td><code>0.05</code></td><td></td></tr>
+          <tr><td>Expert 2 (math)</td><td><code>0.02</code></td><td></td></tr>
+          <tr><td>Expert 3 (code)</td><td><code>0.45</code></td><td>&#10004; Top 1</td></tr>
+          <tr><td>Expert 4 (science)</td><td><code>0.08</code></td><td></td></tr>
+          <tr><td>Expert 5 (language)</td><td><code>0.03</code></td><td></td></tr>
+          <tr><td>Expert 6 (reasoning)</td><td><code>0.30</code></td><td>&#10004; Top 2</td></tr>
+          <tr><td>Expert 7 (creative)</td><td><code>0.04</code></td><td></td></tr>
+          <tr><td>Expert 8 (factual)</td><td><code>0.03</code></td><td></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>After softmax on selected experts:</strong></p>
+      <p>Expert 3 weight: <code>0.45 / (0.45 + 0.30) = 0.60</code></p>
+      <p>Expert 6 weight: <code>0.30 / (0.45 + 0.30) = 0.40</code></p>
+
+      <p><strong>Final output:</strong> <code>0.60 &times; Expert3(token) + 0.40 &times; Expert6(token)</code></p>
+
+      <p>Six experts did zero work. The token only &ldquo;paid for&rdquo; 2 out of 8.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why MoE Matters</h4>
+      <p>Mixtral 8x7B has 47 billion total parameters but only activates ~13 billion per token (2 of 8 experts). It performs comparably to a dense 70B model while being much faster at inference. You get the <em>knowledge</em> of a larger model with the <em>speed</em> of a smaller one.</p>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Total Params</th><th>Active Params/Token</th><th>Experts</th><th>Top-k</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Mixtral 8x7B</td><td>47B</td><td>~13B</td><td>8</td><td>2</td></tr>
+        <tr><td>Mixtral 8x22B</td><td>141B</td><td>~39B</td><td>8</td><td>2</td></tr>
+        <tr><td>GPT-4 (est.)</td><td>~1.8T</td><td>~280B (est.)</td><td>~16 (est.)</td><td>2 (est.)</td></tr>
+        <tr><td>Gemini 1.5</td><td>Unknown</td><td>Unknown</td><td>MoE confirmed</td><td>Unknown</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <strong>The catch with MoE:</strong> While compute per token is lower, you still need to store ALL the parameters in memory. A 47B MoE model needs roughly the same GPU memory as a 47B dense model, even though it only uses 13B at a time. MoE saves compute, not memory.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Diffusion Models: Creating Images from Noise</h2>
+    <!-- ============================================== -->
+
+    <p>Diffusion models power Stable Diffusion, DALL-E, and Midjourney. They work on a completely different principle than transformers.</p>
+
+    <div class="operation-box">
+      <h4>The Diffusion Principle</h4>
+      <p>Two processes:</p>
+      <ol>
+        <li><strong>Forward (training):</strong> Take a real image and gradually add random noise over T steps until it becomes pure noise</li>
+        <li><strong>Reverse (generation):</strong> Start with pure noise and gradually <em>remove</em> noise over T steps to create a clear image</li>
+      </ol>
+      <p>The model learns to predict and remove the noise added at each step. At generation time, it applies this denoising to random noise, sculpting an image from nothing.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Diffusion: A Tiny 4-Pixel Example</h4>
+
+      <p>Imagine a &ldquo;2&times;2 image&rdquo; (4 pixel values) going through 3 denoising steps:</p>
+
+      <p><strong>Step 0: Pure noise</strong></p>
+      <table>
+        <tbody>
+          <tr><td><code>-0.7</code></td><td><code>1.2</code></td></tr>
+          <tr><td><code>0.3</code></td><td><code>-1.5</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 1: First denoise (model predicts and removes some noise)</strong></p>
+      <table>
+        <tbody>
+          <tr><td><code>0.1</code></td><td><code>0.8</code></td></tr>
+          <tr><td><code>0.2</code></td><td><code>-0.3</code></td></tr>
+        </tbody>
+      </table>
+      <p><em>Structure starts emerging. Light pixels on top right, dark bottom right.</em></p>
+
+      <p><strong>Step 2: Second denoise</strong></p>
+      <table>
+        <tbody>
+          <tr><td><code>0.3</code></td><td><code>0.9</code></td></tr>
+          <tr><td><code>0.4</code></td><td><code>0.1</code></td></tr>
+        </tbody>
+      </table>
+      <p><em>Getting cleaner. Values stabilizing.</em></p>
+
+      <p><strong>Step 3: Final denoise &rarr; clean image</strong></p>
+      <table>
+        <tbody>
+          <tr><td><code>0.3</code></td><td><code>1.0</code></td></tr>
+          <tr><td><code>0.5</code></td><td><code>0.2</code></td></tr>
+        </tbody>
+      </table>
+      <p><em>Final output: a small bright patch (top-right) and a darker region (bottom-right). In reality, this would be a 512&times;512 or 1024&times;1024 image with 786,432+ values.</em></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>How Text Controls the Image</h4>
+      <p>Text-to-image models combine a text encoder (often CLIP) with the diffusion model. The text prompt is encoded into a vector that guides each denoising step. The denoiser doesn&rsquo;t just remove noise randomly &mdash; it removes noise <em>in the direction of the text embedding</em>. &ldquo;A cat on a beach&rdquo; guides the noise removal toward cat-like and beach-like patterns.</p>
+    </div>
+
+    <p>Typical diffusion models use 20&ndash;50 denoising steps. More steps = higher quality but slower generation. Techniques like DDIM and distillation can reduce this to 4&ndash;8 steps.</p>
+
+    <!-- ============================================== -->
+    <h2>Vision Transformers (ViT): Images as Token Sequences</h2>
+    <!-- ============================================== -->
+
+    <p>What if you could use the same transformer architecture for images? That&rsquo;s the Vision Transformer (ViT) idea: <strong>split an image into patches and treat each patch as a token</strong>.</p>
+
+    <div class="math-walkthrough">
+      <h4>ViT: Image to Tokens</h4>
+
+      <p>A 224&times;224 pixel image with 16&times;16 patches:</p>
+
+      <p><strong>Step 1: Split into patches</strong></p>
+      <p><code>224 / 16 = 14</code> patches per side &rarr; <code>14 &times; 14 = 196 patches</code></p>
+
+      <p><strong>Step 2: Flatten each patch</strong></p>
+      <p>Each 16&times;16 patch with 3 color channels = <code>16 &times; 16 &times; 3 = 768 values</code></p>
+
+      <p><strong>Step 3: Project to embedding dimension</strong></p>
+      <p>Each 768-value patch &rarr; linear projection &rarr; 768-dim embedding vector</p>
+
+      <p><strong>Step 4: Add position embeddings + [CLS] token</strong></p>
+      <p>Sequence: [CLS, patch_1, patch_2, &hellip;, patch_196] = <strong>197 tokens</strong></p>
+
+      <p><strong>Step 5: Run through standard transformer blocks</strong></p>
+      <p>Same attention mechanism, same layer norm, same FFN as in Chapters 6&ndash;7. The [CLS] token&rsquo;s final embedding is used for classification.</p>
+    </div>
+
+    <p>ViT showed that transformers aren&rsquo;t just for language &mdash; the attention mechanism works on <em>any</em> sequence of tokens, whether those tokens represent words or image patches.</p>
+
+    <!-- ============================================== -->
+    <h2>Multimodal Models: Vision + Language</h2>
+    <!-- ============================================== -->
+
+    <p>Modern models like GPT-4 Vision, Claude 3, and Gemini handle both text and images. How?</p>
+
+    <div class="operation-box">
+      <h4>The Multimodal Recipe</h4>
+      <ol>
+        <li>Process the image through a vision encoder (ViT or similar) to get image embeddings</li>
+        <li>Project image embeddings into the same dimension as text token embeddings</li>
+        <li>Concatenate: [image_tokens, text_tokens] &mdash; one unified sequence</li>
+        <li>Feed through the standard decoder transformer</li>
+      </ol>
+      <p>The transformer treats image and text tokens identically &mdash; it just attends to all of them. The magic is in the projection step that maps visual features into the same vector space as language.</p>
+    </div>
+
+    <p>This is why you can ask Claude &ldquo;what&rsquo;s in this image?&rdquo; &mdash; the image is converted to tokens that live in the same space as text tokens, and the model attends across both modalities seamlessly.</p>
+
+    <!-- ============================================== -->
+    <h2>State-Space Models: The Linear-Time Alternative</h2>
+    <!-- ============================================== -->
+
+    <p>Attention is O(n&sup2;) &mdash; double the sequence, quadruple the compute (Chapter 10). <strong>State-space models</strong> (SSMs) like Mamba offer a fundamentally different approach: O(n) &mdash; linear time.</p>
+
+    <p>Instead of each token attending to all previous tokens, SSMs maintain a compressed <strong>state</strong> that summarizes the entire history. Each new token updates the state and reads from it. Think of it like a running summary instead of re-reading the full transcript.</p>
+
+    <table>
+      <thead>
+        <tr><th>Aspect</th><th>Transformer</th><th>State-Space (Mamba)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Complexity</td><td>O(n&sup2;)</td><td>O(n)</td></tr>
+        <tr><td>Context access</td><td>Full access to all tokens</td><td>Compressed state only</td></tr>
+        <tr><td>Long context</td><td>Expensive, needs KV cache</td><td>Naturally efficient</td></tr>
+        <tr><td>Quality (2025)</td><td>Best for most tasks</td><td>Competitive, improving rapidly</td></tr>
+        <tr><td>In-context learning</td><td>Strong</td><td>Still catching up</td></tr>
+      </tbody>
+    </table>
+
+    <p>Hybrid architectures like Jamba combine transformer layers with Mamba layers, getting the best of both: strong attention-based reasoning where needed and efficient linear-time processing for long contexts.</p>
+
+    <!-- ============================================== -->
+    <h2>The Architecture Landscape</h2>
+    <!-- ============================================== -->
+
+    <p>Here&rsquo;s the full picture &mdash; which architecture for which job:</p>
+
+    <table>
+      <thead>
+        <tr><th>Task</th><th>Best Architecture</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Chatbot / assistant</td><td>Decoder-only</td><td>Autoregressive generation, scales well, universal interface</td></tr>
+        <tr><td>Text classification</td><td>Encoder-only (BERT)</td><td>Bidirectional understanding, fast, efficient</td></tr>
+        <tr><td>Semantic search</td><td>Encoder-only</td><td>Produces embeddings optimized for similarity</td></tr>
+        <tr><td>Translation</td><td>Encoder-decoder or Decoder-only</td><td>Clear input/output structure; decoder-only also works</td></tr>
+        <tr><td>Image generation</td><td>Diffusion</td><td>Iterative denoising produces high-quality images</td></tr>
+        <tr><td>Image understanding</td><td>ViT + decoder</td><td>Patch tokenization + transformer attention</td></tr>
+        <tr><td>Very long sequences</td><td>SSM (Mamba) or hybrid</td><td>Linear-time processing avoids quadratic scaling</td></tr>
+        <tr><td>Large knowledge base, efficient inference</td><td>MoE</td><td>More parameters (knowledge), less active compute</td></tr>
+      </tbody>
+    </table>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>You&rsquo;re building a spam classifier that needs to process 10 million emails per day. Would you choose BERT or GPT-4?</p>
+      <p><strong>Answer:</strong> BERT (or a similar encoder-only model). It&rsquo;s much smaller, faster, and specifically designed for classification. GPT-4 would work but costs 100&times; more per email with no quality benefit for this task.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Where the Field Is Heading</h2>
+    <!-- ============================================== -->
+
+    <p>The landscape is evolving rapidly. Key trends to watch:</p>
+
+    <ul>
+      <li><strong>Hybrid architectures:</strong> Combining transformers with SSMs (Jamba) or convolutions to get the best properties of each</li>
+      <li><strong>Efficiency improvements:</strong> Smaller models with better training (over-training + distillation) matching larger models</li>
+      <li><strong>Multimodal by default:</strong> New models increasingly handle text, images, audio, and video natively</li>
+      <li><strong>Longer context:</strong> From 2K to 1M+ tokens in 5 years, with MoE and SSMs pushing further</li>
+      <li><strong>Inference-time compute:</strong> Models that &ldquo;think longer&rdquo; on hard problems (chain-of-thought, tree search) rather than just increasing training compute</li>
+      <li><strong>On-device models:</strong> Efficient architectures (MoE, quantized models) making AI viable on phones and edge devices</li>
+    </ul>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Pick the Right Architecture</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your Turn: Architecture Selection</h4>
+
+      <p>For each use case, pick the best architecture and justify why. Choose from: Encoder-Only, Decoder-Only, Encoder-Decoder, MoE, Diffusion, ViT.</p>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>Use Case</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>A customer support chatbot that answers questions about your product</td></tr>
+          <tr><td>2</td><td>A system that generates product images from text descriptions</td></tr>
+          <tr><td>3</td><td>A search engine that finds relevant documents by meaning</td></tr>
+          <tr><td>4</td><td>A model that needs deep knowledge across many domains but must be fast at inference</td></tr>
+          <tr><td>5</td><td>A real-time machine translation service</td></tr>
+        </tbody>
+      </table>
+
+      <details>
+        <summary>Show Solution</summary>
+
+        <p><strong>1. Customer support chatbot:</strong> <strong>Decoder-only</strong>. Needs to generate natural language responses, handle diverse questions, and benefit from instruction tuning. GPT, Claude, or Llama-class models.</p>
+
+        <p><strong>2. Image generation from text:</strong> <strong>Diffusion</strong>. Purpose-built for generating images from text descriptions. Stable Diffusion, DALL-E 3, or Midjourney.</p>
+
+        <p><strong>3. Semantic search:</strong> <strong>Encoder-only</strong>. Needs to produce embeddings for documents and queries. BERT-family or specialized embedding models (text-embedding-3). Fast, efficient, optimized for similarity computation.</p>
+
+        <p><strong>4. Broad knowledge, fast inference:</strong> <strong>MoE</strong>. More total parameters (broader knowledge) but fewer active per token (faster inference). Mixtral-style architecture.</p>
+
+        <p><strong>5. Machine translation:</strong> <strong>Encoder-decoder</strong> or <strong>Decoder-only</strong>. Encoder-decoder (T5, NLLB) is the traditional choice with the clearest input/output mapping. But large decoder-only models also translate well with prompting.</p>
+      </details>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Wrapping Up the Course</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <p>You&rsquo;ve completed <strong>How AI Really Works: The Deep Dive</strong>. Here&rsquo;s the full journey you&rsquo;ve taken:</p>
+      <ul>
+        <li><strong>Chapters 1&ndash;4:</strong> The building blocks &mdash; neurons, layers, forward pass, training</li>
+        <li><strong>Chapters 5&ndash;8:</strong> The transformer &mdash; tokenization, attention, full architecture, generation</li>
+        <li><strong>Chapters 9&ndash;11:</strong> The internals &mdash; sampling, KV cache, embeddings</li>
+        <li><strong>Chapters 12&ndash;13:</strong> The big picture &mdash; training at scale, architecture landscape</li>
+      </ul>
+      <p>Every concept was backed by real numbers you computed yourself. You didn&rsquo;t just learn what AI does &mdash; you traced <em>how</em> it does it, step by step. That understanding puts you in a position few developers have: you can reason about AI systems from first principles, not just from API documentation.</p>
+    </div>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="12-training-at-scale.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">How Models Are Actually Trained at Scale</span>
+    </a>
+    <a href="index.html" class="next-chapter">
+      <span class="nav-direction">Back to</span>
+      <span class="nav-chapter">Table of Contents</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

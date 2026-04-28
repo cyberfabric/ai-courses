@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Chunking &mdash; The Art of Splitting Documents | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-vector-databases.html">&larr; Prev</a>
+      <a href="07-retrieval-that-works.html">Next &rarr;</a>
+      <a href="maps/06-chunking-strategies-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Chunking: The Art of Splitting Documents</h1>
+    <p class="subtitle">How you slice your documents matters more than which vector DB you pick</p>
+  </header>
+
+  <main>
+
+    <h2>The Most Underrated Step in RAG</h2>
+
+    <p>You've got embeddings. You've got a vector database. You feed in your documents, ask a question, and get&hellip; garbage. The answer is technically related to your query but misses the point entirely. What went wrong?</p>
+
+    <p>Nine times out of ten, the answer is <strong>chunking</strong>. Not the embedding model. Not the vector database. The way you split your documents into pieces is the single biggest lever you have over RAG quality. Get it wrong and everything downstream suffers. Get it right and even a simple RAG pipeline delivers surprisingly good results.</p>
+
+    <div class="highlight-box">
+      <strong>The core idea:</strong> A chunk is the unit of retrieval. When a user asks a question, your system doesn't return entire documents &mdash; it returns chunks. If those chunks are too big, too small, or split in the wrong places, the LLM gets confused context and produces confused answers.
+    </div>
+
+    <h2>Why Chunking Is So Hard</h2>
+
+    <p>Think of chunking like cutting a book into note cards. You need each card to make sense on its own, contain enough context to be useful, and be small enough that you're not wasting the reader's time with irrelevant text.</p>
+
+    <p>Here's the fundamental dilemma:</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <strong>Chunks too small (50&ndash;100 tokens)</strong>
+        <ul>
+          <li>Each chunk is a sentence fragment</li>
+          <li>Precise match to the query</li>
+          <li>But the LLM has no surrounding context</li>
+          <li>Answer: "Yes." (with no explanation)</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <strong>Chunks too big (2000+ tokens)</strong>
+        <ul>
+          <li>Each chunk is multiple pages</li>
+          <li>Lots of context available</li>
+          <li>But most of it is irrelevant to the query</li>
+          <li>Answer: buries the relevant detail in noise</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>The sweet spot? <strong>200&ndash;512 tokens</strong> for most use cases. That's roughly a paragraph or two &mdash; enough to carry a complete thought without drowning in unrelated information.</p>
+
+    <div class="pipeline-box">
+      <strong>Where chunking fits in the RAG pipeline:</strong> Chunking happens during <em>indexing</em>, right after you load your raw documents and before you create embeddings. It's the bridge between "I have a 50-page PDF" and "I have 200 searchable pieces of knowledge." Every decision you make here ripples through retrieval quality and generation accuracy downstream.
+    </div>
+
+    <h2>Strategy 1: Fixed-Size Chunking</h2>
+
+    <p>The simplest approach: split your text every N characters (or tokens). No intelligence, no awareness of content &mdash; just a ruler and a pair of scissors.</p>
+
+<pre><code>from langchain_text_splitters import CharacterTextSplitter
+
+splitter = CharacterTextSplitter(
+    chunk_size=500,       # 500 characters per chunk
+    chunk_overlap=50,     # 50 characters of overlap between chunks
+    separator="\n"        # Try to split on newlines first
+)
+
+text = open("company_handbook.txt").read()
+chunks = splitter.split_text(text)
+
+print(f"Created {len(chunks)} chunks")
+print(f"First chunk: {chunks[0][:100]}...")</code></pre>
+
+    <p><strong>When to use it:</strong> Quick prototypes, uniform text (like log files or transcripts), or when you just need something working in five minutes.</p>
+
+    <p><strong>The problem:</strong> Fixed-size splitting doesn't care about meaning. It will happily cut a sentence in half, split a code block mid-function, or separate a question from its answer. That's why we have overlap.</p>
+
+    <h3>Overlap: The Safety Net</h3>
+
+    <p>Overlap means each chunk shares some text with the next one. If an important sentence falls right at a chunk boundary, overlap ensures it appears in at least one chunk intact.</p>
+
+    <div class="tip-box">
+      <strong>Overlap guidelines:</strong> A 10&ndash;20% overlap is standard. For a 500-token chunk, that's 50&ndash;100 tokens of overlap. More overlap means more redundancy in your index (and higher storage costs), but fewer lost boundary sentences. A January 2026 study using SPLADE retrieval found that overlap provided <em>no measurable benefit</em> for some retrieval setups &mdash; so don't assume more overlap is always better. Test with your data.
+    </div>
+
+    <h2>Strategy 2: Recursive Character Splitting</h2>
+
+    <p>This is the workhorse of chunking &mdash; and the one you should reach for first. LangChain's <code>RecursiveCharacterTextSplitter</code> tries to split text using a hierarchy of separators:</p>
+
+    <ol>
+      <li>First, try to split on <strong>double newlines</strong> (paragraph boundaries)</li>
+      <li>If chunks are still too big, split on <strong>single newlines</strong></li>
+      <li>If still too big, split on <strong>spaces</strong> (word boundaries)</li>
+      <li>Last resort: split on <strong>individual characters</strong></li>
+    </ol>
+
+    <p>The genius of this approach is that it preserves the most natural boundaries it can. Paragraphs stay together when possible, sentences stay intact when paragraphs are too long, and you never get a chunk that starts mid-word.</p>
+
+<pre><code>from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=512,
+    chunk_overlap=64,
+    separators=["\n\n", "\n", ". ", " ", ""]
+)
+
+# Split a document
+with open("product_docs.txt") as f:
+    text = f.read()
+
+chunks = splitter.split_text(text)
+
+# Inspect the results
+for i, chunk in enumerate(chunks[:3]):
+    print(f"--- Chunk {i+1} ({len(chunk)} chars) ---")
+    print(chunk[:200])
+    print()</code></pre>
+
+    <div class="retrieval-box">
+      <strong>Why recursive splitting wins for retrieval:</strong> When chunks respect natural language boundaries, their embeddings are more meaningful. A chunk that contains a complete paragraph about "refund policy" will have a clean, focused embedding vector. A chunk that starts mid-sentence ("...within 30 days of purchase. Our shipping policy...") creates a muddled embedding that matches both refund and shipping queries poorly.
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">512</div>
+        <div class="stat-label">tokens &mdash; recommended baseline chunk size (2026 benchmarks)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">69%</div>
+        <div class="stat-label">end-to-end accuracy with recursive 512-token chunks (Vectara benchmark)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">10&ndash;20%</div>
+        <div class="stat-label">overlap ratio &mdash; the standard starting point</div>
+      </div>
+    </div>
+
+    <h2>Strategy 3: Sentence-Based Chunking</h2>
+
+    <p>Instead of counting characters, split on sentence boundaries. Each chunk gets a set number of complete sentences. This guarantees you never cut a thought mid-stream.</p>
+
+<pre><code>import nltk
+nltk.download('punkt_tab', quiet=True)
+from langchain_text_splitters import NLTKTextSplitter
+
+splitter = NLTKTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50
+)
+
+chunks = splitter.split_text(text)
+# Each chunk boundary aligns with a sentence ending</code></pre>
+
+    <p>Sentence-based chunking works great for well-written prose &mdash; blog posts, documentation, knowledge base articles. It struggles with text that doesn't have clean sentence boundaries: code, tables, log files, or bullet-point lists.</p>
+
+    <h2>Strategy 4: Document-Structure-Aware Chunking</h2>
+
+    <p>If your documents have structure &mdash; headings, sections, HTML tags, Markdown formatting &mdash; why not use that structure to guide your splitting?</p>
+
+<pre><code>from langchain_text_splitters import MarkdownHeaderTextSplitter
+
+headers_to_split_on = [
+    ("#", "h1"),
+    ("##", "h2"),
+    ("###", "h3"),
+]
+
+splitter = MarkdownHeaderTextSplitter(
+    headers_to_split_on=headers_to_split_on
+)
+
+markdown_doc = """
+# Company Policies
+
+## Refund Policy
+We offer full refunds within 30 days of purchase.
+Returns must include the original receipt.
+Digital products are non-refundable after download.
+
+## Shipping Policy
+Standard shipping takes 5-7 business days.
+Express shipping is available for an additional fee.
+
+### International Shipping
+International orders may incur customs fees.
+Delivery times vary by destination country.
+"""
+
+chunks = splitter.split_text(markdown_doc)
+for chunk in chunks:
+    print(chunk.metadata)   # {'h1': 'Company Policies', 'h2': 'Refund Policy'}
+    print(chunk.page_content[:100])
+    print()</code></pre>
+
+    <p>The beauty of this approach: each chunk carries <strong>metadata about where it came from</strong> in the document hierarchy. When the user asks about "refund policy," the retriever finds a chunk that's tagged with <code>h2: Refund Policy</code> &mdash; that's a strong signal.</p>
+
+    <div class="tip-box">
+      <strong>Best for:</strong> Documentation sites, wikis, Markdown files, HTML pages, API docs, and any content with a clear heading structure. If your content is structured, use that structure. Don't throw away free information.
+    </div>
+
+    <h2>Strategy 5: Semantic Chunking</h2>
+
+    <p>This is the "smart" approach. Instead of relying on character counts or formatting, semantic chunking uses embeddings to detect where the <em>meaning</em> of the text shifts, and splits there.</p>
+
+    <p>The idea: embed each sentence, then compare consecutive sentences. When the similarity between adjacent sentences drops below a threshold, that's a topic boundary &mdash; and that's where you cut.</p>
+
+<pre><code>from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+chunker = SemanticChunker(
+    embeddings,
+    breakpoint_threshold_type="percentile",
+    breakpoint_threshold_amount=75   # Split at the 75th percentile of dissimilarity
+)
+
+chunks = chunker.create_documents([long_document])
+
+for chunk in chunks:
+    print(f"Chunk ({len(chunk.page_content)} chars): {chunk.page_content[:80]}...")
+    print()</code></pre>
+
+    <div class="embedding-box">
+      <strong>How semantic chunking works under the hood:</strong> The chunker embeds every sentence in your document, then computes the cosine similarity between each pair of consecutive sentences. When two neighbors have low similarity (meaning the topic changed), a chunk boundary is inserted. The result: chunks that follow the natural flow of ideas, regardless of character count or formatting.
+    </div>
+
+    <div class="gotcha-box">
+      <strong>Semantic chunking sounds great, but&hellip;</strong> A peer-reviewed study (NAACL 2025 Findings) found that plain fixed 200-word chunks <em>matched or beat</em> semantic chunking across both retrieval and answer-generation tasks. The problem? Semantic chunks averaged only 43 tokens &mdash; precise retrieval, but too little context for the LLM to generate good answers. The 2026 Vectara benchmark confirmed: recursive 512-token splitting at 69% accuracy outperformed semantic chunking. Don't assume "smarter" means "better." Always benchmark with your own data.
+    </div>
+
+    <h2>Strategy 6: Late Chunking</h2>
+
+    <p>Late chunking flips the traditional pipeline on its head. Instead of "chunk first, then embed," you <strong>embed first, then chunk</strong>.</p>
+
+    <p>Here's the traditional approach:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>Traditional</strong><br>
+        Document &rarr; Split into chunks &rarr; Embed each chunk independently
+      </div>
+      <div class="step-arrow">&darr;</div>
+      <div class="step">
+        <strong>Late Chunking</strong><br>
+        Document &rarr; Embed entire document (full attention) &rarr; Split token embeddings into chunks &rarr; Pool each chunk
+      </div>
+    </div>
+
+    <p>Why does this matter? In traditional chunking, each chunk is embedded in isolation. The sentence "They implemented it last quarter" loses all meaning when "they" and "it" refer to things mentioned three paragraphs ago. With late chunking, every token embedding has already "seen" the entire document through the transformer's attention mechanism. The pronoun "they" carries the context of who it refers to.</p>
+
+    <div class="tip-box">
+      <strong>When to use late chunking:</strong> Long narrative documents where context flows across sections &mdash; technical manuals, legal contracts, research papers. If your documents are short and self-contained (FAQs, product listings), traditional chunking works fine. Late chunking was introduced by Jina AI in 2024 and is supported by their <code>jina-embeddings-v3</code> model.
+    </div>
+
+    <h2>Choosing the Right Strategy: A Decision Tree</h2>
+
+    <p>With six strategies to choose from, here's how to pick:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <strong>Start here (80% of projects)</strong>
+        <ul>
+          <li>Use <code>RecursiveCharacterTextSplitter</code></li>
+          <li>Set chunk size to 400&ndash;512 tokens</li>
+          <li>Set overlap to 10&ndash;15%</li>
+          <li>Benchmark, then adjust</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <strong>If your docs are structured</strong>
+        <ul>
+          <li>Use Markdown/HTML-aware splitting</li>
+          <li>Preserve heading metadata</li>
+          <li>Fall back to recursive splitting for large sections</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <strong>If your docs are long narratives</strong>
+        <ul>
+          <li>Try late chunking (if using Jina embeddings)</li>
+          <li>Or use recursive splitting with larger overlap</li>
+          <li>Consider parent-child retrieval (Chapter 9)</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <strong>If nothing else works</strong>
+        <ul>
+          <li>Try semantic chunking as an experiment</li>
+          <li>Use larger chunk sizes (512&ndash;1024 tokens)</li>
+          <li>Combine with re-ranking (Chapter 7)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Preprocessing: Before You Chunk</h2>
+
+    <p>Chunking strategy gets all the attention, but <strong>preprocessing</strong> is where many RAG pipelines quietly fail. Garbage in, garbage out &mdash; and most real-world documents are messy.</p>
+
+    <h3>PDFs: The Worst Format for RAG</h3>
+
+    <p>PDFs look clean to humans but are chaos for machines. Text extraction can scramble column layouts, merge headers with body text, lose table structure, and miss text in images entirely.</p>
+
+<pre><code># Using PyMuPDF (fitz) for better PDF extraction
+import fitz  # pip install pymupdf
+
+def extract_pdf_text(pdf_path):
+    doc = fitz.open(pdf_path)
+    pages = []
+    for page in doc:
+        text = page.get_text("text")
+        # Clean up common PDF artifacts
+        text = text.replace("\x00", "")           # null bytes
+        text = "\n".join(                          # remove empty lines
+            line for line in text.split("\n")
+            if line.strip()
+        )
+        pages.append(text)
+    return "\n\n".join(pages)</code></pre>
+
+    <div class="gotcha-box">
+      <strong>PDF gotcha:</strong> Headers and footers repeat on every page. If you don't strip them, your chunks will be full of "Page 47 | Company Confidential | Q3 Report" mixed into the actual content. That noise pollutes your embeddings and wastes tokens. Always clean repetitive headers/footers before chunking.
+    </div>
+
+    <h3>HTML: Strip the Boilerplate</h3>
+
+    <p>Web pages carry navigation bars, sidebars, cookie banners, and footer links. You want the <em>content</em>, not the chrome.</p>
+
+<pre><code>from bs4 import BeautifulSoup
+
+def extract_html_content(html_text):
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    # Remove non-content elements
+    for tag in soup(["nav", "header", "footer", "script",
+                     "style", "aside", "iframe"]):
+        tag.decompose()
+
+    # Get the main content area if it exists
+    main = soup.find("main") or soup.find("article") or soup
+    return main.get_text(separator="\n", strip=True)</code></pre>
+
+    <h3>Markdown: Your Best Friend</h3>
+
+    <p>Markdown is the easiest format to chunk because its structure (headings, lists, code blocks) maps naturally to chunk boundaries. If you can convert your source documents to Markdown before chunking, do it.</p>
+
+    <h2>Chunk Metadata: The Secret Weapon</h2>
+
+    <p>A chunk isn't just text &mdash; it should carry metadata about where it came from. This metadata is critical for filtering, attribution, and debugging.</p>
+
+<pre><code># Adding rich metadata to each chunk
+def create_chunks_with_metadata(documents):
+    chunks = []
+    for doc in documents:
+        raw_chunks = splitter.split_text(doc["text"])
+        for i, chunk_text in enumerate(raw_chunks):
+            chunks.append({
+                "text": chunk_text,
+                "metadata": {
+                    "source": doc["filename"],
+                    "chunk_index": i,
+                    "total_chunks": len(raw_chunks),
+                    "section": doc.get("section", "unknown"),
+                    "last_updated": doc.get("updated_at"),
+                    "char_count": len(chunk_text),
+                }
+            })
+    return chunks</code></pre>
+
+    <div class="tip-box">
+      <strong>Metadata you should always include:</strong>
+      <ul>
+        <li><strong>Source file</strong> &mdash; so you can cite where the answer came from</li>
+        <li><strong>Chunk index</strong> &mdash; so you can retrieve surrounding chunks if needed</li>
+        <li><strong>Section/heading</strong> &mdash; for filtering ("search only in the API docs")</li>
+        <li><strong>Last updated date</strong> &mdash; so you can prioritize fresh content</li>
+      </ul>
+    </div>
+
+    <h2>A Complete Chunking Pipeline</h2>
+
+    <p>Let's put it all together. Here's a production-ready chunking pipeline that handles multiple document types:</p>
+
+<pre><code>from langchain_text_splitters import (
+    RecursiveCharacterTextSplitter,
+    MarkdownHeaderTextSplitter,
+)
+from pathlib import Path
+
+# Configure splitters
+md_header_splitter = MarkdownHeaderTextSplitter(
+    headers_to_split_on=[("#", "h1"), ("##", "h2"), ("###", "h3")]
+)
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=512,
+    chunk_overlap=64,
+    separators=["\n\n", "\n", ". ", " ", ""]
+)
+
+def chunk_document(file_path: str) -&gt; list[dict]:
+    """Chunk a document based on its type."""
+    path = Path(file_path)
+    text = path.read_text(encoding="utf-8")
+
+    if path.suffix == ".md":
+        # Use structure-aware splitting for Markdown
+        header_chunks = md_header_splitter.split_text(text)
+        final_chunks = []
+        for hc in header_chunks:
+            # Further split if header sections are too long
+            sub_chunks = text_splitter.split_text(hc.page_content)
+            for sc in sub_chunks:
+                final_chunks.append({
+                    "text": sc,
+                    "metadata": {**hc.metadata, "source": file_path}
+                })
+        return final_chunks
+
+    else:
+        # Use recursive splitting for plain text
+        raw_chunks = text_splitter.split_text(text)
+        return [
+            {"text": c, "metadata": {"source": file_path, "index": i}}
+            for i, c in enumerate(raw_chunks)
+        ]
+
+# Process an entire directory
+docs_dir = Path("./docs")
+all_chunks = []
+for file_path in docs_dir.glob("**/*.md"):
+    all_chunks.extend(chunk_document(str(file_path)))
+
+print(f"Total chunks: {len(all_chunks)}")
+print(f"Avg chunk size: {sum(len(c['text']) for c in all_chunks) / len(all_chunks):.0f} chars")</code></pre>
+
+    <div class="pipeline-box">
+      <strong>The full chunking pipeline in context:</strong>
+      <ol>
+        <li><strong>Load</strong> &mdash; read raw documents (PDF, HTML, Markdown, plain text)</li>
+        <li><strong>Preprocess</strong> &mdash; strip boilerplate, fix encoding, remove headers/footers</li>
+        <li><strong>Chunk</strong> &mdash; split into pieces using the right strategy for your document type</li>
+        <li><strong>Enrich</strong> &mdash; attach metadata (source, section, date, chunk index)</li>
+        <li><strong>Embed</strong> &mdash; create vector embeddings for each chunk (next step, handled by your vector DB or embedding API)</li>
+        <li><strong>Store</strong> &mdash; upsert chunks + metadata + vectors into your vector database</li>
+      </ol>
+    </div>
+
+    <h2>Measuring Chunk Quality</h2>
+
+    <p>How do you know if your chunking strategy is working? Here are three quick sanity checks:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Read 10 random chunks</strong> &mdash; does each one make sense on its own? Could you understand what it's about without reading the full document?</li>
+        <li><strong>Run 10 test queries</strong> &mdash; do the top-3 retrieved chunks contain the answer? If the answer spans two chunks, your boundaries are in the wrong place.</li>
+        <li><strong>Check chunk size distribution</strong> &mdash; are most chunks in the 200&ndash;512 token range? A spike of very small chunks (under 50 tokens) suggests your splitter is over-fragmenting.</li>
+      </ul>
+    </div>
+
+<pre><code># Quick chunk quality check
+import statistics
+
+sizes = [len(c["text"].split()) for c in all_chunks]
+print(f"Min: {min(sizes)} words")
+print(f"Max: {max(sizes)} words")
+print(f"Mean: {statistics.mean(sizes):.0f} words")
+print(f"Median: {statistics.median(sizes):.0f} words")
+print(f"Std dev: {statistics.stdev(sizes):.0f} words")
+
+# Flag suspicious chunks
+tiny = [c for c in all_chunks if len(c["text"].split()) < 20]
+print(f"\nWarning: {len(tiny)} chunks under 20 words — consider merging these")</code></pre>
+
+    <div class="warning-box">
+      <strong>Watch out for tiny chunks.</strong> A chunk that says "See the next section for details" is useless on its own. It matches many queries but provides zero useful context. Filter or merge chunks under ~20 words with their neighbors.
+    </div>
+
+    <h2>Tokens vs Characters vs Words</h2>
+
+    <p>A quick clarification, because this trips up everyone at least once:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <strong>Characters</strong>
+        <p>"Hello world" = 11 characters</p>
+        <p>Simple to count, but a poor proxy for how much "meaning" a chunk carries. 500 characters of code &ne; 500 characters of prose.</p>
+      </div>
+      <div class="prompt-example good">
+        <strong>Tokens</strong>
+        <p>"Hello world" = 2 tokens</p>
+        <p>What LLMs actually process. Use <code>tiktoken</code> to count. 512 tokens &asymp; 380 words &asymp; 1,900 characters (varies by language).</p>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>Always think in tokens</strong> when setting chunk sizes, because tokens are what the embedding model and the LLM consume. Use <code>tiktoken</code> (for OpenAI models) or your model's tokenizer to get accurate counts.
+    </div>
+
+    <div class="exercise-box">
+      <strong>Try It: Compare Three Chunking Strategies</strong>
+      <p>Take a real document from your project &mdash; a README, a FAQ page, or a few pages of documentation. Then:</p>
+      <ol>
+        <li>Chunk it three ways: fixed-size (400 chars), recursive (512 tokens, 64 overlap), and Markdown-aware (if it's Markdown)</li>
+        <li>Print the first 5 chunks from each strategy side by side</li>
+        <li>Write 5 test questions that a user might ask about the document</li>
+        <li>For each strategy, manually check: do the top-retrieved chunks contain the answer?</li>
+        <li>Count how many of your 5 questions each strategy answers correctly</li>
+      </ol>
+      <p>This exercise builds your intuition for how chunking affects retrieval. You'll quickly see why recursive splitting outperforms naive fixed-size splitting for most content &mdash; and where structure-aware splitting shines for well-formatted documents.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now know how to slice documents into meaningful chunks. But chunking is only half the retrieval story. Once your chunks are embedded and stored, you need to <em>find the right ones</em> when a user asks a question.</p>
+
+    <p>In the next chapter, we'll tackle <strong>retrieval strategies</strong> &mdash; keyword search, semantic search, hybrid search, and re-ranking. You'll learn why pure vector search isn't always enough, and how combining approaches can dramatically improve your RAG system's accuracy.</p>
+
+    <nav class="chapter-nav">
+      <a href="05-vector-databases.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Vector Databases: Your AI's Memory</span>
+      </a>
+      <a href="07-retrieval-that-works.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Retrieval That Actually Works</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

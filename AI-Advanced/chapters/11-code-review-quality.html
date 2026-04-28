@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Code Review and Quality &mdash; AI-Driven Development</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Development</span>
+    <div class="nav-links">
+      <a href="10-vibe-vs-structured.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="12-large-codebases.html">Next &rarr;</a>
+      <a href="maps/11-code-review-quality-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Code Review and Quality</h1>
+    <p class="subtitle">Reviewing AI-generated code, catching common smells, the 10-point checklist</p>
+  </header>
+
+  <main>
+
+    <!-- The Review Mindset -->
+    <section>
+      <h2>The Review Mindset</h2>
+
+      <p>AI-generated code is like code from a talented junior developer: syntactically correct, often clever, but missing the context that experience provides. It compiles, it usually works on the happy path, and it looks reasonable at first glance. The bugs hide in the gaps between what you specified and what the AI assumed.</p>
+
+      <p>Your review mindset should be: <strong>"This code is guilty until proven innocent."</strong> Not because AI is bad at coding &mdash; it's often quite good. But because the cost of a missed bug in reviewed code is yours to bear, not the AI's. You are the last line of defense before production.</p>
+
+      <div class="highlight-box">
+        <h3>The Ownership Principle</h3>
+        <p><strong>You are responsible for every line of AI-generated code you commit.</strong> "The AI wrote it" is not an excuse in a post-mortem. If it's in your PR, it's your code. Review it with the same rigor you'd apply to code from a teammate whose work you're putting your name on.</p>
+      </div>
+    </section>
+
+    <!-- Common AI Code Smells -->
+    <section>
+      <h2>Common AI Code Smells</h2>
+
+      <p>AI-generated code has characteristic patterns that should trigger closer inspection. Learn to recognize these smells and you'll catch the majority of issues before they reach production.</p>
+
+      <h3>1. Over-Engineering</h3>
+      <p>AI loves abstractions. Ask for a simple utility function and you might get a factory pattern with dependency injection, three interfaces, and a configuration system. The code works, but it's 10x more complex than the task requires.</p>
+
+      <p><span class="profession-tag">Backend</span> You asked for a function to format user display names. You got a <code>DisplayNameFormatterFactory</code> with pluggable strategies, locale-aware formatters, and a caching layer. When a three-line function was all you needed:</p>
+
+      <pre><code># What you needed:
+def format_display_name(first: str, last: str) -> str:
+    return f"{first} {last}".strip()
+
+# What AI generated (over-engineered):
+class DisplayNameFormatter:
+    def __init__(self, strategy: FormattingStrategy, cache: Cache):
+        self._strategy = strategy
+        self._cache = cache
+
+    def format(self, user: User) -> str:
+        cache_key = f"display_name:{user.id}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            return cached
+        result = self._strategy.format(user.first_name, user.last_name)
+        self._cache.set(cache_key, result, ttl=3600)
+        return result</code></pre>
+
+      <h3>2. Hallucinated APIs</h3>
+      <p>AI models sometimes generate calls to APIs, methods, or parameters that don't exist. They look plausible because they follow naming conventions of real APIs, but they'll fail at runtime.</p>
+
+      <p><span class="profession-tag">Android Dev</span> Watch for Compose functions that look right but don't exist: <code>Modifier.fadeIn()</code>, <code>LazyColumn.stickyFooter {}</code>, or <code>rememberScrollableState()</code> with parameters that the real API doesn't accept. Always verify that imported APIs actually exist in your dependency versions.</p>
+
+      <h3>3. Inconsistent Patterns</h3>
+      <p>AI may use different approaches in different parts of the same file: callbacks here, coroutines there. <code>Result</code> wrapping in one function, raw exceptions in the next. This happens when the model generates code section by section without maintaining a coherent style.</p>
+
+      <h3>4. Missing Error Handling</h3>
+      <p>AI often generates the happy path perfectly and either ignores error cases or handles them generically (catch-all exceptions, empty catch blocks, returning null where it shouldn't). Every <code>try/catch</code> block deserves scrutiny: is the catch clause actually handling the error correctly?</p>
+
+      <h3>5. Stale or Wrong Dependencies</h3>
+      <p>AI may import deprecated libraries, use old API versions, or add dependencies that conflict with your existing stack. Check every new import and dependency against your project's current versions. This is
+        especially common in fast-moving ecosystems like Android Jetpack, where API surfaces change frequently between versions.</p>
+
+      <div class="tip-box">
+        <strong>The 30-second sniff test:</strong> Before reading AI-generated code line by line, scan it quickly: How many files were created? How many new classes/functions? How many new dependencies? If any of these seem disproportionate to the task, something is over-engineered.
+      </div>
+    </section>
+
+    <!-- Security Review -->
+    <section>
+      <h2>Security Review</h2>
+
+      <p>AI-generated code frequently contains security vulnerabilities. Not because the AI is malicious, but because security is a constraint that needs to be explicitly specified &mdash; and often isn't.</p>
+
+      <h3>Common AI Security Issues</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Vulnerability</th>
+            <th>What AI Does</th>
+            <th>What to Check</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>SQL Injection</strong></td>
+            <td>Uses string interpolation in queries</td>
+            <td>All database queries use parameterized statements</td>
+          </tr>
+          <tr>
+            <td><strong>Hardcoded Secrets</strong></td>
+            <td>Puts API keys, passwords in source code</td>
+            <td>Secrets come from env vars or secret managers</td>
+          </tr>
+          <tr>
+            <td><strong>Missing Auth</strong></td>
+            <td>Creates endpoints without authentication checks</td>
+            <td>Every endpoint has appropriate auth middleware</td>
+          </tr>
+          <tr>
+            <td><strong>XSS</strong></td>
+            <td>Renders user input without sanitization</td>
+            <td>All user input is escaped before rendering</td>
+          </tr>
+          <tr>
+            <td><strong>Excessive Data</strong></td>
+            <td>Returns full objects including sensitive fields</td>
+            <td>Response models exclude passwords, tokens, internal IDs</td>
+          </tr>
+          <tr>
+            <td><strong>Insecure Defaults</strong></td>
+            <td>Disables SSL verification, uses HTTP instead of HTTPS</td>
+            <td>All external connections use secure defaults</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><span class="profession-tag">Full-Stack</span> AI-generated React code sometimes uses <code>dangerouslySetInnerHTML</code> to render dynamic content. AI-generated Node.js code sometimes uses <code>eval()</code> or <code>child_process.exec()</code> with unsanitized input. These are XSS and command injection vectors that look like reasonable solutions until you think about malicious input.</p>
+
+      <p><span class="profession-tag">Backend</span> Here's a real example of AI-generated code that looks fine but has multiple security issues:</p>
+
+      <pre><code># AI-generated endpoint — spot the problems
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int):
+    user = await db.execute(
+        f"SELECT * FROM users WHERE id = {user_id}"
+    )
+    return user.first()
+
+# Issues:
+# 1. SQL injection via f-string interpolation
+# 2. SELECT * exposes password_hash, reset_token, etc.
+# 3. No authentication — anyone can access any user
+# 4. No authorization — users can see other users' data
+# 5. Returns raw DB row, not a response model
+
+# Fixed version:
+@app.get("/api/users/{user_id}", response_model=UserPublicResponse)
+@require_auth
+async def get_user(user_id: int, current_user: User = Depends(get_current_user)):
+    if current_user.id != user_id and not current_user.is_admin:
+        raise HTTPException(status_code=403)
+    user = await db.execute(
+        select(User.id, User.name, User.email).where(User.id == user_id)
+    )
+    result = user.first()
+    if not result:
+        raise HTTPException(status_code=404)
+    return result</code></pre>
+
+      <div class="warning-box">
+        <strong>Add security rules to CLAUDE.md.</strong> Explicitly tell the AI what it must never do: "NEVER use string interpolation in SQL queries. NEVER hardcode secrets. NEVER disable SSL verification. ALWAYS use parameterized queries. ALWAYS add authentication to new endpoints." These rules prevent many security issues at generation time, but never replace manual security review.
+      </div>
+    </section>
+
+    <!-- Performance Review -->
+    <section>
+      <h2>Performance Review</h2>
+
+      <p>AI optimizes for correctness, not performance. It will generate code that works but may be needlessly slow. Common performance issues to watch for:</p>
+
+      <ul>
+        <li><strong>N+1 queries:</strong> A loop that makes one database query per iteration instead of a batch query</li>
+        <li><strong>Missing pagination:</strong> Loading entire tables into memory instead of paginating</li>
+        <li><strong>Redundant computation:</strong> Recalculating values that could be cached or computed once</li>
+        <li><strong>Blocking the main thread:</strong> Synchronous operations where async is needed (especially in Android and Node.js)</li>
+        <li><strong>Unbounded collections:</strong> <code>SELECT *</code> without <code>LIMIT</code>, lists that grow without bounds</li>
+      </ul>
+
+      <p><span class="profession-tag">Android Dev</span> AI-generated Compose code often triggers unnecessary recompositions: using unstable types in state, creating new lambda instances on every recomposition, or putting expensive computations directly in composable functions instead of <code>remember</code> or <code>derivedStateOf</code>. These won't crash your app but will make it feel sluggish.</p>
+
+      <pre><code>// AI-generated: creates a new lambda on every recomposition
+@Composable
+fun UserList(users: List&lt;User&gt;, onUserClick: (User) -> Unit) {
+    LazyColumn {
+        items(users) { user ->
+            // BAD: new lambda instance every recomposition
+            UserCard(user = user, onClick = { onUserClick(user) })
+        }
+    }
+}
+
+// Better: use key parameter and remember the callback
+@Composable
+fun UserList(users: List&lt;User&gt;, onUserClick: (User) -> Unit) {
+    LazyColumn {
+        items(users, key = { it.id }) { user ->
+            UserCard(user = user, onClick = { onUserClick(user) })
+        }
+    }
+}</code></pre>
+
+      <p><span class="profession-tag">DevOps</span> AI-generated Terraform sometimes creates oversized resources (db.r6g.2xlarge when db.r6g.large suffices), missing auto-scaling configurations, or leaving logging at verbose levels that generate excessive CloudWatch costs. Always check resource sizing and cost implications in AI-generated infrastructure code &mdash; the AI defaults to "safe" (large) rather than "efficient" (right-sized).</p>
+
+      <p><span class="profession-tag">Freelancer</span> Performance issues in AI-generated code are particularly costly for client projects. A client who sees a slow app doesn't care that "the AI generated it efficiently for correctness." Profile AI-generated code on realistic data volumes before delivering. A list that works with 10 items but freezes with 1,000 is a bug the review should catch.</p>
+    </section>
+
+    <!-- Architecture Review -->
+    <section>
+      <h2>Architecture Review</h2>
+
+      <p>The subtlest and most important review: does the AI-generated code fit your existing architecture?</p>
+
+      <ul class="checklist">
+        <li><strong>Layer boundaries:</strong> Does the code respect your layered architecture? Routes shouldn't access repositories directly. ViewModels shouldn't import UI framework classes.</li>
+        <li><strong>Pattern consistency:</strong> Does it use the same patterns as existing code? If your app uses sealed interfaces for UI state, the new code shouldn't use data classes with nullable fields.</li>
+        <li><strong>Dependency direction:</strong> Do dependencies point the right way? Domain code shouldn't depend on framework code.</li>
+        <li><strong>Module boundaries:</strong> Does new code stay within its module? A feature module shouldn't reach into another feature's internals.</li>
+        <li><strong>Naming conventions:</strong> Do names follow your project's conventions? Services, repositories, ViewModels, routes should all follow existing naming patterns.</li>
+      </ul>
+
+      <p><span class="profession-tag">Team Lead</span> Architecture violations are the most expensive AI code smells because they compound. One bypassed layer boundary becomes the template for the next ten features. Catch them early. Add architectural rules to CLAUDE.md and enforce them in PR review. Consider adding architecture tests (like ArchUnit for JVM projects) that automatically catch layer violations.</p>
+
+      <p><span class="profession-tag">Android Dev</span> Common Android architecture violations by AI: a ViewModel that imports <code>android.widget.Toast</code> (UI framework leak), a repository that directly accesses <code>SharedPreferences</code> instead of going through a DataStore abstraction, a Compose screen that creates its own ViewModel instance instead of receiving it via Hilt, or a data layer class that references Compose state types.</p>
+
+      <div class="tip-box">
+        <strong>Use AI to check AI.</strong> After the agent generates code, ask it to review its own output against your architecture rules: <code>"Review the code you just generated against the architecture rules in CLAUDE.md. Flag any violations of layer boundaries, naming conventions, or dependency direction."</code> This catches 60-70% of architecture issues before you even start reading.
+      </div>
+    </section>
+
+    <!-- The 10-Point Checklist -->
+    <section>
+      <h2>The 10-Point Review Checklist</h2>
+
+      <p>Use this checklist for every AI-generated PR. Print it, pin it, make it part of your PR template.</p>
+
+      <div class="highlight-box">
+        <h3>AI Code Review Checklist</h3>
+        <ul class="checklist">
+          <li class="checked"><strong>1. Correctness:</strong> Does the code actually do what was specified? Walk through the acceptance criteria.</li>
+          <li class="checked"><strong>2. Security:</strong> No SQL injection, XSS, hardcoded secrets, missing auth, or excessive data exposure.</li>
+          <li class="checked"><strong>3. Performance:</strong> No N+1 queries, unbounded collections, missing pagination, or blocking operations.</li>
+          <li class="checked"><strong>4. Architecture:</strong> Respects layer boundaries, dependency direction, and module separation.</li>
+          <li class="checked"><strong>5. Pattern consistency:</strong> Uses the same patterns, naming conventions, and approaches as existing code.</li>
+          <li class="checked"><strong>6. Error handling:</strong> All error paths handled appropriately. No empty catch blocks or swallowed exceptions.</li>
+          <li class="checked"><strong>7. Edge cases:</strong> Nulls, empty inputs, boundary values, concurrent access, and failure modes are handled.</li>
+          <li class="checked"><strong>8. Tests:</strong> Meaningful tests exist that test behavior, not implementation. Edge cases and error paths are covered.</li>
+          <li class="checked"><strong>9. Scope:</strong> The AI didn't add unrequested features, refactor unrelated code, or introduce new patterns.</li>
+          <li class="checked"><strong>10. Dependencies:</strong> No new unnecessary dependencies. Existing dependencies used at correct versions. No hallucinated APIs.</li>
+        </ul>
+      </div>
+
+      <p>Not every item applies to every change. A one-line bug fix doesn't need an architecture review. Scale the checklist to the size and risk of the change. For high-risk changes (auth, payments, data migrations), apply every point. For low-risk changes (formatting, docs, simple refactors), focus on correctness and scope.</p>
+    </section>
+
+    <!-- Team Workflows -->
+    <section>
+      <h2>Team Workflows for AI Code Review</h2>
+
+      <h3>PR Template for AI-Assisted Code</h3>
+
+      <pre><code>## Summary
+[What this PR does and why]
+
+## AI Assistance
+- [ ] Primarily AI-generated
+- [ ] AI-assisted (human + AI collaboration)
+- [ ] Human-written (AI used only for review/suggestions)
+
+## Review Checklist (for AI-generated code)
+- [ ] Correctness verified against spec/requirements
+- [ ] Security review: no injection, secrets, or auth gaps
+- [ ] Performance: no N+1 queries or unbounded operations
+- [ ] Architecture: respects existing patterns and layers
+- [ ] Tests: meaningful coverage of behavior and edge cases
+- [ ] Scope: no unrequested changes or new dependencies
+
+## How to Test
+[Steps to verify the changes]</code></pre>
+
+      <p><span class="profession-tag">Team Lead</span> Make the "AI Assistance" section mandatory. It signals to reviewers how much scrutiny the code needs. Primarily AI-generated code gets the full 10-point checklist. Human-written code with minor AI suggestions gets a lighter review. This transparency builds trust and calibrates effort.</p>
+
+      <h3>Review Guidelines for the Team</h3>
+      <ul>
+        <li><strong>Don't trust "the AI wrote it" as a quality signal.</strong> Review AI code with the same rigor as human code.</li>
+        <li><strong>Read the spec first, then the code.</strong> Review against the specification, not just the code's internal logic.</li>
+        <li><strong>Run the code locally</strong> before approving. Build it, test it, click through it. AI code that "looks right" may not behave right.</li>
+        <li><strong>Check the diff size.</strong> If a simple feature produced a 500-line diff, something may be over-engineered.</li>
+        <li><strong>Look for scope creep.</strong> AI often "helpfully" refactors adjacent code or adds features you didn't request.</li>
+      </ul>
+    </section>
+
+    <!-- Code Health -->
+    <section>
+      <h2>Code Health Assessment</h2>
+
+      <p><a href="https://codescene.com/blog/agentic-ai-coding-best-practice-patterns-for-speed-with-quality" target="_blank">CodeScene's research</a> (Adam Tornhill, February 2026) recommends assessing code health <em>before</em> deploying AI changes. Their finding: AI performs best when modifying healthy code and tends to amplify problems in unhealthy code.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">9.5+</div>
+          <div class="stat-label">Target code health score (out of 10) before applying AI changes to a module</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">2x</div>
+          <div class="stat-label">More defects introduced by AI in low-health code vs high-health code</div>
+        </div>
+      </div>
+
+      <p>Before letting an AI agent loose on a module, ask: is this code healthy enough to receive AI modifications? If the module is already tangled, poorly tested, and full of tech debt, AI will generate code that's consistent with the mess &mdash; making it worse. Consider cleaning up the module first, then applying AI.</p>
+
+      <div class="tip-box">
+        <strong>The health-first strategy:</strong> Use AI to improve code health (add tests, extract functions, simplify logic) <em>before</em> using AI to add features. Healthy code produces healthier AI output. It's a virtuous cycle: cleaner code &rarr; better AI suggestions &rarr; even cleaner code.
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <div class="exercise-box">
+        <h3>Exercise: Review AI-Generated Code</h3>
+        <p>Practice the 10-point review checklist on real AI-generated code:</p>
+        <ol>
+          <li><strong>Generate a non-trivial feature with AI.</strong> Use Claude Code to implement something substantial: a new API endpoint with tests, a Compose screen with ViewModel, or a data pipeline with error handling.</li>
+          <li><strong>Apply the 10-point checklist</strong> systematically. For each point, write down:
+            <ul>
+              <li>Pass/Fail</li>
+              <li>Specific issues found (if any)</li>
+              <li>The exact line or code block with the issue</li>
+            </ul>
+          </li>
+          <li><strong>Categorize your findings:</strong> How many issues are security-related? Performance? Architecture? Pattern consistency?</li>
+          <li><strong>Fix the issues</strong> &mdash; either manually or by re-prompting the AI with specific corrections.</li>
+          <li><strong>Reflect:</strong> Which checklist items caught the most issues? Which are hardest to evaluate? Where does AI-generated code in your project tend to fall short?</li>
+        </ol>
+        <p>Run this exercise 3-5 times across different types of changes. You'll develop an intuition for where AI code typically needs correction in your specific project and stack.</p>
+      </div>
+    </section>
+
+    <!-- Further Reading -->
+    <section>
+      <h2>Further Reading</h2>
+      <div class="tip-box">
+        <strong>Recommended resources:</strong>
+        <ul>
+          <li><a href="https://codescene.com/blog/agentic-ai-coding-best-practice-patterns-for-speed-with-quality" target="_blank">Agentic AI Coding: Best Practice Patterns</a> (CodeScene) &mdash; Code health and multi-layer safeguards</li>
+          <li><a href="https://www.anthropic.com/research/AI-assistance-coding-skills" target="_blank">How AI Assistance Impacts Coding Skills</a> (Anthropic) &mdash; Why review skills matter more than ever</li>
+          <li><a href="https://code.claude.com/docs/en/best-practices" target="_blank">Best Practices for Claude Code</a> (Anthropic) &mdash; Verification strategies, plus <strong>auto mode</strong> (classifier-gated approvals) and <strong>/sandbox</strong> (OS-level isolation) as defense-in-depth for AI-generated changes</li>
+          <li><a href="https://www.nxcode.io/tools/ai-coding-tools-comparison" target="_blank">AI Coding Tools Comparison</a> (NxCode) &mdash; Tool-specific quality patterns</li>
+        </ul>
+      </div>
+    </section>
+
+    <p>Quality review ensures each piece of AI-generated code meets your standard. The next chapter tackles the bigger challenge: applying these skills across <strong>large codebases</strong> where context exceeds any model's window.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-vibe-vs-structured.html" class="prev">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Chapter 10: Vibe Coding vs Structured Development</span>
+      </a>
+      <a href="12-large-codebases.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Chapter 12: Working with Large Codebases</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

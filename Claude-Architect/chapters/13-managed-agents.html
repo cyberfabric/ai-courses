@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Managed Agents for Architects | CCA-F Exam Prep</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-exam-scenarios.html">Previous Chapter</a>
+      <a href="maps/13-managed-agents-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Managed Agents for Architects</h1>
+    <p class="subtitle">Anthropic's Fully Managed Agent Runtime &mdash; Architecture, Decisions, and Exam Connections</p>
+  </header>
+
+  <main>
+
+    <h2>Why This Chapter Matters</h2>
+
+    <p>Chapters 1&ndash;12 gave you everything you need to pass the CCA-F. So why Chapter 13? Because Anthropic launched <strong>Claude Managed Agents</strong> on April 8, 2026 &mdash; a fully managed agent runtime that changes how you think about building production agent systems. Even if the exam was designed before this launch, Managed Agents implements the exact patterns tested across all five domains. Understanding it deepens your grasp of every exam concept.</p>
+
+    <p>Think of Managed Agents as the "cloud-hosted Claude Code." Instead of running agents on your own infrastructure, Anthropic provides the harness, the sandbox, the tool execution, and the session management. You just define what the agent should do.</p>
+
+    <div class="highlight-box">
+      <strong>Exam Connection:</strong> Managed Agents touches all 5 domains &mdash; Domain 1 (Agentic Architecture, 27%), Domain 2 (Tool Integration, 18%), Domain 3 (Claude Code Workflows, 20%), Domain 4 (Prompt Engineering, 20%), and Domain 5 (Context &amp; Reliability, 15%). This chapter ties them all together through a single platform.
+    </div>
+
+    <h2>The Four Pillars</h2>
+
+    <p>Managed Agents is built around four core concepts. If you remember nothing else from this chapter, remember these:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>Agent</h4>
+        <p>Model, system prompt, tools, MCP servers, skills</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Environment</h4>
+        <p>Container template: packages, network access</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Session</h4>
+        <p>A running agent instance performing a task</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Events</h4>
+        <p>Messages between your app and the agent</p>
+      </div>
+    </div>
+
+    <p>Here's how they come together in code. Creating an agent is just an API call:</p>
+
+    <pre><code># Python SDK
+from anthropic import Anthropic
+client = Anthropic()
+
+agent = client.beta.agents.create(
+    name="Support Agent",
+    model="claude-sonnet-4-6",
+    system="You are a customer support agent. Follow escalation policies.",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+
+environment = client.beta.environments.create(
+    name="support-env",
+    config={
+        "type": "cloud",
+        "networking": {"type": "unrestricted"},
+    },
+)
+
+session = client.beta.sessions.create(
+    agent=agent.id,
+    environment_id=environment.id,
+    title="Ticket #4521",
+)</code></pre>
+
+    <div class="warning-box">
+      <strong>Beta Header Required:</strong> Claude Managed Agents is in beta &mdash; every API call requires the <code>anthropic-beta: managed-agents-2026-04-01</code> header. The official Anthropic SDKs set this automatically; raw HTTP clients must add it manually or every call will fail.
+    </div>
+
+    <p>The <code>agent_toolset_20260401</code> tool type enables all built-in tools: bash, file operations, web search, and more. You create the agent once and reuse its ID across many sessions.</p>
+
+    <div class="tip-box">
+      <strong>Key Insight:</strong> Agents and environments are <em>templates</em>. Sessions are <em>instances</em>. One agent definition can power thousands of concurrent sessions, each in its own isolated environment. This maps directly to the hub-and-spoke pattern from Chapter 4.
+    </div>
+
+    <h2>Architecture: Decoupling the Brain from the Hands</h2>
+
+    <p>The most important architectural insight in Managed Agents is the separation of three concerns:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">Brain</div>
+        <div class="stat-label">Claude + stateless harness &mdash; decides what to do</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Hands</div>
+        <div class="stat-label">Sandboxed containers &mdash; execute tool calls</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Session Log</div>
+        <div class="stat-label">Append-only event store &mdash; durable state outside the context window</div>
+      </div>
+    </div>
+
+    <p>Why does this matter? In a traditional agent harness, the orchestrator lives inside the container. If the container crashes, the agent dies. In Managed Agents, the harness is stateless &mdash; if it fails, a new instance picks up the session log and resumes exactly where it left off. Anthropic's engineering team calls this turning harnesses from "pets" (hand-maintained, irreplaceable) into "cattle" (interchangeable, disposable).</p>
+
+    <p>Containers are provisioned <strong>on-demand</strong>. If a session only needs Claude to reason (no bash commands, no file writes), no container spins up at all. This is why Managed Agents achieved a ~60% reduction in median time-to-first-token and >90% at the 95th percentile compared to the coupled architecture.</p>
+
+    <div class="architect-box">
+      <strong>Architectural Pattern &mdash; Brain/Hands Decoupling:</strong> This is the same principle behind microservices vs monoliths. By separating reasoning (brain) from execution (hands) and state (session log), each component scales independently. The brain scales with inference demand, the hands scale with tool execution demand, and the session log provides durability. When the exam asks about agent lifecycle management or error recovery, think about this pattern.
+    </div>
+
+    <h2>Domain 1: Agentic Architecture (27%)</h2>
+
+    <p>Managed Agents is a concrete implementation of the orchestration patterns from Chapters 2&ndash;4. Here's how the exam concepts map:</p>
+
+    <ul>
+      <li><strong>Hub-and-spoke:</strong> The managed harness is the hub. It routes tool calls to containers (the spokes). You configure the routing through the agent definition.</li>
+      <li><strong>Agent loop:</strong> Managed Agents runs the plan &rarr; act &rarr; observe loop for you. Claude decides which tools to use, the harness executes them in the container, and results stream back as events.</li>
+      <li><strong>Task decomposition:</strong> In the multi-agent research preview, one agent can spawn sub-agents to parallelize work &mdash; exactly the fan-out/fan-in pattern from Chapter 3.</li>
+      <li><strong>Error handling:</strong> When a container crashes, the harness treats it as a tool-call error and passes it to Claude for retry. Claude can reinitialize containers using standard recipes. No information is lost because the session log is durable.</li>
+    </ul>
+
+    <div class="exam-tip-box">
+      <strong>Exam Tip:</strong> If a question asks about agent lifecycle management or what happens when a tool execution fails, the correct answer usually involves the orchestrator catching the error, logging it, and giving the model a chance to retry or escalate &mdash; not silently failing or restarting the entire session. Managed Agents implements this pattern exactly.
+    </div>
+
+    <h2>Domain 2: Tool Integration (18%)</h2>
+
+    <p>Remember Chapter 5's tool design principles? They all apply to Managed Agents, with some platform-specific additions:</p>
+
+    <p><strong>Built-in tools</strong> include bash, file read/write/edit, glob, grep, web search, and web fetch. You enable the full set with <code>agent_toolset_20260401</code>, or configure individual tools for finer control.</p>
+
+    <p><strong>MCP server attachment</strong> lets you connect external tool providers. This is the same MCP architecture from Chapter 6 &mdash; your agent can call tools exposed by MCP servers running alongside the container.</p>
+
+    <pre><code># Agent with MCP server for database access
+agent = client.beta.agents.create(
+    name="Data Analyst",
+    model="claude-sonnet-4-6",
+    system="You analyze data. Use SQL queries through the database tool.",
+    tools=[
+        {"type": "agent_toolset_20260401"},
+    ],
+    mcp_servers=[
+        {
+            "name": "postgres",
+            "url": "https://your-mcp-server.example.com/mcp",
+        }
+    ],
+)</code></pre>
+
+    <p>The tool design principles from Chapter 5 apply directly: clear descriptions, well-defined schemas, one-purpose tools. The difference is that Managed Agents handles the tool execution infrastructure for you.</p>
+
+    <h2>Domain 3: Claude Code Workflows (20%)</h2>
+
+    <p>Think of Managed Agents as the <strong>cloud counterpart to local Claude Code</strong>. Here's a comparison:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Claude Code (Local)</div>
+        <ul>
+          <li>Runs on your machine</li>
+          <li>CLAUDE.md for project context</li>
+          <li>Git worktrees for isolation</li>
+          <li>Hooks for automation</li>
+          <li><code>claude -p</code> for CI/CD</li>
+          <li>Full local file system access</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Managed Agents (Cloud)</div>
+        <ul>
+          <li>Runs on Anthropic's infrastructure</li>
+          <li>System prompt for agent context</li>
+          <li>Environments for isolation</li>
+          <li>Events for automation</li>
+          <li>API calls for CI/CD</li>
+          <li>Sandboxed container file system</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>For CI/CD integration (the Claude Code for CI/CD scenario), Managed Agents offers a compelling alternative: instead of installing Claude Code in your pipeline runner, you make API calls to create sessions and stream results. This is cleaner for environments where you can't install CLI tools.</p>
+
+    <pre><code># In a CI/CD pipeline script
+session = client.beta.sessions.create(
+    agent="agent_01abc...",          # pre-configured code review agent
+    environment_id="env_01xyz...",   # env with project dependencies
+    title=f"PR #{pr_number} review",
+)
+
+# Send the PR diff as a user message
+client.beta.sessions.events.send(session.id, events=[{
+    "type": "user.message",
+    "content": [{"type": "text", "text": f"Review this PR diff:\n{diff}"}],
+}])
+
+# Stream results back to the PR comment
+with client.beta.sessions.events.stream(session.id) as stream:
+    for event in stream:
+        if event.type == "agent.message":
+            post_pr_comment(event.content)
+        elif event.type == "session.status_idle":
+            break</code></pre>
+
+    <h2>Domain 4: Prompt Engineering (20%)</h2>
+
+    <p>The system prompt in a Managed Agent serves the same role as CLAUDE.md in Claude Code &mdash; it's persistent context that shapes every interaction. But there are differences:</p>
+
+    <ul>
+      <li><strong>Agent-level system prompt:</strong> Defined once in the agent creation call. Applied to every session.</li>
+      <li><strong>Session-level context:</strong> Passed through user events at session start. Varies per task.</li>
+      <li><strong>Tool descriptions:</strong> Built-in tools have pre-optimized descriptions. Custom MCP tools need your own clear descriptions (Chapter 5 principles).</li>
+    </ul>
+
+    <p>The prompt engineering techniques from Chapter 9 all apply: role prompting, explicit criteria, few-shot examples. The key architectural decision is <em>what goes in the agent system prompt vs what goes in the session's first user message</em>.</p>
+
+    <div class="tip-box">
+      <strong>Rule of Thumb:</strong> Put stable instructions in the agent system prompt (role, constraints, output format). Put task-specific context in the session's user events (the specific ticket, the PR diff, the research query). This mirrors the CLAUDE.md vs conversation split in Claude Code.
+    </div>
+
+    <h2>Domain 5: Context &amp; Reliability (15%)</h2>
+
+    <p>This is where Managed Agents truly shines from an architectural perspective. The platform handles the hardest parts of reliability engineering:</p>
+
+    <ul>
+      <li><strong>Session log as durable state:</strong> The append-only event log lives outside Claude's context window. The harness can query it with <code>getEvents()</code>, selecting positional slices &mdash; rewind, skip forward, or reread context before a specific action.</li>
+      <li><strong>Built-in compaction:</strong> The managed harness includes prompt caching and compaction strategies. You don't implement sliding-window truncation yourself.</li>
+      <li><strong>Graceful degradation:</strong> Container failures become tool-call errors. The model can retry, reinitialize, or escalate.</li>
+      <li><strong>Event streaming:</strong> Server-sent events (SSE) provide real-time visibility into agent execution. You can steer or interrupt the agent mid-task by sending additional user events.</li>
+    </ul>
+
+    <p>The session lifecycle follows a clear pattern:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>Created</h4>
+        <p>Session initialized, no work started</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Running</h4>
+        <p>Agent is processing, tools executing</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Idle</h4>
+        <p>Agent finished, waiting for input</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Ended</h4>
+        <p>Session complete or timed out</p>
+      </div>
+    </div>
+
+    <div class="exam-tip-box">
+      <strong>Exam Tip:</strong> When the exam asks about long-running agent sessions or maintaining state across multiple interactions, the correct pattern is external state management (like a session log) rather than cramming everything into the context window. Managed Agents implements this with its durable event log. The "lost in the middle" problem from Chapter 11 is mitigated by the harness's ability to selectively retrieve context from the log.
+    </div>
+
+    <h2>The Architectural Decision: Managed vs Self-Hosted</h2>
+
+    <p>This is the most important section for exam-style thinking. When should you use Managed Agents vs building your own agent harness with the Messages API and Agent SDK?</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Factor</th>
+          <th>Managed Agents</th>
+          <th>Self-Hosted (Messages API + Agent SDK)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Infrastructure overhead</strong></td>
+          <td>Near-zero &mdash; Anthropic runs everything</td>
+          <td>You manage containers, sandboxing, scaling</td>
+        </tr>
+        <tr>
+          <td><strong>Customization</strong></td>
+          <td>Configure within platform constraints</td>
+          <td>Full control over every component</td>
+        </tr>
+        <tr>
+          <td><strong>Latency control</strong></td>
+          <td>Depends on Anthropic's infrastructure</td>
+          <td>You choose compute location and resources</td>
+        </tr>
+        <tr>
+          <td><strong>Compliance</strong></td>
+          <td>Data processed on Anthropic infrastructure</td>
+          <td>Data stays in your environment</td>
+        </tr>
+        <tr>
+          <td><strong>Cost model</strong></td>
+          <td>Token rates + $0.08/session-hour</td>
+          <td>Token rates + your own infrastructure costs</td>
+        </tr>
+        <tr>
+          <td><strong>Agent loop control</strong></td>
+          <td>Platform-managed loop with steering via events</td>
+          <td>You implement the full plan-act-observe cycle</td>
+        </tr>
+        <tr>
+          <td><strong>Tool execution</strong></td>
+          <td>Sandboxed containers with built-in tools</td>
+          <td>You build tool execution and sandboxing</td>
+        </tr>
+        <tr>
+          <td><strong>Best for</strong></td>
+          <td>Long-running tasks, async work, rapid prototyping</td>
+          <td>Custom loops, data-sensitive workloads, edge deployment</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="architect-box">
+      <strong>Architectural Tradeoff &mdash; Managed vs Custom:</strong> This is a classic build-vs-buy decision. Managed Agents trades customization for operational simplicity. Choose managed when your agent fits the platform's patterns (long-running tasks, standard tools, cloud-first). Choose self-hosted when you need custom agent loops, strict data residency, or non-standard execution environments. The exam loves testing this kind of tradeoff &mdash; there's rarely a universally "right" answer, only a right answer <em>for the scenario</em>.
+    </div>
+
+    <h2>Environment Design</h2>
+
+    <p>Environments define the container where your agent executes tools. Key configuration options:</p>
+
+    <pre><code># Environment with specific packages and restricted networking
+environment = client.beta.environments.create(
+    name="data-analysis-env",
+    config={
+        "type": "cloud",
+        "networking": {
+            "type": "restricted",
+            "allowed_domains": ["api.internal.company.com", "pypi.org"],
+        },
+    },
+)</code></pre>
+
+    <p><strong>Security boundaries</strong> in Managed Agents follow two patterns:</p>
+
+    <ul>
+      <li><strong>Resource-bundled auth:</strong> Git tokens are used during container setup to clone repos. They're wired into local git remotes &mdash; the agent never handles credentials directly. Push/pull just works.</li>
+      <li><strong>Vault-proxied access:</strong> OAuth tokens for custom tools (via MCP) live in secure vaults outside the sandbox. A dedicated proxy retrieves credentials and makes external calls. The agent never sees the actual tokens.</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>Security Pattern:</strong> Never pass API keys or credentials directly in the agent's system prompt or user messages. Use environment-level configuration or vault-proxied MCP servers. This applies to both Managed Agents and self-hosted setups &mdash; it's a universal agent security principle the exam tests.
+    </div>
+
+    <h2>Research Previews and Future Directions</h2>
+
+    <p>Three features round out the platform: Memory recently graduated to <strong>public beta</strong> (April 2026), while Multi-Agent and Outcomes remain research previews (separate access required). All three signal where the platform is heading:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">Multi-Agent</div>
+        <div class="stat-label">One agent spawns and directs sub-agents to parallelize work. Implements the fan-out/fan-in pattern from Chapter 3 at the platform level.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Memory <small>(Public Beta)</small></div>
+        <div class="stat-label">Agents learn across sessions through a file-backed memory layer. Memories are stored as files with scoped permissions and audit logs &mdash; org-wide read-only stores or per-user read/write stores. Addresses the context limits from Chapter 11.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Outcomes</div>
+        <div class="stat-label">Agents define success criteria and self-evaluate. They iterate until criteria are met, enabling more autonomous operation.</div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>For the Exam:</strong> These research previews aren't directly tested (the exam predates them), but they implement patterns that <em>are</em> tested: multi-agent orchestration, context persistence, and self-evaluation loops. Understanding them reinforces your grasp of the core concepts.
+    </div>
+
+    <h2>Exam Scenario Connections</h2>
+
+    <p>Here's how Managed Agents maps to the 6 exam scenarios:</p>
+
+    <ul>
+      <li><strong>Customer Support Resolution Agent:</strong> Long-running sessions with escalation. Managed Agents handles session persistence, so the agent can maintain context across a multi-turn support conversation. Events let you inject supervisor guidance mid-session (the escalation pattern from Chapter 4).</li>
+      <li><strong>Code Generation with Claude Code:</strong> Environments pre-loaded with project dependencies. The agent writes code, runs tests, and iterates &mdash; all inside a sandboxed container. This is exactly what Claude Code does locally, but cloud-hosted.</li>
+      <li><strong>Multi-Agent Research System:</strong> The multi-agent preview enables one orchestrator to spawn researcher sub-agents in parallel. Each runs in its own session with a shared environment template. Results are aggregated through event streaming.</li>
+      <li><strong>Developer Productivity:</strong> Agents with MCP servers connected to internal tools (Jira, GitHub, Slack). The environment provides network access to internal APIs while sandboxing tool execution.</li>
+      <li><strong>Claude Code for CI/CD:</strong> Sessions triggered by pipeline events (PR opened, merge to main). The API-first design makes integration straightforward &mdash; no CLI installation required.</li>
+      <li><strong>Structured Data Extraction:</strong> Agents that process documents in the container, extract structured data, and validate against schemas. The environment provides the parsing tools; the agent handles the extraction logic from Chapter 10.</li>
+    </ul>
+
+    <h2>Practice Questions</h2>
+
+    <div class="exercise-box">
+      <strong>Test Yourself:</strong> Try answering these before checking the explanations below.
+
+      <p><strong>Q1:</strong> A financial services company needs an agent that processes sensitive customer data and must comply with data residency requirements (data cannot leave their AWS region). Which approach is most appropriate?</p>
+      <p>A) Managed Agents with restricted networking<br>
+         B) Self-hosted agent using Messages API + Agent SDK<br>
+         C) Managed Agents with vault-proxied authentication<br>
+         D) Claude Code running in their CI/CD pipeline</p>
+
+      <p><strong>Q2:</strong> In Managed Agents, what happens when a container crashes during tool execution?</p>
+      <p>A) The entire session is terminated and must be restarted<br>
+         B) The harness automatically retries the exact same tool call<br>
+         C) The failure is passed to Claude as a tool-call error for decision-making<br>
+         D) The session enters an error state and waits for manual intervention</p>
+
+      <p><strong>Q3:</strong> An architect is designing a multi-agent research system using Managed Agents. Each sub-agent needs different packages (one needs Python scientific libraries, another needs Node.js). What's the correct approach?</p>
+      <p>A) Install all packages in a single shared environment<br>
+         B) Create separate environment templates for each agent type<br>
+         C) Use the system prompt to instruct agents to install packages at runtime<br>
+         D) Use a single agent with all tools instead of multiple agents</p>
+
+      <p><strong>Q4:</strong> What is the primary architectural benefit of Managed Agents' brain/hands decoupling?</p>
+      <p>A) Lower token costs<br>
+         B) Faster model inference<br>
+         C) Independent scaling and failure recovery of reasoning and execution<br>
+         D) Support for more programming languages</p>
+
+      <hr>
+
+      <p><strong>Answers:</strong></p>
+      <p><strong>Q1: B.</strong> Data residency requirements mean data must stay in their environment. Managed Agents processes data on Anthropic's infrastructure, which doesn't satisfy the compliance constraint. Self-hosted gives them full control over where data lives.</p>
+      <p><strong>Q2: C.</strong> The harness treats container failures as tool-call errors and passes them to Claude. Claude can then decide to retry, reinitialize the container, or take an alternative approach. This is the graceful degradation pattern from Chapter 11.</p>
+      <p><strong>Q3: B.</strong> Environments are templates. Create separate environments optimized for each agent's needs. A Python-heavy researcher gets a Python environment; a Node.js agent gets a Node.js environment. This follows the principle of agent specialization from Chapter 2.</p>
+      <p><strong>Q4: C.</strong> The decoupling allows the brain (reasoning) and hands (execution) to scale independently and recover from failures independently. The session log provides durability. This is the core architectural insight.</p>
+    </div>
+
+    <h2>Exercise: Design a Managed Agents Architecture</h2>
+
+    <div class="exercise-box">
+      <strong>Hands-On Task:</strong> Design a Managed Agents architecture for the <strong>Multi-Agent Research System</strong> exam scenario.
+
+      <p>Requirements:</p>
+      <ul>
+        <li>A user submits a complex research question (e.g., "Compare the top 3 cloud providers' AI agent offerings")</li>
+        <li>The system decomposes the query into sub-tasks</li>
+        <li>Sub-tasks are researched in parallel</li>
+        <li>Results are aggregated into a structured report</li>
+      </ul>
+
+      <p>Your design should specify:</p>
+      <ol>
+        <li>How many agent definitions do you need? What's each one's role and system prompt focus?</li>
+        <li>How many environment templates? What packages and network access does each need?</li>
+        <li>How do sessions relate to each other? (Orchestrator session vs researcher sessions)</li>
+        <li>How do you aggregate results? (Event streaming, shared files, or session log queries)</li>
+        <li>What happens when one researcher sub-agent fails? How does the orchestrator handle it?</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Write the Python SDK calls to create the orchestrator agent and one researcher agent. Define their system prompts and tool configurations.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Managed Agents has four pillars: Agent (config), Environment (container), Session (running instance), Events (communication)</li>
+      <li>The brain/hands architecture decouples reasoning from execution &mdash; each scales and recovers independently via the durable session log</li>
+      <li>Choose managed for long-running async tasks with standard tools; choose self-hosted for custom loops, data residency, or edge deployment</li>
+      <li>All 5 exam domains map to Managed Agents: orchestration patterns, tool integration, Claude Code parallels, prompt design, and session reliability</li>
+      <li>Security follows two patterns: resource-bundled auth (git tokens) and vault-proxied access (OAuth via MCP) &mdash; never expose credentials to the agent directly</li>
+    </ul>
+
+    <h2>Course Complete</h2>
+
+    <p>You've made it through all 13 chapters. From exam logistics to multi-agent architecture, from tool design to prompt engineering, from context management to Managed Agents &mdash; you now have a complete picture of what the CCA-F tests and how to think about each domain.</p>
+
+    <p>The certification isn't about memorizing API endpoints or reciting domain weights. It's about <strong>architectural thinking</strong>: given a scenario, can you choose the right patterns, identify the tradeoffs, and design a system that works in production?</p>
+
+    <p>If you've worked through the exercises, answered the practice questions, and connected the concepts across chapters, you're ready. Go schedule that exam.</p>
+
+    <div class="highlight-box">
+      <strong>Final Advice:</strong> Review your weakest domain one more time. Do the practice exam on <code>claudecertifications.com</code> and aim for 900+ before scheduling the real thing. Remember the 3-pass strategy from Chapter 12. And most importantly &mdash; trust the architectural instincts you've built. You've got this.
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="12-exam-scenarios.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Exam Day: Scenarios &amp; Final Review</span>
+      </a>
+      <a href="14-evals-and-observability.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Agent Evaluations &amp; Observability</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Multi-Agent Systems — AutoGen &amp; CrewAI | The AI Developer's Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The AI Developer's Toolkit</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-langgraph.html">&larr; Previous</a>
+      <a href="08-gradio.html">Next &rarr;</a>
+      <a href="maps/07-multi-agent-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Multi-Agent Systems: AutoGen &amp; CrewAI</h1>
+    <p class="subtitle">When one AI isn't enough &mdash; agents collaborating, debating, and solving problems together</p>
+  </header>
+
+  <main>
+
+    <h2>The Idea</h2>
+
+    <p>In the last chapter, you saw how LangGraph lets a single AI agent loop, branch, and make decisions. That's powerful. But here's a thought experiment: what if instead of one agent doing everything, you had a <em>team</em>?</p>
+
+    <ul>
+      <li>One agent <strong>writes</strong> code</li>
+      <li>Another agent <strong>reviews</strong> the code and finds bugs</li>
+      <li>A third agent <strong>tests</strong> it and reports results</li>
+      <li>The first agent <strong>fixes</strong> the bugs based on the feedback</li>
+    </ul>
+
+    <p>That's multi-agent systems. Multiple LLM-powered agents, each with a specific role, collaborating on a task. It sounds like science fiction, but it works &mdash; sometimes impressively, sometimes expensively, and sometimes both.</p>
+
+    <p>This is the most hyped area in AI development right now. Let's cut through the hype and understand what it actually is, when it helps, and when it's overkill.</p>
+
+    <div class="why-care-box">
+      Multi-agent systems represent the frontier of what's possible with LLMs today. Even if you never build one, understanding the concept helps you evaluate tools and claims you'll encounter in the wild. And when you do have a genuinely complex task that benefits from multiple perspectives &mdash; code review, research synthesis, content creation pipelines &mdash; knowing how to set up a crew of agents is a powerful tool in your belt.
+    </div>
+
+    <h2>What Is an "Agent" Here?</h2>
+
+    <p>In the multi-agent context, an <strong>agent</strong> is an LLM instance with three things:</p>
+
+    <ul>
+      <li><strong>A role:</strong> "You are a senior code reviewer" or "You are a research analyst"</li>
+      <li><strong>Tools:</strong> functions it can call (search the web, run code, query a database)</li>
+      <li><strong>A goal:</strong> what it's trying to accomplish</li>
+    </ul>
+
+    <p>Each agent is basically a separate LLM conversation with a carefully crafted system prompt and access to specific tools. The magic is in how agents <em>interact</em> with each other.</p>
+
+    <p>Think of it like microservices: each service has a focused responsibility, they communicate through defined interfaces, and together they accomplish something bigger than any one could alone.</p>
+
+    <h2>AutoGen: Conversation-Driven Agents</h2>
+
+    <div class="tool-card">
+      <div class="tool-icon">AG</div>
+      <div class="tool-info">
+        <div class="tool-name">AutoGen (by Microsoft)</div>
+        <div class="tool-desc">A framework where agents collaborate by having conversations with each other. Agents talk back and forth until they solve the problem or reach a termination condition.</div>
+      </div>
+    </div>
+
+    <h3>How AutoGen Works</h3>
+
+    <p>AutoGen's core model is simple: agents send messages to each other in a conversation. You define who talks to whom, and the agents take turns responding until the task is done.</p>
+
+    <pre><code>from autogen import AssistantAgent, UserProxyAgent
+
+# Create agents with different roles
+coder = AssistantAgent(
+    name="Coder",
+    system_message="You write Python code to solve problems. Write clean, tested code.",
+    llm_config={"model": "gpt-4"}
+)
+
+reviewer = AssistantAgent(
+    name="Reviewer",
+    system_message="You review code for bugs, style, and edge cases. Be thorough but fair.",
+    llm_config={"model": "gpt-4"}
+)
+
+# UserProxy can execute code and represent the human
+user = UserProxyAgent(name="User", code_execution_config={"work_dir": "coding"})
+
+# Start a conversation: User asks Coder, Coder writes, Reviewer reviews
+user.initiate_chat(coder, message="Write a function that finds duplicate files by hash")</code></pre>
+
+    <p>What happens: the User agent sends the task to Coder. Coder writes code. The conversation can then be routed to Reviewer, who critiques it. Coder revises based on feedback. This back-and-forth continues until the code is approved or a turn limit is reached.</p>
+
+    <h3>Key AutoGen Features</h3>
+
+    <ul>
+      <li><strong>Conversation-based:</strong> agents communicate through natural language messages, just like developers in a Slack channel</li>
+      <li><strong>Code execution:</strong> agents can write and run code in a sandboxed environment, seeing the actual output</li>
+      <li><strong>Human-in-the-loop:</strong> the UserProxyAgent can require human approval before executing code or taking actions</li>
+      <li><strong>Group chat:</strong> multiple agents in the same conversation, with automated or custom speaker selection</li>
+      <li><strong>Flexible topology:</strong> agents can talk one-on-one, in groups, or in custom patterns</li>
+    </ul>
+
+    <div class="tip-box">
+      AutoGen's code execution capability is its killer feature. The coder agent writes Python, AutoGen runs it in a sandboxed Docker container, and the agent sees the actual output (including errors). This means agents can iteratively debug their own code until it actually works.
+    </div>
+
+    <h2>CrewAI: Task-Driven Teams</h2>
+
+    <div class="tool-card">
+      <div class="tool-icon">CA</div>
+      <div class="tool-info">
+        <div class="tool-name">CrewAI</div>
+        <div class="tool-desc">A framework for organizing AI agents into structured teams (crews) with defined roles, goals, and tasks. More structured than AutoGen, less free-form conversation.</div>
+      </div>
+    </div>
+
+    <h3>How CrewAI Works</h3>
+
+    <p>CrewAI is more opinionated than AutoGen. Instead of free-form conversation, you define a structured crew with explicit roles, tasks, and execution order.</p>
+
+    <pre><code>from crewai import Agent, Task, Crew
+
+# Define agents with roles and backstories
+researcher = Agent(
+    role="Research Analyst",
+    goal="Find accurate, comprehensive information on the given topic",
+    backstory="You're a senior analyst known for thorough, well-sourced research.",
+    tools=[web_search, arxiv_search]
+)
+
+writer = Agent(
+    role="Technical Writer",
+    goal="Turn research findings into clear, engaging content",
+    backstory="You write for developers — clear, practical, no fluff.",
+    tools=[])
+
+# Define tasks
+research_task = Task(description="Research the state of on-device AI for mobile apps",
+                     agent=researcher, expected_output="A detailed research brief")
+
+writing_task = Task(description="Write a blog post based on the research",
+                    agent=writer, expected_output="A 1000-word blog post",
+                    context=[research_task])  # Writer receives researcher's output
+
+# Create and run the crew
+crew = Crew(agents=[researcher, writer], tasks=[research_task, writing_task])
+result = crew.kickoff()</code></pre>
+
+    <h3>Key CrewAI Features</h3>
+
+    <ul>
+      <li><strong>Role-based:</strong> each agent has a role, goal, and backstory (the backstory helps the LLM "stay in character")</li>
+      <li><strong>Task-driven:</strong> work is organized into explicit tasks with expected outputs</li>
+      <li><strong>Task dependencies:</strong> tasks can depend on other tasks' outputs (like a build pipeline)</li>
+      <li><strong>Tool access:</strong> each agent gets specific tools relevant to their role</li>
+      <li><strong>Process types:</strong> sequential (one after another) or hierarchical (a manager delegates to workers)</li>
+    </ul>
+
+    <h2>AutoGen vs CrewAI</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>AutoGen</th>
+          <th>CrewAI</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Interaction model</strong></td>
+          <td>Conversation-driven (agents chat)</td>
+          <td>Task-driven (agents complete assignments)</td>
+        </tr>
+        <tr>
+          <td><strong>Structure</strong></td>
+          <td>Flexible, free-form</td>
+          <td>Structured, opinionated</td>
+        </tr>
+        <tr>
+          <td><strong>Best analogy</strong></td>
+          <td>A group brainstorm in Slack</td>
+          <td>A project board with assigned tickets</td>
+        </tr>
+        <tr>
+          <td><strong>Code execution</strong></td>
+          <td>Built-in (Docker sandbox)</td>
+          <td>Through tools (less integrated)</td>
+        </tr>
+        <tr>
+          <td><strong>Learning curve</strong></td>
+          <td>Moderate &mdash; flexible means more decisions to make</td>
+          <td>Lower &mdash; structured means more guidance</td>
+        </tr>
+        <tr>
+          <td><strong>Best for</strong></td>
+          <td>Exploratory tasks, code generation, open-ended problems</td>
+          <td>Defined workflows, content pipelines, structured deliverables</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>My Recommendation</h3>
+      <p><strong>Start with CrewAI</strong> if you want structured, predictable results. Its role/task/crew model is intuitive and produces consistent output. Use <strong>AutoGen</strong> if your task is more exploratory or requires agents to iteratively solve problems through conversation (especially code generation tasks).</p>
+      <p>Both are evolving rapidly. Check their current state before committing &mdash; the landscape may look different in six months.</p>
+    </div>
+
+    <h2>Real Use Cases (Where Multi-Agent Actually Helps)</h2>
+
+    <p>Let's be specific about when multiple agents genuinely outperform a single agent:</p>
+
+    <h3>Code Review Pipeline</h3>
+    <p>Agent 1 writes code. Agent 2 reviews for bugs. Agent 3 reviews for security. The separation of concerns means each reviewer is focused and thorough. A single agent asked to "write and review" tends to be too forgiving of its own work.</p>
+
+    <h3>Research and Synthesis</h3>
+    <p>Agent 1 searches academic papers. Agent 2 searches news articles. Agent 3 searches forums. Agent 4 synthesizes all findings into a coherent report. Each researcher can focus deeply on one source type.</p>
+
+    <h3>Content Creation Pipeline</h3>
+    <p>Researcher &rarr; Writer &rarr; Editor &rarr; Fact-checker. Each step has a clear deliverable and quality gate. The editor and fact-checker catch mistakes the writer makes.</p>
+
+    <h3>Data Analysis</h3>
+    <p>Agent 1 cleans and structures data. Agent 2 runs statistical analysis. Agent 3 creates visualizations. Agent 4 writes the narrative. Each agent has specialized tools and focus.</p>
+
+    <h2>The Hype vs Reality</h2>
+
+    <p>Let's be honest about the current state of multi-agent systems:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Where It Works Well</p>
+        <p class="prompt-text">• Tasks where self-review genuinely improves quality
+• Pipelines with clear stages and handoffs
+• Code generation with iterative testing
+• Research from multiple source types
+• Any task where "a second opinion" catches errors</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Where It's Overhyped</p>
+        <p class="prompt-text">• Simple tasks that one LLM call handles fine
+• When agents just agree with each other (echo chamber)
+• When the "debate" adds latency without quality
+• Tasks where the bottleneck is the LLM's knowledge, not its perspective
+• Demos that look impressive but cost $5 per run</p>
+      </div>
+    </div>
+
+    <h3>The Cost Problem</h3>
+
+    <p>This is the elephant in the room. If a single LLM call costs X, a 3-agent system with 5 turns of conversation costs roughly <strong>15X</strong>. For cloud APIs, that means:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1 Agent</span>
+        <span class="stat-label">~$0.01-0.05 per task</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3 Agents</span>
+        <span class="stat-label">~$0.10-0.50 per task</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">5 Agents</span>
+        <span class="stat-label">~$0.50-2.00 per task</span>
+      </div>
+    </div>
+
+    <p>This is fine for high-value tasks (code review, research reports) but absurd for things like chatbot responses or simple classifications. <strong>Always ask: does the quality improvement justify the 10-15x cost increase?</strong></p>
+
+    <div class="warning-box">
+      The biggest mistake with multi-agent systems: using them because they're cool, not because they're needed. A single well-prompted LLM with tools (a LangGraph agent) handles 90% of use cases. Multi-agent adds value when you genuinely need separation of concerns and self-review. Test with a single agent first; add agents only when you can measure the quality improvement.
+    </div>
+
+    <h2>When Single-Agent Is Better</h2>
+
+    <p>For most tasks, one agent is enough. Here's a useful rule of thumb:</p>
+
+    <ul>
+      <li><strong>Can one person do this task well?</strong> Then one agent is probably enough.</li>
+      <li><strong>Would you assign this to a team in real life?</strong> Then consider multi-agent.</li>
+      <li><strong>Is the bottleneck knowledge or perspective?</strong> If it's knowledge (the LLM doesn't know enough), adding agents won't help &mdash; use RAG instead. If it's perspective (the LLM misses things), a reviewer agent might help.</li>
+    </ul>
+
+    <p>Most AI features in mobile apps &mdash; chatbots, search, classification, summarization &mdash; are single-agent tasks. Multi-agent shines in backend pipelines and content workflows, not in user-facing interactions.</p>
+
+    <div class="tip-box">
+      A great way to test whether you need multi-agent: build the feature with a single agent first. Then ask yourself: "Where did the output fall short?" If the answer is "it didn't catch its own mistakes" or "it missed a perspective," <em>that's</em> where you add a second agent. Start minimal, add complexity only when you can point to the specific improvement.
+    </div>
+
+    <h2>Running Agents Locally</h2>
+
+    <p>Both AutoGen and CrewAI support Ollama as a backend. This means you can run multi-agent systems entirely on your machine with zero API costs &mdash; great for development and experimentation.</p>
+
+    <p>The trade-off: local models (7-8B parameters) are noticeably weaker as agents than cloud models (GPT-4, Claude). They're more likely to go off-track, hallucinate tool calls, or produce mediocre output. For development and learning, local is fine. For production-quality results, you'll likely want cloud models for at least the key agents.</p>
+
+    <p>A practical middle ground: use a cloud model for the "lead" agent (the one making decisions) and local models for supporting agents (the ones doing simpler, well-defined tasks). This hybrid approach keeps costs down while maintaining quality where it matters most.</p>
+
+    <h2>Connection to Android Development</h2>
+
+    <p>Multi-agent systems are exclusively backend tools. Your Android app never interacts with agents directly. But the features they enable can be exposed through your API:</p>
+
+    <ul>
+      <li><strong>Code review in your CI/CD:</strong> A crew that reviews PRs, checks for security issues, and writes review comments. Your mobile team benefits from better code quality without running agents on devices.</li>
+      <li><strong>Content pipeline:</strong> A crew that researches, writes, edits, and publishes content for your app. The Android app just fetches the finished content from your CMS.</li>
+      <li><strong>Support escalation:</strong> A first agent handles common questions. If confidence is low, it escalates to a specialist agent. If still unresolved, it routes to a human. Your app shows the response regardless of which agent produced it.</li>
+      <li><strong>Test generation:</strong> A crew that reads your API specs and generates test cases. Useful for ensuring your Android app's backend behaves correctly.</li>
+    </ul>
+
+    <p>The pattern is always the same: agents run on the server, your app consumes the results through a standard API.</p>
+
+    <h2>Learning Curve: Honest Assessment</h2>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Understanding the concept (30 minutes):</strong> If you've ever managed a team, you understand multi-agent. It's assigning roles and tasks.</li>
+      <li class="checked"><strong>Simple 2-agent setup (1-2 hours):</strong> CrewAI's role/task/crew pattern is intuitive. AutoGen's conversable agents are also quick to start.</li>
+      <li><strong>Effective role design (ongoing):</strong> Crafting system prompts that make agents actually useful (and not just chatty) takes iteration.</li>
+      <li><strong>Managing cost and quality (ongoing):</strong> Tuning the number of turns, knowing when to stop, balancing cost vs quality.</li>
+      <li><strong>Production deployment (days):</strong> Error handling, fallbacks, monitoring, cost control.</li>
+    </ul>
+
+    <div class="use-skip-box">
+      <div class="use-it">
+        <ul>
+          <li>Your task genuinely benefits from multiple perspectives (review, fact-checking)</li>
+          <li>You have a pipeline with distinct stages and clear handoffs</li>
+          <li>Code generation tasks where self-testing improves quality</li>
+          <li>Research tasks requiring synthesis from multiple source types</li>
+          <li>You can measure that multi-agent produces better results than single-agent</li>
+        </ul>
+      </div>
+      <div class="skip-it">
+        <ul>
+          <li>A single LLM call or simple chain handles the task well</li>
+          <li>Your task is latency-sensitive (users are waiting for a response)</li>
+          <li>Cost is a concern and the quality improvement is marginal</li>
+          <li>You're adding agents because it sounds impressive, not because it helps</li>
+          <li>The agents end up agreeing with each other without catching real issues</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <strong>Design a 3-Agent Crew</strong>
+      <p>Pick a task from your domain and design a crew of three agents. For each agent, define:</p>
+      <ol>
+        <li><strong>Role:</strong> What is this agent's job title?</li>
+        <li><strong>Goal:</strong> What is it trying to accomplish?</li>
+        <li><strong>Tools:</strong> What can it do? (search, run code, query databases, etc.)</li>
+        <li><strong>Backstory:</strong> A sentence that helps the LLM stay in character</li>
+      </ol>
+      <p>Then define the tasks:</p>
+      <ul>
+        <li>What does each agent produce?</li>
+        <li>Which tasks depend on other tasks' output?</li>
+        <li>Where would you add a human checkpoint?</li>
+      </ul>
+      <p>Finally, the honest question: <strong>would a single well-prompted agent with tools do 80% as well for 1/10th the cost?</strong> If yes, start with that and add agents only if needed.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>We've been deep in frameworks and architectures for three chapters straight. Time for something lighter and more instantly gratifying: <strong>showing your work to actual humans</strong>. In <strong>Chapter 8: Gradio</strong>, you'll learn how to build interactive AI demos in 5-10 lines of Python. It's the fastest way to go from "I built something cool" to "here, try it yourself" &mdash; and it's surprisingly satisfying.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-langgraph.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">&larr; LangGraph: Smarter Workflows</span>
+      </a>
+      <a href="08-gradio.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Gradio: Building AI Interfaces in Minutes &rarr;</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

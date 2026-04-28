@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Vision Framework — See Like an iPhone — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="03-first-core-ml-model.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="05-nlp-speech-sound.html">Next &rarr;</a>
+      <a href="maps/04-vision-framework-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Vision Framework &mdash; See Like an iPhone</h1>
+    <p class="subtitle">Text recognition, face detection, body pose, document scanning, and barcode reading &mdash; no custom models required</p>
+  </header>
+
+  <main>
+
+    <h2>Apple Already Trained the Models for You</h2>
+
+    <p>In Chapter 3 you converted a model, dragged it into Xcode, and wired up a camera pipeline. That's powerful &mdash; but it's also work. What if Apple already has a production-ready model for your task?</p>
+
+    <p>That's exactly what the <strong>Vision framework</strong> is. It's a collection of pre-trained computer vision models that Apple maintains, optimizes for each chip generation, and updates with every iOS release. You don't download model files, manage versions, or worry about Neural Engine compatibility. You create a request, run it, and read the results.</p>
+
+    <div class="apple-framework">
+      <strong>Vision Framework</strong>
+      <p><strong>Available since:</strong> iOS 11. Significantly expanded in iOS 14 (body pose), iOS 15 (live text), iOS 16 (person segmentation), iOS 18 (Swift concurrency API), and iOS 26 (RecognizeDocumentsRequest, lens smudge detection).</p>
+      <p><strong>No model files needed.</strong> Apple bundles the models in the OS and optimizes them per device.</p>
+      <p><strong>Key pattern:</strong> Create a request &rarr; Create a handler &rarr; Perform &rarr; Read observations.</p>
+    </div>
+
+    <h2>The Vision Request Pattern</h2>
+
+    <p>Every Vision feature follows the same three-line pattern you already know from Chapter 3:</p>
+
+<pre><code>// 1. Create the request
+let request = VNRecognizeTextRequest { request, error in
+    let results = request.results as? [VNRecognizedTextObservation]
+    // Process results
+}
+
+// 2. Create the handler with your image
+let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
+
+// 3. Perform
+try handler.perform([request])</code></pre>
+
+    <p>Change the request type, and you change what Vision looks for. That's the beauty of the framework &mdash; one pattern, dozens of capabilities.</p>
+
+    <div class="model-pipeline">
+      <div class="workflow-steps">
+        <div class="step">
+          <h4>Your Image</h4>
+          <p>CGImage, CVPixelBuffer, CIImage, or URL</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>VNImageRequestHandler</h4>
+          <p>Manages the image lifecycle</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>VN___Request</h4>
+          <p>What to look for</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>VN___Observation</h4>
+          <p>What was found</p>
+        </div>
+      </div>
+    </div>
+
+    <h2>Text Recognition (OCR)</h2>
+
+    <p>Let's start with the most practical Vision feature: reading text from images. This is what powers Live Text across iOS.</p>
+
+<pre><code>func recognizeText(in image: CGImage) async throws -> [String] {
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate  // .fast for real-time
+    request.recognitionLanguages = ["en", "de", "fr"]
+    request.usesLanguageCorrection = true
+
+    let handler = VNImageRequestHandler(cgImage: image)
+    try handler.perform([request])
+
+    return request.results?.compactMap { observation in
+        observation.topCandidates(1).first?.string
+    } ?? []
+}</code></pre>
+
+    <p>That's a complete OCR implementation. Let's break down the key options:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Property</th>
+          <th>Options</th>
+          <th>When to Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>recognitionLevel</code></td>
+          <td><code>.accurate</code> / <code>.fast</code></td>
+          <td>.accurate for static images (receipts, documents). .fast for live camera feed.</td>
+        </tr>
+        <tr>
+          <td><code>recognitionLanguages</code></td>
+          <td>Array of language codes</td>
+          <td>Supports 18+ languages. Order matters &mdash; put the most likely language first.</td>
+        </tr>
+        <tr>
+          <td><code>usesLanguageCorrection</code></td>
+          <td>Bool</td>
+          <td>Improves accuracy using language models. Adds ~10ms latency.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Building a receipt scanner?</strong> Use <code>.accurate</code> mode with language correction on. Each <code>VNRecognizedTextObservation</code> includes bounding box coordinates (<code>boundingBox</code>), so you can map text to physical locations on the receipt &mdash; the total is usually at the bottom, the merchant name at the top.
+    </div>
+
+    <h2>RecognizeDocumentsRequest (iOS 26)</h2>
+
+    <p>iOS 26 introduces <code>RecognizeDocumentsRequest</code>, a major upgrade over basic text recognition. Instead of returning flat text lines, it understands document <em>structure</em>:</p>
+
+<pre><code>import Vision
+
+let request = RecognizeDocumentsRequest()
+let handler = VNImageRequestHandler(cgImage: documentImage)
+let results = try await handler.perform(request)
+
+for document in results {
+    // Structured elements — not just flat text
+    for block in document.blocks {
+        switch block {
+        case .paragraph(let paragraph):
+            print("Paragraph: \(paragraph.text)")
+        case .table(let table):
+            for row in table.rows {
+                print("Row: \(row.cells.map { $0.text })")
+            }
+        case .list(let list):
+            for item in list.items {
+                print("Item: \(item.text)")
+            }
+        }
+    }
+    // Detected important information
+    for info in document.importantInformation {
+        print("\(info.type): \(info.value)")  // email, phone, URL
+    }
+}</code></pre>
+
+    <div class="highlight-box">
+      <h3>What RecognizeDocumentsRequest Detects</h3>
+      <ul>
+        <li><strong>Paragraphs</strong> &mdash; Lines grouped into coherent text blocks</li>
+        <li><strong>Tables</strong> &mdash; Row/column structure with individual cell content</li>
+        <li><strong>Lists</strong> &mdash; Bulleted and numbered items</li>
+        <li><strong>Machine-readable codes</strong> &mdash; QR codes and barcodes embedded in documents</li>
+        <li><strong>Important information</strong> &mdash; Emails, phone numbers, URLs, dates automatically extracted</li>
+      </ul>
+      <p>26 languages supported. Runs entirely on-device.</p>
+    </div>
+
+    <h2>Image Classification</h2>
+
+    <p>In Chapter 3 you brought your own model for classification. Vision also has a built-in classifier that recognizes hundreds of scene and object categories:</p>
+
+<pre><code>let request = VNClassifyImageRequest()
+
+let handler = VNImageRequestHandler(cgImage: photo)
+try handler.perform([request])
+
+let top5 = request.results?.prefix(5) ?? []
+for observation in top5 {
+    print("\(observation.identifier): \(observation.confidence)")
+}
+// outdoor, beach, sky, water, tropical — with confidence scores</code></pre>
+
+    <p>Apple's built-in taxonomy includes scenes (beach, forest, office), objects (dog, car, food), and activities (running, cooking). It's less precise than a custom model for your specific categories, but it's free and requires zero setup.</p>
+
+    <h2>Face Detection and Landmarks</h2>
+
+    <p>Vision provides two levels of face analysis:</p>
+
+<pre><code>// Level 1: Just find the faces
+let faceDetect = VNDetectFaceRectanglesRequest()
+
+// Level 2: Find faces AND 76 landmark points
+let faceLandmarks = VNDetectFaceLandmarksRequest()
+
+let handler = VNImageRequestHandler(cgImage: groupPhoto)
+try handler.perform([faceLandmarks])
+
+for face in faceLandmarks.results ?? [] {
+    let box = face.boundingBox  // Normalized rect (0..1)
+    let landmarks = face.landmarks
+
+    // Access specific features
+    let leftEye = landmarks?.leftEye?.normalizedPoints
+    let rightEye = landmarks?.rightEye?.normalizedPoints
+    let nose = landmarks?.nose?.normalizedPoints
+    let outerLips = landmarks?.outerLips?.normalizedPoints
+    // 76 points total across all facial features
+}</code></pre>
+
+    <p>Practical uses: profile photo cropping (detect face, center crop around it), attention tracking (are the user's eyes looking at the screen?), AR overlays (place effects on specific facial landmarks), and face-based unlock UX.</p>
+
+    <div class="warning-box">
+      <strong>Face detection is not face recognition.</strong> Vision tells you <em>where</em> faces are and what they look like. It does <em>not</em> identify who the person is. For that, you'd need a face embedding model &mdash; and significant privacy considerations.
+    </div>
+
+    <h2>Body Pose Detection</h2>
+
+    <p>Want to track someone's body? Vision detects 19 joint points in real time:</p>
+
+<pre><code>let request = VNDetectHumanBodyPoseRequest()
+
+let handler = VNImageRequestHandler(cgImage: frame)
+try handler.perform([request])
+
+for pose in request.results ?? [] {
+    // Get specific joints
+    if let rightWrist = try? pose.recognizedPoint(.rightWrist),
+       rightWrist.confidence > 0.5 {
+        let position = rightWrist.location  // Normalized coordinates
+        print("Right wrist at: \(position)")
+    }
+
+    // Get all recognized points
+    let allPoints = try? pose.recognizedPoints(forGroupKey: .all)
+}</code></pre>
+
+    <p>The 19 joints include: head, neck, shoulders, elbows, wrists, hips, knees, and ankles for both sides, plus the root (center of hips). Each point has a <code>location</code> (normalized 0..1 coordinates) and a <code>confidence</code> score.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">19</div>
+        <div class="stat-label">Body joint points detected per person</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">76</div>
+        <div class="stat-label">Facial landmark points per face</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">21</div>
+        <div class="stat-label">Hand joint points per hand</div>
+      </div>
+    </div>
+
+    <p>Practical uses: fitness apps (rep counting by tracking wrist movement), physical therapy (measuring range of motion by joint angles), dance/form correction (comparing pose to reference), and interactive games.</p>
+
+    <h2>Person Segmentation</h2>
+
+    <p>Vision can separate people from backgrounds at the pixel level:</p>
+
+<pre><code>let request = VNGeneratePersonSegmentationRequest()
+request.qualityLevel = .balanced  // .fast, .balanced, or .accurate
+
+let handler = VNImageRequestHandler(cgImage: selfie)
+try handler.perform([request])
+
+if let mask = request.results?.first?.pixelBuffer {
+    // mask is a CVPixelBuffer where white = person, black = background
+    // Use it to replace the background, apply effects, etc.
+    let ciMask = CIImage(cvPixelBuffer: mask)
+    // Composite: original image where mask is white, new background where black
+}</code></pre>
+
+    <p>Three quality levels give you the speed/accuracy tradeoff:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Quality</th>
+          <th>Resolution</th>
+          <th>Speed</th>
+          <th>Use Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>.fast</code></td>
+          <td>Low</td>
+          <td>~5 ms</td>
+          <td>Real-time video effects</td>
+        </tr>
+        <tr>
+          <td><code>.balanced</code></td>
+          <td>Medium</td>
+          <td>~20 ms</td>
+          <td>Good for most apps</td>
+        </tr>
+        <tr>
+          <td><code>.accurate</code></td>
+          <td>Full</td>
+          <td>~80 ms</td>
+          <td>Portrait mode, static photos</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Barcode and QR Scanning</h2>
+
+    <p>Vision's barcode detection is fast and supports 16+ symbologies:</p>
+
+<pre><code>let request = VNDetectBarcodesRequest()
+// Optionally restrict to specific types for faster detection:
+// request.symbologies = [.qr, .ean13, .code128]
+
+let handler = VNImageRequestHandler(cgImage: image)
+try handler.perform([request])
+
+for barcode in request.results ?? [] {
+    print("Type: \(barcode.symbology)")        // .qr, .ean13, etc.
+    print("Value: \(barcode.payloadStringValue ?? "")")
+    print("Bounds: \(barcode.boundingBox)")     // Normalized rect
+}</code></pre>
+
+    <p>Supported symbologies include QR, EAN-13, EAN-8, UPC-E, Code 128, Code 39, Code 93, PDF417, Aztec, Data Matrix, ITF-14, and more. For most apps, leave <code>symbologies</code> unset and Vision will detect all types.</p>
+
+    <div class="tip-box">
+      <strong>Restrict symbologies for speed.</strong> If your app only needs QR codes, set <code>request.symbologies = [.qr]</code>. Vision can skip checking for other formats, making detection noticeably faster on each frame.
+    </div>
+
+    <h2>Combining Multiple Requests</h2>
+
+    <p>Here's one of Vision's best features: you can run multiple requests on the same image in a single pass. The handler shares preprocessing work across all requests:</p>
+
+<pre><code>let textRequest = VNRecognizeTextRequest { request, error in
+    // Handle text results
+}
+let barcodeRequest = VNDetectBarcodesRequest { request, error in
+    // Handle barcode results
+}
+let faceRequest = VNDetectFaceRectanglesRequest { request, error in
+    // Handle face results
+}
+
+let handler = VNImageRequestHandler(cgImage: image)
+try handler.perform([textRequest, barcodeRequest, faceRequest])</code></pre>
+
+    <p>Vision preprocesses the image once and feeds it to all three models. This is significantly faster than creating separate handlers for each request.</p>
+
+    <div class="device-benchmark">
+      <strong>Vision Request Performance &mdash; iPhone 16 Pro (A18 Pro)</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>Request</th>
+            <th>What It Detects</th>
+            <th>Latency</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>VNRecognizeTextRequest (.fast)</td>
+            <td>Text / OCR</td>
+            <td>~8 ms</td>
+          </tr>
+          <tr>
+            <td>VNRecognizeTextRequest (.accurate)</td>
+            <td>Text / OCR</td>
+            <td>~30 ms</td>
+          </tr>
+          <tr>
+            <td>VNClassifyImageRequest</td>
+            <td>Scene/object categories</td>
+            <td>~12 ms</td>
+          </tr>
+          <tr>
+            <td>VNDetectFaceRectanglesRequest</td>
+            <td>Face bounding boxes</td>
+            <td>~5 ms</td>
+          </tr>
+          <tr>
+            <td>VNDetectFaceLandmarksRequest</td>
+            <td>76 facial points</td>
+            <td>~15 ms</td>
+          </tr>
+          <tr>
+            <td>VNDetectHumanBodyPoseRequest</td>
+            <td>19 body joints</td>
+            <td>~10 ms</td>
+          </tr>
+          <tr>
+            <td>VNDetectBarcodesRequest</td>
+            <td>QR, EAN, Code 128, etc.</td>
+            <td>~4 ms</td>
+          </tr>
+          <tr>
+            <td>VNGeneratePersonSegmentationRequest (.fast)</td>
+            <td>Person mask</td>
+            <td>~5 ms</td>
+          </tr>
+          <tr>
+            <td>RecognizeDocumentsRequest (iOS 26)</td>
+            <td>Document structure</td>
+            <td>~50 ms</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>All requests run on the Neural Engine. Combining text + barcode + face detection in a single pass takes ~15 ms total &mdash; well within a 30fps camera budget.</p>
+    </div>
+
+    <h2>VNImageRequestHandler vs. VNSequenceRequestHandler</h2>
+
+    <p>Vision offers two handler types for different scenarios:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">VNImageRequestHandler</div>
+        <div class="prompt-text">One image, one or more requests</div>
+        <div class="prompt-text">Create a new handler for each image</div>
+        <div class="prompt-explanation">Use for: photos, single frames, document scanning. The handler you've been using throughout this chapter.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">VNSequenceRequestHandler</div>
+        <div class="prompt-text">Sequence of related frames (video)</div>
+        <div class="prompt-text">Reuse the same handler across frames</div>
+        <div class="prompt-explanation">Use for: object tracking across video frames. The handler maintains state between calls to track movement.</div>
+      </div>
+    </div>
+
+    <h2>Region of Interest</h2>
+
+    <p>If you know where to look, tell Vision. The <code>regionOfInterest</code> property limits detection to a specific area of the image, making requests faster and more focused:</p>
+
+<pre><code>let textRequest = VNRecognizeTextRequest()
+// Only look at the bottom third of the image (where totals usually are)
+textRequest.regionOfInterest = CGRect(x: 0, y: 0, width: 1.0, height: 0.33)
+// Note: Vision uses normalized coordinates (0..1), origin at bottom-left</code></pre>
+
+    <div class="warning-box">
+      <strong>Vision's coordinate system is flipped.</strong> Vision uses normalized coordinates (0.0 to 1.0) with the origin at the <strong>bottom-left</strong>. UIKit's origin is top-left. When converting bounding boxes to UIKit coordinates, flip the Y axis: <code>uiKitY = 1.0 - visionY - visionHeight</code>.
+    </div>
+
+    <h2>Try It: Build a Smart Scanner</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Receipt Scanner with Text + Barcodes</h3>
+      <p>Build a scanner that combines <code>VNRecognizeTextRequest</code> and <code>VNDetectBarcodesRequest</code> to extract information from receipts.</p>
+      <ol>
+        <li>Reuse the camera pipeline from Chapter 3 (CameraManager + CameraPreview)</li>
+        <li>Create both requests and run them in a single <code>VNImageRequestHandler.perform()</code> call</li>
+        <li>Display recognized text lines in a scrollable list below the camera preview</li>
+        <li>If a barcode is detected, highlight it separately with its symbology type and value</li>
+        <li>Add a "freeze" button that stops the camera and lets the user review the extracted text</li>
+      </ol>
+      <p><strong>Test with:</strong> a grocery receipt (text extraction), a product box (barcode + text), and a business card (name, phone, email). Note how RecognizeDocumentsRequest on iOS 26 could auto-extract the structured data from that business card.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Vision handles everything your camera can see. But what about what your iPhone can <em>hear</em>? In <strong>Chapter 5: Natural Language, Speech, and Sound</strong>, we'll bring on-device intelligence to text analysis, voice transcription, and audio classification &mdash; NLTagger for sentiment and entities, the new SpeechTranscriber for real-time speech-to-text, and SoundAnalysis for identifying 300+ sound categories. All running on-device, all private.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-first-core-ml-model.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Your First Core ML Model</span>
+      </a>
+      <a href="05-nlp-speech-sound.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Natural Language, Speech, and Sound</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

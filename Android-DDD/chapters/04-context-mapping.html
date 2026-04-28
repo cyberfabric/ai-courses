@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Context Mapping — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="03-bounded-contexts.html">← Prev</a>
+      <a href="05-subdomains.html">Next →</a>
+      <a href="maps/04-context-mapping-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Context Mapping</h1>
+    <p class="subtitle">How bounded contexts talk &mdash; and the eight relationships you can label on the arrows</p>
+  </header>
+
+  <main>
+
+    <p>Last chapter you drew boxes. This chapter you label arrows.</p>
+
+    <p>If your map from chapter 3 has more than one bounded context, you already have a context map &mdash; you just don't have a vocabulary for what the arrows mean. By the end of this chapter you will, and you'll be able to look at any two of your contexts and answer the only question that matters: <em>"who depends on whom, and on whose terms?"</em></p>
+
+    <h2>Why bounded contexts have to talk</h2>
+
+    <p>The dream of a "fully isolated context" doesn't survive a real product. Your <span class="context-name">Onboarding</span> context completes a verification, and your <span class="context-name">Transactions</span> context needs to know about it so the user can finally send money. Your <span class="context-name">Investments</span> context places an order, and <span class="context-name">Statements</span> needs to record it for the year-end PDF. Real apps cross context boundaries on every screen.</p>
+
+    <p>The trick is not to <em>avoid</em> the integration. The trick is to make the integration explicit, named, and one-directional whenever possible. Evans gave us the words for this; you don't have to invent them.</p>
+
+    <h2>The vocabulary at a glance</h2>
+
+    <p>There are eight context-relationship patterns in the Blue Book canon. Most teams never need more than four of them. Here's the lineup, ordered roughly by how often you'll reach for each on a real Android app:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">ACL</span>
+        <div class="stat-label">Anti-Corruption Layer &mdash; your favorite weapon</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">C/S</span>
+        <div class="stat-label">Customer / Supplier &mdash; healthy default for inter-team work</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">OHS</span>
+        <div class="stat-label">Open Host Service &mdash; an API designed to be consumed</div>
+      </div>
+    </div>
+
+    <p>And four more you'll meet less often, but you need to be able to spot:</p>
+
+    <ul>
+      <li><strong>Shared Kernel</strong> &mdash; a tiny shared model between two contexts. Powerful, expensive.</li>
+      <li><strong>Conformist</strong> &mdash; you accept the upstream model as-is, no translation. The cheap path.</li>
+      <li><strong>Published Language</strong> &mdash; a deliberate, versioned format for communication (often paired with OHS).</li>
+      <li><strong>Separate Ways</strong> &mdash; you decide not to integrate at all, and live with the duplication.</li>
+      <li><strong>Big Ball of Mud</strong> &mdash; the elephant. What to do when you inherit one.</li>
+    </ul>
+
+    <p>Let's take them in order.</p>
+
+    <h2>Anti-Corruption Layer (ACL)</h2>
+
+    <div class="language-box">
+      <span class="term">Anti-Corruption Layer</span> &mdash; a translation layer at the boundary of your context that converts the foreign model into your model. The foreign side never knows it exists; your side never sees the foreign types. It is "Google Translate" between two languages.
+      <div class="do-not-say">Do not say "mapper," "adapter," or "wrapper" interchangeably with ACL. A mapper is a one-line type conversion; an ACL is a deliberate, named layer with its own vocabulary translation. The ACL contains mappers, but it is more than them &mdash; it shields your model from foreign concepts entirely.</div>
+    </div>
+
+    <p>This is the pattern you will use most. Whenever you depend on a third-party SDK, a legacy backend you can't change, or a context owned by another team that doesn't share your worldview, the answer is almost always an ACL.</p>
+
+    <p>The shape: foreign DTOs come in one side, clean domain types come out the other. Your ViewModel, your repository, your aggregates &mdash; nothing in your context ever sees the foreign type. If the foreign API renames <code>user_id</code> to <code>userIdentifier</code>, only the ACL changes.</p>
+
+    <h3>A real Android example: a third-party identity SDK</h3>
+
+    <p>You're integrating a popular KYC vendor's Android SDK. It returns this charming object:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// What the vendor SDK gives you
+data class VendorVerificationResult(
+  val status: String,                  // "PASS", "FAIL", "REVIEW", "UNKNOWN"
+  val flags: Map&lt;String, Any?&gt;,        // a junk drawer
+  val raw_score: Double?,              // sometimes null, sometimes 0.0 = unverified
+  val provider_ref: String,            // their tracking id
+  val errorCode: Int = 0,              // 0 = success
+  val timestamp_ms: Long
+)</div>
+    </div>
+
+    <p>Letting that type leak into your domain is how you end up with a 200-line <code>OnboardingViewModel</code> that branches on string status codes. The ACL converts it into something your <span class="context-name">Onboarding</span> context can actually reason about:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :onboarding:domain &mdash; pure, ours
+sealed class VerificationOutcome {
+  data class Verified(val confidence: Confidence) : VerificationOutcome()
+  data class Rejected(val reason: RejectionReason) : VerificationOutcome()
+  data class NeedsReview(val flags: List&lt;ReviewFlag&gt;) : VerificationOutcome()
+  data class Failed(val cause: VerificationError) : VerificationOutcome()
+}
+
+// :onboarding:data &mdash; the ACL lives here
+class VendorAcl(private val sdk: VendorSdk) {
+  suspend fun verify(applicant: Applicant): VerificationOutcome {
+    val raw = sdk.runCheck(applicant.toVendorRequest())
+    return when (raw.status) {
+      "PASS"    -&gt; VerificationOutcome.Verified(raw.toConfidence())
+      "FAIL"    -&gt; VerificationOutcome.Rejected(raw.toRejectionReason())
+      "REVIEW"  -&gt; VerificationOutcome.NeedsReview(raw.toReviewFlags())
+      else      -&gt; VerificationOutcome.Failed(raw.toError())
+    }
+  }
+}</div>
+    </div>
+
+    <p>Now your ViewModel calls <code>VendorAcl.verify(...)</code> and gets a sealed Kotlin type with four cases. Exhaustive <code>when</code>. No string codes leaking. When the vendor releases a v2 with a completely different shape, the diff is contained to one file.</p>
+
+    <div class="tip-box">
+      <strong>The ACL is the single most useful pattern for legacy migrations.</strong> When you can't refactor a 5-year-old backend or a giant <code>:legacy</code> module in one go, you wrap it in an ACL and pretend it has the shape you want. The legacy code stays put; your new context lives in clean domain terms; the ACL absorbs the ugliness. This is also exactly how you incrementally adopt DDD without a rewrite (chapter 12 walks through it end-to-end).
+    </div>
+
+    <h2>Shared Kernel</h2>
+
+    <div class="language-box">
+      <span class="term">Shared Kernel</span> &mdash; a small, jointly-owned model fragment shared between two contexts. Both teams must agree on every change. High coupling, but useful for truly universal value objects.
+      <div class="do-not-say">Do not call your <code>:common</code> module a "shared kernel." A real shared kernel is &lt;10 types, jointly owned, version-locked. <code>:common</code> is a junk drawer with neither shared ownership nor strict review.</div>
+    </div>
+
+    <p>A shared kernel sounds appealing &mdash; "we both need <code>Money</code>, why duplicate?" &mdash; and it is occasionally right. But every line of code in a shared kernel must be approved by every consumer. Change <code>Money</code> and you need sign-off from <span class="context-name">Billing</span>, <span class="context-name">Transactions</span>, and <span class="context-name">Investments</span>. That is expensive.</p>
+
+    <p>Use it for genuinely universal value objects: <code>Money</code>, <code>Currency</code>, <code>Locale</code>, <code>UserId</code> (if your IDs really are global). Don't use it for domain entities or anything that has even a whiff of business logic.</p>
+
+    <div class="android-box">
+      <div class="android-code">// settings.gradle.kts &mdash; a thin, deliberate shared kernel
+
+include(":shared:money")    // Money, Currency, Amount &mdash; ~5 types
+include(":shared:ids")      // UserId, OrderId &mdash; type-safe IDs
+
+// :billing:domain      depends on :shared:money
+// :transactions:domain depends on :shared:money, :shared:ids
+// :investments:domain  depends on :shared:money
+
+// CODEOWNERS sets joint review on :shared/*
+// Any change requires approval from billing-team AND transactions-team AND investments-team</div>
+    </div>
+
+    <p>The CODEOWNERS rule is what makes the kernel <em>shared</em>. Without it you've just got <code>:common</code> with a fancy name.</p>
+
+    <h2>Customer-Supplier</h2>
+
+    <p>This is the healthiest pattern between two cooperating teams. The downstream context (Customer) tells the upstream context (Supplier) what it needs. The upstream team accepts it as a real requirement and prioritizes accordingly. There's a real backlog conversation, real sprint commitments, real SLAs.</p>
+
+    <p>It's not a code pattern; it's a team-relationship pattern. But it has code consequences: the supplier publishes a stable contract, the customer holds the supplier accountable, and changes are negotiated rather than imposed.</p>
+
+    <div class="context-box">
+      <span class="context-name">Statements</span> (downstream / customer) needs the <span class="context-name">Transactions</span> (upstream / supplier) team to publish a <code>TransactionRecorded</code> event with a specific schema, monthly aggregates, and a guarantee of replay-ability. The Transactions team adds a ticket to its backlog. The Statements team gets a stable contract. Both teams are happy.
+    </div>
+
+    <p>What makes it <em>customer-supplier</em> rather than something looser is that the upstream team feels obligated. If you can't get that obligation &mdash; if upstream says "we'll consider it" &mdash; you don't have customer-supplier. You probably have <em>conformist</em>.</p>
+
+    <h2>Conformist</h2>
+
+    <p>Conformist is what happens when you depend on an upstream context that doesn't care about you. The platform team that ships a Maps SDK; the giant backend service owned by a different org; the OS layer itself. They don't take requirements from you. You either accept their model as-is or you don't integrate.</p>
+
+    <p>The conformist accepts the upstream model. No translation, no ACL, no pretense. Their <code>User</code> is your <code>User</code>. Their JSON is your JSON. Their breakage is your breakage.</p>
+
+    <div class="warning-box">
+      <strong>Conformist is cheap, until it isn't.</strong> The day the upstream team makes a breaking change, the conformist context shatters. There's no cushion. If you're going to be a conformist, do it deliberately, document it, and price in the future re-write &mdash; or upgrade to ACL the moment the upstream model starts hurting.
+    </div>
+
+    <p>Practical advice: be a conformist for genuinely stable foreign types (the JDK's <code>Instant</code>, AndroidX's <code>Bitmap</code>) and an ACL-er for everything that looks like business data. The line between them is "could this model change for business reasons?" If yes, ACL.</p>
+
+    <h2>Open Host Service & Published Language</h2>
+
+    <div class="language-box">
+      <span class="term">Open Host Service (OHS)</span> &mdash; an API your context publishes specifically for other contexts to consume. The API is designed for consumption, not as an accident of internal implementation.
+      <br><br>
+      <span class="term">Published Language (PL)</span> &mdash; the format the OHS speaks. Versioned, documented, treated as a real contract.
+      <div class="do-not-say">Do not call your internal Retrofit interface an "open host service." OHS is a deliberate design choice that says "we expect to be consumed by N contexts." If only one context calls it, it's just an internal API.</div>
+    </div>
+
+    <p>OHS + PL is what an upstream context offers when it knows it has many downstream consumers. On a server it's a REST or gRPC API. Inside a single Android app, it's typically a sealed event hierarchy and a small repository interface, both designed for foreign consumption from day one.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :transactions:domain &mdash; the published language
+sealed class TransactionEvent {
+  abstract val id: TransactionId
+  abstract val occurredAt: Instant
+  abstract val version: Int   // schema version, never 0
+
+  data class Posted(
+    override val id: TransactionId,
+    override val occurredAt: Instant,
+    override val version: Int = 1,
+    val amount: Money,
+    val direction: Direction,
+    val accountRef: AccountRef
+  ) : TransactionEvent()
+
+  data class Reversed(
+    override val id: TransactionId,
+    override val occurredAt: Instant,
+    override val version: Int = 1,
+    val originalId: TransactionId,
+    val reason: ReversalReason
+  ) : TransactionEvent()
+}
+
+// :transactions:domain &mdash; the open host service
+interface TransactionFeed {
+  fun events(since: Instant): Flow&lt;TransactionEvent&gt;
+}</div>
+    </div>
+
+    <p><span class="context-name">Statements</span> consumes <code>TransactionFeed</code> via the published language. <span class="context-name">Notifications</span> does the same. So might a future <span class="context-name">Analytics</span> context. Each consumer reads the events; each consumer is responsible for its own ACL inward, if needed. The upstream team has one contract to maintain instead of three.</p>
+
+    <h2>Separate Ways</h2>
+
+    <p>Sometimes the right answer is no integration at all. Two contexts have similar concepts but the cost of unifying them &mdash; through ACLs, shared kernels, or events &mdash; would be greater than the cost of letting both have their own. So they go their separate ways.</p>
+
+    <p>Separate Ways is the most-undersold pattern in the canon. It's the one that says "yes, you have two notion of <code>Address</code>, no, we will not unify them, the duplication is cheaper than the integration." It is a perfectly valid answer when the two contexts almost never need to talk.</p>
+
+    <div class="tip-box">
+      <strong>Duplication is cheaper than wrong abstraction.</strong> If two contexts each have a five-field <code>Address</code> and they only ever exchange a fully-formatted string at one point, do not build an ACL or a shared kernel for them. Let both <code>Address</code> classes exist, document the choice, and move on. The team-time saved is enormous.
+    </div>
+
+    <h2>Big Ball of Mud</h2>
+
+    <p>Eric Evans named this lovingly: it's the legacy system you inherited, the one with no boundaries, no language consistency, and 12 years of accumulated decisions. Most apps have at least one Big Ball of Mud somewhere in their dependency graph &mdash; a giant Retrofit backend, a 500-class <code>:legacy</code> module, a cursed feature that nobody dares touch.</p>
+
+    <p>The DDD answer is not to fix it. The DDD answer is to <em>name it as a context</em> ("Legacy Banking Backend") and <em>wrap it in an ACL</em>. You stop pretending it's clean. You document its boundary. New work happens in new contexts that consume the Big Ball of Mud through the ACL. The ball stays muddy; your new code stays clean. Over time the ball shrinks, or it doesn't &mdash; either way, your downside is bounded.</p>
+
+    <h2>Drawing the map: arrows, U/D labels, and what they mean</h2>
+
+    <p>A context map is two things: boxes (contexts) and arrows (relationships). The arrow direction matters. The labels matter even more. Here's the canonical notation:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Meaning</th>
+          <th>Where it goes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>U</strong></td>
+          <td>Upstream &mdash; this context dictates the model</td>
+          <td>On the side of the dictator</td>
+        </tr>
+        <tr>
+          <td><strong>D</strong></td>
+          <td>Downstream &mdash; this context accepts upstream's model (or translates)</td>
+          <td>On the side of the consumer</td>
+        </tr>
+        <tr>
+          <td><strong>ACL</strong></td>
+          <td>Anti-corruption layer between U and D</td>
+          <td>On the downstream end of the arrow</td>
+        </tr>
+        <tr>
+          <td><strong>OHS / PL</strong></td>
+          <td>Open Host Service / Published Language</td>
+          <td>On the upstream end of the arrow</td>
+        </tr>
+        <tr>
+          <td><strong>SK</strong></td>
+          <td>Shared Kernel between two contexts</td>
+          <td>Drawn as a small overlap region between the two boxes</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>An arrow from <code>Statements</code> to <code>Transactions</code>, with <strong>D</strong> on the Statements side, <strong>U/OHS</strong> on the Transactions side, and <strong>ACL</strong> right next to the D, reads as: "Statements consumes Transactions' open-host event feed via an ACL." That single arrow has communicated more than a 12-page architecture doc.</p>
+
+    <h2>A worked map: the fintech app from chapter 3</h2>
+
+    <p>Remember the four contexts: <span class="context-name">Onboarding</span>, <span class="context-name">Transactions</span>, <span class="context-name">Investments</span>, <span class="context-name">Statements</span>. Here's how they probably relate, with labels:</p>
+
+    <div class="domain-box">
+      <div class="model-text">+--------------+        OHS/PL          +-------------------+
+| Onboarding   | -----------------&gt;    | Transactions      |
+| (U)          |  ApplicantApproved    | (D, conformist on |
+|              |                       |  the event shape) |
++--------------+                       +-------------------+
+       |                                       | OHS/PL
+       | OHS/PL                                | TransactionEvent
+       v                                       v
++--------------+                       +-------------------+
+| Investments  |                       | Statements        |
+| (D, ACL)     | &lt;-----  SK ------     | (D, ACL)          |
+|              |        Money,         |                   |
+|              |        UserId         |                   |
++--------------+                       +-------------------+
+
+LEGEND
+  U  = upstream    D  = downstream
+  OHS/PL = published events on a stable schema
+  ACL = anti-corruption layer on the downstream side
+  SK  = shared kernel (Money, UserId)</div>
+    </div>
+
+    <p>You can read every relationship out loud: "Onboarding publishes <code>ApplicantApproved</code> as an open host service; Transactions consumes it as a downstream conformist on the event shape. Transactions then publishes <code>TransactionEvent</code> for both Investments and Statements, which each have their own ACL on their downstream side. Investments and Statements share a tiny kernel of value objects (<code>Money</code>, <code>UserId</code>)."</p>
+
+    <p>That paragraph used every concept from this chapter. The diagram says it in 20 lines.</p>
+
+    <h2>Building an ACL on Android: a complete example</h2>
+
+    <p>Let's make this concrete. Your <span class="context-name">Investments</span> feature integrates with a third-party brokerage API that returns wildly inconsistent JSON. The upstream context is, effectively, "the Brokerage Big Ball of Mud." You want your domain to stay clean. The recipe:</p>
+
+    <div class="android-box">
+      <div class="android-code">// :investments:data &mdash; the ACL package
+
+// 1) The foreign DTOs (kept private to the ACL)
+internal data class BrokeragePositionDto(
+  val sym: String,
+  val qty: String,         // yes, a string
+  val mkt_val: Map&lt;String, Any?&gt;,
+  val acct: String,
+  val ts: Long?
+)
+
+// 2) The Retrofit interface (also internal)
+internal interface BrokerageApi {
+  @GET("v3/positions")
+  suspend fun positions(@Header("X-Acct") acct: String): List&lt;BrokeragePositionDto&gt;
+}
+
+// 3) The mappers (private; tested in isolation)
+private fun BrokeragePositionDto.toDomain(): Position = Position(
+  symbol = TickerSymbol(sym.trim().uppercase()),
+  quantity = Quantity(BigDecimal(qty)),
+  marketValue = mkt_val.toMoneyOrZero(),
+  accountRef = AccountRef(acct)
+)
+
+// 4) The ACL: the only public thing in the package
+class BrokerageAcl @Inject constructor(
+  private val api: BrokerageApi
+) : PositionRepository {
+  override suspend fun positionsFor(account: AccountRef): List&lt;Position&gt; =
+    api.positions(account.value).map { it.toDomain() }
+}</div>
+    </div>
+
+    <p>The shape: nothing outside <code>:investments:data</code> ever sees a <code>BrokeragePositionDto</code>. The ViewModel asks <code>PositionRepository</code> for <code>Position</code> objects and gets them. If the brokerage API breaks, only the ACL changes. If the brokerage gets replaced, only the ACL is rewritten.</p>
+
+    <p>The four-step recipe is universal: foreign DTO &rarr; foreign API client &rarr; private mapper &rarr; clean domain interface. Anything else (caching, retries, rate-limiting) goes inside the ACL too &mdash; the boundary is its own little fortress.</p>
+
+    <h2>ACL vs Shared Kernel: how to pick</h2>
+
+    <p>Engineers love a shared kernel because "no mappers!" Engineers come to regret a shared kernel because "every change needs three teams' approval." A simple decision tree:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Shared Kernel works when</div>
+        <div class="prompt-text">- The type is a value object (no behavior, no identity)
+- It is genuinely universal (Money, Currency)
+- &lt; 10 types total
+- Joint code-ownership is in place
+- You expect almost zero churn</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">ACL is the right move when</div>
+        <div class="prompt-text">- The other side has its own model and worldview
+- Foreign types have fields you don't care about
+- Foreign types lack invariants you require
+- The other team owns its evolution
+- You expect any change at all</div>
+      </div>
+    </div>
+
+    <p>If both lists describe your situation, default to ACL. It's almost always cheaper than maintaining a shared kernel that nobody has the authority to change.</p>
+
+    <h2>When to redraw the map</h2>
+
+    <p>Context maps are not write-once artifacts. They drift as the org changes, as features ship, and as new integrations appear. Watch for these signals that yours is stale:</p>
+
+    <ul class="checklist">
+      <li><strong>Cross-team escalations on every release.</strong> Two teams that the map shows as separate keep blocking each other. The boundary is in the wrong place.</li>
+      <li><strong>Recurring outages at one integration point.</strong> The arrow is right, but the contract is wrong &mdash; you probably need to upgrade a conformist relationship to an ACL.</li>
+      <li><strong>Types ping-ponging through three ACLs.</strong> The same data crosses three context boundaries unchanged. One of those boundaries is fake; merge the contexts on either side.</li>
+      <li><strong>A "shared" type that one team always changes.</strong> If <code>Money</code> in your shared kernel only ever gets PRs from one team, that team owns it &mdash; it should be in their context with an ACL or OHS, not in a kernel.</li>
+      <li><strong>The map disagrees with the build graph.</strong> Run <code>./gradlew :module-graph</code> and compare to your map. If there's an arrow on the diagram that doesn't exist in the build, or vice versa, somebody's lying. Usually it's the diagram.</li>
+    </ul>
+
+    <p>A good cadence: redraw the map every quarter, or whenever a team reorganizes, or whenever a new context appears. Make it a 30-minute meeting, not a workshop. The point is alignment, not artistry.</p>
+
+    <h2>The role of events in context mapping</h2>
+
+    <p>You'll notice that several of the patterns in this chapter (OHS, Customer-Supplier, even some ACLs) are easier to implement when contexts communicate via events rather than direct calls. That's not a coincidence &mdash; events are the single best mechanism for one-directional, asynchronous, schema-stable integration between contexts. They make most of these patterns nearly trivial.</p>
+
+    <p>That's why chapter 6 (Domain Events) is a big deal even though it sits in the "tactical" half of the course. The strategic patterns from this chapter and the tactical ones from chapter 6 are the same idea seen from two different elevations.</p>
+
+    <h2>Anti-patterns specific to mobile teams</h2>
+
+    <div class="warning-box">
+      <strong>The "shared module" that became a context.</strong> Your <code>:shared</code> module slowly accumulated entities, repositories, ViewModels, and now half the team commits to it on every PR. It is no longer a kernel. It is a context with no name and no owner. Pick one of: rename it, split it, or accept that it's the new "main" context and reorganize everything else around it.
+    </div>
+
+    <div class="warning-box">
+      <strong>Treating the network DTOs as the model.</strong> If your <code>UserDto</code> from Retrofit flows directly into your ViewModel, you are a conformist to your backend &mdash; whether you meant to be or not. Every backend change is now a UI change. The fix is an ACL right at the data layer: DTOs in <code>:context:data</code>, domain types in <code>:context:domain</code>, mappers between them.
+    </div>
+
+    <h2>Exercise: classify every cross-context arrow in your app</h2>
+
+    <div class="exercise-box">
+      <p><strong>One hour. Pull out the map you drew at the end of chapter 3.</strong></p>
+      <ol>
+        <li>For every arrow on your map, write down which side is upstream (<strong>U</strong>) and which is downstream (<strong>D</strong>).</li>
+        <li>For each arrow, pick exactly one label: <code>ACL</code>, <code>SharedKernel</code>, <code>Customer-Supplier</code>, <code>Conformist</code>, <code>OHS/PL</code>, or <code>SeparateWays</code>.</li>
+        <li>If you can't decide, you've found something: either you don't know how the contexts integrate (talk to the other team) or the integration is incoherent (it needs to be one of the patterns &mdash; pick which one and refactor toward it).</li>
+        <li>Highlight every arrow labeled <code>Conformist</code>. For each, ask: "Should this really be an ACL? What's the cost of upgrading?"</li>
+        <li>Highlight every <code>SharedKernel</code>. For each, count the number of types in it. Anything &gt; 10? It's not a kernel; it's a shared context. Decide whose context it should be.</li>
+        <li>Take a picture and compare to <code>./gradlew :module-graph</code>. Where the diagram and the build graph disagree, one of them is wrong.</li>
+      </ol>
+      <p>The output of this exercise is a labeled context map and a small list of "we should probably do something about this arrow" items. Pick one. That's your next refactor.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You can now name every context in your app and label every arrow between them. The natural next question is <em>strategic</em>: which of those contexts should you actually invest in? Which are differentiators, which are commodity, which should you outsource or buy off the shelf? Chapter 5 introduces <strong>subdomains</strong> &mdash; the lens that separates "where your team adds the most value" from "where you're paying senior engineer salaries to reinvent auth." Bring your map; we'll color the boxes by strategic value.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-bounded-contexts.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Bounded Contexts</span>
+      </a>
+      <a href="05-subdomains.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Subdomains: Core, Supporting, Generic</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

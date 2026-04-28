@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Beyond Transformers: SSMs and Hybrids | AI in 2026</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Frontier 2026</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-end-of-2026-forecast.html">&larr; Prev</a>
+      <a href="08-world-models-jepa.html">Next &rarr;</a>
+      <a href="maps/07-beyond-transformers-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Beyond Transformers: SSMs and Hybrids</h1>
+    <p class="subtitle">Mamba-3, Jamba, Titans, diffusion text &mdash; the architectures eating the Transformer&rsquo;s lunch from below, and where the original still rules</p>
+  </header>
+
+  <main>
+
+    <section>
+      <div class="frontier-box">
+        <p>As of <strong>April 2026</strong>, the &ldquo;all-Transformer&rdquo; assumption that defined frontier AI from 2017 to 2024 is dead at the architectural level &mdash; but the obituaries you read on Twitter are still wrong. <strong>Hybrids</strong> won. Pure Mamba models hit a recall wall (<em>&ldquo;Achilles&rsquo; Heel of Mamba,&rdquo; NeurIPS 2025 spotlight</em> <a href="https://goombalab.github.io/blog/2025/tradeoffs/">[Goomba Lab, 2025]</a>), pure Transformers hit a quadratic-cost wall, and the production frontier has converged on <em>interleaved attention + state-space + sparse routing</em>. <strong>Mamba-3</strong> shipped from CMU/Princeton/Together/Cartesia in March 2026 with half the state size of Mamba-2 and better downstream accuracy <a href="https://www.marktechpost.com/2026/03/18/meet-mamba-3-a-new-state-space-model-frontier-with-2x-smaller-states-and-enhanced-mimo-decoding-hardware-efficiency/">[MarkTechPost, Mar 2026]</a>. <strong>Jamba 1.5</strong> from AI21 scaled hybrid Mamba&ndash;Transformer to <code>398B</code> total / <code>94B</code> active parameters with a <code>256K</code> effective context. <strong>Qwen3-Next</strong> (Sep 2025) and <strong>Qwen 3.5</strong> (Feb 2026) ship Gated DeltaNet + Gated Attention hybrids in production at Alibaba scale <a href="https://developer.nvidia.com/blog/new-open-source-qwen3-next-models-preview-hybrid-moe-architecture-delivering-improved-accuracy-and-accelerated-parallel-processing-across-nvidia-platform/">[NVIDIA, 2026]</a>. <strong>DeepSeek V4 Preview</strong> (April 24, 2026) leans on Compressed Sparse Attention + Heavily Compressed Attention to run <code>1M</code>-token contexts at <strong>27% of V3.2&rsquo;s FLOPs and 10% of its KV cache</strong> <a href="https://www.digitalapplied.com/blog/deepseek-v4-preview-launch-1m-context-efficiency">[DigitalApplied, Apr 2026]</a>. <strong>Google&rsquo;s Titans</strong> (Dec 2025) reintroduced <em>test-time memorization</em> &mdash; the model rewrites its own weights as it reads. And <strong>Inception Labs Mercury 2</strong> (Feb 2026) shipped a commercial diffusion LLM doing <code>1,109 tok/sec</code> on an H100 <a href="https://www.businesswire.com/news/home/20260224034496/en/Inception-Launches-Mercury-2-the-Fastest-Reasoning-LLM-5x-Faster-Than-Leading-Speed-Optimized-LLMs-with-Dramatically-Lower-Inference-Cost">[BusinessWire, Feb 2026]</a>. The frontier is no longer one architecture. <strong>This snapshot rots fast, the patterns last.</strong></p>
+      </div>
+
+      <p>Welcome to Part III of the course: <strong>Beyond LLMs</strong>. Part I told you what shipped, Part II told you where it&rsquo;s going. The next three chapters explore the architectures, paradigms, and embodiments that <em>aren&rsquo;t</em> the dominant Transformer-LLM-text-prediction stack &mdash; the alternatives that may, or may not, define the next era.</p>
+
+      <p>This chapter is about the architectural alternatives <em>under the hood</em>. The next two are about the alternative <em>frames</em> &mdash; world models (Ch 8) and embodied AI (Ch 9). All three pair real momentum with a contrarian dose of &ldquo;but&hellip; not yet.&rdquo;</p>
+
+      <div class="tip-box">
+        <strong>Companion:</strong> This chapter builds on <a href="../../AI-DeepDive/chapters/07-the-full-transformer.html">AI-DeepDive Ch 7 (The Full Transformer)</a> for attention basics and <a href="../../AI-DeepDive/chapters/13-architectures-compared.html">AI-DeepDive Ch 13 (Architectures Compared)</a> for the broader family tree. If you don&rsquo;t remember why attention is <code>O(n&sup2;)</code>, jump back &mdash; the rest of this chapter is built on top of it.
+      </div>
+    </section>
+
+    <section>
+      <h2>The problem the Transformer can&rsquo;t solve</h2>
+
+      <p>Let&rsquo;s start with what we&rsquo;re running away from. The Transformer&rsquo;s attention mechanism is famously powerful: every token can &ldquo;see&rdquo; every other token directly. That&rsquo;s why it&rsquo;s good at recall &mdash; ask GPT-5.4 about a name from token 3 of a 100K-token doc and it can usually find it.</p>
+
+      <p>The catch: that &ldquo;every-to-every&rdquo; computation costs <code>O(n&sup2;)</code> in both compute and memory. Double the context, quadruple the cost. At <code>1M</code> tokens, naive attention requires roughly <strong>a trillion attention scores per layer</strong>. Multiply by tens of layers and tens of heads, and you&rsquo;re burning whole GPU racks just to read.</p>
+
+      <h3>The KV cache is the second wall</h3>
+
+      <p>It gets worse at inference time. Modern LLMs cache the &ldquo;keys&rdquo; and &ldquo;values&rdquo; of every prior token (the <em>KV cache</em>) so they don&rsquo;t recompute attention for already-seen tokens. The KV cache grows <em>linearly</em> with context but is <strong>memory-bandwidth-bound</strong> &mdash; you&rsquo;re shoveling gigabytes per second from VRAM into compute units. By <code>1M</code> tokens, the KV cache for a frontier-class dense model can hit <strong>hundreds of GB per request</strong>.</p>
+
+      <p>This is why &ldquo;1M context&rdquo; remains marketing-speak for many models. The window <em>opens</em> at 1M, but the <em>per-token serving cost</em> is so high that the provider quietly throttles you.</p>
+
+      <h3>Three escape routes</h3>
+
+      <p>The post-Transformer field organizes itself around three different bets on how to escape the quadratic cliff:</p>
+
+      <ol>
+        <li><strong>State Space Models (SSMs)</strong> &mdash; compress history into a fixed-size state, propagate it linearly. Mamba, Mamba-2, Mamba-3.</li>
+        <li><strong>Hybrids</strong> &mdash; mostly SSMs or linear attention, with a <em>thin layer</em> of full attention sprinkled in to preserve recall. Jamba, Qwen3-Next, Kimi Linear, DeepSeek V4.</li>
+        <li><strong>Diffusion text</strong> &mdash; abandon left-to-right token prediction altogether. Generate text in parallel, then refine. Mercury, LLaDA.</li>
+      </ol>
+
+      <p>A fourth bet &mdash; <strong>test-time memory</strong> (Titans) &mdash; is technically orthogonal to the others, but it&rsquo;s the most surprising 2025&ndash;2026 development and we&rsquo;ll cover it last.</p>
+    </section>
+
+    <section>
+      <h2>State Space Models: the linear-time intuition</h2>
+
+      <p>Forget the math for a second. Here&rsquo;s the intuition.</p>
+
+      <p>A standard attention layer is like a librarian with perfect recall: ask about <em>any</em> token in the input and they hand it to you in full fidelity. Beautiful. Expensive.</p>
+
+      <p>An SSM is like a meditator. As input streams in, they hold a <em>fixed-size mental summary</em>. New token? Update the summary. Older tokens? Already <em>folded</em> into the summary &mdash; you can&rsquo;t pull them out verbatim, but their gist is still there. Cost is <strong>linear in sequence length</strong>, no matter how long.</p>
+
+      <h3>What &ldquo;selective&rdquo; means</h3>
+
+      <p>The original Mamba (Dec 2023) added a key trick: the meditator <em>chooses what to remember</em>. Each new token can modulate the state-update parameters based on its content &mdash; the model learns to compress aggressively on filler words and faithfully on names, numbers, code identifiers, etc. This was the &ldquo;selective state space&rdquo; breakthrough that put SSMs on the map.</p>
+
+      <h3>Mamba-3 &mdash; the March 2026 update</h3>
+
+      <p>The newest entry, <a href="https://pli.princeton.edu/blog/2026/mamba-3-improved-sequence-modeling-using-state-space-principles">Mamba-3</a>, came out of a CMU&ndash;Princeton&ndash;Together AI&ndash;Cartesia collaboration on <strong>March 18, 2026</strong>. It introduces three changes designed for &ldquo;inference-first&rdquo; deployment <a href="https://arxiv.org/abs/2603.15569">[arXiv:2603.15569]</a>:</p>
+
+      <ul>
+        <li><strong>Exponential-trapezoidal discretization</strong> &mdash; a smarter way of stepping the continuous SSM through discrete tokens, improving stability.</li>
+        <li><strong>Complex-valued state updates</strong> &mdash; lets the state &ldquo;rotate&rdquo; through different patterns, not just attenuate.</li>
+        <li><strong>Multi-Input Multi-Output (MIMO)</strong> formulation &mdash; the state has multiple coupled channels that talk to each other, not just one.</li>
+      </ul>
+
+      <p>The headline numbers, from the Princeton blog:</p>
+
+      <table>
+        <thead>
+          <tr><th>Comparison</th><th>Mamba-3 result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Pretraining perplexity vs Mamba-2</td><td>Matches with <strong>half the state size</strong> (<code>64</code> vs <code>128</code>)</td></tr>
+          <tr><td>Downstream accuracy at 1.5B vs Gated DeltaNet</td><td><strong>+0.6 pp</strong>, +1.8 pp with MIMO</td></tr>
+          <tr><td>Inference latency vs Mamba-2 / GDN at BF16</td><td><strong>Lower</strong> &mdash; meaningfully so on long sequences</td></tr>
+        </tbody>
+      </table>
+
+      <p>The thesis: SSMs aren&rsquo;t a curiosity. They&rsquo;re the efficient backbone for the next decade of long-context, low-latency inference &mdash; <em>provided</em> you stop trying to use them as drop-in Transformer replacements.</p>
+
+      <div class="contrarian-box">
+        <p><strong>The Achilles&rsquo; heel.</strong> A NeurIPS 2025 spotlight paper titled &ldquo;Achilles&rsquo; Heel of Mamba&rdquo; demonstrated that pure Mamba and Mamba-2 architectures <em>systematically fail</em> on synthetic copy and recall tasks that Transformers solve trivially <a href="https://goombalab.github.io/blog/2025/tradeoffs/">[Goomba Lab, 2025]</a>. The cause is not implementation: it&rsquo;s structural. The fixed-size state is <em>compressed</em>; you cannot uncompress an arbitrary past token. Empirically, Mamba layers maintain recall accuracy for <strong>4&ndash;8 stacked layers</strong> before needle-in-a-haystack performance degrades sharply. This is why pure Mamba won&rsquo;t replace Transformers at the frontier &mdash; and why every winning 2026 architecture is a <em>hybrid</em>.</p>
+      </div>
+
+      <div class="alt-path-box">
+        <p><strong>Pure SSMs (Mamba family).</strong> The bet: linear-time everything. Wins on edge inference, tiny models, audio/genomics, and anywhere recall doesn&rsquo;t matter much. Loses on five-shot MMLU, code retrieval, long-document QA. Best as a backbone <em>component</em>, not a replacement.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The hybrid sweet spot</h2>
+
+      <p>If pure Mamba can&rsquo;t recall and pure attention can&rsquo;t scale, the obvious answer is to <em>mix them</em>. The question is the mixing ratio.</p>
+
+      <p>The 2025&ndash;2026 finding: you don&rsquo;t need much attention. <strong>One attention layer per ~7&ndash;8 SSM (or linear-attention) layers</strong> is enough to plug the recall hole, while keeping ~90% of the cost savings.</p>
+
+      <h3>Jamba 1.5 &mdash; the open-weight hybrid pioneer</h3>
+
+      <p>AI21&rsquo;s <a href="https://arxiv.org/abs/2408.12570">Jamba</a> family pioneered the production hybrid. The architecture interleaves Mamba and Transformer layers in a <strong>1:7</strong> ratio (one attention layer for every seven Mamba layers), then sprinkles MoE into a subset of layers for capacity. <strong>Jamba 1.5</strong> scales this to 398B total / 94B active across 72 layers <a href="https://www.ai21.com/blog/rise-of-hybrid-llms/">[AI21, 2026]</a>.</p>
+
+      <p>The result: an open-weight model with a <strong>256K effective context window</strong> that runs at a fraction of dense-Transformer cost. Jamba is the first model to ship a hybrid at this scale and prove that the architecture doesn&rsquo;t silently fall apart under real workloads.</p>
+
+      <h3>Qwen3-Next and Qwen 3.5 &mdash; hybrid-MoE at Alibaba scale</h3>
+
+      <p><a href="https://qwen3-next.com/">Qwen3-Next</a> shipped in <strong>September 2025</strong> as Alibaba&rsquo;s &ldquo;ultra-efficient&rdquo; preview, with a follow-up <strong>Qwen 3.5</strong> (397B-A17B MoE) in February 2026 <a href="https://stable-learn.com/en/qwen3-next-series/">[StableLearn, 2026]</a>. Architecture highlights:</p>
+
+      <ul>
+        <li><strong>48 layers</strong>, with <strong>every 4th layer using GQA attention</strong>; the rest use <em>Gated DeltaNet</em>, a linear-attention variant.</li>
+        <li><strong>Ultra-Sparse MoE</strong> activating only <strong>3.7% of parameters</strong> (3B of 80B for the smaller variant) per token.</li>
+        <li><strong>Multi-Token Prediction</strong> &mdash; predict several tokens per step, decoded in parallel.</li>
+      </ul>
+
+      <p>The Qwen3-Next-80B-A3B model became NVIDIA&rsquo;s reference example for hybrid-MoE optimization on H100/H200 stacks <a href="https://developer.nvidia.com/blog/new-open-source-qwen3-next-models-preview-hybrid-moe-architecture-delivering-improved-accuracy-and-accelerated-parallel-processing-across-nvidia-platform/">[NVIDIA, 2026]</a>.</p>
+
+      <h3>Kimi Linear and the Gated DeltaNet wave</h3>
+
+      <p>Moonshot&rsquo;s <strong>Kimi Linear</strong> uses the same Gated DeltaNet + Gated Attention recipe to ship a <strong>262K native context</strong> open-weight model. The pattern across multiple Chinese open-weight labs in 2026 is striking: nearly every major release uses some hybrid attention design, almost none use pure dense Transformers anymore.</p>
+
+      <h3>DeepSeek V4 &mdash; the most aggressive 2026 hybrid</h3>
+
+      <p><strong>DeepSeek V4 Preview</strong> shipped on <strong>April 24, 2026</strong> with a hybrid attention scheme that&rsquo;s arguably the most aggressive in production <a href="https://dasroot.net/posts/2026/04/deepseek-v4-hybrid-attention-massive-contexts/">[dasroot.net, Apr 2026]</a>:</p>
+
+      <ul>
+        <li><strong>Compressed Sparse Attention (CSA)</strong> &mdash; small chunks of tokens are summarized into &ldquo;summary tokens,&rdquo; and each new token attends only to the <em>top-k most relevant summaries</em> instead of every prior token.</li>
+        <li><strong>Heavily Compressed Attention (HCA)</strong> &mdash; even more aggressive compression for very long contexts.</li>
+        <li><strong>Hash routing</strong> in the first three MoE layers (deterministic by token ID), then learned routing afterwards.</li>
+        <li><strong>FP4 storage</strong> for MoE expert weights &mdash; 4-bit precision in memory, decoded to higher precision on load.</li>
+      </ul>
+
+      <p>The result: at <code>1M</code>-token context, V4-Pro uses <strong>27% of single-token inference FLOPs</strong> and <strong>10% of the KV cache</strong> of V3.2 <a href="https://www.digitalapplied.com/blog/deepseek-v4-preview-launch-1m-context-efficiency">[DigitalApplied, 2026]</a>. Same model class, an order-of-magnitude better serving economics.</p>
+
+      <h3>The 2026 hybrid roster, side by side</h3>
+
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Released</th><th>Total / Active params</th><th>Attention design</th><th>Context</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Jamba 1.5</code></td><td>2024&rarr;2025</td><td>398B / 94B</td><td>Mamba + Transformer 7:1, MoE</td><td>256K eff.</td></tr>
+          <tr><td><code>Qwen3-Next-80B-A3B</code></td><td>Sep 2025</td><td>80B / 3B</td><td>Gated DeltaNet + GQA every 4th layer</td><td>262K</td></tr>
+          <tr><td><code>Kimi Linear</code></td><td>2025</td><td>varies</td><td>Gated DeltaNet + Gated Attention</td><td>262K</td></tr>
+          <tr><td><code>Qwen 3.5</code></td><td>Feb 2026</td><td>397B / 17B</td><td>Hybrid MoE, refined</td><td>262K+</td></tr>
+          <tr><td><code>Mamba-3</code></td><td>Mar 2026</td><td>research</td><td>Pure SSM (MIMO), often used in hybrids</td><td>research</td></tr>
+          <tr><td><code>DeepSeek V4-Pro</code></td><td>Apr 2026</td><td>1.6T / 49B</td><td>CSA + HCA hybrid, FP4 MoE</td><td>1M native</td></tr>
+          <tr><td><code>DeepSeek V4-Flash</code></td><td>Apr 2026</td><td>284B / 13B</td><td>Same family, smaller</td><td>1M native</td></tr>
+        </tbody>
+      </table>
+
+      <div class="alt-path-box">
+        <p><strong>Hybrid SSM/attention models.</strong> The bet: keep ~10&ndash;15% of attention layers, replace the rest with linear-time substitutes. Wins on long context, throughput, cost-per-token. Loses some peak quality on hardest reasoning benchmarks vs equivalent-compute pure Transformers, but the gap closes every quarter. This is the architecture eating frontier production deployments in 2026.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Diffusion text: throwing out left-to-right</h2>
+
+      <p>SSMs and hybrids still generate text the &ldquo;normal&rdquo; way: left to right, one token at a time. Diffusion language models throw <em>that</em> assumption out too.</p>
+
+      <h3>The core idea, in one paragraph</h3>
+
+      <p>Diffusion models for images (Stable Diffusion, Midjourney, etc.) start with random noise and iteratively denoise it into a coherent image. Diffusion language models do the same with text: start with a sequence of <em>masked</em> tokens, and denoise them in parallel over a few iterations, refining the whole sequence at once instead of generating token-by-token.</p>
+
+      <p>The win: <strong>parallelism</strong>. A standard autoregressive LLM has to wait for token <em>n</em> before it can produce token <em>n+1</em>. A diffusion LLM produces a whole sequence per denoising step, and only needs ~10&ndash;30 steps total. On GPUs, that&rsquo;s a <strong>10&times; throughput</strong> opportunity.</p>
+
+      <h3>Mercury and Mercury 2 &mdash; the commercial diffusion frontier</h3>
+
+      <p><a href="https://www.inceptionlabs.ai/blog/introducing-mercury">Inception Labs</a> &mdash; founded by Stanford, UCLA, and Cornell researchers behind foundational diffusion work &mdash; released <strong>Mercury</strong>, the world&rsquo;s first commercial-scale diffusion LLM, in 2025. Mercury Coder Mini and Coder Small hit <strong><code>1109</code> and <code>737</code> tokens/sec</strong> respectively on a single H100, outperforming speed-optimized frontier models by up to <strong>10&times;</strong> while matching their quality <a href="https://arxiv.org/abs/2506.17298">[arXiv:2506.17298]</a>.</p>
+
+      <p><strong>Mercury 2</strong> shipped <strong>February 2026</strong> as a <em>reasoning</em>-focused diffusion LLM &mdash; described as &ldquo;5&times; faster than leading speed-optimized LLMs, with dramatically lower inference cost&rdquo; <a href="https://www.businesswire.com/news/home/20260224034496/en/Inception-Launches-Mercury-2-the-Fastest-Reasoning-LLM-5x-Faster-Than-Leading-Speed-Optimized-LLMs-with-Dramatically-Lower-Inference-Cost">[BusinessWire, Feb 2026]</a>. Inception is reportedly deploying these models at Fortune 500 customers as the autoregressive-vs-diffusion bake-off begins to play out in real procurement decisions.</p>
+
+      <h3>LLaDA &mdash; the open-weight diffusion alternative</h3>
+
+      <p><a href="https://medium.com/@saehwanpark/llada-and-mercury-how-diffusion-models-may-reshape-text-generation-e300f20ca636">LLaDA</a> (Large Language Diffusion with mAsking) is the most prominent open-weight diffusion LLM. As of April 2026 you can download <code>LLaDA-8B-Instruct</code> and <code>LLaDA-8B-Base</code> from HuggingFace. Its architecture is BERT-like (bidirectional attention, no causal mask), <strong>does not use a KV cache</strong>, and processes the whole sequence at every denoising step.</p>
+
+      <h3>What diffusion text unlocks</h3>
+
+      <ul>
+        <li><strong>Speed.</strong> 5&ndash;10&times; throughput at comparable quality &mdash; matters most for agents in tight inner loops.</li>
+        <li><strong>Bidirectional editing.</strong> The model can rewrite tokens in the middle of the sequence, not just append. Format conformance and infill become trivial.</li>
+        <li><strong>Built-in error correction.</strong> Each denoising step lets the model &ldquo;fix&rdquo; tokens it generated in earlier steps &mdash; a structural mitigation for some kinds of hallucination.</li>
+        <li><strong>Controllable generation.</strong> Want JSON in a specific schema? Mask the values, fix the keys, and denoise &mdash; the schema is enforced architecturally.</li>
+      </ul>
+
+      <div class="contrarian-box">
+        <p><strong>But it&rsquo;s still small-scale.</strong> The diffusion-LLM frontier as of April 2026 tops out around <strong>~10B parameters</strong> in the open and undisclosed-but-modest sizes commercially. No diffusion LLM has shipped at <code>500B+</code> active parameters or matched GPT-5.4 / Claude Opus 4.7 on hard reasoning benchmarks. Diffusion may yet eat the latency-bound segment of the market &mdash; high-volume agents, low-stakes summarization, real-time coding suggestions &mdash; without ever displacing the autoregressive flagship for &ldquo;hardest 5% of queries.&rdquo; Treat 2026 diffusion-LLM hype the way you treated 2023 SSM hype: <em>real, but smaller than the headlines.</em></p>
+      </div>
+
+      <div class="alt-path-box">
+        <p><strong>Diffusion language models.</strong> The bet: parallel generation beats sequential. Wins on throughput and on use-cases where bidirectional rewriting matters (code edits, structured outputs, format-constrained generation). Loses on the very long, very open-ended generation tasks autoregressive LLMs are still designed around. Watch the next 12 months &mdash; if a major lab ships a 100B+ diffusion model that matches GPT-5-class quality, the architectural debate gets a lot more interesting.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Titans: when the model rewrites itself</h2>
+
+      <p>The most architecturally surprising 2025&ndash;2026 development came not from a startup but from <a href="https://research.google/blog/titans-miras-helping-ai-have-long-term-memory/">Google Research</a>. On <strong>December 4, 2025</strong>, the Titans paper landed (NeurIPS 2025 poster), proposing a radically different memory model: <strong>let the model update its own weights at inference time.</strong></p>
+
+      <h3>The intuition: short-term and long-term memory</h3>
+
+      <p>Standard Transformers have one memory store: the KV cache, which is essentially a transcript of recent attention. Titans adds a second store: a small <em>neural network</em> &mdash; literally an MLP &mdash; whose weights are <strong>updated as the model reads</strong>. Think of it as the model writing notes in a separate notebook as it processes the input.</p>
+
+      <h3>The &ldquo;surprise&rdquo; mechanism</h3>
+
+      <p>Titans only writes to its long-term memory when something <em>surprising</em> happens &mdash; when the new input meaningfully diverges from what the model already knows. This is measured via a gradient signal: high gradient = high surprise = worth committing to memory <a href="https://arxiv.org/abs/2501.00663">[arXiv:2501.00663]</a>.</p>
+
+      <p>Combined with attention, Titans handles context windows above <strong><code>2 million tokens</code></strong> while keeping linear-time inference. On the <strong>BABILong</strong> benchmark (long-context reasoning) it outperforms much larger models including GPT-4, RecurrentGemma-9B, and Llama-3.1-70B <a href="https://www.etavrian.com/news/google-titans-miras-long-context-memory">[eTavrian, 2025]</a>.</p>
+
+      <h3>Why this is a big deal</h3>
+
+      <p>Every Transformer LLM you&rsquo;ve used is, at inference, a <em>frozen</em> function. It has parameters that were trained months ago, and a temporary working memory in the KV cache. Titans dissolves that line: parameters can change <em>now</em>, in the middle of your conversation, in response to what you said.</p>
+
+      <p>Google followed up Titans with the <strong>MIRAS</strong> framework &mdash; a more general theoretical foundation for what they&rsquo;re calling &ldquo;continuously learning&rdquo; architectures. None of it is in production at GPT/Claude/Gemini scale yet. But it is the most concrete answer the field has produced to one of LLMs&rsquo; oldest complaints: &ldquo;why can&rsquo;t the model actually <em>learn</em> from this conversation?&rdquo;</p>
+
+      <div class="alt-path-box">
+        <p><strong>Test-time learning architectures (Titans, MIRAS).</strong> The bet: the line between training and inference is a relic. Wins on tasks needing genuine in-context adaptation (long documents, persistent agents, lifelong learning). Loses on safety predictability &mdash; a model that rewrites its own weights at inference is harder to audit, version, and roll back. Watch this space; it&rsquo;s the most interesting architectural research direction since the original Transformer.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Where the Transformer still wins (and why)</h2>
+
+      <p>Despite all of the above, GPT-5.4, Claude Opus 4.7, Gemini 3.1 Pro, and Grok 4 &mdash; the four highest-grossing model APIs in the Western market &mdash; remain <em>predominantly</em> dense or sparse Transformers. That&rsquo;s not nostalgia. It&rsquo;s a deliberate choice.</p>
+
+      <h3>Recall-heavy workloads</h3>
+
+      <p>Anything that requires <em>verbatim</em> retrieval of arbitrary past tokens &mdash; long-document Q&amp;A, multi-doc legal analysis, codebase-wide refactoring &mdash; benefits from explicit attention. Hybrid models close most of this gap; pure SSMs do not.</p>
+
+      <h3>Hardest-of-hardest reasoning</h3>
+
+      <p>On the upper end of the <code>GPQA Diamond</code>, <code>Humanity&rsquo;s Last Exam</code>, and <code>FrontierMath</code> distribution, dense or moderately-sparse Transformers + extended thinking still hold. The structural advantage of full attention shows up most when the model is doing many compositions over many entities.</p>
+
+      <h3>Fine-grained instruction following</h3>
+
+      <p>On benchmarks like <code>IFBench</code>, dense Transformers with strong post-training still dominate. Hybrids are catching up, but the post-training recipe for hybrids is less mature.</p>
+
+      <div class="contrarian-box">
+        <p><strong>&ldquo;The Transformer is dead&rdquo; has been wrong every year since 2022.</strong> SSMs were going to kill it (2023). Diffusion text was going to kill it (2024). Mamba-2 was going to kill it (early 2024). RetNet was going to kill it (also 2023, briefly). What actually happened: the Transformer absorbed what it needed (sparse attention, MoE, linear attention <em>where useful</em>) and the alternatives became its <em>components</em>, not its replacement. The field that talks loudest about replacing Transformers is also the field that keeps releasing hybrids that <em>contain</em> Transformers. Be skeptical of the next &ldquo;Transformer killer&rdquo; headline. The asymptote is hybrids, not displacement.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The multimodal twist: Mixture-of-Mamba and friends</h2>
+
+      <p>Everything above was about <em>language</em>. The story gets more interesting once you cross modalities.</p>
+
+      <p>One of the more striking 2025&ndash;2026 results is <a href="https://openreview.net/forum?id=Valt8gMdfl">Mixture-of-Mamba</a> &mdash; an architecture that takes the SSM idea and adds <strong>modality-aware sparsity</strong>. The intuition: when you&rsquo;re processing a vision token, you don&rsquo;t need the same state-space parameters as when you&rsquo;re processing a text token. Mixture-of-Mamba routes each token through a modality-specific SSM block, similar to how MoE routes tokens through experts.</p>
+
+      <p>The result: the same total compute as a unified Mamba, but markedly better cross-modal performance &mdash; and the architecture extends cleanly to any number of modalities (image, audio, text, code) without ballooning the per-token cost.</p>
+
+      <p>The vision-language hybrid <a href="https://openaccess.thecvf.com/content/ICCV2025/papers/Li_MaTVLM_Hybrid_Mamba-Transformer_for_Efficient_Vision-Language_Modeling_ICCV_2025_paper.pdf">MaTVLM</a> (ICCV 2025) is another data point: replace most of the Transformer blocks in a vision-language model with Mamba blocks, keep a few attention layers, and you get comparable accuracy at a fraction of the inference cost &mdash; particularly relevant for video, where token counts are enormous.</p>
+
+      <p>Expect the same pattern as we saw with text-only LLMs: pure Mamba wins on edge / mobile multimodal, hybrids win on long-context multimodal, and dense Transformers cling to the highest-fidelity tasks (e.g., expert-level image reasoning at frontier scale).</p>
+    </section>
+
+    <section>
+      <h2>What changes for training, not just inference</h2>
+
+      <p>Most of this chapter has focused on <em>inference</em> &mdash; what happens when you serve the model. The training story is its own thing, and it&rsquo;s the reason hybrids took longer to ship at scale than the architectural papers suggested.</p>
+
+      <h3>Hybrid post-training is genuinely harder</h3>
+
+      <p>Reinforcement learning from human feedback (RLHF) and the more modern post-training pipelines (constitutional AI, GRPO, etc.) were all developed assuming dense Transformers. The reward models, the PPO variants, the value heads &mdash; all designed around the attention pattern. When you swap in Mamba layers, the gradient flow changes, the credit assignment changes, and standard recipes <em>silently underperform</em>.</p>
+
+      <p>This is why early hybrids (2024-era Jamba 1.0, RWKV) were strong on raw next-token prediction but underwhelming on chat benchmarks: the post-training hadn&rsquo;t caught up. By 2026, the recipe is maturing &mdash; DeepSeek V4&rsquo;s <em>per-domain expert RL</em> approach (a separate specialist trained for math, coding, agent tasks, etc., each with its own reward model) is partly an accommodation to hybrid post-training quirks.</p>
+
+      <h3>Stability is non-trivial</h3>
+
+      <p>SSMs are sensitive to the discretization scheme. Pure Mamba-1 had stability issues at long contexts that Mamba-2 partly fixed, that Mamba-3 fixes more carefully via exponential-trapezoidal discretization. The <a href="https://openreview.net/forum?id=i9RTCC6whL">Lyapunov stability</a> analysis (NeurIPS) is a useful theoretical lens: a model whose state can &ldquo;blow up&rdquo; under adversarial input is not safe to deploy, no matter how good the benchmarks look.</p>
+
+      <h3>Hardware co-design matters more than for Transformers</h3>
+
+      <p>Transformers map cleanly to dense matmul, which is what every accelerator since 2017 has been optimized for. SSMs need <em>scan</em> primitives (associative scan, parallel scan) that older accelerators don&rsquo;t do well. Mamba-3&rsquo;s &ldquo;inference-first&rdquo; design philosophy is largely about being kind to GPU memory hierarchy and bandwidth &mdash; you can&rsquo;t just pretend the hardware doesn&rsquo;t exist. NVIDIA has shipped first-class kernels for Mamba and hybrid stacks; AMD and custom AI chips are still catching up.</p>
+    </section>
+
+    <section>
+      <h2>The on-device frontier</h2>
+
+      <p>Frontier-class flagship models live in data centers. The <em>other</em> half of AI &mdash; the half running on your phone, your laptop, your earbuds &mdash; has very different architectural constraints. And this is where the post-Transformer architectures shine first.</p>
+
+      <p>On a phone-class NPU with maybe 8&ndash;16 GB of RAM and strict power budgets:</p>
+
+      <ul>
+        <li><strong>KV cache memory</strong> at long context becomes the binding constraint long before raw compute does.</li>
+        <li><strong>Latency</strong> matters in milliseconds, not seconds.</li>
+        <li><strong>Battery</strong> means every joule per token counts.</li>
+      </ul>
+
+      <p>SSMs are nearly purpose-built for this regime. A 3B Mamba-3 derivative can serve thousands of tokens of context on-device with stable memory use, where a same-size Transformer would either OOM or take too long. Expect 2026&rsquo;s on-device assistants &mdash; the ones that actually run locally, not the marketing ones &mdash; to be predominantly hybrid, often with a heavier Mamba component than their data-center cousins.</p>
+
+      <div class="alt-path-box">
+        <p><strong>Edge-first architectures.</strong> The bet: bring inference closer to the user. Wins on privacy, latency, offline use, and per-token cost (zero serving cost on-device). Loses on raw quality &mdash; a 3B on-device model is not a 1.6T cloud model, and never will be. The interesting question for 2026 is which user experiences are <em>good enough</em> at 3B that the privacy/latency/cost wins justify shipping them locally instead of via API. Expect dictation, summarization, drafting, retrieval against personal data, and live translation to all flip on-device by year-end.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>How to choose: a practical map</h2>
+
+      <p>If you&rsquo;re building a product on top of an open-weight or open-API model in 2026, the architectural choice maps surprisingly cleanly onto the use-case.</p>
+
+      <table>
+        <thead>
+          <tr><th>Use case</th><th>Best architectural fit</th><th>Concrete example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Million-token context, cost-sensitive</td><td>Hybrid SSM/attention with sparse attention</td><td><code>DeepSeek V4-Pro</code> (1M, $0.30/MTok class)</td></tr>
+          <tr><td>Hardest reasoning, cost-tolerant</td><td>Dense or sparse Transformer + extended thinking</td><td><code>Claude Opus 4.7</code>, <code>GPT-5.4</code></td></tr>
+          <tr><td>High-throughput agent loops</td><td>Diffusion LLM (or fast hybrid)</td><td><code>Mercury 2</code>, <code>Qwen3-Next-80B-A3B</code></td></tr>
+          <tr><td>Edge / on-device</td><td>Pure or near-pure SSM</td><td>Mamba-3 derivatives, small Jamba variants</td></tr>
+          <tr><td>Long persistent context (months)</td><td>Test-time-memory architecture (research-stage)</td><td>Titans-class &mdash; not yet production</td></tr>
+          <tr><td>Structured outputs, code edits</td><td>Diffusion LLM</td><td><code>Mercury Coder</code></td></tr>
+          <tr><td>Open-weight + 256K context + cost balance</td><td>Hybrid MoE</td><td><code>Qwen 3.5</code>, <code>Jamba 1.5</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip-box">
+        <strong>Practical rule.</strong> Default to a Transformer flagship for the hardest 5% of your traffic. Default to a hybrid or diffusion model for the cheap 80%. The middle 15% is where this decision is interesting and worth A/B testing. Don&rsquo;t pick an architecture &mdash; pick a <em>cost-per-quality-point</em> curve, and let the architecture follow.
+      </div>
+    </section>
+
+    <section>
+      <h2>Forecast: end of 2026 in architectures</h2>
+
+      <div class="forecast-box">
+        <p>By <strong>December 2026</strong>, three predictions look relatively safe and one is genuinely uncertain.</p>
+        <p><strong>Safe bets:</strong></p>
+        <ul>
+          <li><strong>Every major Chinese open-weight release will be a hybrid.</strong> The pattern is already universal. Expect Qwen 4, GLM 5+, MiniMax M3+, Kimi K3+ to all use linear/sparse attention as the dominant layer with Transformer attention sprinkled in.</li>
+          <li><strong>At least one Western frontier lab will ship a hybrid in production.</strong> Anthropic, Google DeepMind, and Meta have all published hybrid research. By Q4 2026, expect at least one of the named flagship APIs to quietly become a hybrid &mdash; user-invisible, but with a step-change in serving cost at long context.</li>
+          <li><strong>Diffusion text will ship at &gt;30B parameters with a public benchmark sweep.</strong> Inception Labs or a peer will publish results that force the autoregressive crowd to take diffusion seriously for at least latency-sensitive workloads.</li>
+        </ul>
+        <p><strong>Genuinely uncertain:</strong> Whether a Titans-class test-time-memory architecture ships at frontier scale. Google has the research; the question is whether the safety story is mature enough to deploy a model that rewrites itself.</p>
+      </div>
+
+      <div class="contrarian-box">
+        <p><strong>What may rot fastest:</strong> the specific version numbers (Mamba-3, Mercury 2, Qwen 3.5, DeepSeek V4 Preview), the specific FLOP and KV-cache reduction numbers, the specific benchmark margins, and the layer ratios. <strong>What will remain true:</strong> the <em>O(n&sup2;)</em> wall, the SSM recall-vs-throughput trade-off, the structural advantage of attention for in-context retrieval, the fact that hybrids consistently beat &ldquo;pure&rdquo; alternatives, and the fact that diffusion text trades sequential coherence for parallelism. Memorize the patterns; let the version numbers age.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What this means for you, the builder</h2>
+
+      <p>If you&rsquo;re writing application code, the architectural details rarely show up in your prompts. But they show up <em>everywhere</em> in your serving costs and your latency budget. A few practical implications:</p>
+
+      <ul>
+        <li><strong>Don&rsquo;t pay for context you don&rsquo;t use.</strong> If your prompt is &lt;8K tokens, the choice between hybrid and dense Transformer barely matters. If your prompt is &gt;200K, it matters enormously &mdash; one architecture will cost you 5&times; the other.</li>
+        <li><strong>Latency-sensitive? Try diffusion.</strong> Mercury 2 (commercial) and LLaDA (open) are real options for inner-loop agents and real-time UX, where 5&times; throughput translates directly to 5&times; better p99.</li>
+        <li><strong>Long-context recall &ne; long-context window.</strong> A hybrid model with a 1M window will <em>open</em> the window but quietly compress earlier tokens. If you need exact recall at token 700,000, run an evaluation, don&rsquo;t trust the spec sheet.</li>
+        <li><strong>The provider may swap your architecture out from under you.</strong> If GPT-5.4-Turbo or Claude Opus 4.7 quietly becomes a hybrid in Q3 2026, you&rsquo;ll see latency improve and behavior shift slightly on edge cases. Build evals you can re-run automatically.</li>
+      </ul>
+
+      <div class="exercise-box">
+        <p><strong>Try this.</strong> Pick a long-context task you actually have &mdash; say, a 200K-token document QA. Run it through three models with three different architectures: a dense Transformer (e.g. Claude Opus 4.7), a hybrid (e.g. DeepSeek V4-Flash), and a diffusion LLM (e.g. Mercury 2 if you have access, or a fast small Mamba-based model otherwise). Measure: time-to-first-token, total cost, and answer correctness on 20 needle-in-haystack questions sprinkled across the document. The differences will surprise you &mdash; in either direction.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The bigger pattern</h2>
+
+      <p>Step back from the model names and you can see something that&rsquo;s easy to miss in the version-number churn: <strong>the era of the &ldquo;one true architecture&rdquo; is ending.</strong></p>
+
+      <p>From 2017 to roughly 2023, the field was a Transformer monoculture. Bigger Transformer, more data, longer training, win. By 2025 the cracks were obvious: serving costs at long context, recall fragility, sequential-decoding latency. By 2026 the post-Transformer ecosystem isn&rsquo;t a single competitor &mdash; it&rsquo;s a <em>menu</em> of architectures, each better at some axis (recall, throughput, cost, persistence, parallelism), composed into hybrids tuned per use-case.</p>
+
+      <p>This is healthier than monoculture, but it raises the cost of building. You can&rsquo;t just &ldquo;pick the SOTA model&rdquo; anymore. You have to know what you&rsquo;re optimizing for and pick the architecture that shapes that curve.</p>
+
+      <div class="highlight-box">
+        <h3>The takeaway</h3>
+        <p>The Transformer didn&rsquo;t die. It absorbed its competitors. SSMs became its long-context backbone. MoE became its capacity multiplier. Sparse attention became its default. Diffusion became its fast-lane sibling. Test-time memory may become its life-long-learning extension. The frontier of 2026 is a <em>menagerie</em>, not a single beast &mdash; and the architectures you ignore today will be the production defaults you depend on by 2027.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+
+      <p>This chapter covered architectural alternatives that still mostly do the same job as a Transformer LLM &mdash; predict text, but cheaper or faster or longer. <a href="08-world-models-jepa.html">Chapter 8</a> takes a sharper turn: what if the entire <em>frame</em> &mdash; predicting tokens, predicting language &mdash; is the wrong frame? Yann LeCun thinks so, and the JEPA family of world models is his bet. We&rsquo;ll look at why &ldquo;predict the next token&rdquo; may not be the path to the next paradigm, and what predicting <em>states of the world</em> looks like instead.</p>
+    </section>
+
+    <nav class="chapter-nav">
+      <a href="06-end-of-2026-forecast.html" class="prev">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Chapter 6: What to Expect by End of 2026</span>
+      </a>
+      <a href="08-world-models-jepa.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Chapter 8: World Models &amp; JEPA</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>AI in 2026: The State of the Frontier &copy; 2026. A snapshot, not a forever-truth. Built with AI assistance.</p>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

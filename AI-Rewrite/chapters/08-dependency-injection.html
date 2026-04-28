@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Dependency Injection: Hilt Modules With AI | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="07-presentation-layer.html">&larr; Prev</a>
+      <a href="09-navigation-errors.html">Next &rarr;</a>
+      <a href="maps/08-dependency-injection-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Dependency Injection: Hilt Modules With AI</h1>
+    <p class="subtitle">Per-module Hilt setup, scoping rules, and multi-module DI configuration</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The Electrical Wiring</h2>
+
+      <p>You've built the foundation (domain), installed the plumbing (data), and painted the walls (presentation). But nothing is connected. The ViewModel asks for a use case &mdash; where does it come from? The use case needs a repository &mdash; which implementation? The repository needs DAOs &mdash; from which database instance?</p>
+
+      <p>Dependency injection is the electrical wiring that connects every room to the panel. Hilt generates the wiring at compile time &mdash; but only if you tell AI the correct wiring diagram. One wrong scope, one missing <code>@InstallIn</code>, and the circuit doesn't close.</p>
+
+      <p>This chapter generates one Hilt <code>@Module</code> per Gradle module, with correct scopes, bindings, and qualifier placement.</p>
+    </section>
+
+    <section>
+      <h2>The DI Rules</h2>
+
+      <div class="rule-callout">
+        <h4>Rule DI-001: One @Module Per Gradle Module</h4>
+        <p>Each Gradle module gets exactly one Hilt <code>@Module</code> in a <code>di/</code> package. The module name follows the pattern <code>{GradleModule}Module</code>: <code>DataLocalModule</code>, <code>DataRepositoryModule</code>, <code>FeatureRecipeModule</code>. No dumping all bindings in <code>:app</code>.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DI-002: Scope Matching</h4>
+        <p><code>@Singleton</code> for data and core modules (database, repositories). No scope annotation (unscoped) for use cases &mdash; they're stateless. <code>@ViewModelScoped</code> is implicit via <code>@HiltViewModel</code>. Never scope a stateless class.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DI-003: @Binds Over @Provides</h4>
+        <p>When binding an interface to its implementation, use <code>@Binds</code> (abstract function). Use <code>@Provides</code> only when construction needs logic (Room database builder, OkHttpClient, etc.). AI defaults to <code>@Provides</code> for everything &mdash; always enforce <code>@Binds</code>.</p>
+      </div>
+
+      <div class="tip-box">
+        <h4>Why These Rules Matter for AI</h4>
+        <p>Without DI-001, AI dumps 30 bindings into one massive AppModule. Without DI-002, it Singleton-scopes everything (including stateless use cases, wasting memory). Without DI-003, it creates unnecessary object instances via @Provides when @Binds would generate zero overhead. Load all three in every DI prompt.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The Monolith Had No DI</h2>
+
+      <p>In the monolith, dependencies are created wherever they're needed. Activities instantiate helpers directly. There's no injection, no inversion, no testability.</p>
+
+      <div class="migration-step">
+        <h4>Migration: Manual Construction &rarr; Hilt Injection</h4>
+
+        <div class="before-code">
+          <h5>Before: Manual dependency creation in Activity</h5>
+          <pre><code>class RecipeListActivity : AppCompatActivity() {
+    // Dependencies created inline — untestable, tightly coupled
+    private lateinit var db: DatabaseHelper
+    private lateinit var adapter: RecipeAdapter
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        db = DatabaseHelper(this)            // Direct construction
+        adapter = RecipeAdapter(this)         // Direct construction
+        loadRecipes()
+    }
+
+    private fun loadRecipes() {
+        val cursor = db.readableDatabase.rawQuery(  // Direct DB access
+            "SELECT * FROM recipes", null
+        )
+        // ... populate adapter with cursor data
+    }
+}</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: Hilt-injected ViewModel with use cases</h5>
+          <pre><code>@HiltViewModel
+class RecipeListViewModel @Inject constructor(
+    private val getRecipes: GetRecipesUseCase,
+    private val searchRecipes: SearchRecipesUseCase,
+    private val toggleFavorite: ToggleFavoriteUseCase,
+    private val deleteRecipe: DeleteRecipeUseCase
+) : ViewModel() {
+    // Use cases injected — each backed by repo → DAO → database
+    // All wiring handled by Hilt at compile time
+    // Fully testable — swap use cases for fakes
+
+    private val _state = MutableStateFlow(RecipeListContract.State())
+    val state: StateFlow&lt;RecipeListContract.State&gt; = _state.asStateFlow()
+
+    init { loadRecipes() }
+
+    private fun loadRecipes() {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+            getRecipes().onSuccess { recipes ->
+                _state.update { it.copy(recipes = recipes, isLoading = false) }
+            }
+        }
+    }
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The Hilt Module Map</h2>
+
+      <p>Here's the wiring diagram &mdash; which Gradle module gets which Hilt module, and what it binds.</p>
+
+      <div class="module-map">
+        <h4>Hilt Module Per Gradle Module</h4>
+        <pre>:data:local     → DataLocalModule      → @Provides RecipesDatabase, DAOs
+:data:repository → DataRepositoryModule → @Binds RecipeRepository ← RecipeRepositoryImpl
+:core:domain    → (no Hilt module)      → Use cases are unscoped, injected directly
+:feature:recipe → (no Hilt module)      → @HiltViewModel handles injection
+:feature:books  → (no Hilt module)      → @HiltViewModel handles injection
+:app            → AppModule             → @Provides OkHttpClient, app-level singletons</pre>
+      </div>
+
+      <p>Notice: <code>:core:domain</code> has no Hilt module. Use cases take repository interfaces via constructor &mdash; Hilt resolves them from <code>DataRepositoryModule</code>. Feature modules have no Hilt module either &mdash; <code>@HiltViewModel</code> handles ViewModel injection automatically.</p>
+    </section>
+
+    <section>
+      <h2>Generating the Data Local Module</h2>
+
+      <p>The <code>:data:local</code> module provides the Room database and DAOs. These need <code>@Provides</code> because they require builder logic.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Data Local Hilt Module Prompt</h4>
+        <pre>Generate a Hilt @Module for :data:local.
+
+BINDINGS NEEDED:
+- RecipesDatabase (Room) — @Singleton, built with Room.databaseBuilder
+- RecipeDao — from database.recipeDao()
+- IngredientDao — from database.ingredientDao()
+
+DI RULES:
+- @Module @InstallIn(SingletonComponent::class)
+- @Singleton for database instance
+- @Provides for all (Room needs builder logic)
+- Package: com.example.recipes.data.local.di
+- Class name: DataLocalModule</pre>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Generated DataLocalModule</h4>
+        <pre><code>@Module
+@InstallIn(SingletonComponent::class)
+object DataLocalModule {
+
+    @Provides
+    @Singleton
+    fun provideDatabase(
+        @ApplicationContext context: Context
+    ): RecipesDatabase = Room.databaseBuilder(
+        context,
+        RecipesDatabase::class.java,
+        "recipes.db"
+    ).build()
+
+    @Provides
+    fun provideRecipeDao(db: RecipesDatabase): RecipeDao = db.recipeDao()
+
+    @Provides
+    fun provideIngredientDao(db: RecipesDatabase): IngredientDao = db.ingredientDao()
+}</code></pre>
+      </div>
+
+      <p>DAOs are not <code>@Singleton</code> &mdash; they're lightweight accessors created from the database instance. Only the database itself is Singleton-scoped.</p>
+    </section>
+
+    <section>
+      <h2>Generating the Data Repository Module</h2>
+
+      <p>The <code>:data:repository</code> module binds repository interfaces to their implementations. This is where <code>@Binds</code> shines.</p>
+
+      <div class="highlight-box">
+        <h4>Generated DataRepositoryModule</h4>
+        <pre><code>@Module
+@InstallIn(SingletonComponent::class)
+abstract class DataRepositoryModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindRecipeRepository(
+        impl: RecipeRepositoryImpl
+    ): RecipeRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindCookBookRepository(
+        impl: CookBookRepositoryImpl
+    ): CookBookRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindGroceryRepository(
+        impl: GroceryRepositoryImpl
+    ): GroceryRepository
+}</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>AI Will Use @Provides Here — Don't Let It</h4>
+        <p>AI's default for interface binding is <code>@Provides fun bindRepo(): RecipeRepository = RecipeRepositoryImpl(dao)</code>. This creates a new instance manually. <code>@Binds</code> is an abstract function that tells Hilt "when someone asks for RecipeRepository, give them RecipeRepositoryImpl" &mdash; zero runtime overhead, the binding is resolved at compile time.</p>
+      </div>
+
+      <p>Note: <code>RecipeRepositoryImpl</code> needs an <code>@Inject constructor</code> for this to work:</p>
+
+      <div class="highlight-box">
+        <h4>Constructor Injection on Implementation</h4>
+        <pre><code>class RecipeRepositoryImpl @Inject constructor(
+    private val recipeDao: RecipeDao,
+    private val ingredientDao: IngredientDao
+) : RecipeRepository {
+    // ... implementation from Chapter 6
+}</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Use Cases: No Module Needed</h2>
+
+      <p>Use cases are stateless. They don't need a Hilt module or a scope &mdash; just an <code>@Inject constructor</code>.</p>
+
+      <div class="highlight-box">
+        <h4>Use Case with @Inject Constructor</h4>
+        <pre><code>class GetRecipesUseCase @Inject constructor(
+    private val recipeRepository: RecipeRepository
+) {
+    suspend operator fun invoke(): Result&lt;List&lt;Recipe&gt;&gt; =
+        recipeRepository.getAll()
+}</code></pre>
+      </div>
+
+      <p>Hilt sees the <code>@Inject constructor</code>, knows how to provide <code>RecipeRepository</code> (from <code>DataRepositoryModule</code>), and creates the use case on demand. No scope means a new instance every time it's injected &mdash; which is fine because it's stateless.</p>
+
+      <div class="tip-box">
+        <h4>Don't Singleton-Scope Use Cases</h4>
+        <p>AI loves to add <code>@Singleton</code> to everything. Use cases are stateless functions. Singleton-scoping them wastes memory by keeping them alive for the entire app lifetime. Unscoped = created when needed, garbage-collected when done.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>ViewModels: @HiltViewModel</h2>
+
+      <p>Feature module ViewModels don't need a Hilt module either. <code>@HiltViewModel</code> + <code>@Inject constructor</code> is all Hilt needs.</p>
+
+      <div class="highlight-box">
+        <h4>ViewModel with @HiltViewModel</h4>
+        <pre><code>@HiltViewModel
+class RecipeListViewModel @Inject constructor(
+    private val getRecipes: GetRecipesUseCase,
+    private val searchRecipes: SearchRecipesUseCase,
+    private val toggleFavorite: ToggleFavoriteUseCase,
+    private val deleteRecipe: DeleteRecipeUseCase
+) : ViewModel() {
+    // ... MVI implementation from Chapter 7
+}</code></pre>
+      </div>
+
+      <p>The full dependency chain: <code>RecipeListViewModel</code> ← use cases ← <code>RecipeRepository</code> (bound via <code>@Binds</code>) ← <code>RecipeRepositoryImpl</code> ← DAOs ← <code>RecipesDatabase</code>. All resolved at compile time by Hilt.</p>
+    </section>
+
+    <section>
+      <h2>Qualifier Placement</h2>
+
+      <p>When you have multiple implementations of the same type (e.g., two OkHttpClients for authenticated and unauthenticated requests), qualifiers disambiguate.</p>
+
+      <div class="highlight-box">
+        <h4>Qualifier Definition and Usage</h4>
+        <pre><code>// Define qualifiers in the module that DEFINES the type
+// :core:common/di/Qualifiers.kt
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class AuthenticatedClient
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class UnauthenticatedClient
+
+// Use in the module that PROVIDES the instances
+// :app/di/AppModule.kt
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+    @Provides @Singleton @AuthenticatedClient
+    fun provideAuthClient(interceptor: AuthInterceptor): OkHttpClient = ...
+
+    @Provides @Singleton @UnauthenticatedClient
+    fun providePublicClient(): OkHttpClient = ...
+}</code></pre>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DI-004: Qualifier Location</h4>
+        <p>Qualifiers are defined in the module that <em>defines</em> the type (usually <code>:core:common</code>), not the module that provides the instance. This ensures any module can reference the qualifier without depending on the provider.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Multi-Module Discovery</h2>
+
+      <p>In a multi-module project, Hilt must discover all <code>@Module</code> classes across all Gradle modules. This works automatically as long as every module applies the Hilt plugin.</p>
+
+      <div class="highlight-box">
+        <h4>Hilt Plugin in Convention Plugins</h4>
+        <pre><code>// build-logic/convention/src/main/kotlin/recipes.android.feature.gradle.kts
+plugins {
+    id("com.android.library")
+    id("dagger.hilt.android.plugin")  // Enables Hilt in this module
+    id("com.google.devtools.ksp")      // KSP for Hilt code generation
+}
+
+dependencies {
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+}</code></pre>
+      </div>
+
+      <p>If a module has <code>@Module</code> or <code>@HiltViewModel</code> but doesn't apply the Hilt plugin, the bindings are invisible. AI sometimes generates bindings in a module without checking that Hilt is enabled there. Always verify the convention plugin chain.</p>
+    </section>
+
+    <section>
+      <h2>AI Review: DI Compliance</h2>
+
+      <div class="ai-review-box">
+        <h4>DI Review Checklist</h4>
+        <pre>Review generated Hilt modules:
+
+✅ PASS: One @Module per Gradle module | @Binds for interface→impl
+| @Singleton only for stateful singletons (DB, repos)
+| Use cases unscoped with @Inject constructor
+| @HiltViewModel on ViewModels | @InstallIn on every @Module
+| Qualifiers defined in type-defining module
+
+❌ FAIL: All bindings in AppModule | @Provides for interface→impl
+| @Singleton on use cases | Missing @InstallIn
+| @Module in wrong Gradle module | KAPT instead of KSP</pre>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">Hilt @Modules</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">6</div>
+          <div class="stat-label">@Binds bindings</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">4</div>
+          <div class="stat-label">@Provides bindings</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Scoped use cases</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Common AI Mistakes</h2>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Mistake</th>
+            <th>What AI Does</th>
+            <th>Rule / Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Giant AppModule</td>
+            <td>Puts all 20 bindings in :app</td>
+            <td>DI-001: one @Module per Gradle module</td>
+          </tr>
+          <tr>
+            <td>@Provides for interfaces</td>
+            <td><code>@Provides fun bind() = Impl(dao)</code></td>
+            <td>DI-003: @Binds, abstract function, zero overhead</td>
+          </tr>
+          <tr>
+            <td>Singleton everything</td>
+            <td><code>@Singleton</code> on use cases and mappers</td>
+            <td>DI-002: only stateful objects get scopes</td>
+          </tr>
+          <tr>
+            <td>Missing @InstallIn</td>
+            <td>@Module without @InstallIn</td>
+            <td>Won't compile. Always @InstallIn(SingletonComponent::class)</td>
+          </tr>
+          <tr>
+            <td>Wrong Gradle module</td>
+            <td>DataLocalModule in :data:repository</td>
+            <td>DI-001: module lives where its types live</td>
+          </tr>
+          <tr>
+            <td>KAPT instead of KSP</td>
+            <td><code>kapt(libs.hilt.compiler)</code></td>
+            <td>KSP only. GRADLE-001 from Chapter 4</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Testing DI Configuration</h2>
+
+      <p>After generating all Hilt modules, verify the dependency graph resolves correctly. The simplest test: compile and run.</p>
+
+      <div class="highlight-box">
+        <h4>DI Verification Steps</h4>
+        <pre><code>// 1. Compile — catches most binding errors at build time
+./gradlew assembleDebug
+
+// 2. Run the app — catches runtime-only issues
+//    Look for: MissingBinding, DuplicateBindings, CyclicDependency
+
+// 3. For complex graphs, use Hilt's component tree visualization:
+// Build → Analyze APK → search for "Hilt" generated sources</code></pre>
+      </div>
+
+      <p>Hilt's compile-time verification catches most errors. If the project compiles with all <code>@Module</code> classes in place, the wiring is correct. Runtime crashes are rare &mdash; but when they happen, it's usually a missing <code>@Module</code> or a scope mismatch.</p>
+    </section>
+
+    <section>
+      <h2>Try It: Wire Your Modules</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Generate Hilt Modules for Your Project</h3>
+
+        <ol>
+          <li><strong>Map the dependency graph:</strong> For each Gradle module, list what it needs injected and what it provides to others.</li>
+          <li><strong>Generate DataLocalModule:</strong> @Provides for Room database and DAOs. @Singleton for the database.</li>
+          <li><strong>Generate DataRepositoryModule:</strong> @Binds for each repository interface → implementation. @Singleton scope.</li>
+          <li><strong>Add @Inject constructors:</strong> Repository implementations, use cases. No Hilt modules needed for these.</li>
+          <li><strong>Add @HiltViewModel:</strong> To each ViewModel. Verify @Inject constructor with use case parameters.</li>
+          <li><strong>Verify convention plugins:</strong> Confirm Hilt plugin + KSP in every module that has Hilt annotations.</li>
+          <li><strong>Compile:</strong> <code>./gradlew assembleDebug</code>. Fix binding errors until it builds clean.</li>
+          <li><strong>Run the review:</strong> Check DI-001 through DI-004. No giant AppModule, no @Provides for interfaces, no scoped use cases.</li>
+        </ol>
+
+        <p><strong>Deliverable:</strong> All modules wired with Hilt. Compile succeeds. The full chain resolves: ViewModel ← use cases ← repositories ← DAOs ← database.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The electrical wiring is complete. Every component is connected to the panel. ViewModels get use cases, use cases get repositories, repositories get DAOs, DAOs get the database &mdash; all resolved at compile time.</p>
+
+      <p>In <a href="09-navigation-errors.html">Chapter 9: Navigation, Errors, and Cross-Cutting Concerns</a>, you'll tackle the remaining cross-cutting concerns: type-safe navigation between features, the error handling hierarchy, and Gradle validation. The house is wired &mdash; now connect the rooms with hallways.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="07-presentation-layer.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">The Presentation Layer: MVI With AI</span>
+    </a>
+    <a href="09-navigation-errors.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Navigation, Errors, and Cross-Cutting Concerns</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

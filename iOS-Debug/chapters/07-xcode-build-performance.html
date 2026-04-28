@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Xcode Build Performance | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-network-urlsession.html">&larr; Prev</a>
+      <a href="08-energy-thermal.html">Next &rarr;</a>
+      <a href="maps/07-xcode-build-performance-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Xcode Build Performance</h1>
+    <p class="subtitle">Use AI to analyze build timelines, find slow-to-compile expressions, and shave minutes off every build</p>
+  </header>
+
+  <main>
+
+    <p>In Chapter 6, we optimized the network layer. But every time you want to test a fix, you hit Cmd+B and wait&hellip; and wait&hellip; and wait. A 90-second build that runs 40 times a day costs you an hour of staring at the Xcode progress bar. Over a year, that&rsquo;s <strong>250 hours</strong> &mdash; more than six full work weeks &mdash; lost to compilation.</p>
+
+    <p>The good news: Xcode 26 introduced <strong>compilation caching</strong> that can cut build times by 24-36%. The better news: AI can analyze your build timeline and tell you exactly which files, expressions, and settings are costing you the most time.</p>
+
+    <!-- Why Build Speed Matters -->
+    <h2>The Real Cost of Slow Builds</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">90s</div>
+        <div class="stat-label">Average incremental build for a 200-file Swift project</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">40x</div>
+        <div class="stat-label">Builds per developer per day (build + test cycles)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">1 hr/day</div>
+        <div class="stat-label">Time lost to compilation (60 min of waiting)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">$$$</div>
+        <div class="stat-label">CI minutes: every second counts when you&rsquo;re paying per minute</div>
+      </div>
+    </div>
+
+    <p>But the real cost isn&rsquo;t time &mdash; it&rsquo;s <strong>flow state</strong>. A 15-second build keeps you in the zone. A 90-second build sends you to Twitter. A 5-minute clean build means you forgot what you were doing when the build finishes.</p>
+
+    <!-- Build Timeline -->
+    <h2>Step 1: Read the Build Timeline</h2>
+
+    <p>Xcode has a built-in build timeline that most developers never look at. Open it after a build: <strong>Report Navigator (Cmd+9) &gt; select a build &gt; click the timeline icon</strong> (the bar chart icon in the top-right).</p>
+
+    <p>The timeline shows every compilation task as a horizontal bar. You&rsquo;re looking for:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Long bars:</strong> Files that take disproportionately long to compile. A single file taking 15 seconds in a 90-second build is a red flag.</li>
+        <li><strong>Serialized tasks:</strong> Bars that don&rsquo;t overlap. These are compilation tasks waiting for dependencies instead of running in parallel.</li>
+        <li><strong>Link phase:</strong> The final linking step. If it&rsquo;s longer than individual compilation, you may benefit from <code>EAGER_LINKING</code>.</li>
+        <li><strong>Script phases:</strong> Custom build scripts (SwiftLint, code generation) that run sequentially and block compilation.</li>
+      </ul>
+    </div>
+
+    <div class="tip-box">
+      <strong>Quick win:</strong> Move SwiftLint and other linting scripts to a <strong>post-build</strong> action or a separate CI step. They don&rsquo;t need to block compilation, and removing them from the critical path can save 5-10 seconds per build.
+    </div>
+
+    <!-- Finding Slow Expressions -->
+    <h2>Step 2: Find Slow-to-Compile Expressions</h2>
+
+    <p>The Swift compiler can tell you exactly which expressions take too long to type-check. Add these flags to your build settings under <strong>Other Swift Flags</strong>:</p>
+
+    <pre><code>-Xfrontend -warn-long-function-bodies=200
+-Xfrontend -warn-long-expression-type-checking=200</code></pre>
+
+    <p>The <code>200</code> means &ldquo;warn if type-checking takes more than 200ms.&rdquo; After a build, you&rsquo;ll see warnings like:</p>
+
+    <div class="debug-trace">
+      <h4>Xcode Build Warnings &mdash; Slow Type-Checking</h4>
+<pre>⚠️ /Sources/Views/DashboardView.swift:47:12
+  Instance method 'body' type-checked in 1284ms
+  (threshold: 200ms)
+
+⚠️ /Sources/Networking/ResponseMapper.swift:23:9
+  Expression type-checked in 856ms
+  (threshold: 200ms)
+
+⚠️ /Sources/Models/PriceCalculator.swift:89:16
+  Expression type-checked in 2341ms
+  (threshold: 200ms)</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>Pattern recognized:</strong> Complex type inference chains.</p>
+      <ul>
+        <li><code>DashboardView.body</code> (1284ms): SwiftUI views with deeply nested modifiers and conditional logic force the type checker to explore many possible types. Break into smaller sub-views.</li>
+        <li><code>ResponseMapper</code> (856ms): Likely a chain of <code>.map</code>/<code>.flatMap</code>/<code>.compactMap</code> on collections where the compiler infers intermediate types. Add explicit type annotations to break the chain.</li>
+        <li><code>PriceCalculator</code> (2341ms): The worst offender. Probably a long arithmetic expression or a ternary chain. The compiler explores exponential type combinations for complex expressions. Split into intermediate variables with explicit types.</li>
+      </ul>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Exponential Type Checking</h4>
+      <p><strong>Symptom:</strong> A single expression takes 2+ seconds to type-check. The file is unreasonably slow to compile.</p>
+      <p><strong>Cause:</strong> The Swift compiler&rsquo;s type checker has exponential worst-case behavior with complex expressions. When you write <code>a + b * c - d / e + f</code> with mixed types (Int, Double, CGFloat), the compiler explores every possible overload combination. Similarly, long chains of <code>.map { }.filter { }.reduce { }</code> without type annotations create cascading inference.</p>
+      <p><strong>Fix:</strong> Break long expressions into intermediate <code>let</code> variables with explicit type annotations. This gives the type checker anchoring points and reduces the search space from exponential to linear.</p>
+    </div>
+
+    <!-- Fix Pattern: Type Annotation -->
+    <h3>The Type Annotation Fix</h3>
+
+    <div class="fix-pattern">
+      <h4>Pattern: Break Type Inference Chains</h4>
+<pre><code>// BEFORE — 2341ms to type-check
+let total = items
+    .filter { $0.isActive }
+    .map { $0.price * (1.0 - $0.discount) }
+    .reduce(0, +) + shippingCost * taxRate
+
+// AFTER — 12ms to type-check
+let activeItems: [Item] = items.filter { $0.isActive }
+let prices: [Double] = activeItems.map { item in
+    item.price * (1.0 - item.discount)
+}
+let subtotal: Double = prices.reduce(0, +)
+let total: Double = subtotal + shippingCost * taxRate</code></pre>
+      <p><strong>Rule of thumb:</strong> If a chain has 3+ operations or mixes numeric types, add explicit type annotations. The 2 seconds you save per build adds up to hours per week.</p>
+    </div>
+
+    <!-- Xcode 26 Compilation Caching -->
+    <h2>Xcode 26: Compilation Caching</h2>
+
+    <p>The biggest build performance feature in years. Xcode 26 can cache compilation results and reuse them when source files haven&rsquo;t changed &mdash; even across branch switches and clean builds.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Enable</strong><br>
+        Build Settings &gt; <code>COMPILATION_CACHE_ENABLE_CACHING = YES</code>
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step">
+        <strong>2. Build</strong><br>
+        First build populates the cache (LLVM CAS storage)
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step">
+        <strong>3. Reuse</strong><br>
+        Subsequent builds skip unchanged units (sub-function granularity)
+      </div>
+    </div>
+
+    <div class="performance-metric">
+      <h4>Before/After: Compilation Caching Impact</h4>
+      <div class="metric-before">
+        <strong>Before (No caching)</strong><br>
+        Clean build after branch switch: <strong>4 min 12s</strong><br>
+        Incremental build (1 file changed): <strong>47s</strong><br>
+        CI pipeline full build: <strong>8 min 30s</strong>
+      </div>
+      <div class="metric-after">
+        <strong>After (Compilation caching enabled)</strong><br>
+        Clean build after branch switch: <strong>2 min 41s</strong> (-36%)<br>
+        Incremental build (1 file changed): <strong>31s</strong> (-34%)<br>
+        CI pipeline with shared cache: <strong>5 min 15s</strong> (-38%)
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>Prerequisite:</strong> Compilation caching requires <strong>Explicit Modules</strong> to be enabled (the default in Xcode 26 for Swift targets). If you previously set <code>SWIFT_ENABLE_EXPLICIT_MODULES=NO</code>, you&rsquo;ll need to re-enable it. Explicit modules give the build system better dependency information, which enables more precise caching.
+    </div>
+
+    <!-- Build Settings Optimization -->
+    <h2>Build Settings AI Should Audit</h2>
+
+    <p>Feed your project&rsquo;s build settings to Claude Code and let it find misconfigurations:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Setting</th>
+            <th>Debug Value</th>
+            <th>Release Value</th>
+            <th>Why It Matters</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>SWIFT_COMPILATION_MODE</code></td>
+            <td><code>singlefile</code> (incremental)</td>
+            <td><code>wholemodule</code></td>
+            <td>Incremental for fast debug builds; whole module for optimized release</td>
+          </tr>
+          <tr>
+            <td><code>SWIFT_OPTIMIZATION_LEVEL</code></td>
+            <td><code>-Onone</code></td>
+            <td><code>-O</code> or <code>-Osize</code></td>
+            <td><code>-Onone</code> in Debug = faster compilation. Never optimize Debug builds.</td>
+          </tr>
+          <tr>
+            <td><code>DEBUG_INFORMATION_FORMAT</code></td>
+            <td><code>dwarf</code></td>
+            <td><code>dwarf-with-dsym</code></td>
+            <td>dSYM generation is slow. Only generate for release/archive builds.</td>
+          </tr>
+          <tr>
+            <td><code>EAGER_LINKING</code></td>
+            <td><code>YES</code></td>
+            <td><code>YES</code></td>
+            <td>Starts linking before all files finish compiling. Can save 10-20% on link time.</td>
+          </tr>
+          <tr>
+            <td><code>COMPILATION_CACHE_ENABLE_CACHING</code></td>
+            <td><code>YES</code></td>
+            <td><code>YES</code></td>
+            <td>Xcode 26&rsquo;s compilation cache. Saves 24-36% on clean builds.</td>
+          </tr>
+          <tr>
+            <td><code>SWIFT_ENABLE_BATCH_MODE</code></td>
+            <td><code>YES</code></td>
+            <td><code>YES</code></td>
+            <td>Groups files for compilation. Reduces compiler process spawn overhead.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="warning-box">
+      <strong>Common mistake:</strong> Setting <code>SWIFT_COMPILATION_MODE = wholemodule</code> for Debug builds. This disables incremental compilation &mdash; changing one line recompiles the entire module. Always use <code>singlefile</code> (incremental) for Debug.
+    </div>
+
+    <!-- SPM Performance -->
+    <h2>SPM Resolution: The Hidden Time Sink</h2>
+
+    <p>Swift Package Manager resolution can add 30-60 seconds to your first build. AI audits for these patterns:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Too many packages:</strong> Every package adds resolution time. Audit for packages you included for one function you could have written in 10 lines.</li>
+        <li><strong>Version ranges instead of exact versions:</strong> <code>.upToNextMajor(from: "5.0")</code> forces SPM to check for newer versions. Pin exact versions for faster resolution.</li>
+        <li><strong>Transitive dependencies:</strong> One popular package can pull in 15 transitive dependencies. Use <code>swift package show-dependencies</code> to see the full graph.</li>
+        <li><strong>Binary targets:</strong> Use <code>.binaryTarget</code> for large pre-built frameworks (e.g., Firebase, AWS SDK) to skip compilation entirely.</li>
+        <li><strong>Package.resolved in git:</strong> Always commit <code>Package.resolved</code>. Without it, every team member resolves independently, wasting time and risking version drift.</li>
+      </ul>
+    </div>
+
+    <pre><code>// Show your full dependency tree
+$ swift package show-dependencies --format json | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); \
+  print(f'Direct: {len(d.get(\"dependencies\",[]))} packages'); \
+  print(f'Total (transitive): count them in the tree')"</code></pre>
+
+    <!-- Build the /analyze-build skill -->
+    <h2>Build It: The <code>/analyze-build</code> Skill</h2>
+
+    <div class="fix-pattern">
+      <h4>/analyze-build &mdash; Claude Code Skill</h4>
+      <p>Create <code>.claude/commands/analyze-build.md</code>:</p>
+<pre><code># /analyze-build
+
+Analyze Xcode build performance data. The user will provide one or more of:
+build timeline screenshots, compilation warnings from -warn-long-function-bodies,
+build settings dumps, or SPM dependency graphs.
+
+## Analysis Steps
+
+1. **Identify bottlenecks** — which files take the longest to compile?
+2. **Check for slow expressions** — type-checking warnings indicate
+   complex inference chains that need explicit type annotations.
+3. **Audit build settings** — verify Debug vs Release configurations
+   are appropriate (no whole-module in Debug, no optimization in Debug).
+4. **Review SPM dependencies** — excessive packages, missing binary
+   targets, unpinned versions?
+5. **Check for serialization** — build scripts, framework dependencies,
+   or module maps that prevent parallel compilation.
+
+## Output Format
+
+Prioritized list of optimizations:
+- **Issue:** [what's slow]
+- **Impact:** [estimated time savings]
+- **Fix:** [specific build setting change, code refactor, or SPM adjustment]
+- **Risk:** [any downsides to this change]</code></pre>
+    </div>
+
+    <!-- Modularization -->
+    <h2>Modularization: The Long-Term Fix</h2>
+
+    <p>If your app is a single-target monolith, changing any file can trigger recompilation of everything that depends on it. Modularization breaks your code into independent modules so that changes in one module don&rsquo;t recompile others.</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt &mdash; Asking AI for Module Boundaries</h4>
+<pre><code>/analyze-build
+
+Here's my project structure with 180 Swift files in a single target.
+Build time: 90 seconds for a one-line change.
+
+[paste file list grouped by directory]
+
+Suggest module boundaries that would minimize recompilation cascades.
+Constraints:
+- We use SwiftUI + Combine
+- Core Data model is shared across features
+- We can't break App Store submission (single app target required)
+- We want to start with 3-4 modules, not 20</code></pre>
+    </div>
+
+    <p>Claude Code will analyze your import graph and suggest boundaries like: <code>CoreModels</code> (Core Data + DTOs), <code>Networking</code> (API layer + Codable types), <code>FeatureHome</code> (home screen feature), with the main app target as the composition root.</p>
+
+    <!-- CI Optimizations -->
+    <h2>CI-Specific Build Optimizations</h2>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">☁️</span>
+        <h4>Xcode Cloud</h4>
+        <p>Apple&rsquo;s CI. Derived data caching built-in. Compilation caching shared across workflows. Parallel destination testing (run tests on multiple simulators simultaneously).</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🐙</span>
+        <h4>GitHub Actions</h4>
+        <p>Cache <code>~/Library/Developer/Xcode/DerivedData</code> and <code>~/.swiftpm</code> between runs. Use Apple silicon runners (<code>macos-15</code>) for 2x faster builds. Pin Xcode version with <code>xcodes</code>.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🔧</span>
+        <h4>XcodeBuildMCP</h4>
+        <p>Automate build analysis: <code>xcodebuild -showBuildTimingSummary</code> piped to Claude Code. Run on every PR to catch build time regressions before they merge.</p>
+      </div>
+    </div>
+
+    <h3>Extracting Build Timing Data for AI</h3>
+
+    <pre><code># Export build timing summary
+xcodebuild -scheme MyApp -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  build 2>&amp;1 | tee build.log
+
+# Extract compilation times (requires Xcode build timing)
+grep "CompileSwift" build.log | \
+  awk '{print $NF, $0}' | sort -rn | head -20</code></pre>
+
+    <div class="tip-box">
+      <strong>xctrace for deeper analysis:</strong> Use <code>xctrace record --template 'Build' --launch -- xcodebuild ...</code> to capture a full Instruments trace of your build. Open in Instruments to see thread utilization, I/O waits, and parallelism. Feed the trace summary to Claude Code for analysis.
+    </div>
+
+    <!-- Xcode 26 AI vs Claude Code -->
+    <h2>Xcode 26 AI vs Claude Code for Build Performance</h2>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">🍎</span>
+        <h4>Xcode 26 Swift Assist</h4>
+        <p><strong>Best for:</strong> Fixing individual slow expressions. Select a file with a type-checking warning, ask &ldquo;Why is this slow to compile?&rdquo; Swift Assist suggests type annotations and expression simplifications inline.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🤖</span>
+        <h4>Claude Code /analyze-build</h4>
+        <p><strong>Best for:</strong> Holistic build analysis. Feed it the full build log, build settings, SPM dependency graph, and slow-compilation warnings. Gets a complete picture and prioritizes fixes by impact. Also suggests module boundaries for long-term improvement.</p>
+      </div>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Find Your Build&rsquo;s Top 3 Time Sinks</h3>
+      <p><strong>Steps:</strong></p>
+      <ol>
+        <li>Add <code>-Xfrontend -warn-long-function-bodies=200</code> and <code>-Xfrontend -warn-long-expression-type-checking=200</code> to your project&rsquo;s Other Swift Flags</li>
+        <li>Do a clean build (Cmd+Shift+K, then Cmd+B)</li>
+        <li>Open the build timeline (Report Navigator &gt; select build &gt; timeline icon)</li>
+        <li>Screenshot or note the 3 longest compilation tasks</li>
+        <li>Collect any slow type-checking warnings from the Issue Navigator</li>
+        <li>Feed all of this to Claude Code with <code>/analyze-build</code></li>
+        <li>Apply the top recommended fix</li>
+        <li>Rebuild and measure the time difference</li>
+      </ol>
+      <p><strong>Bonus:</strong> Enable <code>COMPILATION_CACHE_ENABLE_CACHING = YES</code>, do a clean build, switch branches, switch back, and rebuild. Compare the post-cache build time to the original.</p>
+    </div>
+
+    <!-- Key Takeaways -->
+    <div class="highlight-box">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li><strong>Enable compilation caching</strong> in Xcode 26 &mdash; 24-36% faster clean builds with one build setting</li>
+        <li>Use <code>-warn-long-function-bodies</code> and <code>-warn-long-expression-type-checking</code> to find slow expressions</li>
+        <li><strong>Break type inference chains</strong> with explicit type annotations &mdash; the #1 fix for slow Swift compilation</li>
+        <li>Never use <code>wholemodule</code> compilation mode in Debug &mdash; it kills incremental builds</li>
+        <li><strong>Audit SPM dependencies</strong> &mdash; pin versions, commit <code>Package.resolved</code>, use binary targets for large frameworks</li>
+        <li>Move linting scripts to <strong>post-build</strong> or CI &mdash; they don&rsquo;t need to block compilation</li>
+        <li><strong>Modularize</strong> for long-term build speed &mdash; AI can suggest module boundaries from your file structure</li>
+        <li>Build the <strong>/analyze-build</strong> skill for holistic build performance audits</li>
+      </ul>
+    </div>
+
+    <!-- Coming Up -->
+    <h2>Coming Up Next</h2>
+
+    <p>Your builds are fast &mdash; but is your app draining the user&rsquo;s battery while it runs? In <strong>Chapter 8: Energy &amp; Thermal Optimization</strong>, we&rsquo;ll use AI to analyze energy profiles from Instruments and MetricKit, identify background battery drains, and build an <code>/analyze-energy</code> skill that catches the silent killers: excessive CPU wake, aggressive location tracking, and thermal throttling that makes your app slower the longer it runs.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-network-urlsession.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Network &amp; URLSession Debugging</span>
+      </a>
+      <a href="08-energy-thermal.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Energy &amp; Thermal Optimization</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

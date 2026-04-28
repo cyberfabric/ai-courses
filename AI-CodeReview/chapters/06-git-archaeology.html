@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Understanding What Changed | Reviewing AI Code For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Reviewing AI Code For Dummies</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-claude-review-toolkit.html">&larr; Prev</a>
+      <a href="07-skill-atrophy.html">Next &rarr;</a>
+      <a href="maps/06-git-archaeology-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Understanding What Changed</h1>
+    <p class="subtitle">Git-based techniques for tracing, understanding, and reconstructing AI-generated changes</p>
+  </header>
+
+  <main>
+
+    <!-- ============================================ -->
+    <h2>Why Git Archaeology Matters Now</h2>
+    <!-- ============================================ -->
+
+    <p>Chapters 3&ndash;5 gave you tools for reviewing code <em>as it lands</em>. But there&rsquo;s a different problem: understanding code <em>after</em> it landed. What did the AI agent do during that 45-minute session yesterday? What changed across those 12 commits? Why does <code>auth.ts</code> look different than you remember?</p>
+
+    <p>Think of git history like <strong>sedimentary rock layers</strong>. Each commit is a layer. A geologist reads rock layers to understand what happened millions of years ago. You read git history to understand what happened last Tuesday. The difference in 2026 is that AI agents deposit layers <em>fast</em> &mdash; sometimes 20 commits in a single session &mdash; and the layers don&rsquo;t always explain themselves.</p>
+
+    <p>Addy Osmani calls this <strong>comprehension debt</strong>: the growing gap between how much code exists in your system and how much of it any human genuinely understands. Tests stay green, syntax stays clean, but the team&rsquo;s mental model of the system quietly erodes. Git archaeology is how you fight that erosion.</p>
+
+    <!-- ============================================ -->
+    <h2>The Four Git Commands You Need</h2>
+    <!-- ============================================ -->
+
+    <p>You don&rsquo;t need to be a git wizard. Four commands cover 90% of AI code archaeology. Learn them well.</p>
+
+    <h3>1. <code>git diff --stat</code> &mdash; The Shape of the Change</h3>
+
+    <p>Before you read any code, see the shape. How many files changed? How big are the changes? Where&rsquo;s the weight?</p>
+
+<pre><code>$ git diff --stat HEAD~5..HEAD
+ src/api/auth.ts           | 142 +++++++++++++++++++++
+ src/api/users.ts          |  18 ++-
+ src/middleware/rate-limit.ts | 89 ++++++++++++++
+ src/utils/crypto.ts       |  34 ++++++
+ src/utils/validation.ts   |   6 +-
+ tests/auth.test.ts        |  67 +++++++++++
+ package.json              |   3 +-
+ 7 files changed, 351 insertions(+), 8 deletions(-)</code></pre>
+
+    <p>From this alone, you know: the bulk of the work is in <code>auth.ts</code> (142 lines, high risk) and <code>rate-limit.ts</code> (89 lines, new file). The <code>validation.ts</code> change is tiny (6 lines, probably safe). Start your investigation with <code>auth.ts</code>.</p>
+
+    <h3>2. <code>git log --oneline --graph</code> &mdash; The Story</h3>
+
+    <p>See the sequence. How did the AI work? Was it one massive commit or a logical progression?</p>
+
+<pre><code>$ git log --oneline --graph -10
+* a3f8c21 Add rate limiting middleware
+* 7b2e459 Add auth endpoint tests
+* 1d4c890 Implement token refresh logic
+* 9e7f312 Add crypto utilities for JWT signing
+* 5c1a0b8 Set up auth route structure
+* 82d6f1a (origin/main) Update README</code></pre>
+
+    <p>This tells a story: the AI built from the bottom up &mdash; structure first, then crypto, then logic, then tests, then middleware. That&rsquo;s a logical sequence. If instead you see one giant commit titled &ldquo;Add auth system,&rdquo; you have a problem &mdash; there&rsquo;s no history to investigate when something breaks.</p>
+
+    <h3>3. <code>git show &lt;commit&gt;</code> &mdash; The Detail</h3>
+
+    <p>Once you know which commit matters, read it. <code>git show</code> displays the full diff for a single commit, with the commit message at the top.</p>
+
+<pre><code>$ git show 1d4c890
+commit 1d4c890...
+Author: Claude Code &lt;noreply@anthropic.com&gt;
+Date:   Wed Apr 9 14:23:41 2026
+
+    Implement token refresh logic
+
+    Adds refresh token rotation with 7-day expiry.
+    Revokes old refresh token on use to prevent replay.
+
+diff --git a/src/api/auth.ts b/src/api/auth.ts
+...</code></pre>
+
+    <p>Good commit messages tell you <em>what</em> and <em>why</em>. Bad ones tell you nothing. We&rsquo;ll cover how to enforce good ones shortly.</p>
+
+    <h3>4. <code>git blame</code> &mdash; Who Wrote This Line?</h3>
+
+    <p>When you&rsquo;re debugging a specific function and need to know when it was introduced &mdash; and by whom (or what):</p>
+
+<pre><code>$ git blame src/api/auth.ts -L 45,55
+1d4c890 (Claude Code 2026-04-09 14:23) 45| async function refreshToken(token: string) {
+1d4c890 (Claude Code 2026-04-09 14:23) 46|   const payload = verifyRefreshToken(token);
+1d4c890 (Claude Code 2026-04-09 14:23) 47|   if (!payload) throw new AuthError('Invalid refresh token');
+a3f8c21 (Claude Code 2026-04-09 14:41) 48|   await revokeToken(token);  // Added in rate-limit commit??
+1d4c890 (Claude Code 2026-04-09 14:23) 49|   const newAccess = signAccessToken(payload.userId);
+1d4c890 (Claude Code 2026-04-09 14:23) 50|   const newRefresh = signRefreshToken(payload.userId);</code></pre>
+
+    <p>Line 48 stands out &mdash; it was added in a different commit (<code>a3f8c21</code>, the rate-limiting commit). Why is token revocation in a rate-limiting commit? That&rsquo;s a sign of scope creep &mdash; the AI agent drifted from its task.</p>
+
+    <div class="tip-box">
+      <h4>Blame with Context</h4>
+      <p>Use <code>git blame -L 45,55</code> to focus on specific line ranges instead of blaming an entire file. For long files, this turns a wall of text into a focused investigation. Add <code>-w</code> to ignore whitespace changes &mdash; helpful when the AI reformatted code without changing logic.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Advanced Diff Strategies</h2>
+    <!-- ============================================ -->
+
+    <p>When AI refactors code &mdash; moving functions between files, renaming variables, restructuring modules &mdash; the standard diff is almost unreadable. These flags help:</p>
+
+    <h3><code>--word-diff</code> &mdash; See What Actually Changed</h3>
+
+<pre><code>$ git diff --word-diff HEAD~1
+const [-timeout-]{+requestTimeout+} = config.get('timeout');
+const result = await fetch(url, { [-timeout-]{+signal: AbortSignal.timeout(requestTimeout)+} });</code></pre>
+
+    <p>Instead of showing entire lines as added/removed, <code>--word-diff</code> highlights the specific words that changed. Perfect for AI renames and small refactors.</p>
+
+    <h3><code>--color-moved</code> &mdash; Track Relocated Code</h3>
+
+<pre><code>$ git diff --color-moved=dimmed-zebra HEAD~1</code></pre>
+
+    <p>When AI moves a function from one file to another, the standard diff shows it as deleted from file A and added to file B &mdash; two big blocks of change that look like new code. With <code>--color-moved</code>, moved code is colored differently from truly new code. You instantly see: &ldquo;this block wasn&rsquo;t written, it was relocated.&rdquo;</p>
+
+    <h3><code>--name-only</code> &mdash; Just the Files</h3>
+
+<pre><code>$ git diff --name-only HEAD~5..HEAD
+src/api/auth.ts
+src/api/users.ts
+src/middleware/rate-limit.ts
+src/utils/crypto.ts
+src/utils/validation.ts
+tests/auth.test.ts
+package.json</code></pre>
+
+    <p>When you need a quick inventory without the noise. Combine with <code>--diff-filter=A</code> to see only <em>added</em> files, or <code>--diff-filter=M</code> for only <em>modified</em> files.</p>
+
+    <div class="highlight-box">
+      <h3>The AI Refactor Diff Stack</h3>
+      <p>When reviewing an AI-driven refactor, run these three commands in order:<br>
+      <code>git diff --stat</code> &mdash; see the shape<br>
+      <code>git diff --color-moved=dimmed-zebra</code> &mdash; separate moved code from new code<br>
+      <code>git diff --word-diff</code> &mdash; see the actual changes within lines<br>
+      This trio turns an intimidating 500-line refactor diff into something you can read in 10 minutes.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Asking AI to Explain Its Own Changes</h2>
+    <!-- ============================================ -->
+
+    <p>Here&rsquo;s a technique most developers underuse: <strong>ask the AI to explain what it just did</strong>. After an AI agent session, before you commit or push:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Prompt</div>
+        <div class="prompt-text">&ldquo;Explain the diff between HEAD and HEAD~5. For each commit: what changed, why, and what assumptions did you make about the existing codebase?&rdquo;</div>
+        <div class="prompt-explanation">Forces the AI to articulate its reasoning per commit. You can verify each assumption against your knowledge of the system.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Weak Prompt</div>
+        <div class="prompt-text">&ldquo;What did you change?&rdquo;</div>
+        <div class="prompt-explanation">Too vague. The AI will summarize at a high level and skip the details that matter for review.</div>
+      </div>
+    </div>
+
+    <p>This is especially valuable when you pick up a session someone else started, or when you&rsquo;re reviewing commits from an AI agent that ran autonomously overnight. The AI&rsquo;s explanation won&rsquo;t be perfect &mdash; it can only explain from its context window &mdash; but it gives you a starting point that&rsquo;s much faster than reading raw diffs.</p>
+
+    <!-- ============================================ -->
+    <h2>Annotating Commits: The AI Provenance Trail</h2>
+    <!-- ============================================ -->
+
+    <p>In 2026, knowing <em>which code was AI-generated</em> is no longer optional. When something breaks at 2 AM, the first question is: &ldquo;Who wrote this?&rdquo; If the answer is &ldquo;an AI agent, three weeks ago, and nobody reviewed it closely,&rdquo; you need to know that <em>before</em> you start debugging.</p>
+
+    <h3>Commit Message Conventions</h3>
+
+    <p>The simplest approach: use <strong>git trailers</strong> in your commit messages.</p>
+
+<pre><code>feat: add input validation for user email fields
+
+Adds server-side validation for email format and domain
+allowlist. Rejects disposable email providers.
+
+Generated-with: Claude Code
+Reviewed-by: J. Santos
+Edge-cases-tested: empty string, unicode, 255+ chars</code></pre>
+
+    <p>Trailers appear cleanly in <code>git log</code> output and are machine-parseable. You can filter for AI-generated commits:</p>
+
+<pre><code>$ git log --all --grep="Generated-with:" --oneline
+a3f8c21 Add rate limiting middleware
+7b2e459 Add auth endpoint tests
+1d4c890 Implement token refresh logic</code></pre>
+
+    <h3>2026 Provenance Tools</h3>
+
+    <p>The tooling has matured significantly. Several tools now provide line-level AI attribution:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">🔎</div>
+      <div class="tool-name">Git AI / AI Blame</div>
+      <div class="tool-desc">A drop-in replacement for <code>git blame</code> that shows AI attribution for each line. Uses Git Notes to track provenance. Stores transcripts locally or in the cloud. Run <code>git ai blame src/auth.ts</code> to see which lines were AI-generated and which were human-written.</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">📋</div>
+      <div class="tool-name">Agent Trace (Cursor open standard)</div>
+      <div class="tool-desc">An open RFC specification for recording AI code attribution data. Supported agents report exactly which lines they wrote &mdash; no guessing. Attributions survive rebases, squashes, amends, merges, and cherry-picks.</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🔗</div>
+      <div class="tool-name">Agent Blame (Mesa)</div>
+      <div class="tool-desc">Adds line-level AI attribution by intercepting hooks from Claude Code, Cursor, and OpenCode. Normalizes data from different agents into a common format. Attributions stored in Git Notes and preserved through history rewrites.</div>
+    </div>
+
+    <p>These tools answer the question: &ldquo;Was this line written by a human or an AI?&rdquo; That distinction matters for debugging (AI code has different failure modes) and for compliance (some organizations require human review of all AI-generated code).</p>
+
+    <!-- ============================================ -->
+    <div class="ai-tell-box">
+      <h4>AI Commits That Touch Unrelated Files</h4>
+      <p>One of the most common AI tells in git history: <strong>scope creep across commits</strong>. You asked the agent to add rate limiting. It added rate limiting &mdash; and also refactored the logging utility, renamed a variable in an unrelated controller, and added a helper function &ldquo;for future use.&rdquo;</p>
+<pre><code>$ git diff --stat HEAD~1
+ src/middleware/rate-limit.ts  |  89 ++++++++++++++++++++
+ src/utils/logger.ts           |  23 +++---    &lt;-- Why?
+ src/api/orders.ts             |   4 +-        &lt;-- Why?
+ src/utils/helpers.ts          |  15 ++++     &lt;-- Why?
+ 4 files changed, 116 insertions(+), 15 deletions(-)</code></pre>
+      <p>Only <code>rate-limit.ts</code> was requested. The other three files are scope creep. The AI improved things it noticed along the way &mdash; which sounds helpful until one of those &ldquo;improvements&rdquo; introduces a regression. When you see unrelated files in a commit, investigate each one. If it doesn&rsquo;t belong, revert it or move it to a separate commit with its own review.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="red-flag-box">
+      <h4>The Massive Unexplained Commit</h4>
+      <p>The biggest red flag in git history: a single commit with hundreds of changed lines and a commit message like:</p>
+<pre><code>commit 4f8a2bc
+Author: dev@company.com
+Date:   Wed Apr 9 16:45:00 2026
+
+    AI changes</code></pre>
+      <p>No explanation of what changed. No breakdown of why. No AI disclosure. No test evidence. This commit is a black box. When it breaks &mdash; and at some point, something in those hundreds of lines <em>will</em> break &mdash; you&rsquo;ll have to reverse-engineer the entire change from scratch.</p>
+      <p><strong>The rule:</strong> If a commit has more than 100 changed lines and a commit message shorter than 10 words, it needs to be broken up and explained before merging. No exceptions for AI-generated code &mdash; especially not for AI-generated code.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Building a Mental Model from Git History</h2>
+    <!-- ============================================ -->
+
+    <p>Git history isn&rsquo;t just for debugging. It&rsquo;s a tool for <em>understanding</em>. When you join a project or return to code you haven&rsquo;t touched in months, git history is your map.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Overview</strong><br>
+        <code>git log --oneline -30</code><br>
+        What happened recently?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Focus</strong><br>
+        <code>git log --oneline -- src/api/</code><br>
+        What changed in this area?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Detail</strong><br>
+        <code>git log -p -- src/api/auth.ts</code><br>
+        How did this file evolve?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Context</strong><br>
+        <code>git show &lt;commit&gt;</code><br>
+        What else changed with this?
+      </div>
+    </div>
+
+    <p>This is how experienced developers onboard onto unfamiliar code. In the AI era, it&rsquo;s also how you maintain understanding of code that AI wrote while you were in a meeting. The Anthropic study found a <strong>17% comprehension drop</strong> when developers delegated to AI without actively understanding the output. Git history is your safety net against that drift.</p>
+
+    <div class="tip-box">
+      <h4>The Friday Afternoon Scan</h4>
+      <p>Every Friday, spend 10 minutes running <code>git log --oneline --since="5 days ago"</code> on your main branch. Scan the commits. For any AI-generated commit you don&rsquo;t recognize, run <code>git show</code> on it. This habit keeps your mental model current and catches comprehension debt before it compounds.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Interactive Exploration Commands</h2>
+    <!-- ============================================ -->
+
+    <p>A few more commands for specific scenarios:</p>
+
+    <h3>Find When a Function Was Introduced</h3>
+
+<pre><code>$ git log -S "function refreshToken" --oneline
+1d4c890 Implement token refresh logic</code></pre>
+
+    <p>The <code>-S</code> flag (called &ldquo;pickaxe&rdquo;) finds the commit that added or removed a specific string. When you encounter an unfamiliar function in AI-generated code, this tells you exactly when and in what context it appeared.</p>
+
+    <h3>See All Changes by a Specific Author</h3>
+
+<pre><code>$ git log --author="Claude" --oneline --since="2 weeks ago"
+a3f8c21 Add rate limiting middleware
+7b2e459 Add auth endpoint tests
+1d4c890 Implement token refresh logic
+9e7f312 Add crypto utilities for JWT signing</code></pre>
+
+    <p>Filter by author to see all AI-generated commits in a time range. Combine with <code>--stat</code> to see the scope of AI&rsquo;s recent changes.</p>
+
+    <h3>Compare Branches</h3>
+
+<pre><code>$ git diff main...feature/auth --stat
+$ git log main...feature/auth --oneline</code></pre>
+
+    <p>The three-dot syntax shows what the feature branch added that main doesn&rsquo;t have. Essential for understanding the full scope of an AI agent&rsquo;s work before a merge.</p>
+
+    <!-- ============================================ -->
+    <div class="review-checklist">
+      <h4>Git Commands for Understanding AI Changes</h4>
+      <ul class="checklist">
+        <li class="checked"><code>git diff --stat</code> &mdash; see the shape: which files changed, how much</li>
+        <li class="checked"><code>git log --oneline --graph</code> &mdash; see the story: sequence and structure of commits</li>
+        <li class="checked"><code>git show &lt;commit&gt;</code> &mdash; see the detail: full diff for one commit</li>
+        <li class="checked"><code>git blame -L &lt;start&gt;,&lt;end&gt; &lt;file&gt;</code> &mdash; see the origin: who wrote each line, when</li>
+        <li class="checked"><code>git diff --word-diff</code> &mdash; see word-level changes (renames, small refactors)</li>
+        <li class="checked"><code>git diff --color-moved=dimmed-zebra</code> &mdash; separate moved code from new code</li>
+        <li class="checked"><code>git log -S "function_name"</code> &mdash; find when a function was introduced</li>
+        <li class="checked"><code>git log --author="Claude"</code> &mdash; filter to AI-generated commits</li>
+        <li class="checked"><code>git log --all --grep="Generated-with:"</code> &mdash; find commits with AI provenance trailers</li>
+        <li class="checked"><code>git diff main...HEAD --stat</code> &mdash; see full scope of a feature branch</li>
+      </ul>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="practice-drill">
+      <h4>Reconstruct an AI Agent Session</h4>
+      <p>Do this right now. It takes 10 minutes and teaches you more about git archaeology than reading ever will.</p>
+      <ol>
+        <li>Find your most recent AI coding session: <code>git log --oneline -20</code></li>
+        <li>Identify the range of commits the AI produced (look for patterns: same author, close timestamps, related messages)</li>
+        <li>See the shape: <code>git diff --stat &lt;first-commit&gt;^..&lt;last-commit&gt;</code></li>
+        <li>Read the story: <code>git log --oneline &lt;first-commit&gt;^..&lt;last-commit&gt;</code></li>
+        <li>For each commit, ask yourself:
+          <ul>
+            <li>Does the message explain <em>what</em> and <em>why</em>?</li>
+            <li>Does it touch only files related to its stated purpose?</li>
+            <li>Is AI involvement disclosed?</li>
+          </ul>
+        </li>
+        <li>Pick the commit with the most changed lines: <code>git show &lt;commit&gt;</code></li>
+        <li>Can you explain what this commit does without asking the AI?</li>
+      </ol>
+      <p>If you found scope creep, unexplained commits, or code you can&rsquo;t explain &mdash; congratulations, you&rsquo;ve just identified your comprehension debt.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="exercise-box">
+      <h4>Establish Your Team&rsquo;s Git Conventions for AI Code</h4>
+      <p>Create a shared agreement for how your team annotates AI-generated commits.</p>
+      <ol>
+        <li>Draft a commit message template:
+<pre><code>&lt;type&gt;: &lt;short description&gt;
+
+&lt;what changed and why, 2-3 sentences&gt;
+
+Generated-with: &lt;tool name&gt;
+Reviewed-by: &lt;reviewer&gt;
+Edge-cases-tested: &lt;list&gt;</code></pre>
+        </li>
+        <li>Add the template to your project: <code>git config commit.template .gitmessage</code></li>
+        <li>Agree on scope rules:
+          <ul>
+            <li>One concern per commit &mdash; if the AI drifted, split the commit</li>
+            <li>No commit over 200 lines without a detailed message body</li>
+            <li>AI provenance trailers required on all AI-generated commits</li>
+          </ul>
+        </li>
+        <li>Share this with your team and enforce it for two weeks</li>
+        <li>After two weeks, review: are commit messages improving? Is scope creep easier to spot?</li>
+      </ol>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================ -->
+
+    <p>You can now read the history, trace the changes, and spot the gaps. But all of this &mdash; reviewing, tracing, understanding &mdash; assumes your skills are sharp enough to catch the problems. What if they&rsquo;re not?</p>
+
+    <p>In <a href="07-skill-atrophy.html">Chapter 7: Fighting Skill Atrophy</a>, we&rsquo;ll confront the uncomfortable reality: using AI tools daily can erode the very skills you need to review AI output. You&rsquo;ll learn about the Anthropic study (52 engineers, 17% comprehension drop), the three AI usage patterns that preserve learning, and concrete strategies &mdash; No-AI Days, the 15-minute rule, AI Hygiene &mdash; for staying sharp.</p>
+
+    <p>Understanding the code is only possible if your skills are intact. Let&rsquo;s make sure they are.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="05-claude-review-toolkit.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Claude Code&rsquo;s Review Toolkit</span>
+    </a>
+    <a href="07-skill-atrophy.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Fighting Skill Atrophy</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Your First Agent | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-tool-design.html">&larr; Prev</a>
+      <a href="05-memory-state.html">Next &rarr;</a>
+      <a href="maps/04-first-agent-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Your First Agent</h1>
+    <p class="subtitle">Build a complete, working research agent from scratch &mdash; no frameworks, just code</p>
+  </header>
+
+  <main>
+
+    <h2>The Plan</h2>
+
+    <p>In Chapters 1&ndash;3 you learned what agents are, how they&rsquo;re architected, and how to design tools. Now we build. By the end of this chapter, you&rsquo;ll have a <strong>working research agent</strong> that can search the web, read pages, and synthesize findings &mdash; running on your machine in about 100 lines of Python.</p>
+
+    <p>No frameworks. No magic. Just the Anthropic SDK, a few tool functions, and the <code>while True</code> loop you saw in Chapter 1. Once you understand what&rsquo;s happening at this level, every framework you encounter later will feel transparent instead of magical.</p>
+
+    <div class="workflow-steps">
+      <span class="step">1. Setup</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">2. Define Tools</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">3. System Prompt</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">4. Agent Loop</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">5. Run It</span>
+    </div>
+
+    <h2>Step 1: Setting Up</h2>
+
+    <p>You need three things: Python 3.10+, an Anthropic API key, and two small libraries.</p>
+
+<pre><code># Create a project folder and virtual environment
+mkdir research-agent && cd research-agent
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install anthropic httpx beautifulsoup4</code></pre>
+
+    <p>Set your API key as an environment variable:</p>
+
+<pre><code># Linux/Mac
+export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+
+# Windows PowerShell
+$env:ANTHROPIC_API_KEY="sk-ant-your-key-here"</code></pre>
+
+    <div class="tip-box">
+      Don&rsquo;t have an Anthropic API key? Sign up at <code>console.anthropic.com</code>. You get free credits to start. You can also adapt this code for OpenAI by swapping <code>anthropic</code> for <code>openai</code> &mdash; the tool-use loop is the same pattern.
+    </div>
+
+    <h2>Step 2: Define Your Tools</h2>
+
+    <p>Our research agent needs three tools. Following the design rules from Chapter 3: verb names, rich descriptions, typed parameters.</p>
+
+<pre><code>import anthropic
+import httpx
+from bs4 import BeautifulSoup
+import json
+
+client = anthropic.Anthropic()
+
+# --- Tool Definitions (what the LLM sees) ---
+
+tools = [
+    {
+        "name": "search_web",
+        "description": (
+            "Search the web using DuckDuckGo. Returns up to 5 results, "
+            "each with a title, URL, and snippet. Use specific queries "
+            "for better results. Example: 'Python asyncio best practices 2026' "
+            "instead of just 'Python'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query. Be specific and detailed."
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_page",
+        "description": (
+            "Fetch and read the text content of a web page. Returns the "
+            "main text content, stripped of HTML tags. Use this after "
+            "search_web to read full articles. Returns first 5000 chars "
+            "to stay within limits."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full URL to read, e.g. 'https://example.com/article'"
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "save_report",
+        "description": (
+            "Save the final research report to a local file. Use this "
+            "when you have gathered enough information and synthesized "
+            "your findings. The report should be well-structured with "
+            "sections, key findings, and sources."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, e.g. 'report.md'"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The full report content in Markdown format"
+                }
+            },
+            "required": ["filename", "content"]
+        }
+    }
+]</code></pre>
+
+    <p>That&rsquo;s what the LLM sees. Now let&rsquo;s write the actual implementations &mdash; the code that runs when the agent calls each tool.</p>
+
+    <h2>Step 3: Implement the Tools</h2>
+
+<pre><code># --- Tool Implementations (what actually runs) ---
+
+def search_web(query: str) -> str:
+    """Search DuckDuckGo and return results as JSON."""
+    try:
+        url = "https://html.duckduckgo.com/html/"
+        resp = httpx.post(url, data={"q": query}, timeout=10,
+                          headers={"User-Agent": "ResearchAgent/1.0"})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        for r in soup.select(".result")[:5]:
+            title_tag = r.select_one(".result__title a")
+            snippet_tag = r.select_one(".result__snippet")
+            if title_tag:
+                results.append({
+                    "title": title_tag.get_text(strip=True),
+                    "url": title_tag.get("href", ""),
+                    "snippet": snippet_tag.get_text(strip=True) if snippet_tag else ""
+                })
+        if not results:
+            return json.dumps({"status": "no_results",
+                               "suggestion": "Try different or broader search terms."})
+        return json.dumps({"status": "success", "results": results})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e),
+                           "suggestion": "Search failed. Try a different query."})
+
+def read_page(url: str) -> str:
+    """Fetch a web page and return its text content."""
+    try:
+        resp = httpx.get(url, timeout=15, follow_redirects=True,
+                         headers={"User-Agent": "ResearchAgent/1.0"})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Remove script and style elements
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        # Truncate to stay within context limits
+        if len(text) > 5000:
+            text = text[:5000] + "\n\n[...truncated — page too long]"
+        return json.dumps({"status": "success", "content": text, "url": url})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e),
+                           "suggestion": "Could not read page. Try a different URL."})
+
+def save_report(filename: str, content: str) -> str:
+    """Save content to a file."""
+    try:
+        with open(filename, "w") as f:
+            f.write(content)
+        return json.dumps({"status": "success",
+                           "message": f"Report saved to {filename}"})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+# Map tool names to functions
+tool_functions = {
+    "search_web": lambda inputs: search_web(inputs["query"]),
+    "read_page": lambda inputs: read_page(inputs["url"]),
+    "save_report": lambda inputs: save_report(inputs["filename"], inputs["content"]),
+}</code></pre>
+
+    <p>Notice how every tool returns structured JSON with a <code>status</code> field, exactly as we discussed in Chapter 3. Errors include suggestions so the agent can recover.</p>
+
+    <h2>Step 4: The System Prompt</h2>
+
+    <p>The system prompt turns a generic LLM into a research agent. This is where you encode the ReAct architecture from Chapter 2:</p>
+
+<pre><code>SYSTEM_PROMPT = """You are a research agent. Your job is to answer questions
+thoroughly by searching the web and reading relevant sources.
+
+## Process
+1. Think about what information you need to answer the question.
+2. Search the web with specific, targeted queries.
+3. Read the most promising pages for detailed information.
+4. If needed, search again with refined queries based on what you learned.
+5. Synthesize your findings into a clear, well-sourced answer.
+
+## Rules
+- Always cite your sources with URLs.
+- If sources disagree, note the conflicting information.
+- If you cannot find reliable information, say so honestly.
+- Be efficient — aim for 2-4 searches maximum.
+- After gathering enough info, save a report using save_report.
+
+## Quality Standards
+- Prefer recent sources (2025-2026) over older ones.
+- Cross-reference claims across multiple sources when possible.
+- Distinguish between facts and opinions in your report."""</code></pre>
+
+    <div class="pattern-box">
+      <h3>The System Prompt Blueprint</h3>
+      <p>Every agent system prompt should have three sections:</p>
+      <ol>
+        <li><strong>Identity</strong> &mdash; who the agent is and what it does (&ldquo;You are a research agent&rdquo;)</li>
+        <li><strong>Process</strong> &mdash; the step-by-step approach (your architecture, in plain English)</li>
+        <li><strong>Rules</strong> &mdash; constraints, quality standards, and guardrails</li>
+      </ol>
+      <p><strong>Why it works:</strong> the identity anchors the model&rsquo;s behavior. The process gives it a strategy instead of letting it wing it. The rules prevent common failure modes. Skip any of these and the agent becomes unpredictable.</p>
+    </div>
+
+    <h2>Step 5: The Agent Loop</h2>
+
+    <p>This is the heart of every agent. It&rsquo;s the <code>while True</code> loop from Chapter 1, but now with real tools, logging, and a step limit:</p>
+
+<pre><code>def run_agent(question: str, max_steps: int = 15) -> str:
+    """Run the research agent on a question."""
+    print(f"\n{'='*60}")
+    print(f"Research question: {question}")
+    print(f"{'='*60}\n")
+
+    messages = [{"role": "user", "content": question}]
+
+    for step in range(1, max_steps + 1):
+        # Call the LLM
+        response = client.messages.create(
+            model="claude-sonnet-4-6-20250514",
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            tools=tools,
+            messages=messages,
+        )
+
+        # --- Handle tool use ---
+        if response.stop_reason == "tool_use":
+            # The response may contain text (thinking) + tool calls
+            for block in response.content:
+                if hasattr(block, "text"):
+                    print(f"  [{step}] Think: {block.text[:150]}...")
+
+            # Execute each tool call
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    print(f"  [{step}] Tool:  {block.name}({json.dumps(block.input)[:100]})")
+                    result = tool_functions[block.name](block.input)
+                    print(f"  [{step}] Result: {result[:100]}...")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            # Feed results back into the conversation
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+        # --- Handle final response ---
+        else:
+            final_text = ""
+            for block in response.content:
+                if hasattr(block, "text"):
+                    final_text += block.text
+            print(f"\n  [Done in {step} steps]")
+            print(f"\n{'='*60}")
+            print(final_text)
+            return final_text
+
+    print(f"\n  [Hit step limit of {max_steps}]")
+    return "Agent reached maximum steps without completing."</code></pre>
+
+    <div class="architecture-box">
+      <h3>The Agent Loop, Decoded</h3>
+      <p>Every iteration of the loop follows the same three-phase pattern:</p>
+      <ol>
+        <li><strong>Call the LLM</strong> &mdash; send the conversation history (including previous tool results) to the model</li>
+        <li><strong>Check the response</strong> &mdash; did the model produce a final answer (<code>stop_reason == "end_turn"</code>) or a tool call (<code>stop_reason == "tool_use"</code>)?</li>
+        <li><strong>Execute and feed back</strong> &mdash; if it&rsquo;s a tool call, run the tool, add the result to the conversation, and loop</li>
+      </ol>
+      <p>The conversation <code>messages</code> list is the agent&rsquo;s memory. Every tool call and result gets appended, so the model sees the full history of what it&rsquo;s done. This is the &ldquo;short-term memory&rdquo; we&rsquo;ll expand on in Chapter 5.</p>
+    </div>
+
+    <h2>Step 6: Run It!</h2>
+
+<pre><code># --- Main entry point ---
+
+if __name__ == "__main__":
+    question = input("What would you like me to research? > ")
+    run_agent(question)</code></pre>
+
+    <p>Save everything in a file called <code>agent.py</code> and run it:</p>
+
+<pre><code>python agent.py</code></pre>
+
+    <p>Type a research question and watch the agent work. You&rsquo;ll see each step logged: the thinking, the tool calls, the results, and the final synthesis. Here&rsquo;s what a real execution trace looks like:</p>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>The user wants to know about the best AI agent frameworks in 2026. Let me search for recent comparisons and reviews.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>search_web({"query": "best AI agent frameworks comparison 2026"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span>5 results: articles from LetDataScience, Particula, KDnuggets comparing LangGraph, CrewAI, Claude Agent SDK, OpenAI Agents SDK</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>read_page({"url": "https://letsdatascience.com/blog/ai-agent-frameworks-compared"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span>Detailed comparison article with pros/cons, code examples, community size data for each framework&hellip;</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>Good data from one source. Let me verify with a second source and check for any frameworks I might be missing.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>search_web({"query": "LangGraph vs CrewAI vs OpenAI Agents SDK 2026 developer experience"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span>3 more relevant articles with hands-on comparisons&hellip;</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>save_report({"filename": "frameworks-report.md", "content": "# AI Agent Frameworks in 2026\n\n## Key Findings\n..."})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span><code>{"status": "success", "message": "Report saved to frameworks-report.md"}</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Respond</span>
+        <span>Here&rsquo;s my analysis of the top AI agent frameworks in 2026&hellip; [full synthesized answer with sources]</span>
+      </div>
+    </div>
+
+    <h2>Debugging the Loop</h2>
+
+    <p>When your agent misbehaves (and it will), the logs are your best friend. Here&rsquo;s what to look for:</p>
+
+    <ul>
+      <li><strong>Agent calls the wrong tool</strong> &rarr; your tool descriptions are ambiguous. Clarify them.</li>
+      <li><strong>Agent passes wrong parameters</strong> &rarr; add examples to parameter descriptions, use enums.</li>
+      <li><strong>Agent loops without progress</strong> &rarr; it&rsquo;s stuck. Add a step limit (we did) and check if tool results are useful.</li>
+      <li><strong>Agent ignores tool results</strong> &rarr; the result might be too long. Truncate large outputs.</li>
+    </ul>
+
+    <div class="pitfall-box">
+      <strong>The context window trap.</strong> Every tool call and result gets appended to the <code>messages</code> list. A web page might return 5,000 characters. After 10 pages, that&rsquo;s 50,000 characters of context. The model&rsquo;s accuracy drops after ~32K tokens, and it suffers from the &ldquo;lost in the middle&rdquo; effect &mdash; information in the middle of the context gets ignored. Always truncate tool outputs to a reasonable size.
+    </div>
+
+    <h2>Handling Edge Cases</h2>
+
+    <h3>Infinite Loops</h3>
+
+    <p>We added <code>max_steps=15</code>, but you can also detect when the agent is repeating itself:</p>
+
+<pre><code>def detect_loop(messages, window=4):
+    """Check if the agent is repeating the same tool calls."""
+    recent_tools = []
+    for msg in messages[-window * 2:]:
+        if isinstance(msg.get("content"), list):
+            for block in msg["content"]:
+                if hasattr(block, "name"):
+                    recent_tools.append(f"{block.name}:{block.input}")
+    # If we see the same call twice in the last window, we're stuck
+    return len(recent_tools) != len(set(recent_tools))</code></pre>
+
+    <h3>Making It Interactive</h3>
+
+    <p>Want to approve actions before the agent executes them? Add a confirmation gate:</p>
+
+<pre><code># Inside the agent loop, before executing a tool:
+for block in response.content:
+    if block.type == "tool_use":
+        if block.name == "save_report":  # Confirm writes
+            print(f"\n  Agent wants to save: {block.input['filename']}")
+            confirm = input("  Allow? (y/n) > ")
+            if confirm.lower() != "y":
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": '{"status": "denied", "message": "User declined."}',
+                    "is_error": True,
+                })
+                continue
+        # ... execute the tool normally</code></pre>
+
+    <p>This is your first taste of <strong>human-in-the-loop</strong> &mdash; a full chapter on this topic is coming in Chapter 6.</p>
+
+    <h2>What You Just Built vs. What Frameworks Do</h2>
+
+    <p>Your ~100-line agent does the same core thing that every agent framework does. The frameworks add:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Wiring</span>
+        <span class="stat-label">Automatic tool registration, schema generation from types, result handling</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Features</span>
+        <span class="stat-label">Memory, streaming, retries, tracing, multi-agent support, guardrails</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Ecosystem</span>
+        <span class="stat-label">Pre-built tools, MCP integrations, deployment helpers, community</span>
+      </div>
+    </div>
+
+    <p>But the core is the same loop. Now when you use LangGraph, CrewAI, or Claude Agent SDK (Chapter 10), you&rsquo;ll understand what they&rsquo;re doing under the hood. You won&rsquo;t be confused by abstractions because you&rsquo;ve built the primitive yourself.</p>
+
+    <div class="highlight-box">
+      <h3>The Full Working Agent</h3>
+      <p>All the code in this chapter fits in a single <code>agent.py</code> file of about 120 lines. The pieces: <strong>tool definitions</strong> (what the LLM sees), <strong>tool implementations</strong> (what actually runs), <strong>system prompt</strong> (the agent&rsquo;s personality and strategy), and <strong>the loop</strong> (the engine that ties it all together). That&rsquo;s it. That&rsquo;s the whole agent.</p>
+    </div>
+
+    <div class="warning-box">
+      <strong>Cost awareness.</strong> Each iteration of the loop is an API call. With Claude Sonnet, a typical research session of 5&ndash;8 steps costs roughly $0.02&ndash;0.05. That&rsquo;s fine for development. But an agent stuck in a loop running 100 iterations can cost $1+ per question. Always set <code>max_steps</code> and monitor your usage at <code>console.anthropic.com</code>.
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Extend Your Research Agent</h3>
+      <p>Take the agent you just built and make it better:</p>
+      <ol>
+        <li><strong>Add a new tool: <code>save_to_file</code></strong> &mdash; lets the agent save notes or intermediate findings to a local file. Define the JSON schema, implement the function, and wire it into the tool map.</li>
+        <li><strong>Test with 3 different queries:</strong>
+          <ul>
+            <li>A factual question: &ldquo;What is the population of the 5 largest cities in Europe?&rdquo;</li>
+            <li>A comparison: &ldquo;Compare Rust vs Go for building CLI tools in 2026.&rdquo;</li>
+            <li>A deep research question: &ldquo;What are the main arguments for and against AI regulation?&rdquo;</li>
+          </ul>
+        </li>
+        <li><strong>Add execution logging</strong> &mdash; save every step (thought, tool call, result) to a log file so you can review the agent&rsquo;s decisions after it finishes.</li>
+        <li><strong>Add a token counter</strong> &mdash; track <code>response.usage.input_tokens</code> and <code>response.usage.output_tokens</code> at each step. Print the total cost at the end.</li>
+      </ol>
+      <p>Bonus: swap <code>claude-sonnet-4-6-20250514</code> for <code>claude-haiku-4-5-20251001</code> and compare the results. Is the cheaper model good enough for simple research? Where does it struggle?</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your agent works &mdash; but it forgets everything between runs. Ask it the same question twice and it starts from scratch. Ask it to build on previous research and it has no idea what you&rsquo;re talking about.</p>
+
+    <p>In <a href="05-memory-state.html">Chapter 5: Memory &amp; State Management</a>, we&rsquo;ll fix that. You&rsquo;ll learn the three types of agent memory (working, short-term, and long-term), how to manage the context window as it grows, and how to give your agent explicit tools to save and recall information across sessions.</p>
+
+    <nav class="chapter-nav">
+      <a href="03-tool-design.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Tool Design for Agents</span>
+      </a>
+      <a href="05-memory-state.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Memory &amp; State Management</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Custom Skills &amp; Hooks | Claude Power User For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💪</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Claude Power User</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-claude-md-memory.html">&larr; Prev</a>
+      <a href="07-claude-api.html">Next &rarr;</a>
+      <a href="maps/06-skills-and-hooks-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Custom Skills &amp; Hooks</h1>
+    <p class="subtitle">Reusable slash commands and automated triggers &mdash; extend Claude Code to fit your workflow</p>
+  </header>
+
+  <main>
+
+    <p>In the last chapter, you taught Claude <em>what to know</em> about your project with CLAUDE.md and memory. Now it's time to teach Claude <em>what to do</em> &mdash; automatically, consistently, and with a single command.</p>
+
+    <p>Think of it this way: CLAUDE.md is the employee handbook. <strong>Skills</strong> are the standard operating procedures. <strong>Hooks</strong> are the automatic quality checks that run without anyone asking.</p>
+
+    <p>Together, they turn Claude Code from a smart assistant into a customized development machine that follows <em>your</em> workflows.</p>
+
+    <h2>Part 1: Skills (Custom Slash Commands)</h2>
+
+    <p>You already know slash commands like <code>/help</code>, <code>/commit</code>, and <code>/review</code>. Skills let you create your own. Type <code>/my-command</code>, and Claude follows a reusable prompt template you wrote &mdash; same quality, same format, every single time.</p>
+
+    <div class="before-after">
+      <div class="before">
+        <h4>Without Skills</h4>
+        <p>You type the same long prompt every time you want to generate tests:</p>
+        <code>"Write unit tests for this file using JUnit 5 and MockK. Follow the should_expected_when_condition naming pattern. Mock all external dependencies. Include edge cases..."</code>
+      </div>
+      <div class="after">
+        <h4>With a Custom Skill</h4>
+        <p>You type one command and get the same quality every time:</p>
+        <code>/generate-tests UserRepository.kt</code>
+      </div>
+    </div>
+
+    <h3>Where Skills Live</h3>
+
+    <p>Skills are Markdown files stored in specific directories. Where you put them determines their scope:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Location</th>
+          <th>Scope</th>
+          <th>Use Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>.claude/commands/</code></td>
+          <td>This project (shared via git)</td>
+          <td>Team skills: project-specific workflows</td>
+        </tr>
+        <tr>
+          <td><code>.claude/skills/*/SKILL.md</code></td>
+          <td>This project (shared via git)</td>
+          <td>Rich skills with supporting files</td>
+        </tr>
+        <tr>
+          <td><code>~/.claude/commands/</code></td>
+          <td>All your projects (personal)</td>
+          <td>Your personal toolkit</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Commands vs. Skills:</strong> Files in <code>.claude/commands/</code> and <code>.claude/skills/</code> both create slash commands. The <code>skills/</code> format is newer and supports additional features like supporting files (templates, scripts), frontmatter configuration, and dynamic context. New skills should use the <code>.claude/skills/</code> format. Existing commands still work perfectly.
+    </div>
+
+    <h3>Creating Your First Skill (Simple Command)</h3>
+
+    <p>The simplest skill is a Markdown file in <code>.claude/commands/</code>. The filename becomes the command name.</p>
+
+    <div class="claude-example">
+      <div class="user-msg">
+        <strong>File: .claude/commands/generate-tests.md</strong>
+      </div>
+      <div class="claude-msg">
+<pre><code>Write comprehensive unit tests for the file or class
+the user specifies.
+
+## Requirements
+- Use JUnit 5 and MockK
+- Follow naming: `should_expectedBehavior_when_condition`
+- Mock all external dependencies (repositories, APIs)
+- Include: happy path, edge cases, error cases
+- Place tests in the matching test/ directory
+- Run the tests after generating them
+
+## Context
+- Read the source file first to understand all public methods
+- Check existing tests to match the project's testing style
+- Use @MockK for mocks, @InjectMockKs for the class under test
+
+The user will specify which file to test as: $ARGUMENTS</code></pre>
+      </div>
+    </div>
+
+    <p>Now you type <code>/generate-tests UserRepository.kt</code> and Claude follows these instructions exactly. The <code>$ARGUMENTS</code> variable gets replaced with whatever you type after the command name.</p>
+
+    <div class="shortcut-box">
+      <h4>Quick Reference: Skill Variables</h4>
+      <ul>
+        <li><code>$ARGUMENTS</code> &mdash; everything the user types after the command name</li>
+        <li>The filename (minus <code>.md</code>) becomes the slash command: <code>generate-tests.md</code> &rarr; <code>/generate-tests</code></li>
+        <li>Subdirectories create namespaced commands: <code>commands/android/lint.md</code> &rarr; <code>/android:lint</code></li>
+      </ul>
+    </div>
+
+    <h3>Creating a Rich Skill (SKILL.md Format)</h3>
+
+    <p>For skills that need supporting files, templates, or advanced configuration, use the <code>.claude/skills/</code> directory with a <code>SKILL.md</code> file:</p>
+
+    <div class="claude-example">
+      <div class="user-msg">
+        <strong>File: .claude/skills/review-pr/SKILL.md</strong>
+      </div>
+      <div class="claude-msg">
+<pre><code>---
+description: Review a pull request for bugs, security, and style
+argument-hint: PR number or branch name
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+---
+
+Review the PR specified by $ARGUMENTS.
+
+## Steps
+1. Run `git diff main...$ARGUMENTS` to see all changes
+2. Read each changed file in full context
+3. Check for:
+   - Bugs and logic errors
+   - Security vulnerabilities (SQL injection, XSS, etc.)
+   - Performance issues (N+1 queries, unnecessary allocations)
+   - Code style violations per CLAUDE.md
+4. Provide feedback in this format:
+   - 🔴 **Critical:** must fix before merge
+   - 🟡 **Suggestion:** would improve the code
+   - 🟢 **Nice:** things done well
+
+## Rules
+- Be specific: reference file names and line numbers
+- Suggest fixes, not just problems
+- Don't nitpick formatting — focus on substance</code></pre>
+      </div>
+    </div>
+
+    <h3>Frontmatter Fields Explained</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Purpose</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>description</code></td>
+          <td>What the skill does (helps Claude decide when to auto-load)</td>
+          <td><code>"Generate unit tests for a file"</code></td>
+        </tr>
+        <tr>
+          <td><code>argument-hint</code></td>
+          <td>Hints at what argument to pass</td>
+          <td><code>"file path or class name"</code></td>
+        </tr>
+        <tr>
+          <td><code>allowed-tools</code></td>
+          <td>Which tools Claude can use during this skill</td>
+          <td><code>[Bash, Read, Edit]</code></td>
+        </tr>
+        <tr>
+          <td><code>paths</code></td>
+          <td>Only activate when working with matching files</td>
+          <td><code>["src/**/*.kt"]</code></td>
+        </tr>
+        <tr>
+          <td><code>disable-model-invocation</code></td>
+          <td>Only run when explicitly called (never auto-loaded)</td>
+          <td><code>true</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Practical Skill Examples</h3>
+
+    <p>Here are five skills that cover the most common developer workflows:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">📝</div>
+      <div class="tool-name">/daily-standup</div>
+      <div class="tool-desc">Summarizes your git activity from the last 24 hours into a standup-ready format. Reads git log, groups by feature, and generates "Yesterday I... Today I plan to..." format.</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🔍</div>
+      <div class="tool-name">/review-pr</div>
+      <div class="tool-desc">Reviews a PR for bugs, security issues, and style. Takes a branch name or PR number as an argument. Outputs categorized feedback.</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">♻️</div>
+      <div class="tool-name">/refactor</div>
+      <div class="tool-desc">Refactors a file or function while preserving behavior. Reads the code, identifies improvement opportunities, makes changes, and runs tests to verify nothing broke.</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">📖</div>
+      <div class="tool-name">/explain</div>
+      <div class="tool-desc">Explains a file or function in plain English. Covers what it does, why it exists, how it connects to the rest of the codebase, and common gotchas.</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🚀</div>
+      <div class="tool-name">/release-notes</div>
+      <div class="tool-desc">Generates human-readable release notes from git history between two tags. Groups changes by category (features, fixes, breaking changes).</div>
+    </div>
+
+    <div class="power-tip">
+      <h4>Power Tip: Build a Standup Skill in 2 Minutes</h4>
+      <p>Create <code>.claude/commands/daily-standup.md</code> with this content:</p>
+<pre><code>Summarize my git activity from the last 24 hours.
+
+1. Run `git log --oneline --author="$(git config user.name)" --since="24 hours ago"`
+2. Group commits by feature/area
+3. Format as:
+   **Yesterday:** [bullet list of what was done]
+   **Today:** [suggest next logical steps based on recent work]
+   **Blockers:** [note any failing tests or unresolved conflicts]
+
+Keep it concise — this goes in a Slack standup channel.</code></pre>
+      <p>Now <code>/daily-standup</code> gives you a formatted standup in seconds. Share this with your team by committing it to the repo.</p>
+    </div>
+
+    <h3>Writing Good Skill Instructions</h3>
+
+    <div class="prompt-example good">
+      <h4>Good: Be directive and specific</h4>
+<pre><code>Read the file at $ARGUMENTS.
+Identify all public methods without unit tests.
+For each untested method, generate a test that covers:
+- The happy path with typical inputs
+- At least one edge case
+- Error handling if the method can throw
+Run the tests and fix any failures.</code></pre>
+    </div>
+
+    <div class="prompt-example bad">
+      <h4>Bad: Vague and conversational</h4>
+<pre><code>Hey Claude, could you maybe look at this file and
+write some tests if you think it needs them? Use
+whatever testing framework seems appropriate. Thanks!</code></pre>
+    </div>
+
+    <p>Skills are <strong>instructions</strong>, not conversations. Use imperative verbs: "Read the file", "Generate tests", "Run lint." Be specific about format, tools, and expected output.</p>
+
+    <h2>Part 2: Hooks (Automated Triggers)</h2>
+
+    <p>If skills are things you <em>ask</em> Claude to do, hooks are things that happen <em>automatically</em>. They're shell commands that run in response to specific Claude Code events &mdash; like a Git hook, but for Claude's actions.</p>
+
+    <h3>How Hooks Work</h3>
+
+    <div class="workflow-steps">
+      <span class="step">Event fires (file write, command, etc.)</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Your shell command runs</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Format, block, notify, log&hellip;</span>
+    </div>
+
+    <h3>Hook Events</h3>
+
+    <p>Hooks aren&rsquo;t limited to <code>PreToolUse</code> / <code>PostToolUse</code>. Claude Code now exposes <strong>around 30 lifecycle events</strong> grouped into three cadences: once per session, once per turn, and once per tool call (plus a handful of asynchronous events for things like compaction and worktrees). You don&rsquo;t need to know all of them &mdash; here are the ones you&rsquo;ll actually reach for:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Event</th>
+          <th>Cadence</th>
+          <th>Can Block?</th>
+          <th>Common Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SessionStart</code></td>
+          <td>Per session</td>
+          <td>No</td>
+          <td>Auto-load context (read git status, inject reminders)</td>
+        </tr>
+        <tr>
+          <td><code>SessionEnd</code></td>
+          <td>Per session</td>
+          <td>No</td>
+          <td>Persist transcripts, ship logs, cleanup</td>
+        </tr>
+        <tr>
+          <td><code>UserPromptSubmit</code></td>
+          <td>Per turn</td>
+          <td>Yes</td>
+          <td>Add hidden context to the prompt; redact secrets</td>
+        </tr>
+        <tr>
+          <td><code>UserPromptExpansion</code></td>
+          <td>Per turn</td>
+          <td>Yes</td>
+          <td>Modify a slash command after it expands into a prompt</td>
+        </tr>
+        <tr>
+          <td><code>Stop</code></td>
+          <td>Per turn</td>
+          <td>Yes</td>
+          <td>Run final checks before Claude is allowed to stop</td>
+        </tr>
+        <tr>
+          <td><code>PreToolUse</code></td>
+          <td>Per tool call</td>
+          <td>Yes (exit 2)</td>
+          <td>Validate commands, block dangerous operations</td>
+        </tr>
+        <tr>
+          <td><code>PostToolUse</code></td>
+          <td>Per tool call</td>
+          <td>Yes</td>
+          <td>Auto-format, lint, log actions</td>
+        </tr>
+        <tr>
+          <td><code>SubagentStop</code></td>
+          <td>Per tool call</td>
+          <td>Yes</td>
+          <td>Validate or filter what a subagent returns</td>
+        </tr>
+        <tr>
+          <td><code>PreCompact</code></td>
+          <td>Async</td>
+          <td>Yes</td>
+          <td>Save state right before context is compacted</td>
+        </tr>
+        <tr>
+          <td><code>Notification</code></td>
+          <td>Async</td>
+          <td>No</td>
+          <td>Route alerts to Slack, desktop, logging</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The full reference (including <code>StopFailure</code>, <code>PostToolBatch</code>, <code>PermissionRequest</code>, <code>InstructionsLoaded</code>, <code>WorktreeCreate</code>, and friends) lives in the official <a href="https://code.claude.com/docs/en/hooks">hooks docs</a>. Most teams only ever wire up two or three of these, so don&rsquo;t feel obligated to learn them all.</p>
+
+    <h3>Configuring Hooks</h3>
+
+    <p>Hooks live in your settings files. Here's the JSON format in <code>.claude/settings.json</code>:</p>
+
+    <div class="claude-example">
+      <div class="user-msg">
+        <strong>Example: Auto-format files after Claude edits them</strong>
+      </div>
+      <div class="claude-msg">
+<pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx prettier --write \"$CLAUDE_TOOL_INPUT_FILE_PATH\""
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+      </div>
+    </div>
+
+    <p>Every time Claude edits or writes a file, Prettier auto-formats it. No asking, no forgetting &mdash; it just happens.</p>
+
+    <h3>The Matcher Filter</h3>
+
+    <p>The <code>matcher</code> field is a regex that filters which tools trigger the hook. Common matchers: <code>Bash</code> (shell commands), <code>Edit|Write</code> (any file modification), <code>Read</code> (file reads, for auditing), <code>.*</code> (every tool &mdash; use carefully).</p>
+
+    <h3>Practical Hook Examples</h3>
+
+    <h4>1. Auto-Format on Edit (PostToolUse)</h4>
+
+    <p>Ensure every file Claude touches is properly formatted:</p>
+
+    <div class="prompt-example good">
+<pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx prettier --write \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+      <p>The <code>|| true</code> ensures the hook doesn't fail for non-supported file types.</p>
+    </div>
+
+    <h4>2. Block Dangerous Commands (PreToolUse)</h4>
+
+    <p>Prevent Claude from running destructive operations:</p>
+
+    <div class="prompt-example good">
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT_COMMAND\" | grep -qE 'rm -rf|drop table|force push'; then exit 2; fi"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+      <p>Exit code 2 tells Claude Code to <strong>block the action</strong>. Claude gets told the hook rejected the command and can try a safer alternative.</p>
+    </div>
+
+    <h4>3. Run Lint After File Changes (PostToolUse)</h4>
+
+    <div class="prompt-example good">
+<pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [[ \"$CLAUDE_TOOL_INPUT_FILE_PATH\" == *.kt ]]; then ./gradlew lintDebug --quiet 2>/dev/null; fi"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+    </div>
+
+    <h4>4. Desktop Notification on Completion (Notification)</h4>
+
+    <div class="prompt-example good">
+<pre><code>{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "notify-send 'Claude Code' \"$CLAUDE_NOTIFICATION_MESSAGE\""
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+      <p>On macOS, replace <code>notify-send</code> with <code>osascript -e 'display notification \"$CLAUDE_NOTIFICATION_MESSAGE\" with title \"Claude Code\"'</code></p>
+    </div>
+
+    <div class="warning-box">
+      <strong>Hook performance matters.</strong> Hooks run synchronously &mdash; a slow hook blocks Claude from proceeding. Keep hook commands fast (under 2 seconds). If you need something slower like a full test suite, consider running it asynchronously or only on specific file patterns.
+    </div>
+
+    <h3>Blocking vs. Non-Blocking Hooks</h3>
+
+    <p><strong>PreToolUse exit codes:</strong> <code>0</code> allows the action (proceed normally), <code>2</code> blocks it (Claude is told the hook rejected it and can try an alternative), and any other code is treated as a hook error (logged, but the action still proceeds).</p>
+
+    <h2>Beyond Skills and Hooks: Subagents</h2>
+
+    <p>Skills and hooks are two of the three first-class extension points in Claude Code. The third is <strong>subagents</strong> &mdash; specialized workers Claude can delegate to that run in their own context window. Built-in subagents include <strong>Explore</strong> (Haiku-powered, read-only codebase search), <strong>Plan</strong> (research-only, used by plan mode), and <strong>general-purpose</strong> (full tool access). You can also drop your own Markdown files into <code>.claude/agents/</code> &mdash; same shape as a SKILL.md, but the body becomes a system prompt for an isolated worker.</p>
+
+    <div class="tip-box">
+      <strong>The mental model:</strong> Skills run a procedure when you call them. Hooks run on events. Subagents run in their <em>own</em> conversation, returning only a summary &mdash; great for fan-out work like running three reviewers in parallel without flooding your main context. Subagents are a topic in their own right; this chapter stays scoped to skills and hooks.
+    </div>
+
+    <h2>Combining Skills and Hooks</h2>
+
+    <p>The real power comes from using skills and hooks together. Here's a workflow that shows how:</p>
+
+    <div class="workflow-steps">
+      <span class="step"><strong>/feature</strong> &mdash; skill scaffolds branch, files, tests</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">You code &mdash; hook auto-formats every edit</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step"><strong>/review-pr</strong> &mdash; skill reviews changes</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step"><strong>/commit</strong> &mdash; hook lints before commit</span>
+    </div>
+
+    <p>Skills handle the big, intentional workflows. Hooks handle the small, automatic quality checks. Together, they create a pipeline where quality is built in, not bolted on.</p>
+
+    <h2>Debugging Skills and Hooks</h2>
+
+    <p>Things will go wrong. Here's how to fix them:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong>Skill not showing up?</strong> Check the filename and directory. It must be in <code>.claude/commands/</code> or <code>.claude/skills/*/SKILL.md</code>. Filename becomes the command name.</li>
+        <li><strong>Hook not firing?</strong> Run <code>/status</code> to verify hooks are loaded. Check that the <code>matcher</code> regex matches the tool name exactly.</li>
+        <li><strong>Hook running but not working?</strong> Test the command manually in your terminal first. Environment variables like <code>$CLAUDE_TOOL_INPUT_FILE_PATH</code> are only set during hook execution.</li>
+        <li><strong>Hook blocking when it shouldn't?</strong> Check your exit codes. Only exit code 2 blocks &mdash; other non-zero codes are treated as errors but don't block.</li>
+        <li><strong>Hook too slow?</strong> Add <code>2>/dev/null</code> to suppress stderr noise and ensure commands are scoped to relevant file types only.</li>
+      </ul>
+    </div>
+
+    <div class="tip-box">
+      <strong>Quick test:</strong> Claude Code watches your settings files for changes. If you edit <code>.claude/settings.json</code> while Claude is running, the hooks update automatically &mdash; no restart needed.
+    </div>
+
+    <h2>Sharing Skills With Your Team</h2>
+
+    <p>One of the best things about skills in <code>.claude/commands/</code> or <code>.claude/skills/</code>: they're just files in your repo. Commit them to git, and every team member gets the same slash commands.</p>
+
+    <div class="prompt-example good">
+      <h4>Recommended: Document your skills in CLAUDE.md</h4>
+<pre><code>## Available Skills
+- `/generate-tests [file]` — Generate unit tests for a file
+- `/review-pr [branch]` — Review a PR for bugs and style
+- `/daily-standup` — Summarize git activity for standup
+- `/explain [file]` — Explain what a file does in plain English
+- `/release-notes [tag1] [tag2]` — Generate release notes between tags</code></pre>
+      <p>This tells both Claude and your teammates what's available.</p>
+    </div>
+
+    <p>Personal skills go in <code>~/.claude/commands/</code> &mdash; they travel with you across projects but aren't shared with your team.</p>
+
+    <div class="exercise-box">
+      <h4>Try It Yourself: Build Your First Skill and Hook</h4>
+      <p><strong>Part 1: Create a skill</strong></p>
+      <ol>
+        <li>Create <code>.claude/commands/daily-standup.md</code> in your project</li>
+        <li>Write instructions to summarize your last 24 hours of git activity</li>
+        <li>Include the <code>$ARGUMENTS</code> variable so you can optionally specify a time range</li>
+        <li>Test it: type <code>/daily-standup</code> in Claude Code</li>
+      </ol>
+      <p><strong>Part 2: Add a hook</strong></p>
+      <ol>
+        <li>Open <code>.claude/settings.json</code> (create it if it doesn't exist)</li>
+        <li>Add a PostToolUse hook that auto-formats files after Claude edits them (use Prettier, ktlint, or your project's formatter)</li>
+        <li>Edit a file with Claude and verify the formatter runs automatically</li>
+      </ol>
+      <p><strong>Bonus:</strong> Create a PreToolUse hook that blocks <code>rm -rf</code> commands. Test it by asking Claude to delete a temporary directory with <code>rm -rf</code> &mdash; the hook should block it.</p>
+    </div>
+
+    <h2>What's Coming Next</h2>
+
+    <p>You've now customized Claude Code with persistent knowledge (CLAUDE.md), reusable workflows (skills), and automated quality checks (hooks). But there's a whole other dimension to Claude: the <strong>API</strong>. In <a href="07-claude-api.html">Chapter 7: The Claude API</a>, you'll learn how to call Claude directly from your own code &mdash; building custom integrations, automated pipelines, and product features that go far beyond what any CLI can do.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-claude-md-memory.html">
+        <span class="nav-direction">&larr; Previous chapter</span>
+        <span class="nav-chapter">CLAUDE.md &amp; Memory Systems</span>
+      </a>
+      <a href="07-claude-api.html" class="next">
+        <span class="nav-direction">Next chapter &rarr;</span>
+        <span class="nav-chapter">The Claude API</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

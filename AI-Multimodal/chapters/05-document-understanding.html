@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Document Understanding & OCR 2.0 | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-multimodal-prompting.html">&larr; Prev</a>
+      <a href="06-image-generation.html">Next &rarr;</a>
+      <a href="maps/05-document-understanding-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 5</div>
+    <h1>Document Understanding &amp; OCR 2.0</h1>
+    <p class="subtitle">When AI doesn't just read the letters &mdash; it understands the whole document</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>OCR Is Dead. Long Live OCR.</h2>
+
+      <p>In the last chapter, you learned how to send images to LLMs and get useful answers back. Now let's apply that skill to one of the most immediately valuable use cases in production software: <strong>understanding documents</strong>.</p>
+
+      <p>For decades, OCR (Optical Character Recognition) was the go-to technology for extracting text from images. Scan a receipt, get the characters. Photograph a page, get the words. It worked. Sort of.</p>
+
+      <p>The problem? Traditional OCR is like a person who can <em>read</em> but doesn't <em>understand</em>. It sees "Total: $42.50" and gives you back the string "Total: $42.50." Great &mdash; but it has no idea that's the amount someone owes. It doesn't know it's at the bottom of a receipt. It can't tell you what was purchased or calculate whether the line items actually add up to that total.</p>
+
+      <div class="highlight-box">
+        <h3>The OCR 2.0 Paradigm</h3>
+        <p>Traditional OCR reads characters. Multimodal AI understands documents. Instead of getting raw text that you then have to parse with regex and heuristics, you send the document image to an LLM and get <strong>structured, meaningful data</strong> back. The model sees layout, hierarchy, relationships between fields &mdash; just like a human would.</p>
+      </div>
+
+      <p>This isn't a marginal improvement. It's the difference between hiring a typist and hiring an accountant. Both can read your receipts &mdash; but only one understands what the numbers mean.</p>
+    </section>
+
+    <!-- Traditional OCR vs Multimodal -->
+    <section>
+      <h2>Traditional OCR vs. Multimodal Understanding</h2>
+
+      <p>Let's make the difference concrete. Imagine you photograph a restaurant receipt:</p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <div class="prompt-label">Traditional OCR output</div>
+          <div class="prompt-text">BELLA ITALIA
+Via Roma 15
+2x Margherita    18.00
+1x Tiramisu       8.50
+1x Espresso       3.00
+Subtotal         29.50
+Tax (10%)         2.95
+Total            32.45
+Card ****1234</div>
+          <p class="prompt-explanation">Raw text. You now need regex or custom parsing to extract merchant name, items, prices, and total. Good luck when the next receipt has a different layout.</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="prompt-label">Multimodal AI output</div>
+          <div class="prompt-text">{
+  "merchant": "Bella Italia",
+  "address": "Via Roma 15",
+  "items": [
+    {"name": "Margherita", "qty": 2, "price": 18.00},
+    {"name": "Tiramisu", "qty": 1, "price": 8.50},
+    {"name": "Espresso", "qty": 1, "price": 3.00}
+  ],
+  "subtotal": 29.50,
+  "tax": 2.95,
+  "total": 32.45,
+  "payment_method": "Card ending 1234"
+}</div>
+          <p class="prompt-explanation">Structured JSON. Ready to use in your code. Works regardless of receipt layout because the model <em>understands</em> what each field means.</p>
+        </div>
+      </div>
+
+      <p>Notice the difference? The OCR approach gives you text you need to <em>interpret</em>. The multimodal approach gives you data you can <em>use</em>. And the multimodal version generalizes across layouts, languages, and formats without custom parsing rules.</p>
+
+      <div class="modality-box">
+        <h3>Vision + Language = Document Intelligence</h3>
+        <p>Document understanding is a perfect showcase for multimodal fusion (Chapter 3). The vision encoder sees the layout &mdash; headers, tables, columns, alignment, font sizes. The language model understands the meaning &mdash; "Total" is a sum, "Date" is a timestamp, a table has headers and rows. Together, they don't just <em>read</em> the document &mdash; they <em>comprehend</em> it. This is cross-attention at work: the language model attends to the visual layout to figure out which numbers belong to which labels.</p>
+      </div>
+    </section>
+
+    <!-- Processing Receipts -->
+    <section>
+      <h2>Practical: Processing Receipts</h2>
+
+      <p>Receipts are the "Hello World" of document understanding. They're everywhere, they're messy, and they're the first thing most teams try to automate. Here's how to do it properly:</p>
+
+<pre><code>import anthropic, base64, json
+
+def extract_receipt(image_path):
+    client = anthropic.Anthropic()
+    with open(image_path, "rb") as f:
+        img = base64.standard_b64encode(f.read()).decode("utf-8")
+    ext = image_path.split(".")[-1].replace("jpg", "jpeg")
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64",
+                "media_type": f"image/{ext}", "data": img}},
+            {"type": "text", "text": """Extract receipt data as JSON:
+{"merchant":"...", "date":"...", "items":[
+  {"name":"...", "qty":1, "price":0.00}],
+"subtotal":0.00, "tax":0.00, "total":0.00}
+If a field isn't visible, use null."""}
+        ]}])
+    return json.loads(resp.content[0].text)
+</code></pre>
+
+      <p>That's it. No regex. No layout templates. No training a custom model. One API call, and you get structured data from <em>any</em> receipt, in any language, with any layout.</p>
+
+      <div class="tip-box">
+        <strong>Why include a JSON example in the prompt?</strong> The model follows patterns. By showing the exact shape you want (field names, data types, nesting), you get consistent output every time. Without the example, the model might use "store_name" one time and "merchant" the next. The example is your schema definition.
+      </div>
+    </section>
+
+    <!-- Invoices and Business Documents -->
+    <section>
+      <h2>Invoices and Business Documents</h2>
+
+      <p>Receipts are simple. Invoices are where document understanding really earns its keep. An invoice has headers, line items, tax calculations, payment terms, sender and recipient addresses &mdash; a complex, hierarchical structure.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Invoice extraction prompt</div>
+        <div class="prompt-text">This is a scanned invoice. Extract the following as JSON:
+- sender (company name, address)
+- recipient (company name, address)
+- invoice_number, date, due_date
+- line_items (description, quantity, unit_price, total)
+- subtotal, tax_rate, tax_amount, grand_total
+- payment_terms, bank_details (if visible)
+
+Use null for any field not present. For amounts, use
+numbers (not strings). Dates in YYYY-MM-DD format.</div>
+        <p class="prompt-explanation">Be explicit about data types and date formats. Without this, you'll get inconsistent formatting across different invoices &mdash; "March 5, 2024" vs "05/03/2024" vs "2024-03-05".</p>
+      </div>
+
+      <p>The model handles multi-column layouts, varying fonts, logos in the header, and even invoices in languages you don't speak. This is where multimodal AI completely outclasses traditional OCR &mdash; the understanding layer is language-agnostic because the model actually <em>knows</em> what an invoice is.</p>
+
+      <div class="warning-box">
+        <strong>Verify financial data.</strong> Models can misread digits, especially in low-quality scans. A "3" can become an "8." A decimal point can shift. For any financial processing pipeline, add a validation step: do the line items add up to the subtotal? Does the tax calculation check out? Flag discrepancies for human review.
+      </div>
+    </section>
+
+    <!-- Charts and Graphs -->
+    <section>
+      <h2>Charts and Graphs: Reading Visual Data</h2>
+
+      <p>Here's something that feels like magic the first time you try it: send a chart image to a multimodal LLM and ask it to extract the data.</p>
+
+      <p>Bar charts, line graphs, pie charts &mdash; the model can read them all and convert the visual information back into numbers. It's not perfect (more on that in a moment), but it's shockingly good for a system that's essentially "looking" at colored shapes.</p>
+
+      <div class="pipeline-box">
+        <h3>Chart Understanding Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Chart Image</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Vision Encoder</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Identify Chart Type</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Read Axes &amp; Labels</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Extract Data Points</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Structured Output</span>
+        </div>
+      </div>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Chart data extraction</div>
+        <div class="prompt-text">This is a bar chart from a quarterly report.
+Extract the data as JSON:
+{
+  "title": "...",
+  "x_axis": "...",
+  "y_axis": "...",
+  "data": [{"label": "...", "value": 0}],
+  "trend": "increasing|decreasing|stable|mixed"
+}
+Approximate values to the nearest whole number.</div>
+      </div>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="prompt-label">Works well</div>
+          <p><strong>Bar charts</strong> &mdash; clear bars, distinct labels</p>
+          <p><strong>Line graphs</strong> &mdash; single or few lines, labeled axes</p>
+          <p><strong>Pie charts</strong> &mdash; labeled slices with percentages</p>
+          <p><strong>Simple tables rendered as images</strong></p>
+        </div>
+        <div class="prompt-example bad">
+          <div class="prompt-label">Struggles with</div>
+          <p><strong>Overlapping data series</strong> &mdash; multiple stacked bars</p>
+          <p><strong>Dense scatter plots</strong> &mdash; hundreds of data points</p>
+          <p><strong>3D charts</strong> &mdash; perspective distortion confuses values</p>
+          <p><strong>Tiny axis labels</strong> &mdash; low resolution kills accuracy</p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Pro tip:</strong> Tell the model to "approximate to the nearest whole number" or "round to one decimal place." This manages expectations and reduces hallucinated precision. A model claiming a bar is exactly "47.3" when the axis doesn't have that granularity is hallucinating precision, not reading data.
+      </div>
+    </section>
+
+    <!-- Table Extraction -->
+    <section>
+      <h2>Table Extraction: The Crown Jewel</h2>
+
+      <p>Tables in images are traditionally one of the hardest problems in document processing. Traditional OCR can read the text in each cell, but figuring out which cell belongs to which row and column? That requires understanding the visual layout &mdash; exactly what multimodal AI excels at.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Table extraction prompt</div>
+        <div class="prompt-text">This image contains a table. Extract it as a JSON array
+of objects where each object is a row, and the keys are
+the column headers. Example format:
+[{"Name": "Alice", "Age": 30, "City": "NYC"},
+ {"Name": "Bob", "Age": 25, "City": "LA"}]
+Preserve the exact values. Use null for empty cells.</div>
+        <p class="prompt-explanation">By giving an example shape, the model knows to use column headers as keys. Without this, it might output a flat list, a markdown table, or something else entirely.</p>
+      </div>
+
+      <p>This works remarkably well for:</p>
+      <ul>
+        <li>Spreadsheet screenshots (when you can't get the actual file)</li>
+        <li>Tables in PDF reports (especially older PDFs where text extraction fails)</li>
+        <li>Handwritten tables on whiteboards</li>
+        <li>Comparison tables on websites (screenshot and extract)</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Watch for merged cells and multi-row headers.</strong> Tables with complex merged cells, nested headers, or spanning rows will confuse even the best models. For these cases, add explicit instructions: "The first two rows are headers. Row 1 is the category, row 2 is the sub-category." Guide the model through the structure.
+      </div>
+    </section>
+
+    <!-- Handwriting and Diagrams -->
+    <section>
+      <h2>Handwriting, Diagrams, and the Messy Real World</h2>
+
+      <h3>Handwriting Recognition</h3>
+
+      <p>Can multimodal AI read handwriting? Yes &mdash; better than you'd expect, worse than you'd hope. Clean, neat handwriting in a well-lit photo? Usually fine. A doctor's prescription on a crumpled napkin? Expect hallucinations.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">~85%</span>
+          <span class="stat-label">accuracy on neat handwriting</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~60%</span>
+          <span class="stat-label">accuracy on messy handwriting</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~40%</span>
+          <span class="stat-label">accuracy on cursive or shorthand</span>
+        </div>
+      </div>
+
+      <p>The trick with handwriting is to give the model context. "This is a handwritten shopping list" triggers very different expectations than "this is a handwritten chemistry formula." Context helps the model resolve ambiguous letters.</p>
+
+      <h3>Diagram Understanding</h3>
+
+      <p>Flowcharts, architecture diagrams, wireframes, mind maps &mdash; multimodal models can describe what they see, identify elements and connections, and even convert diagrams to structured representations.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Diagram-to-structure prompt</div>
+        <div class="prompt-text">This is a flowchart diagram. Describe the flow as a
+structured list of steps with decision points. Format:
+1. [Start] → description
+2. [Decision] condition → Yes: step / No: step
+3. [Process] description
+4. [End] outcome
+
+Include all branches and paths.</div>
+        <p class="prompt-explanation">The model "sees" boxes, arrows, diamonds, and text. By asking for a structured list with specific markers ([Decision], [Process]), you get a consistent, parseable output instead of a rambling paragraph.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>Whiteboard photos are surprisingly useful.</strong> After a design session, photograph the whiteboard and ask the model to: (1) transcribe all text, (2) describe the diagram structure, (3) convert it to Mermaid or PlantUML syntax. You'll have a digital version of your whiteboard discussion in seconds.
+      </div>
+    </section>
+
+    <!-- Multi-Page Documents -->
+    <section>
+      <h2>Multi-Page Documents: The PDF Problem</h2>
+
+      <p>Real documents aren't single pages. Reports, contracts, manuals &mdash; they're multi-page PDFs. How do you handle that with vision models?</p>
+
+      <h3>Strategy 1: Page-by-Page Processing</h3>
+
+      <p>Convert each page to an image and process independently. Simple, but you lose cross-page context (a table that spans two pages, a paragraph that continues on the next page).</p>
+
+      <h3>Strategy 2: Key Page Selection</h3>
+
+      <p>Don't process every page. Identify the pages that matter (first page for summary, last page for signatures, specific pages for data) and only send those. This saves tokens and focuses the model's attention.</p>
+
+      <h3>Strategy 3: Multi-Image Single Request</h3>
+
+      <p>Send multiple pages in a single API call (as multiple images) so the model has cross-page context. This is the best approach for short documents (5-10 pages), but token costs add up quickly.</p>
+
+      <div class="pipeline-box">
+        <h3>Multi-Page Document Processing Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">PDF Input</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Convert Pages to Images</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Classify Each Page</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Send Relevant Pages to LLM</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Merge Results</span>
+        </div>
+      </div>
+
+<pre><code>from pdf2image import convert_from_path
+
+# Convert PDF to images (one per page)
+pages = convert_from_path("report.pdf", dpi=150)
+
+# Process each page (or selected pages)
+for i, page in enumerate(pages):
+    page.save(f"page_{i+1}.png", "PNG")
+    result = extract_document(f"page_{i+1}.png",
+        f"This is page {i+1} of {len(pages)}. "
+        "Extract key data from this page.")
+</code></pre>
+
+      <div class="tip-box">
+        <strong>DPI matters.</strong> 150 DPI is usually the sweet spot &mdash; readable text without enormous images. 300 DPI doubles the pixel count (and token cost) but rarely improves results unless the document has tiny text. 72 DPI is too low for most text.
+      </div>
+    </section>
+
+    <!-- OCR Tools Comparison -->
+    <section>
+      <h2>When to Use What: OCR Tools vs. Multimodal LLMs</h2>
+
+      <p>Multimodal LLMs aren't always the right choice. Here's when to use each approach:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Criteria</th>
+            <th>Traditional OCR</th>
+            <th>Multimodal LLM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Speed</strong></td>
+            <td>Fast (&lt;1 second)</td>
+            <td>Slower (2-10 seconds)</td>
+          </tr>
+          <tr>
+            <td><strong>Cost per document</strong></td>
+            <td>Very cheap ($0.001)</td>
+            <td>More expensive ($0.01-0.05)</td>
+          </tr>
+          <tr>
+            <td><strong>Understanding</strong></td>
+            <td>Characters only</td>
+            <td>Full semantic understanding</td>
+          </tr>
+          <tr>
+            <td><strong>Layout handling</strong></td>
+            <td>Needs templates/rules</td>
+            <td>Automatic, layout-agnostic</td>
+          </tr>
+          <tr>
+            <td><strong>Structured output</strong></td>
+            <td>You build the parser</td>
+            <td>Built-in JSON extraction</td>
+          </tr>
+          <tr>
+            <td><strong>Volume</strong></td>
+            <td>Millions/day, no problem</td>
+            <td>Rate-limited, costly at scale</td>
+          </tr>
+          <tr>
+            <td><strong>Best for</strong></td>
+            <td>Simple text extraction, high volume, low cost</td>
+            <td>Complex documents, varied layouts, meaning extraction</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="model-card">
+        <div class="model-icon">T</div>
+        <div class="model-info">
+          <div class="model-name">Tesseract OCR</div>
+          <div class="model-desc">Free, open-source, runs locally. Best for simple text extraction at high volume. No understanding &mdash; pure character recognition. Use when you just need raw text and will handle parsing yourself.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">A</div>
+        <div class="model-info">
+          <div class="model-name">AWS Textract</div>
+          <div class="model-desc">Cloud OCR with table and form detection built in. Returns structured data with bounding boxes. Good middle ground between raw OCR and full LLM understanding. Tables and forms are its sweet spot.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">G</div>
+        <div class="model-info">
+          <div class="model-name">Google Document AI</div>
+          <div class="model-desc">Specialized document processors for invoices, receipts, IDs, and more. Pre-trained for specific document types. Higher accuracy than general OCR, lower cost than LLM calls. Great when your document type matches a supported processor.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">C</div>
+        <div class="model-info">
+          <div class="model-name">Claude / GPT-4o / Gemini Vision</div>
+          <div class="model-desc">Full multimodal understanding. Handles any document type without training. Returns structured data with semantic understanding. Best for varied, complex documents where building custom parsers isn't feasible.</div>
+        </div>
+      </div>
+
+      <p>The smart play? Use a <strong>hybrid approach</strong>. Use fast, cheap OCR (Tesseract or cloud OCR) for simple, high-volume text extraction. Use multimodal LLMs for complex documents, new layouts, and cases where you need semantic understanding &mdash; not just character recognition.</p>
+    </section>
+
+    <!-- Try It Box -->
+    <section>
+      <h2>Try It Yourself</h2>
+
+      <div class="try-it-box">
+        <h3>Try It Now: The Receipt Challenge</h3>
+        <p>Grab your phone, take a photo of any receipt (restaurant, grocery, gas station &mdash; anything), and try this:</p>
+        <ol>
+          <li>Upload the photo to Claude or ChatGPT</li>
+          <li>Use this prompt: <em>"Extract all data from this receipt as JSON. Include merchant, date, each line item (name, quantity, price), subtotal, tax, total, and payment method. Use null for anything not visible."</em></li>
+          <li>Check the output against the actual receipt. How accurate was it?</li>
+          <li>Now try a crumpled, faded, or angled receipt. How does quality affect accuracy?</li>
+        </ol>
+        <p><strong>Bonus:</strong> Try the same receipt in a different language. If you have a receipt from a foreign restaurant or store, see if the model can extract data from it without you specifying the language.</p>
+      </div>
+    </section>
+
+    <!-- Building a Receipt Scanner -->
+    <section>
+      <h2>Building a Receipt Scanner: End-to-End</h2>
+
+      <p>Let's build something real. Here's a complete receipt scanner that processes an image and returns validated, structured data:</p>
+
+<pre><code>import anthropic, base64, json
+
+def scan_receipt(image_path):
+    client = anthropic.Anthropic()
+    with open(image_path, "rb") as f:
+        img = base64.standard_b64encode(f.read()).decode("utf-8")
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64",
+                "media_type": "image/jpeg", "data": img}},
+            {"type": "text", "text": """Extract this receipt
+as JSON: {"merchant":"...", "date":"YYYY-MM-DD",
+"items":[{"name":"...","qty":1,"price":0.00}],
+"subtotal":0.00,"tax":0.00,"total":0.00}
+Use null for missing fields. Be precise with numbers."""}
+        ]}])
+    data = json.loads(resp.content[0].text)
+    # Validate: do line items add up?
+    if data.get("items") and data.get("subtotal"):
+        calc = sum(i["qty"] * i["price"] for i in data["items"])
+        data["_validation"] = "pass" if abs(calc - data["subtotal"]) < 0.02 else "check"
+    return data
+</code></pre>
+
+      <p>Notice the validation step at the end. We calculate whether the line items add up to the subtotal. If they don't match (within a 2-cent tolerance for rounding), we flag it. This is the kind of defensive programming you need when building on top of AI output &mdash; trust but verify.</p>
+
+      <div class="warning-box">
+        <strong>Production tip:</strong> Always parse AI output inside a try/except block. Even with JSON instructions, models occasionally return malformed JSON, add explanatory text before the JSON, or wrap it in markdown code fences. Strip those before parsing. A robust pipeline expects and handles imperfect output.
+      </div>
+    </section>
+
+    <!-- Common Pitfalls -->
+    <section>
+      <h2>Pitfalls That Will Bite You</h2>
+
+      <p>After building a few document understanding features, these are the traps everyone falls into:</p>
+
+      <h3>1. Hallucinated Numbers</h3>
+      <p>The model might "read" $1,250 as $1,260 or flip a digit in an account number. Always validate numerical output when accuracy matters. Cross-reference totals with line items. Flag impossible values (negative prices, dates in the future).</p>
+
+      <h3>2. Language Assumptions</h3>
+      <p>If your prompt says "extract the date," the model might interpret "01/02/2024" as January 2 (US) or February 1 (EU). Specify the format: "Dates in YYYY-MM-DD format, ISO 8601."</p>
+
+      <h3>3. Overconfidence with Blurry Text</h3>
+      <p>Blurry, faded, or partially obscured text is where hallucinations peak. The model won't say "I can't read this" &mdash; it'll guess. Add to your prompt: "If text is unclear or unreadable, use null instead of guessing."</p>
+
+      <h3>4. Token Cost Surprises</h3>
+      <p>A high-resolution scan of an A4 document can cost 2,000+ tokens as input. Processing 1,000 documents a day? That's 2 million tokens just for images. Budget for it.</p>
+
+      <ul class="checklist">
+        <li class="checked">Always validate extracted numbers against internal consistency</li>
+        <li class="checked">Specify date formats explicitly (ISO 8601 preferred)</li>
+        <li class="checked">Include "use null for unclear values" in every extraction prompt</li>
+        <li class="checked">Resize images to 150 DPI before sending (save tokens without losing quality)</li>
+        <li class="checked">Wrap JSON parsing in error handling</li>
+        <li class="checked">Log raw model responses for debugging failed extractions</li>
+      </ul>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Build a Document Processing Pipeline</h3>
+        <p>Pick one of these document types and build a processing script:</p>
+        <ol>
+          <li><strong>Business cards:</strong> Extract name, title, company, phone, email, address as JSON. Test with at least 3 different card designs.</li>
+          <li><strong>Screenshots of tables:</strong> Take a screenshot of any table (spreadsheet, web page, PDF) and extract it as a JSON array of objects. Verify column alignment.</li>
+          <li><strong>Whiteboard photos:</strong> After your next meeting, photograph the whiteboard. Ask the model to (1) transcribe all text, (2) describe the diagram, (3) generate a meeting summary based on what it sees.</li>
+        </ol>
+        <p><strong>Requirements for each:</strong></p>
+        <ul>
+          <li>Write a Python function that takes an image path and returns structured JSON</li>
+          <li>Include at least one validation check on the output</li>
+          <li>Handle the case where the model returns invalid JSON</li>
+          <li>Test with at least 2 different images to verify it generalizes</li>
+        </ul>
+        <p><strong>Stretch goal:</strong> Build a comparison tool that processes the same document with both Tesseract (raw OCR) and Claude (multimodal). Compare the outputs side by side. Where does each approach win?</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>So far in this course, everything has been about <em>understanding</em> existing images &mdash; describing them, extracting data from them, reading documents. In Chapter 6, we flip the script entirely.</p>
+
+      <p>Instead of AI <strong>reading</strong> images, we'll explore AI <strong>creating</strong> them. Diffusion models, DALL-E, Stable Diffusion, Midjourney &mdash; how they work, how to use them via API, and what you can (and can't) build with image generation. If document understanding is the sensible, business-value chapter, image generation is where things get <em>fun</em>.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="04-multimodal-prompting.html" class="prev">
+      <span class="nav-direction">&larr; Previous</span>
+      <span class="nav-chapter">Multimodal Prompting: Sending Images to LLMs</span>
+    </a>
+    <a href="06-image-generation.html" class="next">
+      <span class="nav-direction">Next &rarr;</span>
+      <span class="nav-chapter">Image Generation &amp; Editing with AI</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

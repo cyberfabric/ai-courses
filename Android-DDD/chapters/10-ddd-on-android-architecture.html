@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: DDD on Android Architecture — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="09-repositories-and-services.html">← Prev</a>
+      <a href="11-ubiquitous-language-skill.html">Next →</a>
+      <a href="maps/10-ddd-on-android-architecture-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>DDD on Android Architecture</h1>
+    <p class="subtitle">Mapping DDD onto Gradle modules, Clean Architecture, MVI/MVVM, Room, Retrofit, and coroutines</p>
+  </header>
+
+  <main>
+
+    <p>You now have the full DDD vocabulary: bounded contexts, ubiquitous language, subdomains, events, entities, value objects, aggregates, repositories, and domain services. The question this chapter answers is the practical one your team will ask the moment you open a PR: <em>"Where does each of these things actually live in our IDE?"</em></p>
+
+    <p>The good news: a modern multi-module Android app already gives you most of the slots you need. The bad news: every team I've seen freelances the slot names and the dependency directions, and small naming inconsistencies metastasize into architectural confusion within a year. This chapter draws crisp lines &mdash; module by module, layer by layer &mdash; so the DDD vocabulary lands in real Gradle code instead of a slide deck.</p>
+
+    <h2>The big-picture module layout</h2>
+
+    <p>Every DDD-shaped Android codebase I've worked on has converged on roughly the same module shape. The names vary, the spirit doesn't.</p>
+
+    <div class="android-box">
+      <div class="android-code">// settings.gradle.kts &mdash; the canonical layout
+rootProject.name = "fittracker"
+
+include(
+  // Pure Kotlin/JVM &mdash; no Android, no Room, no Retrofit
+  ":domain:workouts",
+  ":domain:profile",
+  ":domain:billing",
+  ":domain:shared",          // tiny shared kernel (use sparingly)
+
+  // Android-aware persistence and network &mdash; one per context
+  ":data:workouts",
+  ":data:profile",
+  ":data:billing",
+
+  // UI features, one per user-facing flow
+  ":feature:workout-log",
+  ":feature:workout-detail",
+  ":feature:profile-edit",
+  ":feature:billing-portal",
+
+  // App shell &mdash; only thing that knows about the others
+  ":app",
+)</div>
+    </div>
+
+    <p>Three layers, four module families, one direction of dependency. <code>:feature</code> depends on <code>:domain</code> and gets <code>:data</code> wired in by Hilt at the <code>:app</code> graph. Nothing in <code>:domain</code> depends on anything Android. That last constraint is the load-bearing one; everything else flows from it.</p>
+
+    <h2>Why <code>:domain</code> must be Android-free</h2>
+
+    <div class="language-box">
+      <span class="term">Pure-Kotlin domain module</span> &mdash; a Gradle module that compiles with the <code>org.jetbrains.kotlin.jvm</code> plugin, depends on zero Android artifacts, and contains your aggregates, value objects, repository interfaces, domain services, and domain events. It runs in milliseconds inside a JVM unit test, ships as part of a KMP target without modification, and never imports a single class whose package starts with <code>android.</code> or <code>androidx.</code>.
+      <div class="do-not-say">Do not say "core module" or "common module." "Core" already means "core domain" (chapter 5), and "common" is the magnet that turns into <code>:everything</code>. Call it <code>:domain</code>, or split it per bounded context: <code>:domain:workouts</code>, <code>:domain:billing</code>.</div>
+    </div>
+
+    <p>Why this matters in concrete terms:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">⚡</span>
+        <div class="stat-label"><strong>Tests run in milliseconds.</strong> No Robolectric, no Android SDK boot, no <code>androidTest</code> ceremony. Pure JUnit + Kotlin = a 2,000-test suite in under 10 seconds.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🔁</span>
+        <div class="stat-label"><strong>Reusable across surfaces.</strong> Wear OS, Auto, Compose for Desktop, KMP iOS, a JVM CLI for ops &mdash; all consume the same domain module unchanged.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">🧱</span>
+        <div class="stat-label"><strong>The compiler enforces the rule.</strong> If you accidentally <code>import android.util.Log</code> in <code>:domain</code>, the build breaks. No reviewer needed.</div>
+      </div>
+    </div>
+
+    <p>The mechanical guarantee comes from the Gradle plugin choice. Make <code>:domain:*</code> use <code>org.jetbrains.kotlin.jvm</code> (or <code>multiplatform</code> for KMP). Don't apply <code>com.android.library</code>. The Android types are then literally not on the classpath; the compiler will refuse to compile a domain class that mentions <code>Context</code>, <code>SharedPreferences</code>, or <code>LiveData</code>.</p>
+
+    <h2>One bounded context, one Gradle module</h2>
+
+    <p>Chapter 3 introduced bounded contexts as the strategic boundary. Gradle modules are how you make that boundary structural &mdash; not just a comment in a design doc. The cleanest mapping is one module per context per layer:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// Bounded context "Workouts":
+//   :domain:workouts        &mdash; aggregates, repos, services
+//   :data:workouts          &mdash; Room + Retrofit implementations
+//   :feature:workout-log    &mdash; UI for logging a workout
+//   :feature:workout-detail &mdash; UI for viewing one workout
+
+// Dependency rules (Gradle build files):
+:feature:workout-log    -&gt; :domain:workouts
+:feature:workout-detail -&gt; :domain:workouts
+:data:workouts          -&gt; :domain:workouts
+:domain:workouts        -&gt; (nothing app-specific)
+
+// What the Workouts context CANNOT do:
+:domain:workouts        -X-&gt; :domain:billing
+:data:workouts          -X-&gt; :data:billing
+:feature:workout-log    -X-&gt; :feature:billing-portal</div>
+    </div>
+
+    <p>If a feature genuinely needs to talk to another context, it does it through a domain event (chapter 6) or an explicit ACL (chapter 4) &mdash; never by directly importing types from another context's module. The build-graph enforces what the team agreement asks for.</p>
+
+    <h2>DDD inside Clean Architecture (without the ceremony)</h2>
+
+    <p>Clean Architecture and Hexagonal both arrived at the same insight Evans did: business logic in the middle, I/O at the edges, dependencies pointing inward. The DDD vocabulary slots in cleanly:</p>
+
+    <table>
+      <thead>
+        <tr><th>Clean Architecture layer</th><th>What lives there (DDD terms)</th><th>Module</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Entities / Domain</strong></td>
+          <td>Aggregates, entities, value objects, domain events, domain services, repository interfaces</td>
+          <td><code>:domain:*</code></td>
+        </tr>
+        <tr>
+          <td><strong>Use cases / Application</strong></td>
+          <td>Application services orchestrating one user intention</td>
+          <td><code>:domain:*</code> or <code>:feature:*</code></td>
+        </tr>
+        <tr>
+          <td><strong>Interface adapters</strong></td>
+          <td>ViewModels, mappers, presentation models, repository implementations</td>
+          <td><code>:feature:*</code> + <code>:data:*</code></td>
+        </tr>
+        <tr>
+          <td><strong>Frameworks &amp; drivers</strong></td>
+          <td>Room, Retrofit, OkHttp, Hilt, Compose, sensors</td>
+          <td><code>:data:*</code> and <code>:app</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>You don't need a separate <code>:usecase</code> module or a <code>:interactor</code> module. Use cases are small and they belong with the aggregates they orchestrate. Putting them in their own module multiplies module count without adding architectural value.</p>
+
+    <h2>DDD with MVI: state machines over a domain</h2>
+
+    <p>MVI works beautifully with DDD because both think in terms of state transitions. The trick: the <em>domain</em> models the business state machine; the <em>presentation</em> models the UI state machine. They are not the same thing, and confusing them is one of the silent killers of Android architecture.</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :domain:checkout &mdash; the BUSINESS state machine
+sealed interface Cart {
+  val id: CartId
+
+  data class Empty(override val id: CartId) : Cart
+  data class Active(
+    override val id: CartId,
+    val lines: List&lt;LineItem&gt;,
+    val coupon: Coupon? = null,
+  ) : Cart
+  data class Submitted(
+    override val id: CartId,
+    val orderId: OrderId,
+  ) : Cart
+}
+
+// :feature:checkout &mdash; the UI state machine
+sealed interface CheckoutUiState {
+  data object Loading : CheckoutUiState
+  data class Showing(
+    val cart: Cart.Active,
+    val totals: Money,
+    val canSubmit: Boolean,
+  ) : CheckoutUiState
+  data class Submitted(val orderId: OrderId) : CheckoutUiState
+  data class Error(val message: String) : CheckoutUiState
+}</div>
+    </div>
+
+    <p>The <code>Cart</code> sealed hierarchy is domain truth: a cart is either empty, active, or submitted. The <code>CheckoutUiState</code> hierarchy is what the screen renders right now: it includes loading/error states the domain doesn't care about, plus derived values (<code>totals</code>, <code>canSubmit</code>) that are computed at the presentation layer. The ViewModel holds a <code>StateFlow&lt;CheckoutUiState&gt;</code> and updates it in response to user intents.</p>
+
+    <h2>DDD with MVVM: ViewModels are application services, not domain</h2>
+
+    <div class="warning-box">
+      <strong>The "ViewModel as god object" trap.</strong> The most common DDD-on-Android failure mode is letting the ViewModel become the domain. It accumulates business rules ("validate the email," "compute the discount," "decide whether to allow checkout"), then accumulates orchestration ("call the repo, then the analytics, then update state"), then accumulates UI logic ("if in edit mode show field X"). Each layer's concerns are reasonable; concentrated in one class, they make the ViewModel un-testable, un-reusable on a tablet, and un-portable to KMP. The fix: <em>ViewModels orchestrate, they do not enforce.</em> Push every business rule down into aggregates, value objects, and domain services in <code>:domain</code>. The ViewModel calls them.
+    </div>
+
+    <p>The minimum-viable ViewModel after a DDD pass looks like this:</p>
+
+    <div class="android-box">
+      <div class="android-code">// :feature:checkout
+@HiltViewModel
+class CheckoutViewModel @Inject constructor(
+  private val placeOrder: PlaceOrderUseCase,
+  private val carts: CartRepository,
+  private val pricing: PriceCalculator,
+  private val savedState: SavedStateHandle,
+) : ViewModel() {
+
+  private val cartId: CartId = savedState.toRoute&lt;CheckoutRoute&gt;().cartId
+  private val _state = MutableStateFlow&lt;CheckoutUiState&gt;(CheckoutUiState.Loading)
+  val state: StateFlow&lt;CheckoutUiState&gt; = _state.asStateFlow()
+
+  init {
+    viewModelScope.launch {
+      carts.observe(cartId).collect { cart -&gt;
+        _state.value = when (cart) {
+          null, is Cart.Empty -&gt; CheckoutUiState.Error("Cart not found")
+          is Cart.Active -&gt; CheckoutUiState.Showing(
+            cart = cart,
+            totals = pricing.totalsFor(cart),
+            canSubmit = cart.lines.isNotEmpty(),
+          )
+          is Cart.Submitted -&gt; CheckoutUiState.Submitted(cart.orderId)
+        }
+      }
+    }
+  }
+
+  fun submit() = viewModelScope.launch {
+    placeOrder(cartId).fold(
+      onSuccess = { /* state will arrive via the flow */ },
+      onFailure = { e -&gt; _state.update { CheckoutUiState.Error(e.message ?: "Failed") } },
+    )
+  }
+}</div>
+    </div>
+
+    <p>Notice what's <em>not</em> in this ViewModel: business rules, validation, totals math, event publishing. Those all live in <code>PlaceOrderUseCase</code>, <code>PriceCalculator</code>, and the <code>Cart</code> aggregate. The ViewModel's job is to map domain state into UI state and forward intents into the application service. That's it.</p>
+
+    <h2>Coroutines and Flow at the domain boundary</h2>
+
+    <p>A common question: should <code>:domain</code> use <code>Flow</code>? It's a Kotlin-X library, not Android, so technically yes &mdash; and most teams pick this trade-off because the alternative (callbacks, RxJava holdouts, hand-rolled observers) is worse. But there's a discipline:</p>
+
+    <div class="checklist">
+      <li class="checked"><strong>Repository interfaces may return <code>Flow&lt;T&gt;</code>.</strong> An aggregate's lifecycle is naturally observable; modeling it as a flow lets the UI stay reactive.</li>
+      <li class="checked"><strong>Domain services should return values, not flows.</strong> A <code>PriceCalculator</code> takes a cart and returns a total &mdash; no I/O, no time, no flow.</li>
+      <li class="checked"><strong>Aggregates should expose plain methods.</strong> <code>order.place(fee, now)</code> returns a domain event. It does not return a flow.</li>
+      <li><strong>Avoid <code>kotlinx-coroutines-android</code> in <code>:domain</code>.</strong> That artifact pulls in the main dispatcher, which is Android. Use <code>kotlinx-coroutines-core</code> only.</li>
+      <li><strong>Threading is an infrastructure concern.</strong> <code>:domain</code> code never calls <code>withContext(Dispatchers.IO)</code>; the repository implementation in <code>:data</code> does.</li>
+    </div>
+
+    <h2>Room as a persistence backend for aggregates</h2>
+
+    <p>Room is excellent at one-aggregate-at-a-time persistence. Where teams stumble is mapping the aggregate's internal structure (a root entity with nested value objects and a collection of child entities) to Room's relational shape.</p>
+
+    <div class="android-box">
+      <div class="android-code">// :data:workouts &mdash; Room rows, NOT domain types
+@Entity(tableName = "workouts")
+data class WorkoutRow(
+  @PrimaryKey val id: String,
+  val athleteId: String,
+  val startedAtEpochMs: Long,
+  val durationSec: Int,
+  val rpe: Int,                          // value object, flattened
+)
+
+@Entity(
+  tableName = "workout_sets",
+  foreignKeys = [ForeignKey(
+    entity = WorkoutRow::class,
+    parentColumns = ["id"],
+    childColumns = ["workoutId"],
+    onDelete = ForeignKey.CASCADE
+  )],
+  indices = [Index("workoutId")]
+)
+data class SetRow(
+  @PrimaryKey val id: String,
+  val workoutId: String,
+  val exerciseId: String,
+  val reps: Int,
+  val weightGrams: Long,
+)
+
+data class WorkoutWithSets(
+  @Embedded val workout: WorkoutRow,
+  @Relation(parentColumn = "id", entityColumn = "workoutId")
+  val sets: List&lt;SetRow&gt;,
+)
+
+@Dao
+interface WorkoutDao {
+  @Transaction
+  @Query("SELECT * FROM workouts WHERE id = :id")
+  suspend fun loadWithSets(id: String): WorkoutWithSets?
+
+  @Transaction
+  suspend fun saveAggregate(workout: WorkoutRow, sets: List&lt;SetRow&gt;) {
+    upsertWorkout(workout)
+    deleteSetsFor(workout.id)
+    insertSets(sets)
+  }
+
+  @Upsert suspend fun upsertWorkout(row: WorkoutRow)
+  @Query("DELETE FROM workout_sets WHERE workoutId = :id")
+  suspend fun deleteSetsFor(id: String)
+  @Insert suspend fun insertSets(rows: List&lt;SetRow&gt;)
+}</div>
+    </div>
+
+    <p>Three rules to absorb. <strong>One:</strong> Room rows are not aggregates. They are storage shape; the mapper in <code>:data</code> rebuilds the aggregate. <strong>Two:</strong> aggregate writes are transactional &mdash; <code>@Transaction</code> on <code>saveAggregate</code> ensures the workout and its sets land atomically. <strong>Three:</strong> never expose a <code>Flow&lt;WorkoutWithSets&gt;</code> to <code>:domain</code> &mdash; that would leak Room types upward. The repository's <code>observe</code> returns <code>Flow&lt;Workout?&gt;</code>; the mapping happens in the implementation.</p>
+
+    <div class="tip-box">
+      <strong>Lazy collections are the footgun.</strong> Room offers <code>@Relation</code>, which loads child rows when you ask for the parent. That sounds great until you realize you've loaded an aggregate without its full state &mdash; and then a domain method accesses the empty list and quietly does the wrong thing. Always load the whole aggregate or load nothing. If the aggregate is too big to load whole, it's too big &mdash; revisit chapter 8 on aggregate sizing.
+    </div>
+
+    <h2>Retrofit and DTOs: the API as a separate context</h2>
+
+    <p>The backend API is its own bounded context. Its types are shaped for HTTP, JSON-friendly, and frequently uglier than your domain's types deserve. The cure is the ACL pattern from chapter 4: a mapper layer in <code>:data</code> that translates DTOs to aggregates and back.</p>
+
+    <div class="android-box">
+      <div class="android-code">// :data:workouts &mdash; the API DTO (matches the backend contract)
+@Serializable
+data class WorkoutDto(
+  val id: String,
+  val athlete_id: String,
+  val started_at: String,    // ISO-8601, because backend
+  val duration_sec: Int,
+  val rpe: Int,
+  val sets: List&lt;SetDto&gt;,
+)
+
+// :data:workouts &mdash; the mapper (the ACL)
+internal fun WorkoutDto.toDomain(): Workout = Workout(
+  id = WorkoutId(id),
+  athleteId = AthleteId(athlete_id),
+  startedAt = Instant.parse(started_at),
+  duration = Duration.ofSeconds(duration_sec.toLong()),
+  rpe = Rpe(rpe),
+  sets = sets.map { it.toDomain() },
+)
+
+// :data:workouts &mdash; the Retrofit interface stays inside :data
+interface WorkoutsApi {
+  @GET("athletes/{id}/workouts")
+  suspend fun list(@Path("id") athleteId: String): List&lt;WorkoutDto&gt;
+}</div>
+    </div>
+
+    <p>The <code>WorkoutsApi</code>, the DTOs, and the mappers all live in <code>:data:workouts</code>. <code>:domain:workouts</code> sees only <code>Workout</code>, <code>WorkoutId</code>, <code>AthleteId</code>, <code>Rpe</code>. The day the backend renames <code>started_at</code> to <code>begin_ts</code>, exactly one file changes &mdash; the mapper &mdash; and nothing else in the codebase notices.</p>
+
+    <h2>KMP: where DDD really pays off</h2>
+
+    <div class="context-box">
+      In a <span class="context-name">Kotlin Multiplatform</span> setup, the <code>:domain</code> module becomes <code>commonMain</code> &mdash; aggregates, value objects, repository interfaces, domain services, all shared between Android and iOS. The platform-specific bits (Room, SQLDelight, Retrofit, Ktor) live in <code>androidMain</code> and <code>iosMain</code> as <code>actual</code> implementations of the same interfaces. If you've kept <code>:domain</code> Android-free from day one, the KMP migration is a build-script change, not a codebase rewrite. If you haven't, the migration is brutal &mdash; every <code>android.util.Log</code> in your domain is a paper cut.
+    </div>
+
+    <p>You don't need to be planning an iOS port to benefit. The same discipline that makes <code>:domain</code> KMP-ready also makes it Wear-OS-ready, Auto-ready, desktop-ready, and command-line-ready. Optionality is the win.</p>
+
+    <h2>Enforcing the rules: the build graph and detekt</h2>
+
+    <p>"<code>:domain</code> never imports Android" is a rule that holds for exactly as long as your reviewers are paying attention. Lock it in mechanically:</p>
+
+    <div class="android-box">
+      <div class="android-code">// :domain:workouts/build.gradle.kts
+plugins {
+  id("org.jetbrains.kotlin.jvm")    // NOT com.android.library
+}
+
+dependencies {
+  implementation(libs.kotlinx.coroutines.core)
+  implementation(libs.kotlinx.datetime)
+  // No androidx.* on this module's classpath.
+  testImplementation(libs.junit)
+  testImplementation(libs.kotlin.test)
+}
+
+// detekt rule (top-level detekt.yml)
+ForbiddenImport:
+  active: true
+  imports:
+    - 'android.**'
+    - 'androidx.**'
+    - 'com.google.android.**'
+  reason: ":domain modules must not depend on Android"
+
+// Optional: a Konsist test that fails CI if rule is violated
+@Test
+fun `domain modules do not import android`() {
+  Konsist.scopeFromModule("domain")
+    .files
+    .assertFalse { it.imports.any { i -&gt;
+      i.name.startsWith("android.") ||
+      i.name.startsWith("androidx.")
+    } }
+}</div>
+    </div>
+
+    <p>Three lines of defense: the Gradle plugin choice (compiler-enforced), the detekt rule (lint-time-enforced), and a Konsist or ArchUnit test (CI-enforced). Belt, suspenders, parachute. Skip whichever feel excessive for your team, but at least one should be active.</p>
+
+    <h2>Anti-patterns specific to Android</h2>
+
+    <h3>Domain logic in Activities or Fragments</h3>
+
+    <p>Validation in an <code>onClickListener</code>. A "save" button that decides whether to call the API based on the state of three other UI fields. A <code>TextWatcher</code> that triggers a domain rule. Every one of these is domain logic in the wrong layer. Move it down: into a value object's constructor, into an aggregate method, into a domain service. The Activity then becomes a glass shell over a state flow &mdash; which is what it always should have been.</p>
+
+    <h3>Business rules in <code>RecyclerView.Adapter</code> / Compose item composables</h3>
+
+    <p>An adapter computes a discounted price. A Compose item shows a "premium" badge using a complicated conditional. The view layer has just absorbed business knowledge. The fix: enrich the domain model so the answer is already pre-computed (<code>line.discountedPrice</code>, <code>user.tier</code>), or compute it in the ViewModel and pass it through the UI state.</p>
+
+    <h3>The <code>:common</code> magnet module</h3>
+
+    <p>A module called <code>:common</code> or <code>:core</code> that everything depends on. Inevitably it grows analytics, network helpers, string utilities, themes, navigation interfaces, base ViewModels, and a handful of business rules. It becomes the project's largest module and the slowest one to compile. Replace it with intent-shaped tiny modules: <code>:platform:logging</code>, <code>:platform:network</code>, <code>:designsystem</code>, <code>:domain:shared</code> (only if absolutely necessary). When in doubt, duplicate &mdash; small duplication is cheaper than wrong coupling.</p>
+
+    <h2>The complete dependency picture</h2>
+
+    <div class="domain-box">
+      <div class="model-text">// Allowed dependency arrows (read top to bottom):
+//
+//                       :app
+//                        |
+//        +---------------+---------------+
+//        |               |               |
+//  :feature:workout-log  |  :feature:billing-portal
+//        |               |               |
+//        +---&gt; :domain:workouts          |
+//                        |               |
+//                        +---&gt; :domain:billing
+//                        |
+//                  :data:workouts &lt;----+
+//                        |             |
+//                  :data:billing &lt;-----+
+//
+// :app builds the Hilt graph, binding interfaces
+// in :domain:* to implementations in :data:*.
+// :feature:* never directly depends on :data:*.
+// :domain:workouts never depends on :domain:billing.</div>
+    </div>
+
+    <p>Two arrows you'll be tempted to add &mdash; resist them. (1) <code>:feature</code> depending directly on <code>:data</code>: feels convenient, but it leaks Room and Retrofit upward and breaks every test that doesn't have a real database. (2) <code>:domain:workouts</code> depending on <code>:domain:billing</code>: looks innocent, but cross-context coupling at the domain layer is exactly what bounded contexts exist to prevent. If you genuinely need shared types, put them in <code>:domain:shared</code> and treat that module as a tiny shared kernel (chapter 4) under the strictest review.</p>
+
+    <h2>Exercise: sketch your module graph</h2>
+
+    <div class="exercise-box">
+      <p><strong>Forty-five minutes. A whiteboard or a Mermaid diagram. Your real codebase.</strong></p>
+      <ol>
+        <li>Open <code>settings.gradle.kts</code> (or <code>settings.gradle</code>). List every <code>include(...)</code> entry.</li>
+        <li>For each module, label it: <code>:domain</code>, <code>:data</code>, <code>:feature</code>, <code>:platform</code>, <code>:app</code>, or <strong>"unclear"</strong>. Don't lie to yourself &mdash; "unclear" is fine and it's the most useful label you'll write today.</li>
+        <li>For each <code>:domain</code>-labeled module, open its <code>build.gradle.kts</code>. Does it apply <code>com.android.library</code> or <code>kotlin-jvm</code>? If <code>com.android.library</code>, that module is structurally <em>not</em> a pure-Kotlin domain &mdash; flag it.</li>
+        <li>For each module, open the <code>dependencies { }</code> block. Draw an arrow from this module to each module it depends on. Include the standard Android/AndroidX libraries only if they're notable (you don't need to draw arrows to <code>androidx.core</code>).</li>
+        <li>Look for arrows that <em>shouldn't</em> exist: <code>:domain</code> &rarr; Android, <code>:feature</code> &rarr; <code>:data</code>, cross-context <code>:domain</code> &rarr; <code>:domain</code>. Highlight each in red.</li>
+        <li>Look for missing arrows: places where two modules should be talking but instead share state via a global singleton or a static manager. Highlight in orange.</li>
+        <li>Pick the single worst red arrow. Write a one-paragraph plan to fix it: which dependency moves, which interface gets extracted, which file gets renamed. That paragraph is your next refactor PR.</li>
+      </ol>
+      <p>You don't need to fix everything at once. The goal is to <em>see</em> the architecture: most teams have never drawn this graph and are quietly surprised by what they find. The graph is the truth; the design doc is the aspiration.</p>
+    </div>
+
+    <h2>What "DDD-shaped" means in your IDE</h2>
+
+    <div class="highlight-box">
+      A DDD-shaped Android codebase is one where: each bounded context has its own <code>:domain</code>, <code>:data</code>, and <code>:feature</code> modules; <code>:domain</code> is pure Kotlin and depends on nothing Android; aggregates and value objects live in <code>:domain</code>; repositories are interfaces in <code>:domain</code> with implementations in <code>:data</code>; ViewModels are thin orchestrators in <code>:feature</code>; the build graph itself enforces the boundaries that the team agreed on. Tests run fast, contexts stay separate, KMP is one config away, and refactors stay local.
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You now have the structural picture &mdash; modules, layers, dependency arrows. Chapter 11 takes the most valuable practice from this whole course (the ubiquitous language) and shows how to mechanize it with AI: building a <code>/ubiquitous-language</code> Claude Code slash command that scans your codebase, reads your bounded contexts, and emits a <code>UBIQUITOUS_LANGUAGE.md</code> Claude reads on every subsequent task. You'll write the skill from scratch, run it on a sample app, and see how the file changes Claude's behavior on real PRs.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-repositories-and-services.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Repositories and Domain Services</span>
+      </a>
+      <a href="11-ubiquitous-language-skill.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">The /ubiquitous-language Skill</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

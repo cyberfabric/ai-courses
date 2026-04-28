@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 14: Agent Evaluations &amp; Observability | CCA-F Exam Prep</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="13-managed-agents.html">Previous Chapter</a>
+      <a href="maps/14-evals-and-observability-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 14</span>
+    <h1>Agent Evaluations &amp; Observability</h1>
+    <p class="subtitle">Designing Eval Suites and Production Telemetry &mdash; The Architect's Reliability Story for the CCA-F</p>
+  </header>
+
+  <main>
+
+    <h2>Why This Chapter Matters</h2>
+
+    <p>You finished Chapter 13 ready to architect a Managed Agents deployment. There's one thing missing: how do you <em>know</em> it works? Not "works on my machine," not "works in the demo." How do you know it works on Tuesday at 2pm when the prompt got swapped, the model got upgraded, and a new edge case appears in production?</p>
+
+    <p>The answer is evaluations &mdash; eval suites for short. And the architectural twin of evals is observability: the metrics, traces, and alerts that tell you when production behavior drifts from the eval baseline. Together, evals plus observability are how an architect proves reliability instead of hoping for it.</p>
+
+    <div class="highlight-box">
+      <strong>Domain 5 Connection:</strong> Context &amp; Reliability is 15% of the CCA-F. Chapter 11 covered the <em>patterns</em> (retries, circuit breakers, escalation, compaction). This chapter covers the <em>discipline</em> &mdash; how you measure that the patterns are doing their job. Both are exam-relevant and tested through the 6 scenarios.
+    </div>
+
+    <p>Anthropic shipped a flurry of eval-related tooling between January and April 2026: Harbor + Terminal-Bench 2.0 in January, the skill-creator evals workflow in March, the engineering post <em>Demystifying evals for AI agents</em> in April, and a planning/generation/evaluation three-agent harness pattern. The bar for "production-ready agent" rose. An architect today is expected to design the eval suite alongside the agent, not after it.</p>
+
+    <h2>The Failure Mode: Ship-Without-Eval Drift</h2>
+
+    <p>Here's the failure mode every architect should fear. You ship an agent with no eval suite. It works great on Monday. On Tuesday, you tweak the system prompt to "be more concise." On Wednesday, an Anthropic model upgrade ships. On Thursday, your agent now answers half the customer-support tickets with a single dismissive sentence. By Friday, your CSAT is in the basement, and you can't tell <em>which</em> of those three changes broke things.</p>
+
+    <p>That's drift. It's silent, it's compounding, and it's invisible to anyone watching only "is the API returning 200?" Evals are how you catch drift. Observability is how you spot it before the eval suite does.</p>
+
+    <h2>The Three Eval Types</h2>
+
+    <p>Anthropic's official taxonomy from <em>Demystifying evals for AI agents</em> divides evals into three layers, ordered by complexity:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">Single-Turn</div>
+        <div class="stat-label">Prompt &rarr; response &rarr; grading. The simplest case. Good for testing classifiers, extractors, summarizers.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Multi-Turn</div>
+        <div class="stat-label">Multiple back-and-forth turns with tool calls. Tests whether the model maintains context and chooses tools correctly.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Agent</div>
+        <div class="stat-label">Most complex &mdash; agents modify state, adapt to results, and mistakes compound across steps. Closest to production.</div>
+      </div>
+    </div>
+
+    <p>That's the development lens. The architect's deployment lens is slightly different but complementary &mdash; the same evals, named for where they run:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Pre-Launch Evals</div>
+        <ul>
+          <li>Unit checks on discrete steps (tool calls, output schemas)</li>
+          <li>Integration runs that exercise full agent loops</li>
+          <li>Regression suites that gate deployment</li>
+          <li>Run in CI/CD, fast feedback, deterministic where possible</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Production Evals</div>
+        <ul>
+          <li>Sampled traces from live sessions</li>
+          <li>LLM-as-judge scoring on subjective dimensions</li>
+          <li>Long-tail edge-case capture from real users</li>
+          <li>Run continuously, slower feedback, ground-truthed at scale</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>An architect's eval suite usually contains both. Pre-launch evals catch obvious regressions before deploy; production evals catch the long-tail cases your dataset never imagined.</p>
+
+    <h2>Capability vs Regression Evals</h2>
+
+    <p>Within those layers, Anthropic distinguishes two flavors that behave differently as the agent matures:</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Capability Evals</div>
+        <ul>
+          <li>Test "can the agent do this thing yet?"</li>
+          <li>Start with a low pass rate &mdash; that's the point</li>
+          <li>Watch the rate climb as you iterate on prompts and tools</li>
+          <li>Once saturated (near 100%), they <em>graduate</em> into the regression suite</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Regression Evals</div>
+        <ul>
+          <li>Test "does the agent still do this thing?"</li>
+          <li>Should sit near 100% always</li>
+          <li>Any dip is a signal &mdash; investigate immediately</li>
+          <li>Block deployment when the rate drops below threshold</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="exam-tip-box">
+      <strong>Exam Tip:</strong> If a question describes a team that ships a feature, sees the eval pass rate go from 40% to 85%, and asks what they should do next, the right answer is usually <em>graduate the eval into the regression suite and start writing harder capability evals</em>. The wrong answers will say "stop iterating" or "ship it as-is" &mdash; both miss the eval-driven development loop.
+    </div>
+
+    <h2>Designing Eval Datasets</h2>
+
+    <p>Anthropic's headline number for getting started: <strong>20&ndash;50 simple tasks drawn from real failures</strong>. Early-stage evals see large effect sizes, so a small dataset is enough. Mature agents need bigger and harder evals to detect smaller wins.</p>
+
+    <p>Quality tasks share four properties:</p>
+
+    <ul>
+      <li><strong>Unambiguous:</strong> Two domain experts grading independently should reach the same pass/fail decision. If they disagree, the task is the problem.</li>
+      <li><strong>Has a reference solution:</strong> Proves the task is solvable and validates that your grader is configured correctly.</li>
+      <li><strong>Balanced:</strong> Test both positive and negative cases. A dataset that's 95% happy paths optimizes for over-triggering. A dataset that's 95% adversarial optimizes for under-triggering. Avoid both.</li>
+      <li><strong>Isolated:</strong> Each trial starts from a clean environment. No leftover files, no cached state, no shared databases. Dirty environments inflate scores by introducing correlated failures across trials.</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>Warning:</strong> If a task pass rate is 0% across many trials, your <em>task</em> is probably broken &mdash; not the agent. Anthropic explicitly calls this out. Read the actual transcripts before you write a "the model can't do X" report.
+    </div>
+
+    <div class="architect-box">
+      <strong>Architect Pattern &mdash; Scenario-Driven Eval Datasets:</strong> The 6 CCA-F scenarios (Customer Support, Code Generation, Multi-Agent Research, Developer Productivity, CI/CD, Structured Data Extraction) are each a natural eval-dataset organization unit. Treat each scenario as a small "suite": 5&ndash;10 happy-path tasks, 3&ndash;5 edge cases, 2&ndash;3 adversarial cases. The exam loves "the team is failing in one scenario, not others" patterns &mdash; that's a sign the eval dataset is unbalanced or missing entirely for that scenario.
+    </div>
+
+    <h2>The Eval Frameworks Landscape</h2>
+
+    <p>You don't have to build the harness from scratch. As of 2026 the landscape has consolidated around a handful of options:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">Harbor</div>
+        <div class="stat-label">Container-based agent eval framework. Official harness for Terminal-Bench 2.0. Supports Claude Code, Codex CLI, OpenHands, Mini-SWE-Agent. Released January 2026.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">skill-creator</div>
+        <div class="stat-label">Anthropic's official skill workflow with built-in evals, benchmarks, and blind A/B testing. Shipped March 2026.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Braintrust</div>
+        <div class="stat-label">Vendor-agnostic eval platform. Strong UI for transcript review and dataset curation.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">MLflow</div>
+        <div class="stat-label">Autologs Claude Agent SDK calls. Slots into existing MLOps pipelines.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Agent SDK Hooks</div>
+        <div class="stat-label">PreToolUse, PostToolUse, SubagentStop hooks (Chapter 7) double as native eval probes &mdash; capture every tool call as a graded checkpoint.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Custom + OTel</div>
+        <div class="stat-label">Roll-your-own with OpenTelemetry traces. Right when you need full data residency or a non-standard environment.</div>
+      </div>
+    </div>
+
+    <p>For most architects the right answer is "use Harbor or Braintrust for the harness, instrument with OpenTelemetry, route critical events through Agent SDK hooks." You don't pick one tool; you pick a layered story.</p>
+
+    <p>Here's what a minimal Agent-SDK-native eval harness looks like in practice. The hooks from Chapter 7 do most of the work:</p>
+
+    <pre><code># Minimal eval harness using Agent SDK hooks
+from anthropic import Anthropic
+from anthropic.tools import PreToolUseHook, PostToolUseHook
+
+client = Anthropic()
+results = []
+
+def grade_tool_choice(event):
+    # Did the agent pick the expected tool for this task?
+    expected = event.task.expected_tool
+    actual = event.tool_use.name
+    results.append({
+        "task_id": event.task.id,
+        "step": "tool_choice",
+        "passed": expected == actual,
+        "expected": expected,
+        "actual": actual,
+    })
+
+def grade_final_output(event):
+    # LLM-as-judge on the final response
+    judgment = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        system="You grade customer-support replies. "
+               "Reply only with PASS, FAIL, or UNKNOWN.",
+        messages=[{
+            "role": "user",
+            "content": f"Task: {event.task.prompt}\n"
+                       f"Reply: {event.final_output}\n"
+                       f"Rubric: {event.task.rubric}"
+        }],
+        max_tokens=20,
+    )
+    results.append({
+        "task_id": event.task.id,
+        "step": "final_output",
+        "verdict": judgment.content[0].text.strip(),
+    })
+
+# Run all 50 tasks through the harness
+for task in load_eval_dataset():
+    run_agent(task, hooks=[
+        PreToolUseHook(grade_tool_choice),
+        PostToolUseHook(grade_final_output),
+    ])
+
+print_summary(results)</code></pre>
+
+    <p>Two things make this harness real rather than toy. First, the LLM-judge call uses a small fast model (Haiku) and an explicit PASS/FAIL/UNKNOWN rubric &mdash; no inflated scores, no hallucinated numbers. Second, every grader is itself a deterministic function. The grader can fail; the result is recorded; nothing is silent.</p>
+
+    <h2>Eval-Aware Design Patterns</h2>
+
+    <p>This is where eval design loops back into agent design. Some architectural choices make agents <em>easy</em> to evaluate. Others make evals nearly impossible to write. The architect's job is to bias toward the easy side.</p>
+
+    <ul>
+      <li><strong>Structured outputs as testable boundaries.</strong> If your agent produces JSON conforming to a schema (Chapter 10), every field is a discrete grader target. Compare that to free-form prose, which only an LLM judge can score reliably. Whenever you can, push the boundary toward structured.</li>
+      <li><strong>Hooks as deterministic checkpoints.</strong> Chapter 7's hooks (PreToolUse, PostToolUse, SubagentStop) fire at known points in the agent lifecycle. They're free eval probes &mdash; capture state at every checkpoint and you have a deterministic trace your grader can walk through.</li>
+      <li><strong>Structured error responses as scoring signals.</strong> Chapter 5's <code>{is_error, errorCategory, isRetryable, suggestion}</code> error format isn't just for the agent's recovery logic. Each category becomes a graded outcome: did the agent <em>handle</em> retryable errors correctly? Did it <em>escalate</em> non-retryable ones?</li>
+    </ul>
+
+    <div class="architect-box">
+      <strong>Architect Pattern &mdash; The Three-Agent Eval Harness:</strong> A pattern Anthropic surfaced in April 2026: separate the agent into three roles &mdash; <strong>planner</strong> (decomposes), <strong>generator</strong> (executes), and <strong>evaluator</strong> (grades). The evaluator is itself an agent that scores the generator's output against the planner's intent. This decoupling makes long-running autonomous workflows debuggable: when something fails, you can ask which of the three roles broke. It's also the cleanest place to insert LLM-as-judge logic without contaminating the generator.
+    </div>
+
+    <h2>LLM-as-Judge: When the Grader Is Itself a Model</h2>
+
+    <p>Some things you want to score don't reduce to "did this string match this string?" Things like "was the tone empathetic?" or "did the explanation cover the key risks?" That's where LLM-as-judge comes in &mdash; you ask another model to grade the output.</p>
+
+    <p>LLM-as-judge has three failure modes worth designing against:</p>
+
+    <ol>
+      <li><strong>The judge is sycophantic.</strong> If you don't give it permission to fail outputs, it will inflate scores. Solve this with explicit pass/fail rubrics and a reference solution.</li>
+      <li><strong>The judge is overconfident on subjective dimensions.</strong> "Empathy" is hard. Calibrate by sampling 30&ndash;50 outputs, having a human grade them, and comparing scores. If the judge and the human diverge by more than ~10%, your rubric needs work.</li>
+      <li><strong>The judge hallucinates a score.</strong> Always offer an "Unknown" or "Cannot determine" option. It's better than a fabricated 7-out-of-10.</li>
+    </ol>
+
+    <div class="exam-tip-box">
+      <strong>Exam Tip:</strong> When the exam asks how to evaluate "the agent's tone in customer support replies" or "the appropriateness of a code review comment," the right answer involves an LLM-as-judge with a calibrated rubric &mdash; not regex, not exact string match. When the exam asks how to evaluate "did the agent return JSON with the right schema?" the right answer is a deterministic schema validator, not LLM-as-judge. Pick the simplest grader that does the job.
+    </div>
+
+    <h2>Non-Determinism: pass@k vs pass^k</h2>
+
+    <p>Agents are stochastic. Run the same eval ten times and you might get nine successes and one failure &mdash; or one success and nine failures. Anthropic publishes two metrics that capture this directly:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">pass@k</div>
+        <p>"In <em>k</em> attempts, what's the probability the agent succeeds <em>at least once</em>?"</p>
+        <p>Use this when one good answer is all you need &mdash; a code-generation tool where the user can re-roll, or a research agent where you'll synthesize across attempts.</p>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">pass^k</div>
+        <p>"In <em>k</em> attempts, what's the probability the agent succeeds on <em>every single one</em>?"</p>
+        <p>Use this when consistency is the product &mdash; a customer-support agent where every reply must be on-policy, or an automated CI/CD reviewer that can't flake.</p>
+      </div>
+    </div>
+
+    <p>The two metrics diverge fast. At <em>k</em>=1 they're identical. By <em>k</em>=10, pass@k often approaches 100% while pass^k can fall to 0% on the same agent. Choose the metric that matches your product's risk tolerance, not the one that gives the better-looking number.</p>
+
+    <h2>Production Observability</h2>
+
+    <p>Pre-launch evals tell you the agent is good <em>on your dataset</em>. Production observability tells you the agent is good <em>on real traffic</em>. They're different questions and they need different instrumentation.</p>
+
+    <p>The exam-relevant metric categories for an agent system:</p>
+
+    <ul>
+      <li><strong>Tokens per session.</strong> Track median and p95. Budget overruns mean either prompts have grown or the agent is looping.</li>
+      <li><strong>Tool-success rate.</strong> Per tool. A tool that quietly drops from 99% to 92% is a regression even if no agent traces error out.</li>
+      <li><strong>Escalation rate.</strong> What percent of sessions hand off to a human? Compare to baseline. Spikes indicate the agent's confidence dropped or a new failure mode emerged.</li>
+      <li><strong>First-contact resolution.</strong> The customer-support twin of escalation rate. Did the agent solve it without a human?</li>
+      <li><strong>Cost per resolution.</strong> Tokens + tool-execution costs / resolutions. The dollar lens on every other metric.</li>
+      <li><strong>Latency.</strong> Time-to-first-token, time-to-last-token, end-to-end session duration. SLOs live here.</li>
+    </ul>
+
+    <p>OpenTelemetry has emerged as the vendor-neutral standard for agent telemetry in 2026. Datadog, Sentry, Arrize, Arthur AI, and Anthropic-internal tooling all emit OTel traces. Spend the hour wiring it in once and you can swap visualizers later for free.</p>
+
+    <div class="warning-box">
+      <strong>Common Pitfalls:</strong> (1) Sampling only happy-path traces &mdash; the failures are where the lessons live. (2) Evaluating only at deploy time &mdash; drift happens between deploys, not at them. (3) Aggregating metrics across all users when one segment is silently broken &mdash; segment by user type, scenario, and tool. (4) Treating the eval pass rate as a vanity number rather than a deployment gate.
+    </div>
+
+    <h2>The Eval-Driven Iteration Loop</h2>
+
+    <p>Put it all together and you get an iteration loop that mirrors test-driven development for traditional software:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Capture</h4>
+        <p>Pull failures from prod traces and user reports</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Codify</h4>
+        <p>Convert each failure into a deterministic eval task</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. Reproduce</h4>
+        <p>Verify the eval fails on the current agent</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Iterate</h4>
+        <p>Tweak prompt, tool, or harness until eval passes</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>5. Graduate</h4>
+        <p>Move passing eval into the regression gate</p>
+      </div>
+    </div>
+
+    <p>A/B testing fits between steps 4 and 5. When you have two candidate prompts, run both against the eval suite <em>and</em> against a slice of real production traffic. Promote the winner. The losing candidate becomes a regression task &mdash; if your prod metrics ever look like the loser's profile, you know you've regressed.</p>
+
+    <h2>Anti-Patterns to Avoid</h2>
+
+    <div class="warning-box">
+      <strong>Four anti-patterns the exam tests:</strong>
+      <ol>
+        <li><strong>Evaluating only at deploy time.</strong> Drift between deploys is invisible. Continuous sampling is non-negotiable.</li>
+        <li><strong>Sampling only happy-path traces.</strong> The 5% of sessions that fail badly tell you more than the 95% that work fine.</li>
+        <li><strong>Over-trusting LLM-as-judge for subjective dimensions.</strong> Without human calibration, the score is fiction.</li>
+        <li><strong>Treating evals as a one-time setup.</strong> Eval suites rot. Schedule a weekly transcript review and a monthly dataset refresh.</li>
+      </ol>
+    </div>
+
+    <h2>Scenario Connections</h2>
+
+    <div class="architect-box">
+      <strong>Architect Pattern &mdash; Eval Design Per Exam Scenario:</strong>
+      <ul>
+        <li><strong>Customer Support:</strong> Multi-turn evals with LLM-judge on tone + deterministic checks on escalation triggers. pass^k matters &mdash; every reply must be on-policy.</li>
+        <li><strong>Code Generation:</strong> Run-the-tests style grader. Did the generated code compile? Pass tests? Has the lint footprint regressed? pass@k acceptable &mdash; users iterate.</li>
+        <li><strong>Multi-Agent Research:</strong> Multi-turn agent evals with synthesized-judgment LLM judge. Cite-coverage metrics on top of the judge.</li>
+        <li><strong>Developer Productivity:</strong> Tool-success rate per MCP server. Track which tools the agent picks for which intents.</li>
+        <li><strong>CI/CD:</strong> Deterministic schema graders on PR-comment outputs. SLO on latency &mdash; CI/CD has a wall clock.</li>
+        <li><strong>Structured Data Extraction:</strong> Field-level grading. Precision and recall per field. Schema-validity gate before any LLM-judge runs.</li>
+      </ul>
+    </div>
+
+    <h2>Practice Questions</h2>
+
+    <div class="exercise-box">
+      <strong>Test Yourself:</strong> Try answering these before checking the explanations below.
+
+      <p><strong>Q1:</strong> A team ships a customer-support agent. Their eval suite has 100% pass rate on 30 happy-path tasks. After two weeks in production, complaints spike about "rude" replies. The eval still shows 100%. What's the most likely diagnosis?</p>
+      <p>A) The model degraded silently &mdash; file a bug with Anthropic<br>
+         B) The eval dataset is unbalanced &mdash; no adversarial or tone-sensitive cases<br>
+         C) The deployment pipeline corrupted the system prompt<br>
+         D) Production traffic is fundamentally different from any benchmark</p>
+
+      <p><strong>Q2:</strong> An architect is choosing between <code>pass@k</code> and <code>pass^k</code> for an automated PR-review agent that posts comments. The agent runs once per PR and the comment goes directly to GitHub. Which metric, and why?</p>
+      <p>A) <code>pass@k</code> &mdash; users can re-run the agent if a comment looks off<br>
+         B) <code>pass^k</code> &mdash; every comment ships, so consistency is the product<br>
+         C) Either is fine &mdash; they're identical at <em>k</em>=1<br>
+         D) Neither &mdash; use raw accuracy instead</p>
+
+      <p><strong>Q3:</strong> A developer wants to evaluate "did the agent's reply express empathy?" Which grading approach is most appropriate?</p>
+      <p>A) Regex match for empathy keywords ("sorry," "understand," "frustrating")<br>
+         B) Schema validator on a structured-output empathy field<br>
+         C) LLM-as-judge with a calibrated rubric and an "Unknown" out-clause<br>
+         D) Skip the evaluation &mdash; empathy is too subjective to measure</p>
+
+      <hr>
+
+      <p><strong>Answers:</strong></p>
+      <p><strong>Q1: B.</strong> The eval shows 100% because the dataset doesn't <em>contain</em> the failure mode. This is the classic happy-path-only-sampling anti-pattern. The fix is to expand the dataset with adversarial and tone-sensitive cases, not to blame the model or the deployment pipeline. Production traffic being different (D) is the same answer phrased differently &mdash; but B is more diagnostic and actionable.</p>
+      <p><strong>Q2: B.</strong> The PR-review agent has no human-in-the-loop re-roll. Every comment lands. That's the textbook <code>pass^k</code> case &mdash; consistency is the product, not just one good answer. <code>pass@k</code> would mask flakiness behind retries that don't exist in production.</p>
+      <p><strong>Q3: C.</strong> Empathy isn't reducible to keyword matching (A) and isn't a structured field (B). It's exactly the subjective dimension LLM-as-judge was designed for &mdash; with the critical safeguards: a calibrated rubric and an "Unknown" out-clause. (D) is the lazy answer the exam loves to bait with &mdash; the architect's job is to evaluate the hard things, not skip them.</p>
+    </div>
+
+    <h2>Hands-On Exercise</h2>
+
+    <div class="exercise-box">
+      <strong>Design a 10-Task Eval Suite:</strong> Pick the Customer Support Resolution Agent scenario from Chapter 12. Design a 10-task eval dataset for it.
+
+      <p>Specify:</p>
+      <ol>
+        <li>Five happy-path tasks &mdash; common ticket types the agent should resolve cleanly. For each, list the success criterion.</li>
+        <li>Three edge-case tasks &mdash; tickets with ambiguous intent, missing information, or competing constraints. For each, decide what counts as a pass.</li>
+        <li>Two adversarial tasks &mdash; users trying to extract data they shouldn't have, or attempting prompt injection. For each, define the must-not-do behavior.</li>
+        <li>For each of the 10 tasks, pick a grader: deterministic, LLM-as-judge with rubric, or human review.</li>
+        <li>Decide which 3 of these 10 will become your <em>regression gate</em> &mdash; the ones that block deployment if they regress.</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Pick the right metric for the suite &mdash; pass@k or pass^k? Justify your answer in two sentences.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Evals come in three layers: single-turn, multi-turn, and agent &mdash; from simple to production-realistic</li>
+      <li>Capability evals start low and graduate into regression evals once they saturate near 100%</li>
+      <li>Start with 20&ndash;50 tasks drawn from real failures &mdash; small samples have large effect sizes early on</li>
+      <li>Tasks must be unambiguous, balanced (positive + negative), have reference solutions, and run in isolated environments</li>
+      <li>Pick the simplest grader: deterministic for structured output, LLM-as-judge for subjective dimensions, human for calibration</li>
+      <li>Always offer LLM judges an "Unknown" out-clause and calibrate against humans every release cycle</li>
+      <li>pass@k = "at least one success in k tries"; pass^k = "every one of k tries succeeds." They diverge fast &mdash; pick the one that matches your product</li>
+      <li>Production observability tracks tokens, tool success, escalation, first-contact resolution, cost, and latency &mdash; OpenTelemetry is the 2026 standard</li>
+      <li>Eval-driven iteration: capture &rarr; codify &rarr; reproduce &rarr; iterate &rarr; graduate</li>
+      <li>The same eval suite that catches regressions is the architect's portfolio artifact &mdash; it's the proof that you designed for reliability, not hoped for it</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>That's the full course. Chapters 1&ndash;13 gave you the architecture: agents, tools, MCP, Claude Code, prompt engineering, structured output, context, scenarios, Managed Agents. Chapter 14 closed the loop with how you <em>prove</em> the architecture works.</p>
+
+    <p>If you've worked through every exercise &mdash; from designing tool schemas in Chapter 5 to mapping Managed Agents to the 5 domains in Chapter 13 to designing this eval suite &mdash; you have a complete picture of what the CCA-F tests and how an architect thinks. Schedule the exam. You're ready.</p>
+
+    <div class="highlight-box">
+      <strong>Final Thought:</strong> The architect's job isn't to ship one agent that works. It's to ship a system that <em>keeps working</em> across model upgrades, prompt revisions, and tool changes. Evals plus observability are the discipline that makes that possible. The exam tests it. Production demands it.
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="13-managed-agents.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Managed Agents for Architects</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

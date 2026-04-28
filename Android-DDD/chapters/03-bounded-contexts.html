@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Bounded Contexts — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="02-ubiquitous-language.html">← Prev</a>
+      <a href="04-context-mapping.html">Next →</a>
+      <a href="maps/03-bounded-contexts-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Bounded Contexts</h1>
+    <p class="subtitle">Drawing lines on the map — where one model ends and the next begins</p>
+  </header>
+
+  <main>
+
+    <p>End of chapter 2 we had three glossary entries committed to <code>UBIQUITOUS_LANGUAGE.md</code>. By the end of this chapter you'll have something just as committable: a one-page context map showing where your model is allowed to be one shape, and where it has to become another.</p>
+
+    <p>This is the most strategic move in DDD. Get this right and most other decisions get easier. Get it wrong and you'll spend the next five years arguing about whether <code>Customer</code> should have a <code>creditScore</code> field.</p>
+
+    <h2>The single-model fantasy</h2>
+
+    <p>Every engineer who has been through a few rewrites has, at some point, fallen for the same dream: <em>"What if we just had one canonical <code>User</code> class? One <code>Order</code>? One <code>Product</code>? Same shape, used everywhere, no duplication, no mappers, life is good."</em></p>
+
+    <p>It is a beautiful dream. It does not survive contact with three different teams.</p>
+
+    <p>What actually happens: <code>User</code> grows a <code>creditScore</code> for the lending team, a <code>shippingAddress</code> for checkout, a <code>fraudFlags</code> for risk, a <code>vipTier</code> for support, an <code>onboardingStep</code> for growth, and twenty more "optional" fields nobody dares delete. After two years the class is 800 lines long, every nullable field is a state-machine bug waiting to happen, and changing it requires sign-off from six teams.</p>
+
+    <div class="warning-box">
+      <strong>One model, infinite suffering.</strong> The single-shared-model approach has a name in the DDD literature &mdash; the <em>Big Ball of Mud</em>. It's not that the engineers were lazy; it's that the model was asked to mean too many things to too many people. The fix is not better refactoring. The fix is admitting that there is no single <code>User</code>. There are <em>several</em>.
+    </div>
+
+    <h2>What a bounded context actually is</h2>
+
+    <div class="language-box">
+      <span class="term">Bounded Context</span> &mdash; an explicit boundary inside which a particular ubiquitous language and its model are consistent. Inside the boundary, every word means exactly one thing. Outside the boundary, the same word may mean something completely different and that's fine.
+      <div class="do-not-say">Do not say "module," "package," "service," or "layer." A context can be implemented as any of those, but the context is the conceptual boundary; the implementation choice is downstream. Calling it a "module" pre-commits you to a structure before you've thought about the meaning.</div>
+    </div>
+
+    <p>A bounded context has four ingredients. Skip any of them and the boundary leaks:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1</span>
+        <div class="stat-label">A <strong>model</strong> &mdash; the entities, value objects, and rules</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">2</span>
+        <div class="stat-label">A <strong>language</strong> &mdash; the words used inside the boundary</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3</span>
+        <div class="stat-label">A <strong>team</strong> &mdash; the people who own decisions inside it</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">4</span>
+        <div class="stat-label">A <strong>boundary</strong> &mdash; an enforced edge (module, package, repo)</div>
+      </div>
+    </div>
+
+    <p>Notice number 3. Bounded contexts are not just a code-organization trick. They are also a <em>team</em>-organization trick. Conway's Law says your software ends up shaped like your communication structure; bounded contexts say "fine, let's be deliberate about it."</p>
+
+    <h2>The classic example: Customer is not Customer</h2>
+
+    <p>Take the most overloaded noun in business software:</p>
+
+    <div class="context-box">
+      In the <span class="context-name">Sales</span> context, a <code>Customer</code> is "a lead we're trying to close." It has a pipeline stage, a deal size, a probability, a last-contacted date, an owner SDR. It may not even have placed an order yet. Removing it from the system is a daily occurrence.
+      <br><br>
+      In the <span class="context-name">Billing</span> context, a <code>Customer</code> is "an entity we send invoices to." It has a tax ID, a payment method, a billing address, an outstanding balance, a credit limit. Deleting it is forbidden by audit policy.
+      <br><br>
+      In the <span class="context-name">Support</span> context, a <code>Customer</code> is "a person who can open a ticket." It has a tier, a satisfaction score, a list of past interactions, a preferred contact channel.
+      <br><br>
+      In the <span class="context-name">Shipping</span> context, a <code>Customer</code> is "an address we deliver packages to." Half the time it's not even a person &mdash; it's a building, a locker, a depot.
+    </div>
+
+    <p>Four contexts. Four different things called <code>Customer</code>. All correct. The trap is to try to invent a <code>UnifiedCustomer</code> god-object that satisfies all four. That's how you get the 800-line class with twenty nullable fields.</p>
+
+    <p>The bounded-context move is the opposite: declare four classes called <code>Customer</code>, each living in a different module, each with the fields that matter to its context, none of them imported by another context. When two contexts need to reconcile (Sales hands off to Billing on first purchase), an explicit translation step happens at the boundary. We'll spend chapter 4 on what that translation looks like.</p>
+
+    <h2>How to spot a bounded context</h2>
+
+    <p>You don't need a workshop to find your contexts. Three signals do most of the work:</p>
+
+    <h3>Linguistic boundary</h3>
+
+    <p>Same word, different meaning. The cleanest signal. If the support team's "ticket" and the engineering team's "ticket" are different concepts, you've found the seam.</p>
+
+    <h3>Team boundary</h3>
+
+    <p>Two squads, two backlogs, two PMs. If two teams own different parts of the same feature, the seam between them is almost always a context boundary &mdash; whether anyone has named it or not.</p>
+
+    <h3>Deployment / lifecycle boundary</h3>
+
+    <p>Things that ship together belong together; things that ship apart probably shouldn't share types. On Android specifically: a dynamic feature module that ships independently is almost certainly its own bounded context, whether you treat it that way or not.</p>
+
+    <div class="tip-box">
+      <strong>Don't draw boundaries by technology.</strong> "The Room layer," "the network layer," "the UI layer" are <em>technical</em> boundaries, not bounded contexts. Bounded contexts cut <em>vertically</em> through the stack &mdash; a context owns its UI, its data, its persistence, its events. Horizontal layers are organizational; vertical contexts are strategic. Conflating them is the most common DDD mistake on Android.
+    </div>
+
+    <h2>Bounded contexts on Android: Gradle modules</h2>
+
+    <p>Here's the practical question every Android engineer asks: <em>"What does a bounded context look like in my <code>settings.gradle.kts</code>?"</em></p>
+
+    <p>Answer: roughly one Gradle module per context, often three modules per context (domain / data / feature). The build graph becomes the enforcement mechanism. If <code>:feature:billing</code> can't import from <code>:feature:sales</code>, then a billing engineer literally cannot reach into the sales model. That's a much stronger guarantee than "we agreed in stand-up not to."</p>
+
+    <div class="android-box">
+      <div class="android-code">// settings.gradle.kts &mdash; one context, three modules
+
+// SALES context
+include(":sales:domain")        // pure Kotlin, no Android
+include(":sales:data")          // Room/Retrofit impls
+include(":sales:feature")       // Compose + ViewModels
+
+// BILLING context (separate context, same shape)
+include(":billing:domain")
+include(":billing:data")
+include(":billing:feature")
+
+// :app wires it all up; nothing else depends on :app
+
+// And critically:
+// :sales:* must NEVER import :billing:*
+// :billing:* must NEVER import :sales:*
+// Cross-context talk goes through events or shared interfaces in :shared</div>
+    </div>
+
+    <p>You don't need to start with this layout. Most apps inherit a <code>:core</code>, <code>:common</code>, <code>:base</code> mess. The point is: when you migrate, this is the shape you migrate <em>toward</em>. We'll cover the migration in chapter 12.</p>
+
+    <h2>Dynamic feature modules and KMP</h2>
+
+    <p>Two Android-specific module types interact especially well with bounded contexts:</p>
+
+    <p><strong>Dynamic feature modules.</strong> These ship on demand via Play. The fact that they have to be loadable independently forces you to think about their boundary in advance. If your "video editing" feature can be downloaded later, it cannot freely import from your main app's domain &mdash; the contract between them is already a bounded-context interface, whether you noticed or not.</p>
+
+    <p><strong>KMP shared modules.</strong> When you share <code>:domain</code> across iOS and Android, you immediately stop being able to leak Android types into it. The compiler enforces the boundary. People who adopt KMP often discover, accidentally, that they've also adopted DDD &mdash; because KMP makes the cost of breaking the boundary zero-tolerance.</p>
+
+    <h2>What lives inside a context, what lives at the edges</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Inside the boundary</div>
+        <div class="prompt-text">// Pure model. Owns its words.
+class Order(
+  val id: OrderId,
+  val items: List&lt;OrderItem&gt;,
+  val status: OrderStatus
+) {
+  fun cancel(): Order = ...
+  fun ship(): Order = ...
+}
+
+interface OrderRepository {
+  suspend fun save(order: Order)
+  suspend fun findById(id: OrderId): Order?
+}
+
+sealed class OrderEvent {
+  data class Placed(val id: OrderId, ...) : OrderEvent()
+  data class Shipped(val id: OrderId, ...) : OrderEvent()
+}</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">At the edge</div>
+        <div class="prompt-text">// Translation: someone else's words become ours.
+class OrderApiMapper {
+  fun fromDto(dto: BillingOrderDto): Order = ...
+  fun toDto(order: Order): BillingOrderDto = ...
+}
+
+// Translation: our events become someone else's words.
+class OrderEventToShippingMapper {
+  fun toShippingRequest(
+    e: OrderEvent.Shipped
+  ): ShippingRequest = ...
+}</div>
+    </div>
+  </div>
+
+    <p>The interior of a context is pure model. The edges are full of mappers, translators, and adapters &mdash; sometimes called <em>anti-corruption layers</em> (foreshadowing chapter 4). The mappers are not bugs; they are the proof that the boundary is doing its job.</p>
+
+    <h2>The :common module anti-pattern</h2>
+
+    <p>Open your <code>settings.gradle.kts</code>. Is there a <code>:common</code>, <code>:core</code>, or <code>:shared</code> module that contains domain types? Congratulations &mdash; you have a context-collapse hazard. Here's how it goes wrong:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// Day 1 &mdash; reasonable
+:common
+  └── User.kt   // a few fields, used by 2 features
+
+// Day 90
+:common
+  ├── User.kt           // 14 fields now
+  ├── Order.kt          // a "shared" order type
+  ├── Address.kt        // because both checkout and shipping need it
+  ├── PaymentMethod.kt  // and billing
+  └── Money.kt          // why not
+
+// Day 365
+:common  // depended on by :app, :feature-x, :feature-y, :feature-z, :data-room, :data-net
+  ├── User.kt   // 38 fields, 6 nullable, 4 contexts inferred from name prefixes
+  ├── ...
+  // touching anything here triggers full rebuild
+  // changing User.creditScore breaks 4 unrelated features
+  // nobody owns it</div>
+    </div>
+
+    <p>The <code>:common</code> module is the architectural equivalent of "I'll just put it here for now." It is the Big Ball of Mud growing in your build graph. It defeats the entire point of bounded contexts, because every "bounded" context now shares the same un-bounded model.</p>
+
+    <p>The fix is not to delete <code>:common</code> tomorrow. The fix is to (a) stop adding new domain types to it, (b) extract one type at a time into the context that actually owns it, and (c) when two contexts genuinely need to share a value object (like <code>Money</code>), put it in a tiny <code>:shared:money</code> module that does <em>only that one thing</em>.</p>
+
+    <h2>A worked example: a fintech app</h2>
+
+    <p>Consider a typical neo-bank Android app. The features are:</p>
+
+    <ul>
+      <li>Sign up, KYC, identity verification.</li>
+      <li>Send and receive money, transaction history, payment cards.</li>
+      <li>Buy and sell stocks/crypto, portfolio, watchlists.</li>
+      <li>Monthly statements, tax documents, year-end exports.</li>
+    </ul>
+
+    <p>Naive layout: one giant app, one shared <code>User</code>, one shared <code>Account</code>. Production reality after two years: a 1,500-line <code>User</code>, six teams blocked on every change, every release a coordination nightmare.</p>
+
+    <p>DDD layout: four bounded contexts, each with its own model.</p>
+
+    <div class="context-box">
+      <span class="context-name">Onboarding</span> &mdash; <code>Applicant</code>, <code>VerificationStep</code>, <code>IdentityDocument</code>, <code>RiskScore</code>. Once verified, the applicant becomes a customer in <em>other</em> contexts via an event.
+      <br><br>
+      <span class="context-name">Transactions</span> &mdash; <code>Account</code>, <code>Transfer</code>, <code>Card</code>, <code>Beneficiary</code>. Knows nothing about KYC; knows everything about money movement.
+      <br><br>
+      <span class="context-name">Investments</span> &mdash; <code>Portfolio</code>, <code>Position</code>, <code>Order</code>, <code>Instrument</code>. Has its own concept of <code>Account</code> (a <em>brokerage</em> account), which is not the same as the Transactions account.
+      <br><br>
+      <span class="context-name">Statements</span> &mdash; <code>Period</code>, <code>StatementDocument</code>, <code>TaxYear</code>. Read-only consumer of events from the other contexts.
+    </div>
+
+    <p>Notice the deliberate duplication: "Account" exists in Transactions <em>and</em> Investments. They are not the same. The Transactions account has a balance and a routing number. The Investments account has positions and a margin limit. Trying to unify them would create a class with eight fields that are always null in half its uses. Letting them be two different things, in two different modules, is honest and durable.</p>
+
+    <h2>Naming your contexts</h2>
+
+    <p>Naming a context is harder than naming a class, because the name has to mean something to four audiences at once: engineers, PMs, the team that owns it, and the team that consumes it. A few rules of thumb:</p>
+
+    <ul>
+      <li><strong>Use a domain noun, not a technical one.</strong> "Billing" is a domain noun. "Payments-API" is a technical one. Domain nouns survive rewrites; technical names rot.</li>
+      <li><strong>Singular, capitalized.</strong> "Billing," not "Billings." It's a name, not a collection.</li>
+      <li><strong>Avoid the company name.</strong> If your company is Acme, don't call your context "AcmeBilling." When Acme rebrands, the name doesn't have to.</li>
+      <li><strong>Avoid the word "Service."</strong> Especially on the backend, "BillingService" suggests the implementation. The context is "Billing." The service is one possible deployment of it.</li>
+      <li><strong>Test with a new hire.</strong> Could a brand-new engineer guess what's inside the "Billing" context without opening it? If yes, the name is good. If no, try again.</li>
+    </ul>
+
+    <div class="tip-box">
+      <strong>Name the context, not the team.</strong> Teams reorganize every 18 months. Contexts (if you've drawn them well) outlive the teams that own them by years. If you call a context "PaymentsTeamThings," the next reorg invalidates the name. Call it "Billing," and only the ownership label changes &mdash; not the boundary itself.
+    </div>
+
+    <h2>From one big module to four contexts: a migration sketch</h2>
+
+    <p>You don't refactor an entire app to bounded contexts in a sprint. The only way it actually happens is one feature at a time. Here's the ordered sequence that tends to work:</p>
+
+    <ol>
+      <li><strong>Draw the map first.</strong> Even if it's wrong. The map is the alignment artifact &mdash; without it the team will redesign on every PR.</li>
+      <li><strong>Pick the smallest, least-coupled context.</strong> Statements, exports, settings &mdash; the read-only ones. They have the fewest inbound dependencies, so extracting them first teaches the team the pattern without high stakes.</li>
+      <li><strong>Create the new modules empty.</strong> Open a PR that just adds <code>:statements:domain</code>, <code>:statements:data</code>, <code>:statements:feature</code> with no code. Get the build working, get CI green.</li>
+      <li><strong>Move one type at a time.</strong> Cut <code>StatementDocument</code> out of <code>:common</code>, paste it into <code>:statements:domain</code>, fix the imports. Commit. Repeat.</li>
+      <li><strong>Build the boundary.</strong> When a feature outside Statements wants something, it asks via an interface in <code>:statements:domain</code>, not by importing implementations from <code>:statements:data</code>.</li>
+      <li><strong>Repeat for the next context.</strong> Don't try to do two contexts at once. The whole point is locality.</li>
+    </ol>
+
+    <p>This is also exactly the workflow chapter 12 walks through with AI assistance &mdash; but the strategy is the same whether you do it by hand or with Claude Code rewriting twenty files at a time.</p>
+
+    <h2>Tools for drawing context maps</h2>
+
+    <p>You have three tiers of sophistication available; pick whichever you'll actually maintain:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">📝</div>
+      <div class="tool-info">
+        <div class="tool-name">Paper / whiteboard / markdown</div>
+        <div class="tool-desc">Boxes for contexts, arrows for relationships. Works. Cheap. Will rot the day you stop looking at it. Best for the initial workshop and the "explain this to a new hire" use case.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🎨</div>
+      <div class="tool-info">
+        <div class="tool-name">Miro / Excalidraw / FigJam</div>
+        <div class="tool-desc">Same boxes and arrows, but live, shareable, and editable. Add color for team ownership. Add icons for context type. Drift faster than the code does, but at least everyone can see them.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🤖</div>
+      <div class="tool-info">
+        <div class="tool-name">Generated from the build graph</div>
+        <div class="tool-desc">Run <code>./gradlew :module-graph</code> or use a plugin like <code>dependency-graph-generator</code>. The Gradle build graph already contains a context map &mdash; you just need to render it. This is the only one that <em>cannot</em> drift, because it's a function of the code.</div>
+      </div>
+    </div>
+
+    <p>For a working team, do all three. Use paper for the workshop. Use Miro for documentation. Generate the build-graph view in CI so you have a ground-truth comparison: when the doc disagrees with the graph, one of them is wrong.</p>
+
+    <h2>The shape of a context, in code</h2>
+
+    <p>Sometimes a picture is more useful than a paragraph. Here's roughly what one healthy bounded context looks like as a Gradle module trio:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// :billing:domain         &mdash; pure Kotlin, no Android
+//   sealed class Money
+//   class Invoice(...)
+//   class Customer(...)
+//   interface InvoiceRepository
+//   sealed class InvoiceEvent
+
+// :billing:data           &mdash; depends on :billing:domain
+//   class RoomInvoiceRepository(dao: InvoiceDao) : InvoiceRepository
+//   class InvoiceApiMapper        // BillingApiDto &lt;-&gt; Invoice
+//   @Entity class InvoiceEntity   // Room storage type
+
+// :billing:feature        &mdash; depends on :billing:domain (NOT :data)
+//   class InvoiceListViewModel(repo: InvoiceRepository)
+//   @Composable fun InvoiceListScreen(...)
+
+// :app                    &mdash; wires :billing:data into :billing:domain
+//   @Provides fun invoiceRepo(...): InvoiceRepository = RoomInvoiceRepository(...)</div>
+    </div>
+
+    <p>The key invariant: <code>:billing:feature</code> depends on the <em>interface</em> in <code>:billing:domain</code>, never on the <em>implementation</em> in <code>:billing:data</code>. That single rule keeps the boundary alive long enough for it to matter.</p>
+
+    <h2>Translation between contexts (sneak preview)</h2>
+
+    <p>The minute you have two contexts, the next question is: how do they talk?</p>
+
+    <p>The DDD answer comes in chapter 4 with a full vocabulary &mdash; anti-corruption layers, shared kernels, customer-supplier, conformist, open host services. For now, internalize one principle: <strong>types do not cross context boundaries unchanged.</strong> A <code>BillingOrder</code> never directly becomes an <code>InventoryOrder</code> by reuse. There is always an explicit translation, even if it's a one-line mapper. That mapper is what makes the boundary real.</p>
+
+    <h2>Context vs subdomain (two words, often confused)</h2>
+
+    <p>Quick clarification, because these two terms get muddled constantly. A <em>subdomain</em> is a piece of the <em>business problem</em> &mdash; "billing customers is a thing our business has to do." A <em>bounded context</em> is a piece of the <em>solution</em> &mdash; "this module owns the billing model." In the ideal world they line up one-to-one. In the real world a subdomain may span multiple contexts (legacy and new payment systems both implement parts of "Billing") or one context may serve multiple subdomains (a "Notifications" context serving billing reminders, marketing campaigns, and security alerts).</p>
+
+    <p>For now: contexts are about code; subdomains are about the business. We'll come back to subdomains in chapter 5 to talk strategy &mdash; what to invest in, what to outsource, what to buy.</p>
+
+    <h2>Signals you've drawn a boundary in the wrong place</h2>
+
+    <p>You'll know within a sprint whether your context boundaries make sense. Watch for these signals:</p>
+
+    <ul class="checklist">
+      <li><strong>Cross-context chatter.</strong> Every change in feature A requires a change in feature B. The boundary you drew is not the real one.</li>
+      <li><strong>Types ping-ponging through ACLs.</strong> You added a translator between two contexts, and now half your tickets are about keeping the translator in sync. The contexts probably want to merge.</li>
+      <li><strong>Shared types creeping back.</strong> A new type appears in <code>:common</code> "just for now." You drew a boundary your team doesn't believe in.</li>
+      <li><strong>Cross-team escalations on every release.</strong> Multiple teams own pieces of the same context. Either split the context or merge the teams.</li>
+      <li><strong>Recurring outages at integration points.</strong> The contracts between contexts are wrong, or the contracts don't exist.</li>
+    </ul>
+
+    <p>A good context boundary feels like a quiet wall. You almost forget it's there. A bad one is the first thing your team complains about every retro.</p>
+
+    <h2>Exercise: draw a context map of your app</h2>
+
+    <div class="exercise-box">
+      <p><strong>One hour. By yourself. A piece of paper.</strong></p>
+      <ol>
+        <li>List every Gradle module in your app.</li>
+        <li>For each, write one sentence: "this module owns ___."</li>
+        <li>Cluster modules that own the same concept &mdash; that's a candidate context.</li>
+        <li>Draw a box per context. Label it with the team that owns it.</li>
+        <li>Draw arrows for every cross-context dependency. Label each: "uses ___" or "subscribes to ___."</li>
+        <li>Take a picture. Drop it in your team's Slack channel and ask: "Is this what we look like to you?"</li>
+      </ol>
+      <p>Two outcomes are possible. (1) Your map looks tidy &mdash; congratulations, you have implicit bounded contexts and just need to name them. (2) Your map looks like a plate of spaghetti &mdash; congratulations, you found the work. The map itself is the most valuable artifact of this entire course.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>You have boundaries. Now they need to talk to each other. Chapter 4 is <strong>context mapping</strong>: the canonical relationships between contexts (anti-corruption layer, shared kernel, customer-supplier, conformist, open host service, separate ways) and how to draw and label arrows precisely. Bring the messy paper map you drew in the exercise &mdash; we're going to label every arrow on it.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-ubiquitous-language.html">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-chapter">Ubiquitous Language</span>
+      </a>
+      <a href="04-context-mapping.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Context Mapping</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

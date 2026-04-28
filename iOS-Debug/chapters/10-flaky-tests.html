@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Flaky Test Diagnosis | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-ai-assisted-instruments.html">&#8592; Prev</a>
+      <a href="11-production-monitoring.html">Next &#8594;</a>
+      <a href="maps/10-flaky-tests-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Flaky Test Diagnosis</h1>
+    <p class="subtitle">When &ldquo;retry and ignore&rdquo; becomes your team&rsquo;s default response to red builds, you&rsquo;ve got a trust problem.</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <section>
+      <h2>Why Flaky Tests Erode Everything</h2>
+
+      <p>A flaky test is a test that passes sometimes and fails sometimes with no code change. It&rsquo;s the &ldquo;boy who cried wolf&rdquo; of your CI pipeline. After a few false alarms, your team stops trusting the test suite. Soon, real failures get retried and merged. Bugs ship.</p>
+
+      <p>The insidious thing about flaky tests isn&rsquo;t the tests themselves &mdash; it&rsquo;s the <em>culture</em> they create. Once &ldquo;just retry it&rdquo; becomes normal, your entire CI safety net has a hole.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">1 in 7</div>
+          <div class="stat-label">tests in large iOS codebases exhibit some flakiness</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">3.2 hrs</div>
+          <div class="stat-label">average developer time wasted per week on flaky test investigation</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">74%</div>
+          <div class="stat-label">of teams admit to merging PRs despite intermittent test failures</div>
+        </div>
+      </div>
+
+      <p>AI changes the equation. A flaky test produces <em>structured data</em> across multiple runs &mdash; failure logs, assertion messages, stack traces, timing patterns. Feed those runs to AI, and it spots the pattern a human would need 20 runs and an hour to see.</p>
+    </section>
+
+    <!-- Categorizing Flaky Tests -->
+    <section>
+      <h2>The Four Categories of Flaky Tests</h2>
+
+      <p>Not all flakiness is the same. Before you can fix a flaky test, you need to know <em>why</em> it flakes. AI classifies these instantly when you feed it failure logs from multiple runs.</p>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>⏱️ Timing-Dependent</h4>
+          <ul>
+            <li>Passes on fast machines, fails on slow CI</li>
+            <li>Race conditions between threads</li>
+            <li>Hardcoded <code>sleep()</code> or tight timeouts</li>
+            <li><strong>Fix:</strong> proper async waiting, not sleep</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>📋 Order-Dependent</h4>
+          <ul>
+            <li>Passes alone, fails when run after another test</li>
+            <li>Shared mutable state (singletons, UserDefaults)</li>
+            <li>Database not cleaned between tests</li>
+            <li><strong>Fix:</strong> isolate state, proper tearDown</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>🖥️ Environment-Dependent</h4>
+          <ul>
+            <li>Passes on one machine, fails on another</li>
+            <li>Simulator version differences</li>
+            <li>Locale, timezone, or date-dependent logic</li>
+            <li><strong>Fix:</strong> explicit locale/timezone, mock dates</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>📡 Resource-Dependent</h4>
+          <ul>
+            <li>Network calls to real servers</li>
+            <li>File system race conditions</li>
+            <li>Keychain access on CI (provisioning)</li>
+            <li><strong>Fix:</strong> mock external resources, stub I/O</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Feeding Test Failures to AI -->
+    <section>
+      <h2>Feeding Test Failures to AI</h2>
+
+      <p>The key to AI-powered flaky test diagnosis is <em>multiple runs</em>. One failure is ambiguous. Five failures with different stack traces tell a story.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Prompt</div>
+        <div class="prompt-text">This test fails roughly 1 in 5 runs on CI but passes locally. Here are the failure logs from the last 4 CI failures:
+
+Run 1: XCTAssertEqual failed: ("0") is not equal to ("3") — testFetchProducts() line 42
+Run 2: XCTAssertEqual failed: ("1") is not equal to ("3") — testFetchProducts() line 42
+Run 3: Passed
+Run 4: XCTAssertEqual failed: ("0") is not equal to ("3") — testFetchProducts() line 42
+Run 5: XCTAssertEqual failed: ("2") is not equal to ("3") — testFetchProducts() line 42
+
+Here&rsquo;s the test code:
+```swift
+func testFetchProducts() async throws {
+    let viewModel = ProductListViewModel(service: MockProductService())
+    viewModel.loadProducts()
+    // Line 42:
+    XCTAssertEqual(viewModel.products.count, 3)
+}
+```
+
+And the ViewModel:
+```swift
+func loadProducts() {
+    Task {
+        products = try await service.fetchProducts()
+    }
+}
+```
+
+Why does the count vary between 0, 1, 2, and 3?</div>
+      </div>
+
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad Prompt</div>
+        <div class="prompt-text">My test is flaky. Fix it.</div>
+      </div>
+    </section>
+
+    <!-- Debug Trace: Race Condition -->
+    <section>
+      <h2>Diagnosing a Race Condition</h2>
+
+      <div class="debug-trace">
+        <div class="trace-header">XCTest Output &mdash; 5 runs of testFetchProducts()</div>
+<pre>
+Test Suite 'ProductListViewModelTests' started.
+
+--- Run 1 (FAIL) ---
+testFetchProducts(): XCTAssertEqual failed: ("0") is not equal to ("3")
+  ProductListViewModelTests.swift:42
+
+--- Run 2 (FAIL) ---
+testFetchProducts(): XCTAssertEqual failed: ("1") is not equal to ("3")
+  ProductListViewModelTests.swift:42
+
+--- Run 3 (PASS) ---
+testFetchProducts(): passed (0.004 seconds)
+
+--- Run 4 (FAIL) ---
+testFetchProducts(): XCTAssertEqual failed: ("0") is not equal to ("3")
+  ProductListViewModelTests.swift:42
+
+--- Run 5 (PASS) ---
+testFetchProducts(): passed (0.003 seconds)
+</pre>
+        <div class="trace-analysis">
+          <strong>AI Analysis:</strong> Classic race condition. <code>loadProducts()</code> fires an unstructured <code>Task { }</code>, but the test asserts <em>immediately</em> without waiting for the Task to complete. The count varies (0, 1, 2, 3) because the assertion races against the async operation &mdash; sometimes none of the products have arrived, sometimes some, sometimes all. Passes locally because your M4 Mac finishes the mock fetch before the assertion runs. CI&rsquo;s shared runners are slower.
+        </div>
+      </div>
+
+      <div class="root-cause">
+        <h4>Root Cause: Unstructured Task Without Test Synchronization</h4>
+        <p><strong>Evidence:</strong> The assertion count varies randomly between 0 and 3 across runs. The ViewModel uses <code>Task { }</code> which is fire-and-forget &mdash; the test has no way to wait for completion.</p>
+        <p><strong>Category:</strong> Timing-dependent flakiness.</p>
+        <p><strong>Why it passes locally:</strong> Fast hardware completes the mock fetch before the synchronous assertion runs. CI runners are slower and more variable.</p>
+      </div>
+
+      <div class="fix-pattern">
+        <h4>Fix Pattern: Make the Async Operation Awaitable</h4>
+<pre><code>// BEFORE: Fire-and-forget Task — test can't wait
+func loadProducts() {
+    Task {
+        products = try await service.fetchProducts()
+    }
+}
+
+// Test races against the Task:
+func testFetchProducts() async throws {
+    let vm = ProductListViewModel(service: MockProductService())
+    vm.loadProducts()
+    XCTAssertEqual(vm.products.count, 3) // 💥 race condition
+}
+
+// AFTER Option A: Make loadProducts() async
+func loadProducts() async throws {
+    products = try await service.fetchProducts()
+}
+
+// Test awaits properly:
+func testFetchProducts() async throws {
+    let vm = ProductListViewModel(service: MockProductService())
+    try await vm.loadProducts()
+    XCTAssertEqual(vm.products.count, 3) // ✅ deterministic
+}
+
+// AFTER Option B: If Task {} is required (e.g., called from SwiftUI),
+// use XCTestExpectation or observe the published property:
+func testFetchProducts() async throws {
+    let vm = ProductListViewModel(service: MockProductService())
+    let expectation = XCTestExpectation(description: "Products loaded")
+
+    let cancellable = vm.$products
+        .dropFirst()
+        .sink { products in
+            if products.count == 3 { expectation.fulfill() }
+        }
+
+    vm.loadProducts()
+    await fulfillment(of: [expectation], timeout: 2.0)
+    XCTAssertEqual(vm.products.count, 3) // ✅ waits for data
+    cancellable.cancel()
+}</code></pre>
+      </div>
+
+      <div class="performance-metric">
+        <div class="metric-before">
+          <h4>Before</h4>
+          <ul>
+            <li>Pass rate: ~60% (3 of 5 runs)</li>
+            <li>CI retries per week: 12</li>
+            <li>Time wasted: ~2 hours/week</li>
+          </ul>
+        </div>
+        <div class="metric-after">
+          <h4>After</h4>
+          <ul>
+            <li>Pass rate: 100% (deterministic)</li>
+            <li>CI retries per week: 0</li>
+            <li>Time saved: 2 hours/week</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- XCUITest Synchronization -->
+    <section>
+      <h2>XCUITest Synchronization Pitfalls</h2>
+
+      <p>UI tests are flakier than unit tests by nature. They depend on animations completing, views appearing, system alerts popping up, and simulators behaving. Here are the patterns AI catches immediately.</p>
+
+      <h3>The <code>sleep()</code> Antipattern</h3>
+
+<pre><code>// ❌ NEVER do this — timing varies on CI
+func testLogin() {
+    app.textFields["email"].tap()
+    app.textFields["email"].typeText("user@example.com")
+    app.buttons["Login"].tap()
+    sleep(3)  // "Wait for the API"
+    XCTAssert(app.staticTexts["Welcome"].exists)  // Fails if API takes 3.1s
+}
+
+// ✅ Use waitForExistence instead
+func testLogin() {
+    app.textFields["email"].tap()
+    app.textFields["email"].typeText("user@example.com")
+    app.buttons["Login"].tap()
+    let welcome = app.staticTexts["Welcome"]
+    XCTAssertTrue(welcome.waitForExistence(timeout: 10))
+}</code></pre>
+
+      <h3>System Alert Handling</h3>
+
+      <p>The most common XCUITest flake on CI: a system permission alert (&ldquo;Allow Notifications?&rdquo;, &ldquo;Allow Location?&rdquo;) blocks your test. Locally you&rsquo;ve already dismissed it. CI starts with a fresh simulator.</p>
+
+<pre><code>// Handle system alerts automatically
+override func setUp() {
+    super.setUp()
+    continueAfterFailure = false
+    app = XCUIApplication()
+
+    // Dismiss system alerts when they appear
+    addUIInterruptionMonitor(forAlertHandling: { alert in
+        if alert.buttons["Allow"].exists {
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        if alert.buttons["Allow While Using App"].exists {
+            alert.buttons["Allow While Using App"].tap()
+            return true
+        }
+        return false
+    })
+
+    app.launch()
+}</code></pre>
+
+      <div class="warning-box">
+        <strong>XCUITest alert gotcha:</strong> <code>addUIInterruptionMonitor</code> only fires when your test <em>interacts</em> with the app after the alert appears. If the alert blocks your next <code>tap()</code>, the handler fires. But if you&rsquo;re just asserting <code>exists</code> without tapping, the alert won&rsquo;t be dismissed. Always follow alert-triggering actions with an interaction.
+      </div>
+    </section>
+
+    <!-- Test Plan Configuration -->
+    <section>
+      <h2>Test Plan Configuration for Flake Detection</h2>
+
+      <p>Xcode&rsquo;s test plans have built-in tools for finding and managing flaky tests. Most teams never configure them.</p>
+
+      <h3>Test Repetition Modes</h3>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>What It Does</th>
+            <th>When to Use</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Until Failure</strong></td>
+            <td>Repeats a passing test until it fails (up to N times)</td>
+            <td>Proving a test is flaky. Run 100 repetitions to find the failure.</td>
+          </tr>
+          <tr>
+            <td><strong>Retry on Failure</strong></td>
+            <td>Retries a failing test up to N times</td>
+            <td>CI stability (band-aid, not a fix). Marks tests as &ldquo;expected flaky.&rdquo;</td>
+          </tr>
+          <tr>
+            <td><strong>Fixed Repetitions</strong></td>
+            <td>Runs every test exactly N times</td>
+            <td>Statistical flake detection. Run 10x and check for any failure.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="tip-box">
+        <strong>Flake hunting with repetitions:</strong> In your test plan, set repetition to &ldquo;Until Failure&rdquo; with 50 repetitions. Run the suspect test. If it fails once in 50, you&rsquo;ve confirmed it&rsquo;s flaky <em>and</em> you have the failure log. Feed that log to Claude Code for diagnosis.
+      </div>
+
+      <h3>Randomized Test Order</h3>
+
+      <p>Enable &ldquo;Randomize Execution Order&rdquo; in your test plan. This catches <strong>order-dependent</strong> flakiness &mdash; tests that only pass because they happen to run after another test that sets up state they depend on. If tests suddenly fail with randomized order, they have hidden dependencies.</p>
+
+      <h3>Parallel Execution</h3>
+
+      <p>Xcode 26 enables parallel test execution by default in primary test plans. Parallel tests run in separate processes, which naturally exposes shared-state bugs. If a test that passes serially fails in parallel, it&rsquo;s reading or writing shared mutable state.</p>
+    </section>
+
+    <!-- Swift Concurrency Testing -->
+    <section>
+      <h2>Swift Concurrency Testing Challenges</h2>
+
+      <p>Swift 6.2 and Xcode 26 introduce <strong>default actor isolation</strong> &mdash; new projects default to <code>@MainActor</code> for all code unless explicitly opted out. This changes how tests interact with async code and introduces new patterns for testing actor-isolated types.</p>
+
+      <h3>Testing @MainActor Code</h3>
+
+<pre><code>// The ViewModel is implicitly @MainActor (Swift 6.2 default)
+class ProductListViewModel: ObservableObject {
+    @Published var products: [Product] = []
+
+    func loadProducts() async throws {
+        products = try await service.fetchProducts()
+    }
+}
+
+// Test must also run on MainActor
+@MainActor
+func testLoadProducts() async throws {
+    let vm = ProductListViewModel(service: MockProductService())
+    try await vm.loadProducts()
+    XCTAssertEqual(vm.products.count, 3)
+}</code></pre>
+
+      <div class="warning-box">
+        <strong>Swift 6.2 testing pitfall:</strong> With default actor isolation set to <code>MainActor</code>, your test methods are implicitly <code>@MainActor</code> too. If your test calls a <code>nonisolated</code> async function, you may get unexpected behavior because the continuation resumes on the main actor. Be explicit about isolation in tests &mdash; annotate with <code>@MainActor</code> or <code>nonisolated</code> to make intent clear.
+      </div>
+
+      <h3>Swift Testing Framework (Xcode 26)</h3>
+
+      <p>The Swift Testing framework (<code>import Testing</code>) is the modern alternative to XCTest. It runs tests in parallel by default, has better async support, and includes <strong>test attachments</strong> for attaching screenshots, logs, or data to test results. Use the <code>.serialized</code> trait when tests must run sequentially:</p>
+
+<pre><code>import Testing
+
+@Suite(.serialized) // Forces sequential execution
+struct DatabaseTests {
+    @Test func insertAndFetch() async throws {
+        let db = try TestDatabase()
+        try await db.insert(Product(name: "Widget"))
+        let products = try await db.fetchAll()
+        #expect(products.count == 1)
+    }
+}</code></pre>
+    </section>
+
+    <!-- Shared Mutable State -->
+    <section>
+      <h2>Shared Mutable State: The Silent Flake Factory</h2>
+
+      <p>The #1 cause of order-dependent flakiness is shared mutable state that leaks between tests. Here are the iOS-specific culprits:</p>
+
+      <div class="checklist">
+        <h4>Shared State Isolation Checklist</h4>
+        <ul>
+          <li><strong>Singletons:</strong> Use dependency injection instead. If you must use singletons, reset them in <code>tearDown()</code></li>
+          <li><strong>UserDefaults:</strong> Use a test-specific suite: <code>UserDefaults(suiteName: "TestSuite")</code> and remove it in tearDown with <code>UserDefaults.standard.removePersistentDomain(forName: "TestSuite")</code></li>
+          <li><strong>Core Data:</strong> Use <code>NSInMemoryStoreType</code> for test stores. Never share a persistent container across tests.</li>
+          <li><strong>Keychain:</strong> Use a test-specific access group or clear keychain items in tearDown. CI runners may share keychain state between test runs.</li>
+          <li><strong>FileManager:</strong> Use a temporary directory per test: <code>FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)</code></li>
+          <li><strong>NotificationCenter:</strong> Use a test-specific instance instead of <code>.default</code>. Leftover observers from previous tests can trigger unexpected behavior.</li>
+          <li><strong>URLSession caches:</strong> Use <code>URLSessionConfiguration.ephemeral</code> in tests to avoid cached responses from previous runs.</li>
+        </ul>
+      </div>
+
+      <div class="tip-box">
+        <strong>Quick singleton isolation pattern:</strong> Instead of <code>NetworkService.shared</code> everywhere, accept the service as an init parameter with a default: <code>init(network: NetworkServiceProtocol = NetworkService.shared)</code>. Tests pass a mock. No global state touched.
+      </div>
+    </section>
+
+    <!-- CI Simulator Issues -->
+    <section>
+      <h2>CI Simulator Issues</h2>
+
+      <p>Half of all &ldquo;flaky&rdquo; tests aren&rsquo;t actually flaky &mdash; they&rsquo;re failing because of CI simulator problems. Before blaming your test code, check the environment.</p>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Symptom</h4>
+          <ul>
+            <li>Tests time out waiting for simulator</li>
+            <li>Crash in CoreSimulator during test</li>
+            <li>Test passes locally, always fails on CI</li>
+            <li>XCUITest can&rsquo;t find UI elements</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Fix</h4>
+          <ul>
+            <li>Pre-boot simulator before test run: <code>xcrun simctl boot</code></li>
+            <li>Delete and recreate simulator: <code>xcrun simctl delete all</code></li>
+            <li>Check Xcode version matches CI runner version</li>
+            <li>Disable animations: <code>app.launchArguments += ["-UIViewAnimationsEnabled", "NO"]</code></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🔧</div>
+        <div class="tool-name">XcodeBuildMCP for CI Test Stability</div>
+        <div class="tool-desc">XcodeBuildMCP can manage simulator lifecycle, run tests with specific configurations, collect failure logs, and feed them to Claude Code for diagnosis &mdash; all automated. Set up a CI step that collects flaky test failure logs across multiple runs and generates a weekly flake report.</div>
+      </div>
+    </section>
+
+    <!-- Building the /diagnose-flaky Skill -->
+    <section>
+      <h2>Building a <code>/diagnose-flaky</code> Skill</h2>
+
+      <div class="fix-pattern">
+        <h4>The /diagnose-flaky Skill</h4>
+<pre><code># .claude/commands/diagnose-flaky.md
+
+Diagnose this flaky test and recommend a fix.
+
+## Input:
+I'll provide:
+- Test name and file path
+- Failure logs from multiple CI runs (the more the better)
+- The test source code
+- Any relevant production code the test exercises
+
+## Analysis steps:
+1. **Classify** the flakiness:
+   - Timing-dependent (race condition, hardcoded delays)
+   - Order-dependent (shared state, missing tearDown)
+   - Environment-dependent (locale, timezone, simulator)
+   - Resource-dependent (network, file system, keychain)
+
+2. **Identify the root cause** from the failure pattern:
+   - Do failure values vary randomly? → race condition
+   - Does it fail only after a specific test? → order dependency
+   - Does it fail only on CI, never locally? → environment issue
+   - Does the assertion message reference nil/timeout? → async timing
+
+3. **Recommend a fix** with concrete Swift code:
+   - Replace sleep() with waitForExistence() or expectations
+   - Add proper async/await synchronization
+   - Isolate shared state (UserDefaults suite, in-memory Core Data)
+   - Add system alert handling for XCUITest
+   - Mock external resources
+
+4. **Verify the fix** strategy:
+   - Suggest test repetition count to confirm stability
+   - Recommend test plan settings (randomized order, parallel)
+
+$ARGUMENTS</code></pre>
+      </div>
+    </section>
+
+    <!-- Xcode 26 AI for Tests -->
+    <section>
+      <h2>Xcode 26 AI for Test Diagnosis</h2>
+
+      <p>Xcode 26&rsquo;s Coding Intelligence can help with test failures directly in the IDE. When a test fails, Swift Assist can explain the assertion failure and suggest fixes inline. For quick, single-test fixes, this is faster than switching to Claude Code.</p>
+
+      <p>Use <strong>Claude Code</strong> when you need to:</p>
+      <ul>
+        <li>Analyze failure patterns across multiple CI runs</li>
+        <li>Correlate test failures with recent code changes (<code>git log</code>)</li>
+        <li>Audit an entire test suite for flakiness patterns</li>
+        <li>Generate a prioritized flake remediation plan</li>
+        <li>Build automated flake detection in CI with XcodeBuildMCP</li>
+      </ul>
+
+      <p>Use <strong>Xcode 26 Swift Assist</strong> for quick single-test fixes: fixing a failing assertion, converting XCTest to Swift Testing syntax, adding async/await to a synchronous test, or generating a test for code you&rsquo;re looking at.</p>
+
+      <div class="highlight-box">
+        <h4>Swift Testing Attachments (Xcode 26)</h4>
+        <p>Swift Testing now supports <strong>test attachments</strong> &mdash; attach screenshots, logs, or arbitrary data to test results. For flaky XCUITests, attach a screenshot on failure. When the test flakes on CI, you&rsquo;ll see exactly what the screen looked like. Feed the screenshot + failure log to Claude Code for visual + textual diagnosis.</p>
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Diagnose and Fix Your Flakiest Test</h3>
+
+        <p><strong>Goal:</strong> Take your team&rsquo;s most notorious flaky test, collect failure data, and use AI to find the root cause.</p>
+
+        <ol>
+          <li><strong>Identify the flake:</strong> Find a test that has failed intermittently in your CI over the last month. Check your CI dashboard for tests with a pass rate below 95%.</li>
+          <li><strong>Collect failure data:</strong> Gather failure logs from at least 3 different CI failures. Note the assertion message, any varying values, and timestamps.</li>
+          <li><strong>Reproduce locally:</strong> Use Xcode&rsquo;s test repetition (Edit Test Plan &gt; Test Repetition &gt; &ldquo;Until Failure&rdquo; with 50 repetitions) to reproduce the failure on your machine.</li>
+          <li><strong>Feed to Claude Code:</strong></li>
+        </ol>
+
+<pre><code>/diagnose-flaky
+Test: testCheckoutFlow() in CheckoutViewModelTests.swift
+Pass rate: ~80% on CI, 100% locally
+
+Failure logs from 3 CI runs:
+[paste failure logs here]
+
+Test source code:
+[paste test code here]
+
+ViewModel source code:
+[paste relevant production code here]
+
+CI environment: Xcode 26, macOS 15, GitHub Actions M1 runner</code></pre>
+
+        <p><strong>After fixing:</strong> Run the test with &ldquo;Fixed Repetitions&rdquo; (50 reps) to confirm stability, enable &ldquo;Randomize Execution Order&rdquo; to verify no hidden order dependencies, and monitor the next 5 CI runs to confirm the flake is gone.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What&rsquo;s Next</h2>
+
+      <p>You&rsquo;ve been debugging and profiling in development &mdash; with Xcode attached, LLDB available, and Instruments recording. But what happens when your app is in the App Store and users are hitting bugs you can&rsquo;t reproduce? In Chapter 11, we&rsquo;ll tackle <strong>production monitoring and crash reporting</strong> &mdash; using Crashlytics, MetricKit, and Xcode Organizer with AI to prioritize and fix issues from real users. No debugger, no Instruments &mdash; just telemetry, crash reports, and AI to make sense of it all.</p>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-ai-assisted-instruments.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">AI-Assisted Instruments Profiling</span>
+      </a>
+      <a href="11-production-monitoring.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Production Monitoring &amp; Crash Reporting</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

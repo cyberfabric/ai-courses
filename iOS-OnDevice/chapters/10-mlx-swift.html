@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: MLX Swift and Open-Source Models — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-create-ml.html">&larr; Prev</a>
+      <a href="11-production-deployment.html">Next &rarr;</a>
+      <a href="maps/10-mlx-swift-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>MLX Swift and Open-Source Models</h1>
+    <p class="subtitle">Llama, Mistral, and Gemma on Your iPhone</p>
+  </header>
+
+  <main>
+
+    <h2>Beyond Apple's Walled Garden</h2>
+
+    <p>In Chapter 6, you met Apple's Foundation Models framework &mdash; a ~3B parameter model baked into iOS 26, guided generation, tool calling, the works. It's polished, private, and zero-setup. But it's also a black box: you can't choose the model, you can't fine-tune it, and it only runs on iPhone 15 Pro or newer.</p>
+
+    <p>What if you want to run Llama 3.2, Mistral, Gemma, or Phi on a user's device? What if you need a model fine-tuned for your domain? What if you need to support iPhone 14 or iPad Air? That's where the open-source ecosystem comes in.</p>
+
+    <p>Three runtimes let you run open-source models on Apple devices:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">MLX</div>
+        <div class="stat-label">Apple's open-source framework</div>
+        <p>Native Swift, Metal GPU, unified memory</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">llama.cpp</div>
+        <div class="stat-label">Community C/C++ engine</div>
+        <p>Widest model support, GGUF format</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">ExecuTorch</div>
+        <div class="stat-label">Meta's PyTorch runtime</div>
+        <p>Core ML + MPS backends</p>
+      </div>
+    </div>
+
+    <h2>MLX: Apple's Open-Source ML Framework</h2>
+
+    <p>MLX is Apple's answer to PyTorch and NumPy &mdash; an array framework built specifically for Apple Silicon. Think of it as "Metal for ML": it runs tensor operations on the GPU via Metal, leverages unified memory (CPU and GPU share the same RAM, no copying), and has first-class Swift support.</p>
+
+    <div class="apple-framework">
+      <h3>MLX Swift Ecosystem</h3>
+      <table>
+        <thead>
+          <tr><th>Package</th><th>Purpose</th><th>SPM URL</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>mlx-swift</strong></td><td>Core array framework (tensors, ops, Metal)</td><td>github.com/ml-explore/mlx-swift</td></tr>
+          <tr><td><strong>mlx-swift-lm</strong></td><td>LLM/VLM loading and generation</td><td>github.com/ml-explore/mlx-swift-lm</td></tr>
+          <tr><td><strong>mlx-swift-examples</strong></td><td>Example apps and model implementations</td><td>github.com/ml-explore/mlx-swift-examples</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Supported platforms:</strong> iOS 16+, macOS 14+, iPadOS 16+, visionOS 1+. Requires Apple Silicon (A14+ for iOS, M1+ for Mac).</p>
+    </div>
+
+    <h3>Setting Up MLX Swift</h3>
+
+    <p>Add MLX Swift to your Xcode project via Swift Package Manager:</p>
+
+<pre><code>// In Xcode: File → Add Package Dependencies
+// Enter: https://github.com/ml-explore/mlx-swift-lm
+
+// Or in Package.swift:
+dependencies: [
+    .package(
+        url: "https://github.com/ml-explore/mlx-swift-lm",
+        from: "1.0.0"
+    )
+]</code></pre>
+
+    <h3>Loading and Running a Model</h3>
+
+    <p>The <code>mlx-swift-lm</code> package handles model downloading from Hugging Face, loading weights, and text generation:</p>
+
+<pre><code>import MLXLLM
+import MLXLMCommon
+
+// Load a quantized model from Hugging Face
+let modelContainer = try await LLMModelFactory.shared.load(
+    hub: .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit")
+)
+
+// Generate text
+let prompt = "Explain Core ML in one sentence:"
+let result = try await modelContainer.perform { model, tokenizer in
+    let input = try await tokenizer.applyChatTemplate(
+        messages: [["role": "user", "content": prompt]]
+    )
+    return try MLXLMCommon.generate(
+        input: input,
+        parameters: .init(temperature: 0.7),
+        model: model,
+        tokenizer: tokenizer
+    ) { tokens in
+        // Streaming callback — called for each new token
+        if tokens.count >= 500 { return .stop }
+        return .more
+    }
+}
+
+print(result.output)</code></pre>
+
+    <div class="tip-box">
+      <h4>The MLX Community on Hugging Face</h4>
+      <p>The <strong>mlx-community</strong> organization on Hugging Face hosts hundreds of models pre-converted and quantized for MLX. Search for any popular model + "mlx" to find ready-to-use versions: <code>mlx-community/Llama-3.2-1B-Instruct-4bit</code>, <code>mlx-community/Mistral-7B-Instruct-v0.3-4bit</code>, <code>mlx-community/gemma-2-2b-it-4bit</code>.</p>
+    </div>
+
+    <h3>Building a Chat Interface</h3>
+
+    <p>Here's the SwiftUI view model pattern for streaming chat:</p>
+
+<pre><code>import SwiftUI
+import MLXLLM
+import MLXLMCommon
+
+@Observable
+class ChatViewModel {
+    var messages: [ChatMessage] = []
+    var isGenerating = false
+    private var modelContainer: ModelContainer?
+
+    func loadModel() async throws {
+        modelContainer = try await LLMModelFactory.shared.load(
+            hub: .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit")
+        )
+    }
+
+    func send(_ text: String) async throws {
+        messages.append(.user(text))
+        messages.append(.assistant(""))
+        isGenerating = true
+
+        try await modelContainer?.perform { model, tokenizer in
+            let chatMessages = self.messages.map {
+                ["role": $0.role, "content": $0.content]
+            }
+            let input = try await tokenizer.applyChatTemplate(
+                messages: chatMessages
+            )
+            try MLXLMCommon.generate(
+                input: input,
+                parameters: .init(temperature: 0.7),
+                model: model,
+                tokenizer: tokenizer
+            ) { tokens in
+                let text = tokenizer.decode(tokens: tokens)
+                Task { @MainActor in
+                    self.messages[self.messages.count - 1]
+                        .content = text
+                }
+                return tokens.count >= 1000 ? .stop : .more
+            }
+        }
+
+        isGenerating = false
+    }
+}</code></pre>
+
+    <h2>llama.cpp: The Universal Engine</h2>
+
+    <p>If MLX is Apple's first-party solution, llama.cpp is the community's battle-tested workhorse. Written in C/C++, it runs on everything from Raspberry Pi to iPhone to Linux servers. It supports the widest range of models and has the most active community.</p>
+
+    <h3>Integration Options</h3>
+
+    <p>There are several ways to use llama.cpp on iOS:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>llama.swift (Recommended)</h4>
+        <ul>
+          <li>Pre-compiled XCFramework</li>
+          <li>Proper semantic versioning via SPM</li>
+          <li>Clean Swift API wrapping C++ internals</li>
+          <li>Metal GPU acceleration built-in</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Direct llama.cpp Source</h4>
+        <ul>
+          <li>Requires <code>unsafeFlags</code> in SPM</li>
+          <li>Prevents semantic versioning</li>
+          <li>Complex build configuration</li>
+          <li>More control, more headaches</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>GGUF: The Model Format</h3>
+
+    <p>llama.cpp uses the <strong>GGUF</strong> format (GPT-Generated Unified Format). Models come in quantization variants named by their bit depth and method:</p>
+
+    <ul>
+      <li><strong>Q4_K_M</strong> &mdash; 4-bit quantization, medium quality. Best balance of size and quality for phones.</li>
+      <li><strong>Q5_K_M</strong> &mdash; 5-bit, slightly better quality, ~25% larger than Q4.</li>
+      <li><strong>Q8_0</strong> &mdash; 8-bit, near-original quality, 2x the size of Q4. For devices with plenty of RAM.</li>
+      <li><strong>Q2_K</strong> &mdash; 2-bit, aggressive compression. Noticeable quality loss, but tiny.</li>
+    </ul>
+
+    <div class="tip-box">
+      <h4>How to Choose a GGUF Variant</h4>
+      <p>For iPhones with 6GB RAM: use <strong>Q4_K_M</strong> for 1-3B models. For 8GB RAM devices (iPhone 15 Pro+): you can run Q4_K_M of 7B models. Always leave ~2GB for the OS and your app. A 7B Q4_K_M model needs about 4.5GB of RAM.</p>
+    </div>
+
+    <h2>ExecuTorch: PyTorch Native</h2>
+
+    <p>ExecuTorch is Meta's framework for deploying PyTorch models on mobile and edge devices. If your ML team trains in PyTorch and you want the most direct path to iPhone, ExecuTorch is worth considering.</p>
+
+    <p>The key advantage: ExecuTorch supports multiple hardware backends on Apple devices:</p>
+
+    <ul>
+      <li><strong>Core ML delegate</strong> &mdash; routes operations to CPU, GPU, or Neural Engine via Core ML</li>
+      <li><strong>MPS delegate</strong> &mdash; Metal Performance Shaders for GPU-accelerated inference</li>
+      <li><strong>XNNPACK</strong> &mdash; optimized CPU kernels as fallback</li>
+    </ul>
+
+    <p>The tradeoff: ExecuTorch has a steeper setup curve than MLX or llama.cpp. You need to export your PyTorch model through <code>torch.export</code>, lower it for the target backend, and package the resulting <code>.pte</code> file. It's a better fit when your team already has a PyTorch training pipeline.</p>
+
+    <h2>The Big Decision: Foundation Models vs Open-Source</h2>
+
+    <p>This is the most important architectural decision for on-device generative AI. Both paths are valid &mdash; the right choice depends on your constraints.</p>
+
+    <div class="device-benchmark">
+      <h3>Foundation Models vs Open-Source on iPhone 16 Pro</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Foundation Models</th>
+            <th>Llama 3.2 1B (MLX, 4-bit)</th>
+            <th>Llama 3.2 3B (MLX, 4-bit)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Tokens/second</td>
+            <td>~40 tok/s</td>
+            <td>~55 tok/s</td>
+            <td>~25 tok/s</td>
+          </tr>
+          <tr>
+            <td>Time to first token</td>
+            <td>~0.6 ms</td>
+            <td>~200 ms</td>
+            <td>~500 ms</td>
+          </tr>
+          <tr>
+            <td>RAM usage</td>
+            <td>Managed by OS</td>
+            <td>~1.2 GB</td>
+            <td>~2.5 GB</td>
+          </tr>
+          <tr>
+            <td>Model download</td>
+            <td>None (ships with OS)</td>
+            <td>~700 MB</td>
+            <td>~1.8 GB</td>
+          </tr>
+          <tr>
+            <td>Min device</td>
+            <td>iPhone 15 Pro (A17 Pro)</td>
+            <td>iPhone 12 (A14)</td>
+            <td>iPhone 15 Pro (8GB RAM)</td>
+          </tr>
+          <tr>
+            <td>Guided generation</td>
+            <td>@Generable (built-in)</td>
+            <td>Manual JSON parsing</td>
+            <td>Manual JSON parsing</td>
+          </tr>
+          <tr>
+            <td>Tool calling</td>
+            <td>Built-in Tool protocol</td>
+            <td>Prompt engineering</td>
+            <td>Prompt engineering</td>
+          </tr>
+          <tr>
+            <td>Fine-tuning</td>
+            <td>Not possible</td>
+            <td>LoRA adapters available</td>
+            <td>LoRA adapters available</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <table class="device-benchmark" style="margin-top: 1.5rem;">
+      <caption style="font-weight: 600; margin-bottom: 0.5rem;">When to Choose What</caption>
+      <thead>
+        <tr><th>Scenario</th><th>Best Choice</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Text summarization, rewriting</td><td>Foundation Models</td><td>Zero setup, guided generation, built-in</td></tr>
+        <tr><td>Domain-specific chatbot</td><td>Open-source (MLX)</td><td>Fine-tuned model for your domain</td></tr>
+        <tr><td>Support older devices</td><td>Open-source (1B model)</td><td>Runs on A14+ with 4GB RAM</td></tr>
+        <tr><td>Structured output</td><td>Foundation Models</td><td>@Generable guarantees valid output</td></tr>
+        <tr><td>Multi-language support</td><td>Open-source (Mistral/Gemma)</td><td>Better non-English performance</td></tr>
+        <tr><td>Maximum privacy control</td><td>Open-source</td><td>You control the model and inference</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Memory Management for Large Models</h2>
+
+    <p>Running a multi-billion parameter model on a phone is a memory tightrope act. Here's the reality:</p>
+
+    <div class="warning-box">
+      <h4>iPhone RAM Constraints</h4>
+      <ul>
+        <li><strong>iPhone SE / 14:</strong> 4GB total. OS uses ~1.5GB. You get ~2.5GB. Max model: 1B at Q4.</li>
+        <li><strong>iPhone 15:</strong> 6GB total. ~4GB available. Comfortable for 1-3B at Q4.</li>
+        <li><strong>iPhone 15 Pro / 16 Pro:</strong> 8GB total. ~5.5GB available. Can fit 7B at Q4.</li>
+      </ul>
+      <p>Exceed the budget and iOS kills your app via <strong>jetsam</strong> &mdash; no warning, instant termination.</p>
+    </div>
+
+    <h3>Memory-Safe Patterns</h3>
+
+<pre><code>class ModelManager {
+    private var modelContainer: ModelContainer?
+
+    // Load on demand, not at launch
+    func loadIfNeeded() async throws {
+        guard modelContainer == nil else { return }
+        modelContainer = try await LLMModelFactory.shared.load(
+            hub: .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit")
+        )
+    }
+
+    // Unload when backgrounded or under memory pressure
+    func unload() {
+        modelContainer = nil
+        // Force Metal to release GPU memory
+        MLX.GPU.clearCache()
+    }
+
+    // Listen for memory warnings
+    func setupMemoryWarningHandler() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.unload()
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <h4>The KV Cache Trap</h4>
+      <p>As a conversation grows, the KV cache (key-value cache for attention) consumes more memory. A 1B model with 2048 tokens of context uses ~200MB just for the KV cache. For long conversations, either limit context length or periodically reset the session.</p>
+    </div>
+
+    <h2>Model Quantization Formats Compared</h2>
+
+    <p>Each runtime uses its own model format. Here's how they compare:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>MLX Quantized (.safetensors)</h4>
+        <ul>
+          <li>Native Metal GPU acceleration</li>
+          <li>Unified memory (no CPU-GPU copy)</li>
+          <li>4-bit and 8-bit quantization</li>
+          <li>Download from mlx-community on HF</li>
+          <li>Best for: Apple-only projects</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <h4>GGUF (.gguf)</h4>
+        <ul>
+          <li>Widest model compatibility</li>
+          <li>Many quant variants (Q2-Q8)</li>
+          <li>Metal acceleration in llama.cpp</li>
+          <li>Cross-platform (Android too)</li>
+          <li>Best for: maximum flexibility</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Building a Model Selection Layer</h2>
+
+    <p>The production-ready approach: detect device capabilities at runtime and choose the best available model.</p>
+
+    <div class="model-pipeline">
+      <h3>Runtime Model Selection</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Check Foundation Models</strong>
+            <p>SystemLanguageModel.default available?</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Check Device RAM</strong>
+            <p>ProcessInfo.physicalMemory &gt; 6GB?</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Select Model</strong>
+            <p>FM &rarr; 3B MLX &rarr; 1B MLX &rarr; Cloud API</p>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Unified Interface</strong>
+            <p>Same Swift protocol, different backend</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+<pre><code>import FoundationModels
+
+protocol TextGenerator {
+    func generate(prompt: String) async throws -> String
+}
+
+// Foundation Models backend
+struct AppleFMGenerator: TextGenerator {
+    func generate(prompt: String) async throws -> String {
+        let session = LanguageModelSession()
+        let response = try await session.respond(to: prompt)
+        return response.content
+    }
+}
+
+// MLX backend
+struct MLXGenerator: TextGenerator {
+    let modelContainer: ModelContainer
+
+    func generate(prompt: String) async throws -> String {
+        try await modelContainer.perform { model, tokenizer in
+            // ... MLX generation code
+        }
+    }
+}
+
+// Runtime selection
+func bestAvailableGenerator() async throws -> TextGenerator {
+    if #available(iOS 26, *),
+       SystemLanguageModel.default.availability == .available {
+        return AppleFMGenerator()
+    }
+
+    let ram = ProcessInfo.processInfo.physicalMemory
+    let modelID = ram > 6_000_000_000
+        ? "mlx-community/Llama-3.2-3B-Instruct-4bit"
+        : "mlx-community/Llama-3.2-1B-Instruct-4bit"
+
+    let container = try await LLMModelFactory.shared.load(
+        hub: .init(id: modelID)
+    )
+    return MLXGenerator(modelContainer: container)
+}</code></pre>
+
+    <h2>Thermal and Battery Considerations</h2>
+
+    <p>Running a billion-parameter model generates serious heat. In Chapter 7 you learned about thermal throttling &mdash; the same principles apply here, but more aggressively.</p>
+
+    <div class="checklist">
+      <h4>Production Checklist for On-Device LLMs</h4>
+      <ul>
+        <li><strong>Limit generation length</strong> &mdash; cap at 500-1000 tokens per response to prevent thermal runaway</li>
+        <li><strong>Monitor thermal state</strong> &mdash; check <code>ProcessInfo.processInfo.thermalState</code> before starting generation</li>
+        <li><strong>Unload when backgrounded</strong> &mdash; release model memory when the app goes to background</li>
+        <li><strong>Show progress indicators</strong> &mdash; streaming tokens keeps users engaged during generation</li>
+        <li><strong>Batch wisely</strong> &mdash; don't run inference in a tight loop; give the device time to cool</li>
+        <li><strong>Test on lowest-tier device</strong> &mdash; if it works on iPhone SE, it works everywhere</li>
+      </ul>
+    </div>
+
+    <h2>The MLX Community Ecosystem</h2>
+
+    <p>The open-source on-device AI landscape is evolving fast. Key resources:</p>
+
+    <div class="highlight-box">
+      <h3>Essential Resources</h3>
+      <ul>
+        <li><strong>Hugging Face mlx-community</strong> &mdash; hundreds of pre-quantized models ready for MLX Swift</li>
+        <li><strong>WWDC25: "Explore LLMs on Apple Silicon with MLX"</strong> &mdash; Apple's official guide to MLX</li>
+        <li><strong>WWDC25: "Get started with MLX for Apple Silicon"</strong> &mdash; tensor operations and fundamentals</li>
+        <li><strong>ml-explore/mlx-swift on GitHub</strong> &mdash; the core framework source and issues</li>
+        <li><strong>TheBloke on Hugging Face</strong> &mdash; community-quantized GGUF models for llama.cpp</li>
+      </ul>
+    </div>
+
+    <h2>Exercise: Build a Local Chat App</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: MLX Swift Chat</h3>
+      <p>Build a simple chat interface powered by an on-device LLM using MLX Swift:</p>
+      <ol>
+        <li><strong>Create a new Xcode project</strong> &mdash; SwiftUI app, add <code>mlx-swift-lm</code> via SPM from <code>https://github.com/ml-explore/mlx-swift-lm</code></li>
+        <li><strong>Build a ChatViewModel</strong> &mdash; implement model loading, message history, and streaming generation using the pattern from this chapter</li>
+        <li><strong>Download a model</strong> &mdash; use <code>mlx-community/Llama-3.2-1B-Instruct-4bit</code> (smallest practical model, ~700MB download)</li>
+        <li><strong>Build the UI</strong> &mdash; message list with user/assistant bubbles, text input field, send button, loading indicator during generation</li>
+        <li><strong>Add memory management</strong> &mdash; unload the model on <code>didReceiveMemoryWarningNotification</code> and when the app backgrounds</li>
+        <li><strong>Measure performance</strong> &mdash; track and display tokens/second and total RAM usage (<code>ProcessInfo.processInfo.physicalMemory</code> minus available)</li>
+      </ol>
+      <h4>Bonus Challenges:</h4>
+      <ul>
+        <li>Add a model picker: let the user choose between 1B and 3B models based on their device</li>
+        <li>Implement the <code>TextGenerator</code> protocol from this chapter with a Foundation Models fallback</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now know how to run models on-device using every available runtime. But getting it working on your test device is only half the battle. In <strong>Chapter 11: Model Management and Production Deployment</strong>, you'll learn to ship these features to real users &mdash; model bundling strategies, App Store guidelines, device capability detection, A/B testing, error handling, and performance monitoring in production.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-create-ml.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Create ML &mdash; Training Your Own Models</span>
+      </a>
+      <a href="11-production-deployment.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Model Management and Production Deployment</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Production Monitoring &amp; Crash Reporting | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-flaky-tests.html">&larr; Prev</a>
+      <a href="12-performance-playbook.html">Next &rarr;</a>
+      <a href="maps/11-production-monitoring-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Production Monitoring &amp; Crash Reporting</h1>
+    <p class="subtitle">Firebase Crashlytics meets AI &mdash; triage, prioritize, and fix production issues at scale</p>
+  </header>
+
+  <main>
+
+    <h2>No Debugger, Only Telemetry</h2>
+
+    <p>Every chapter so far has been about bugs you can reproduce on your machine. Production is different. You can&rsquo;t attach a debugger. You can&rsquo;t add a log statement. You can&rsquo;t ask the user to &ldquo;try rotating the device.&rdquo; All you have is what your crash reporting tool sends back.</p>
+
+    <p>Chapter 10 fixed your test suite. This chapter tackles the crashes that got past it &mdash; the ones hitting real users on real devices in conditions you never imagined.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">99.5%</span>
+        <span class="stat-label">crash-free rate threshold for a &ldquo;healthy&rdquo; Android app</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">70%</span>
+        <span class="stat-label">of production crashes come from the top 5 crash clusters</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">24 hrs</span>
+        <span class="stat-label">target time-to-fix for a P0 production crash</span>
+      </div>
+    </div>
+
+    <h2>Firebase Crashlytics Overview</h2>
+
+    <p>Crashlytics is the industry standard for Android crash reporting. If you&rsquo;re not using it, set it up now &mdash; it&rsquo;s free and takes 10 minutes.</p>
+
+    <pre><code>// build.gradle.kts (project level)
+plugins {
+    id("com.google.gms.google-services") version "4.4.2" apply false
+    id("com.google.firebase.crashlytics") version "3.0.7" apply false
+}
+
+// build.gradle.kts (app level)
+plugins {
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
+}
+
+dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.12.0"))
+    implementation("com.google.firebase:firebase-crashlytics")
+    implementation("com.google.firebase:firebase-analytics")
+}</code></pre>
+
+    <p>Crashlytics automatically captures fatal crashes. But the real power comes from what you add on top: custom keys, breadcrumb logs, non-fatal exception recording, and user identifiers.</p>
+
+    <h3>Setting Up Rich Crash Context</h3>
+
+    <pre><code>// Set user identifier (for tracking issues by account)
+Firebase.crashlytics.setUserId("user_${userId}")
+
+// Custom keys — add domain-specific context
+Firebase.crashlytics.setCustomKey("subscription_tier", "premium")
+Firebase.crashlytics.setCustomKey("cart_items_count", cartItems.size)
+Firebase.crashlytics.setCustomKey("screen", "CheckoutActivity")
+Firebase.crashlytics.setCustomKey("feature_flags", enabledFlags.joinToString(","))
+
+// Breadcrumb logs — trace user journey before crash
+Firebase.crashlytics.log("User tapped 'Add to Cart' for product ${product.id}")
+Firebase.crashlytics.log("Navigated to CheckoutActivity")
+Firebase.crashlytics.log("Payment method selected: credit_card")
+
+// Non-fatal exception recording
+try {
+    processPayment(order)
+} catch (e: PaymentDeclinedException) {
+    Firebase.crashlytics.recordException(e)  // Logged, doesn't crash
+    showPaymentError(e.userMessage)
+}</code></pre>
+
+    <div class="tip-box">
+      Custom keys are searchable in the Crashlytics console. Add keys for: current screen, user tier/role, feature flags, and data state (e.g., cart size, logged-in status). When a crash hits, these keys tell you <em>what the user was doing</em>, not just what code failed.
+    </div>
+
+    <h2>Feeding Crashlytics Data to Claude Code</h2>
+
+    <p>Crashlytics groups identical crashes into &ldquo;clusters.&rdquo; Each cluster shows the stacktrace, affected versions, device distribution, and crash count. Here&rsquo;s how to extract it for AI analysis:</p>
+
+    <div class="debug-trace">
+      <h4>Crashlytics Cluster: Top Production Crash</h4>
+<pre><code>Crash Cluster: IllegalStateException in CheckoutFragment
+Signature: CheckoutFragment.kt line 89
+
+Events: 2,847 crashes in last 7 days
+Users affected: 1,203 (3.2% of DAU)
+Crash-free rate impact: dropped from 99.6% to 98.1%
+
+Versions affected:
+  v4.2.0 (build 412): 2,614 events (new in this release!)
+  v4.1.3 (build 398): 0 events
+
+Top devices:
+  Samsung Galaxy S23: 487 events
+  Pixel 7: 312 events
+  Samsung Galaxy A54: 298 events
+
+Stacktrace:
+java.lang.IllegalStateException: Can not perform this action
+  after onSaveInstanceState
+    at androidx.fragment.app.FragmentManager.checkStateLoss(FragmentManager.java:1844)
+    at androidx.fragment.app.FragmentManager.enqueueAction(FragmentManager.java:1884)
+    at androidx.fragment.app.BackStackRecord.commitInternal(BackStackRecord.java:329)
+    at androidx.fragment.app.BackStackRecord.commit(BackStackRecord.java:294)
+    at com.example.shopapp.ui.checkout.CheckoutFragment
+        .onPaymentSuccess(CheckoutFragment.kt:89)
+    at com.example.shopapp.ui.checkout.CheckoutFragment$processPayment$1
+        .invokeSuspend(CheckoutFragment.kt:67)
+
+Custom keys at crash time:
+  screen: CheckoutFragment
+  cart_items_count: 3
+  payment_method: credit_card
+  subscription_tier: free
+
+Breadcrumbs:
+  12:34:01 — User tapped 'Pay Now'
+  12:34:03 — Payment API call started
+  12:34:07 — Payment API returned success
+  12:34:07 — CRASH</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) Regression:</strong> 0 events on v4.1.3, 2,847 on v4.2.0 &mdash; this crash was <em>introduced</em> in the latest release. <strong>(2) The crash happens after payment success</strong> &mdash; the payment completes, then the app tries to navigate to a confirmation screen via Fragment transaction. <strong>(3) <code>checkStateLoss</code></strong> means the Fragment transaction is attempted after <code>onSaveInstanceState</code> &mdash; the Activity was already saving state (possibly because the user backgrounded the app during payment). <strong>(4) 4-second gap</strong> between &ldquo;Pay Now&rdquo; tap and crash suggests the user may have switched apps while waiting for the payment API.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Fragment Transaction After State Save</h4>
+      <p>When the user taps &ldquo;Pay Now&rdquo; and then switches to another app while the payment processes, Android calls <code>onSaveInstanceState()</code>. When the payment API returns (4 seconds later), the callback tries to <code>commit()</code> a Fragment transaction, but the Activity has already saved state. <code>commit()</code> throws because it could lose the transaction.</p>
+      <p>This is a <strong>v4.2.0 regression</strong> because the previous version used <code>commitAllowingStateLoss()</code> or handled the navigation differently.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Use commitAllowingStateLoss or Lifecycle-Aware Navigation</h4>
+<pre><code>// Option 1: commitAllowingStateLoss (quick fix)
+// Safe when losing the navigation state is acceptable
+parentFragmentManager.beginTransaction()
+    .replace(R.id.container, ConfirmationFragment())
+    .commitAllowingStateLoss()
+
+// Option 2: Lifecycle-aware (better — defer until resumed)
+class CheckoutFragment : Fragment() {
+    private fun onPaymentSuccess(order: Order) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            // Wait until the Fragment is at least STARTED
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // Safe to navigate — Activity is in foreground
+                findNavController().navigate(
+                    CheckoutFragmentDirections.toConfirmation(order.id)
+                )
+                return@repeatOnLifecycle
+            }
+        }
+    }
+}</code></pre>
+      <p>Option 2 is the robust fix. <code>repeatOnLifecycle(STARTED)</code> ensures navigation only happens when the Activity is in the foreground. If the user backgrounded the app, navigation is deferred until they return.</p>
+    </div>
+
+    <h2>App Quality Insights + Gemini: The IDE-Integrated View</h2>
+
+    <p>The workflow above &mdash; copy a Crashlytics cluster from the web console, paste into Claude Code &mdash; is the deepest analysis path. But Android Studio also ships a lighter, IDE-integrated counterpart: the <strong>App Quality Insights</strong> tool window, which now uses <strong>Gemini</strong> to generate root-cause hints directly next to the offending stacktrace.</p>
+
+    <div class="tool-card">
+      <span class="tool-icon">🪟</span>
+      <div class="tool-name">App Quality Insights (View &rarr; Tool Windows &rarr; App Quality Insights)</div>
+      <div class="tool-description">Pulls Crashlytics clusters and Android Vitals data into the IDE. Click any frame in the stacktrace to jump to your code. The &ldquo;Insights&rdquo; tab uses Gemini to suggest a root cause for the crash without leaving the editor &mdash; useful for a fast first read before you escalate to a Claude Code session for the deeper triage and fix-pattern work.</div>
+    </div>
+
+    <p>Treat the two as complementary: App Quality Insights is the in-IDE radar (browse the cluster, see the Gemini hint, navigate to the suspect code). Claude Code with the <code>/triage-crash</code> skill below is the deep workbench (severity assessment, regression check, fix-pattern code, recommended action).</p>
+
+    <h2>Building a <code>/triage-crash</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/triage-crash.md</code>:</p>
+
+    <pre><code># /triage-crash — Production Crash Triage
+
+Analyze a production crash report from Firebase Crashlytics and
+produce a prioritized triage assessment.
+
+## Input
+The user will provide a Crashlytics crash cluster summary including:
+- Crash count and affected users
+- Versions affected
+- Stacktrace
+- Device distribution
+- Custom keys and breadcrumbs (if available)
+
+## Analysis Steps
+
+1. **Assess severity:**
+   - Critical: data loss, security issue, payments affected, >5% DAU
+   - High: >1% DAU, core feature broken, regression from new release
+   - Medium: <1% DAU, edge case, workaround exists
+   - Low: cosmetic, rare devices only, non-core feature
+
+2. **Check for regression:** compare affected versions. If the crash
+   is new in the latest release, it's a regression — higher priority.
+
+3. **Analyze the stacktrace** using the same techniques from
+   /analyze-crash (Caused-by chain, crash classification).
+
+4. **Use custom keys** to understand user context: what screen, what
+   data state, what feature flags were active.
+
+5. **Read breadcrumbs** to reconstruct the user journey that led to
+   the crash.
+
+6. **Estimate fix complexity:** trivial (one-line), moderate (refactor
+   a method), complex (architectural change).
+
+## Output Format
+
+### Severity: [Critical/High/Medium/Low]
+
+### User Impact
+[How many users, what they experience, which feature is broken]
+
+### Regression?
+[Yes/No — which version introduced it]
+
+### Root Cause
+[Why it happens]
+
+### Suggested Fix
+```kotlin
+[Code]
+```
+
+### Fix Complexity: [Trivial/Moderate/Complex]
+
+### Recommended Action
+[Hotfix immediately / Fix in next release / Monitor / Investigate more]</code></pre>
+
+    <h2>Non-Fatal Exception Analysis</h2>
+
+    <p>Non-fatal exceptions are the silent signals. They don&rsquo;t crash the app, but they indicate problems: excessive retries, fallback paths being taken, and error states that degrade the experience.</p>
+
+    <pre><code>// Track non-fatals that indicate problems:
+try {
+    val products = api.getProducts()
+    displayProducts(products)
+} catch (e: SocketTimeoutException) {
+    Firebase.crashlytics.recordException(e)
+    Firebase.crashlytics.log("Timeout fetching products — showing cached data")
+    displayCachedProducts()  // Works, but user gets stale data
+}</code></pre>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here are our top 5 non-fatal exceptions from the last week:
+
+1. SocketTimeoutException (api.getProducts) — 4,200 events
+2. JsonSyntaxException (parsing /api/v2/promotions) — 890 events
+3. SSLHandshakeException (api.example.com) — 340 events
+4. IllegalStateException (Room migration) — 120 events
+5. FileNotFoundException (loading cached images) — 95 events
+
+Which of these indicate real problems vs expected behavior? Prioritize them for investigation.</div>
+      <div class="prompt-explanation">AI will flag: #1 is high volume and suggests server performance issues. #2 is likely a backend API change. #3 could be certificate rotation. #4 is a known pattern from Chapter 2. #5 is likely benign cache eviction.</div>
+    </div>
+
+    <h2>Crash Trends and Regression Detection</h2>
+
+    <p>The most valuable Crashlytics workflow: comparing crash rates across releases to catch regressions early.</p>
+
+    <div class="workflow-steps">
+      <span class="step">Ship v4.2.0</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Monitor 24 hrs</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Compare crash rate</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Regression? Hotfix</span>
+    </div>
+
+    <pre><code>// Extract version comparison data for Claude Code:
+// Crashlytics Console → Issues → Filter by version
+
+Version   Crash-free rate   Top new crash          Events
+v4.1.3    99.62%            (none new)             —
+v4.2.0    98.14%            IllegalStateException  2,847
+                            in CheckoutFragment
+
+// Feed this to Claude Code:
+// "We shipped v4.2.0 yesterday and crash-free rate dropped from
+//  99.62% to 98.14%. Here are the new crash clusters..."</code></pre>
+
+    <div class="warning-box">
+      <strong>Monitor every release for 24&ndash;48 hours after rollout.</strong> Use a staged rollout (1% &rarr; 10% &rarr; 50% &rarr; 100%) so you can halt if crash rates spike. A 1.5% drop in crash-free rate like the example above should trigger an immediate investigation.
+    </div>
+
+    <h2>Custom Keys for Domain-Specific Analysis</h2>
+
+    <p>Generic crash reports tell you <em>what</em> crashed. Custom keys tell you <em>why</em> it matters. Teach Claude Code what your custom keys mean:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here's a crash report with our custom keys. Let me explain what they mean for our domain:
+
+- subscription_tier: "free" / "premium" / "enterprise"
+  (premium users pay $9.99/mo — crashes for them are higher priority)
+- cart_items_count: number of items in cart at crash time
+  (high count = user was deep in a purchase flow — lost sale)
+- feature_flags: comma-separated list of enabled experiments
+  (if a flag appears in most crash events, the experiment might be the cause)
+
+Crash data:
+[paste Crashlytics cluster with custom keys]
+
+Is the "new_checkout_flow" feature flag correlated with this crash?</div>
+      <div class="prompt-explanation">By explaining the business meaning of custom keys, AI can assess business impact — not just technical severity.</div>
+    </div>
+
+    <h2>ANR Monitoring in Production</h2>
+
+    <p>Google Play Console reports ANR clusters alongside crashes. These are the same ANR traces from Chapter 3, but from production devices.</p>
+
+    <pre><code>// Play Console → Android Vitals → ANR rate
+// Export ANR clusters and feed to Claude Code:
+
+ANR Cluster: Main thread blocked in CheckoutViewModel
+Events: 892 in last 28 days
+ANR rate: 0.31% (threshold: 0.47%)
+
+Main thread state: BLOCKED
+  at com.example.shopapp.data.db.OrderDao_Impl.insertOrder
+  - waiting to lock Room database
+  held by: WorkerThread running SyncWorker</code></pre>
+
+    <p>Use the <code>/analyze-anr</code> skill from Chapter 3 for these production ANR traces. The same patterns apply &mdash; main thread blocking, lock contention, heavy computation.</p>
+
+    <h2>Building a <code>/weekly-crash-report</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/weekly-crash-report.md</code>:</p>
+
+    <pre><code># /weekly-crash-report — Production Crash Summary
+
+Generate a weekly crash report summary with prioritized fix
+recommendations.
+
+## Input
+The user will provide this week's Crashlytics data:
+- Overall crash-free rate (this week vs last week)
+- Top 5 crash clusters with event counts and user counts
+- Any new crashes (not seen in previous versions)
+- Notable non-fatal exception trends
+
+## Output Format
+
+### Weekly Health Summary
+- Crash-free rate: [this week] (trend: ↑/↓ vs last week)
+- Total crash events: [count]
+- Users affected: [count] ([%] of DAU)
+
+### Top Crashes (prioritized)
+For each of the top 5 crashes:
+1. **[Crash title]** — [severity]
+   - Events: [count] | Users: [count]
+   - Regression? [Yes/No]
+   - Root cause: [brief]
+   - Recommended fix: [brief]
+   - Effort: [Trivial/Moderate/Complex]
+
+### Regressions
+[Any crashes new to the latest release]
+
+### Recommended Sprint Work
+[Top 3 crashes to fix this sprint, ordered by impact × effort]
+
+### Trends
+[Are things getting better or worse? Any concerning patterns?]</code></pre>
+
+    <h2>Measuring Production Stability</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Reactive Crash Monitoring</h4>
+        <p><strong>Crash-free rate:</strong> 98.1%</p>
+        <p><strong>Time to detect regressions:</strong> 3&ndash;5 days</p>
+        <p><strong>Time to triage (per crash):</strong> 45 min</p>
+        <p><strong>Crashes fixed per sprint:</strong> 2</p>
+        <p><strong>User complaints before fix:</strong> Dozens</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: AI-Assisted Proactive Monitoring</h4>
+        <p><strong>Crash-free rate:</strong> 99.7%</p>
+        <p><strong>Time to detect regressions:</strong> &lt;24 hours</p>
+        <p><strong>Time to triage (per crash):</strong> 10 min</p>
+        <p><strong>Crashes fixed per sprint:</strong> 8</p>
+        <p><strong>User complaints before fix:</strong> Rare</p>
+      </div>
+    </div>
+
+    <h2>Your Production Monitoring Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Firebase Crashlytics set up with mapping file upload for deobfuscation</li>
+      <li class="checked">Custom keys added: current screen, user tier, feature flags, key data state</li>
+      <li class="checked">Breadcrumb logging at key user journey points</li>
+      <li class="checked">Non-fatal exceptions recorded for caught errors that indicate problems</li>
+      <li class="checked">Staged rollouts enabled (1% &rarr; 10% &rarr; 50% &rarr; 100%)</li>
+      <li class="checked">24-hour crash rate monitoring after every release</li>
+      <li class="checked"><code>/triage-crash</code> and <code>/weekly-crash-report</code> skills set up</li>
+      <li class="checked">Weekly crash review meeting with AI-generated summary</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Production Debugging Mindset</h3>
+      <p>Production debugging is about <strong>prioritization</strong>, not just diagnosis. You can&rsquo;t fix every crash immediately. Use AI to triage: severity, user impact, regression status, and fix complexity. Fix the crash that affects 1,200 premium users before the one that affects 3 users on Android 8. The <code>/triage-crash</code> skill gives you this framework automatically &mdash; severity, impact, and recommended action in 10 minutes instead of 45.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Triage Your Production Crashes</h4>
+      <ol>
+        <li><strong>Open Crashlytics:</strong> Go to your Firebase Console &rarr; Crashlytics. Note your current crash-free rate and the top 3 crash clusters.</li>
+        <li><strong>Export a cluster:</strong> Pick the top crash. Copy: the stacktrace, affected versions, event count, user count, device distribution, and any custom keys/breadcrumbs.</li>
+        <li><strong>Run <code>/triage-crash</code>:</strong> Paste the crash data into Claude Code. Review the severity assessment and fix recommendation. Does AI&rsquo;s priority match your intuition?</li>
+        <li><strong>Check for regressions:</strong> Filter crashes by version. Are any crashes new to your latest release? If so, these should be your highest priority.</li>
+        <li><strong>Generate a weekly report:</strong> Gather this week&rsquo;s top 5 crashes and overall stats. Run <code>/weekly-crash-report</code>. Share the output with your team.</li>
+        <li><strong>Bonus:</strong> Add custom keys to your app if you haven&rsquo;t already. Deploy, wait a week, then re-run the triage &mdash; notice how much richer the AI analysis becomes with business context.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You now have tools for every stage of debugging &mdash; from the first crash log to production monitoring. In <strong>Chapter 12: Performance Budgets and Your Debugging Playbook</strong>, we&rsquo;ll tie everything together: set measurable performance budgets, build a debugging decision tree, curate your personal toolkit of skills, and create a 30-day challenge to make AI-assisted debugging a habit.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-flaky-tests.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Flaky Test Diagnosis</span>
+      </a>
+      <a href="12-performance-playbook.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Performance Budgets and Your Debugging Playbook</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

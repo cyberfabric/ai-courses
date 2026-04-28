@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Your First On-Device Model — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-ml-models-explained.html">&larr; Prev</a>
+      <a href="04-mediapipe.html">Next &rarr;</a>
+      <a href="maps/03-first-model-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Your First On-Device Model</h1>
+    <p class="subtitle">Build a real-time image classifier with TFLite and CameraX from scratch</p>
+  </header>
+
+  <main>
+
+    <h2>Time to Stop Reading, Start Building</h2>
+
+    <p>In Chapter 2 you learned the theory: models, tensors, preprocessing, postprocessing. Now we put it all together. By the end of this chapter, you'll have an app on your phone that points the camera at objects and tells you what they are — in real time, running entirely on-device.</p>
+
+    <p>We'll use <strong>MobileNetV3</strong> for classification, <strong>TensorFlow Lite</strong> for inference, <strong>CameraX</strong> for camera frames, and <strong>Jetpack Compose</strong> for the UI. The full inference loop from Chapter 2 — load, preprocess, infer, postprocess, display — implemented end-to-end.</p>
+
+    <div class="model-pipeline">
+      <p><strong>What we're building — the complete image classification pipeline:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">CameraX Frame</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Resize 224&times;224</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Normalize [0, 1]</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">TFLite Inference</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Top-5 Labels</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Compose UI</span>
+      </div>
+    </div>
+
+    <h2>Step 1: Set Up the Project</h2>
+
+    <p>Create a new Android project in Android Studio (Empty Compose Activity). Then add the TensorFlow Lite and CameraX dependencies to your module-level <code>build.gradle.kts</code>:</p>
+
+<pre><code>dependencies {
+    // TensorFlow Lite — core runtime
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    // TFLite Support Library — image helpers, label loading
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    // TFLite Metadata — read model metadata
+    implementation("org.tensorflow:tensorflow-lite-metadata:0.4.4")
+
+    // CameraX — camera integration
+    val cameraVersion = "1.4.1"
+    implementation("androidx.camera:camera-camera2:$cameraVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraVersion")
+    implementation("androidx.camera:camera-view:$cameraVersion")
+}</code></pre>
+
+    <p>And in the <code>android</code> block, tell the build system not to compress the model file:</p>
+
+<pre><code>android {
+    // ...
+    androidResources {
+        noCompress += "tflite"
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Why <code>noCompress</code>?</strong> TFLite can memory-map model files directly from the APK — this avoids copying the entire model into RAM. But it only works if the file isn't compressed. Without this setting, Android would GZIP the <code>.tflite</code> file during build, and loading would require decompressing the entire model into memory first.
+    </div>
+
+    <h2>Step 2: Add the Model to Your Project</h2>
+
+    <p>Download <strong>MobileNetV3-Large</strong> from TensorFlow Hub or Kaggle Models. You'll get a file called something like <code>mobilenet_v3_large_100_224.tflite</code> (about 5.4MB). This model classifies images into 1,000 ImageNet categories.</p>
+
+    <p>Place the model file and its labels file in your app's assets:</p>
+
+<pre><code>app/
+  src/
+    main/
+      assets/
+        mobilenet_v3.tflite    &lt;-- the model (5.4 MB)
+        labels.txt             &lt;-- 1,000 class names, one per line</code></pre>
+
+    <p>The labels file has one class name per line — "tench", "goldfish", "great_white_shark", ... all the way to "toilet_tissue" at line 1,000. The line number corresponds to the model's output index.</p>
+
+    <h2>Step 3: Load the Model</h2>
+
+    <p>Loading a TFLite model is a two-step process: read the file into a memory-mapped buffer, then create an <code>Interpreter</code>:</p>
+
+<pre><code>class ImageClassifier(private val context: Context) {
+
+    private val interpreter: Interpreter
+    private val labels: List&lt;String&gt;
+
+    init {
+        // Memory-map the model file from assets
+        val model = FileUtil.loadMappedFile(context, "mobilenet_v3.tflite")
+
+        // Configure the interpreter
+        val options = Interpreter.Options().apply {
+            numThreads = 4  // use multiple CPU cores
+        }
+        interpreter = Interpreter(model, options)
+
+        // Load class labels
+        labels = FileUtil.loadLabels(context, "labels.txt")
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Common crash: "Model file not found."</strong> Make sure the file is in <code>src/main/assets/</code> (not <code>res/</code>). The name must match exactly — <code>mobilenet_v3.tflite</code>, not <code>MobileNet_v3.tflite</code>. Android assets are case-sensitive on most devices.
+    </div>
+
+    <h2>Step 4: Build the Preprocessing Pipeline</h2>
+
+    <p>Remember from Chapter 2: the model expects a <code>[1, 224, 224, 3]</code> float tensor with values between 0.0 and 1.0. Your camera gives you a full-resolution Bitmap. TFLite's support library makes the conversion easy:</p>
+
+<pre><code>private val imageProcessor = ImageProcessor.Builder()
+    .add(ResizeOp(224, 224, ResizeOp.ResizeMethod.BILINEAR))
+    .add(NormalizeOp(0.0f, 255.0f))  // 0-255 → 0.0-1.0
+    .build()
+
+fun classify(bitmap: Bitmap): List&lt;Classification&gt; {
+    // Wrap the bitmap in a TensorImage
+    val tensorImage = TensorImage(DataType.FLOAT32)
+    tensorImage.load(bitmap)
+
+    // Apply preprocessing: resize + normalize
+    val processed = imageProcessor.process(tensorImage)
+
+    // ... inference goes here
+}</code></pre>
+
+    <h2>Step 5: Run Inference and Read Results</h2>
+
+    <p>Now for the exciting part — actually asking the model "what is this?":</p>
+
+<pre><code>fun classify(bitmap: Bitmap): List&lt;Classification&gt; {
+    val tensorImage = TensorImage(DataType.FLOAT32)
+    tensorImage.load(bitmap)
+    val processed = imageProcessor.process(tensorImage)
+
+    // Prepare output buffer — 1000 classes
+    val output = TensorBuffer.createFixedSize(
+        intArrayOf(1, 1000), DataType.FLOAT32
+    )
+
+    // Run inference
+    interpreter.run(processed.buffer, output.buffer.rewind())
+
+    // Find top-5 predictions
+    val probabilities = output.floatArray
+    return probabilities
+        .mapIndexed { index, score -&gt; Classification(labels[index], score) }
+        .sortedByDescending { it.score }
+        .take(5)
+}
+
+data class Classification(val label: String, val score: Float)</code></pre>
+
+    <p>That's the complete inference code. Load the image, preprocess it, run the model, sort the output. Five lines of real work.</p>
+
+    <h2>Step 6: Connect to CameraX</h2>
+
+    <p>To classify objects in real time, you need a continuous stream of camera frames. CameraX's <code>ImageAnalysis</code> use case gives you exactly that:</p>
+
+<pre><code>@Composable
+fun CameraClassifierScreen(classifier: ImageClassifier) {
+    val results = remember { mutableStateOf(emptyList&lt;Classification&gt;()) }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Camera preview reference
+    val previewView = remember { PreviewView(context) }
+
+    LaunchedEffect(Unit) {
+        val cameraProvider = ProcessCameraProvider.awaitInstance(context)
+
+        val preview = Preview.Builder().build().also {
+            it.surfaceProvider = previewView.surfaceProvider
+        }
+
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+
+        analysis.setAnalyzer(Dispatchers.Default.asExecutor()) { proxy -&gt;
+            val bitmap = proxy.toBitmap()
+            results.value = classifier.classify(bitmap)
+            proxy.close()
+        }
+
+        cameraProvider.bindToLifecycle(
+            lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA,
+            preview, analysis
+        )
+    }
+
+    // UI: camera preview + results overlay
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView({ previewView }, Modifier.fillMaxSize())
+        ClassificationOverlay(results.value)
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong><code>STRATEGY_KEEP_ONLY_LATEST</code> is critical.</strong> This tells CameraX: "If I'm still processing the previous frame, drop new frames instead of queuing them." Without this, frames queue up faster than you can process them, memory balloons, and your app crashes. Always use this strategy for real-time ML.
+    </div>
+
+    <h2>Step 7: Display Results in Compose</h2>
+
+    <p>The overlay composable shows the top predictions with confidence bars:</p>
+
+<pre><code>@Composable
+fun ClassificationOverlay(results: List&lt;Classification&gt;) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .padding(16.dp)
+    ) {
+        results.forEach { result -&gt;
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = result.label.replace("_", " "),
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "${(result.score * 100).toInt()}%",
+                    color = Color(0xFFFBBF24),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+}</code></pre>
+
+    <h2>Threading Strategy — Never Block the UI</h2>
+
+    <p>Notice that our <code>ImageAnalysis</code> analyzer runs on <code>Dispatchers.Default</code> — a background thread pool. This is essential. Model inference takes 6-100ms depending on the model and hardware. Running that on the main thread means 6-100ms of frozen UI per frame — your app would stutter horribly and eventually ANR.</p>
+
+    <p>The pattern is simple:</p>
+
+    <ul>
+      <li><strong>Camera frames</strong> arrive on the CameraX thread</li>
+      <li><strong>Inference</strong> runs on <code>Dispatchers.Default</code> (background)</li>
+      <li><strong>Results</strong> update a <code>mutableStateOf</code> (Compose recomposes on the main thread automatically)</li>
+    </ul>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Correct threading</p>
+        <div class="prompt-text">// Analyzer runs on background executor
+analysis.setAnalyzer(
+    Dispatchers.Default.asExecutor()
+) { proxy ->
+    results.value = classifier.classify(proxy.toBitmap())
+    proxy.close()
+}</div>
+        <p class="prompt-explanation">Inference on background thread. UI updates via Compose state. Smooth 60fps UI.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">ANR waiting to happen</p>
+        <div class="prompt-text">// DON'T: Analyzer on main thread
+analysis.setAnalyzer(
+    Executors.mainThreadExecutor()
+) { proxy ->
+    results.value = classifier.classify(proxy.toBitmap())
+    proxy.close()
+}</div>
+        <p class="prompt-explanation">Inference blocks the UI thread. Every frame causes 50-100ms jank. ANR dialog after 5 seconds.</p>
+      </div>
+    </div>
+
+    <h2>Measuring Performance — Your CPU Baseline</h2>
+
+    <p>Before optimizing (that's Chapter 7), you need to know where you stand. Add simple timing to your classifier:</p>
+
+<pre><code>fun classify(bitmap: Bitmap): Pair&lt;List&lt;Classification&gt;, Long&gt; {
+    val startTime = System.nanoTime()
+
+    // ... preprocessing and inference (same as before) ...
+
+    val inferenceTimeMs = (System.nanoTime() - startTime) / 1_000_000
+    Log.d("Classifier", "Inference: ${inferenceTimeMs}ms")
+
+    return Pair(results, inferenceTimeMs)
+}</code></pre>
+
+    <div class="device-benchmark">
+      <p><strong>MobileNetV3-Large CPU baseline — what to expect on first run:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Device</th>
+            <th>Chipset</th>
+            <th>CPU Inference</th>
+            <th>Frames/sec</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pixel 8 Pro</td>
+            <td>Tensor G3</td>
+            <td>~18 ms</td>
+            <td>~55 fps</td>
+          </tr>
+          <tr>
+            <td>Samsung Galaxy S24</td>
+            <td>Snapdragon 8 Gen 3</td>
+            <td>~15 ms</td>
+            <td>~66 fps</td>
+          </tr>
+          <tr>
+            <td>Pixel 7a</td>
+            <td>Tensor G2</td>
+            <td>~25 ms</td>
+            <td>~40 fps</td>
+          </tr>
+          <tr>
+            <td>Samsung Galaxy A54</td>
+            <td>Exynos 1380</td>
+            <td>~55 ms</td>
+            <td>~18 fps</td>
+          </tr>
+          <tr>
+            <td>Redmi Note 12</td>
+            <td>Snapdragon 4 Gen 1</td>
+            <td>~80 ms</td>
+            <td>~12 fps</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">These are <strong>CPU-only</strong> numbers (no GPU or NPU acceleration). In Chapter 7, we'll add hardware acceleration and see these drop by 3-10x. But even CPU-only, flagships can classify faster than the camera produces frames.</p>
+    </div>
+
+    <div class="hardware-note">
+      <p><strong>First-inference warm-up:</strong> The very first inference after loading the model is always 2-5x slower than subsequent ones. This is because TFLite performs internal optimizations (memory allocation, operation scheduling) on the first run. Always run 2-3 warm-up inferences before measuring performance or showing results to users.</p>
+<pre><code>// Warm up the model after loading
+val dummyBitmap = Bitmap.createBitmap(224, 224, Bitmap.Config.ARGB_8888)
+repeat(3) { classifier.classify(dummyBitmap) }  // discard results</code></pre>
+    </div>
+
+    <h2>Common Pitfalls and Fixes</h2>
+
+    <p>Every Android developer hits these the first time. Here's the cheat sheet:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Symptom</th>
+          <th>Cause</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Crash:</strong> "Cannot load model"</td>
+          <td>Wrong file path or missing from assets</td>
+          <td>Check <code>src/main/assets/mobilenet_v3.tflite</code> exists. Exact case.</td>
+        </tr>
+        <tr>
+          <td><strong>Crash:</strong> "Input tensor shape mismatch"</td>
+          <td>Feeding raw camera resolution instead of 224&times;224</td>
+          <td>Always resize to the model's expected input shape first.</td>
+        </tr>
+        <tr>
+          <td><strong>Garbage output:</strong> every image is "digital clock"</td>
+          <td>Forgot to normalize pixels (model gets 0-255 instead of 0.0-1.0)</td>
+          <td>Add <code>NormalizeOp(0.0f, 255.0f)</code> to the image processor.</td>
+        </tr>
+        <tr>
+          <td><strong>ANR dialog</strong> after a few seconds</td>
+          <td>Running inference on the main thread</td>
+          <td>Use <code>Dispatchers.Default.asExecutor()</code> for the analyzer.</td>
+        </tr>
+        <tr>
+          <td><strong>Camera image rotated 90&deg;</strong></td>
+          <td><code>ImageProxy</code> has rotation metadata you're ignoring</td>
+          <td>Apply <code>proxy.imageInfo.rotationDegrees</code> to the bitmap before classifying.</td>
+        </tr>
+        <tr>
+          <td><strong>OutOfMemoryError</strong></td>
+          <td>Creating new Bitmap objects every frame without recycling</td>
+          <td>Reuse a single Bitmap, or let the GC handle it with <code>STRATEGY_KEEP_ONLY_LATEST</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Handling Image Rotation</h2>
+
+    <p>Camera sensors are often physically mounted sideways. The <code>ImageProxy</code> gives you rotation metadata that you need to apply:</p>
+
+<pre><code>analysis.setAnalyzer(Dispatchers.Default.asExecutor()) { proxy -&gt;
+    val bitmap = proxy.toBitmap()
+
+    // Apply rotation if needed
+    val rotated = if (proxy.imageInfo.rotationDegrees != 0) {
+        val matrix = Matrix().apply {
+            postRotate(proxy.imageInfo.rotationDegrees.toFloat())
+        }
+        Bitmap.createBitmap(bitmap, 0, 0,
+            bitmap.width, bitmap.height, matrix, true)
+    } else bitmap
+
+    results.value = classifier.classify(rotated)
+    proxy.close()
+}</code></pre>
+
+    <div class="tip-box">
+      For classification (not detection), rotation usually doesn't matter much — MobileNet handles rotated objects reasonably well. But for object detection and segmentation in later chapters, correct rotation is essential for accurate bounding boxes.
+    </div>
+
+    <h2>The Complete Classifier Class</h2>
+
+    <p>Here's the full classifier assembled from all the pieces above, ready to drop into your project:</p>
+
+<pre><code>class ImageClassifier(context: Context) {
+
+    private val interpreter: Interpreter
+    private val labels: List&lt;String&gt;
+    private val imageProcessor = ImageProcessor.Builder()
+        .add(ResizeOp(224, 224, ResizeOp.ResizeMethod.BILINEAR))
+        .add(NormalizeOp(0.0f, 255.0f))
+        .build()
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "mobilenet_v3.tflite")
+        val options = Interpreter.Options().apply { numThreads = 4 }
+        interpreter = Interpreter(model, options)
+        labels = FileUtil.loadLabels(context, "labels.txt")
+
+        // Warm up
+        val dummy = Bitmap.createBitmap(224, 224, Bitmap.Config.ARGB_8888)
+        classify(dummy)
+    }
+
+    fun classify(bitmap: Bitmap): List&lt;Classification&gt; {
+        val tensorImage = TensorImage(DataType.FLOAT32)
+        tensorImage.load(bitmap)
+        val processed = imageProcessor.process(tensorImage)
+
+        val output = TensorBuffer.createFixedSize(
+            intArrayOf(1, 1000), DataType.FLOAT32
+        )
+        interpreter.run(processed.buffer, output.buffer.rewind())
+
+        return output.floatArray
+            .mapIndexed { i, score -&gt; Classification(labels[i], score) }
+            .sortedByDescending { it.score }
+            .take(5)
+    }
+
+    fun close() = interpreter.close()
+}
+
+data class Classification(val label: String, val score: Float)</code></pre>
+
+    <h2>Try It: Build Your Image Classifier</h2>
+
+    <div class="exercise-box">
+      <p><strong>Build a working image classifier and test it on real objects.</strong></p>
+      <ol>
+        <li>Create a new Compose project and add the TFLite + CameraX dependencies</li>
+        <li>Download MobileNetV3-Large <code>.tflite</code> and the ImageNet <code>labels.txt</code> into <code>assets/</code></li>
+        <li>Implement the <code>ImageClassifier</code> class from this chapter</li>
+        <li>Add CameraX integration with <code>ImageAnalysis</code></li>
+        <li>Display top-5 results overlaid on the camera preview</li>
+        <li>Add inference time logging</li>
+      </ol>
+      <p><strong>Then test it:</strong> Photograph <strong>10 different objects</strong> around your desk or home. For each:</p>
+      <ul>
+        <li>Record the top prediction and confidence score</li>
+        <li>Mark whether it got it right or wrong</li>
+        <li>Note the inference time on your device</li>
+      </ul>
+      <p><strong>Expected outcome:</strong> MobileNetV3 should correctly identify 6-8 out of 10 common objects (keyboards, monitors, cups, bottles). It struggles with unusual angles, partial views, and objects not in ImageNet's 1,000 classes. That's normal — and it's why we'll explore specialized models in the next chapters.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've built a working AI feature from scratch: camera to classification in real time. But MobileNet is a general-purpose classifier — it knows 1,000 categories from ImageNet, which doesn't include many things you'd actually want to detect in a real app.</p>
+
+    <p>In <strong>Chapter 4: MediaPipe — Production-Ready AI Features</strong>, we'll use Google's pre-built ML solutions to add polished, specialized features — face detection with 468 landmarks, hand tracking with gesture recognition, pose estimation, and real-time object detection with bounding boxes. All with much less code than we wrote today, and much better results for specific tasks.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-ml-models-explained.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">How ML Models Work</span>
+      </a>
+      <a href="04-mediapipe.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">MediaPipe — Production-Ready AI Features</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

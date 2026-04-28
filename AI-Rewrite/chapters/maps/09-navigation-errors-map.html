@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Navigation, Errors, and Cross-Cutting Concerns | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../09-navigation-errors.html">Chapter</a>
+      <a href="08-dependency-injection-map.html">&larr; Prev Map</a>
+      <a href="10-testing-rewrite-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Navigation, Errors, and Cross-Cutting Concerns</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- Big Idea -->
+    <section>
+      <div class="map-big-idea">
+        <span class="big-idea-icon">💡</span>
+        <h3>The Big Idea</h3>
+        <p>Cross-cutting concerns &mdash; navigation, errors, network, Gradle &mdash; are the hallways, fire alarms, city plumbing, and building codes that connect every room. They span all layers, and AI gets them wrong precisely because they require understanding <strong>boundaries</strong>, not just individual components.</p>
+      </div>
+    </section>
+
+    <!-- The Four Cross-Cutting Domains -->
+    <section>
+      <h2>🏗️ The Four Cross-Cutting Domains</h2>
+
+      <div class="map-grid">
+        <div class="map-card">
+          <span class="map-card-icon">🚪</span>
+          <div class="map-card-title">Navigation</div>
+          <div class="map-card-desc">Hallways connecting rooms. Type-safe routes, feature-owned, assembled in :app. No raw strings, no navController leaks.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">🚨</span>
+          <div class="map-card-title">Error Handling</div>
+          <div class="map-card-desc">Fire alarms. Three-tier translation: ApiResult → AppException → UiError. Each layer translates, never passes raw signals.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">🌐</span>
+          <div class="map-card-title">Network Layer</div>
+          <div class="map-card-desc">City water supply. CallAdapter wraps all responses. Dual OkHttpClient: @Authenticated + @Public. Zero try/catch in repos.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">📐</span>
+          <div class="map-card-title">Gradle Conventions</div>
+          <div class="map-card-desc">Building codes. Convention plugins in build-logic/. Version catalog only. KSP-only, no KAPT. Feature build.gradle.kts under 10 lines.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Navigation Rules -->
+    <section>
+      <h2>🚪 The Navigation Rules</h2>
+
+      <dl class="map-terms">
+        <dt>NAV-001: Route Constants in Owning Feature</dt>
+        <dd>:feature:recipe owns RecipeRoutes. :feature:books owns BookRoutes. :app only assembles the NavHost.</dd>
+        <dt>NAV-002: Type-Safe Routes Only</dt>
+        <dd>@Serializable data classes for routes. No raw strings like <code>navigate("recipe/$id")</code>.</dd>
+        <dt>NAV-003: Features Don't Know Each Other</dt>
+        <dd>Cross-feature navigation via Effect → callback lambda → :app's NavHost resolves the target.</dd>
+      </dl>
+
+      <p style="margin-top:0.5rem; opacity:0.85;"><strong>Navigation 3 (stable since Nov 2025, 1.1.x):</strong> Compose-first, NavMetadata DSL, shared elements. The Navigation 2.x type-safe routes pattern remains supported — adopt Nav 3 as a follow-up migration, not during the rewrite.</p>
+    </section>
+
+    <!-- Cross-Feature Navigation Flow -->
+    <section>
+      <h2>🔄 Cross-Feature Navigation Flow</h2>
+
+      <div class="map-flow">
+        <div class="map-flow-step">ViewModel<br>emits Effect</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">LaunchedEffect<br>calls lambda</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">:app NavHost<br>resolves route</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">Target Screen<br>composable</div>
+      </div>
+
+      <p style="text-align:center; margin-top:0.5rem; opacity:0.8;">No feature module ever references another feature module. :app is the only assembler.</p>
+    </section>
+
+    <!-- Error Hierarchy Flow -->
+    <section>
+      <h2>🚨 Three-Tier Error Flow</h2>
+
+      <div class="map-flow">
+        <div class="map-flow-step">Network<br>IOException / HTTP</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">CallAdapter<br>ApiResult&lt;T&gt;</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">Repository<br>AppException</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">ViewModel<br>UiError</div>
+        <span class="map-flow-arrow">→</span>
+        <div class="map-flow-step">Composable<br>displays string</div>
+      </div>
+
+      <table class="map-compare">
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Type</th>
+            <th>Lives In</th>
+            <th>Example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1 — Network</td>
+            <td>ApiResult&lt;T&gt;</td>
+            <td>:data:repository</td>
+            <td>ApiError(401, "Unauthorized")</td>
+          </tr>
+          <tr>
+            <td>2 — Domain</td>
+            <td>AppException</td>
+            <td>:core:domain</td>
+            <td>AppException.Authentication</td>
+          </tr>
+          <tr>
+            <td>3 — UI</td>
+            <td>UiError</td>
+            <td>:feature:*</td>
+            <td>"Session expired. Please sign in."</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- AppException Subtypes -->
+    <section>
+      <h2>🔥 AppException Subtypes</h2>
+
+      <div class="map-grid">
+        <div class="map-card">
+          <span class="map-card-icon">📡</span>
+          <div class="map-card-title">Network</div>
+          <div class="map-card-desc">Wraps IOException. Connectivity failures.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">🖥️</span>
+          <div class="map-card-title">Server(code, msg)</div>
+          <div class="map-card-desc">HTTP error responses (500, 422, etc.).</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">🔑</span>
+          <div class="map-card-title">Authentication</div>
+          <div class="map-card-desc">401 / token expired. Triggers re-login flow.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">🔍</span>
+          <div class="map-card-title">NotFound(entity)</div>
+          <div class="map-card-desc">404 / missing DB record.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">✏️</span>
+          <div class="map-card-title">Validation(msg)</div>
+          <div class="map-card-desc">Invalid user input caught at domain layer.</div>
+        </div>
+        <div class="map-card">
+          <span class="map-card-icon">🗄️</span>
+          <div class="map-card-title">Database</div>
+          <div class="map-card-desc">Room/SQLite failures. Wraps cause.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Network Layer -->
+    <section>
+      <h2>🌐 Network Layer Rules</h2>
+
+      <dl class="map-terms">
+        <dt>NET-001: CallAdapter for ApiResult</dt>
+        <dd>Custom CallAdapter wraps every Retrofit response in ApiResult. Repositories never write try/catch around network calls.</dd>
+        <dt>NET-002: Dual OkHttpClient</dt>
+        <dd>@Authenticated (token interceptor) + @Public (no auth). Qualifiers defined in :core:common per DI-004.</dd>
+      </dl>
+    </section>
+
+    <!-- Module Dependency Graph -->
+    <section>
+      <h2>📦 Allowed Dependency Graph (PKG-001)</h2>
+
+      <div class="map-relationships">
+        <div class="map-rel-node">:feature:recipe<br>:feature:books<br>:feature:grocery</div>
+        <div class="map-rel-node">:data:repository<br>:data:local</div>
+        <div class="map-rel-center">:core:domain<br>:core:common</div>
+        <div class="map-rel-node">:core:design-system</div>
+        <div class="map-rel-node">:app<br>(assembles all)</div>
+      </div>
+
+      <p style="text-align:center; margin-top:0.5rem; opacity:0.8;">Forbidden: domain → data/feature, feature → feature, data → feature. Strictly unidirectional.</p>
+    </section>
+
+    <!-- Gradle Rules -->
+    <section>
+      <h2>📐 Gradle Convention Stack</h2>
+
+      <ol class="map-timeline">
+        <li class="map-timeline-item" data-step="1">
+          <h4>recipes.jvm.library</h4>
+          <p>Pure Kotlin modules: :core:domain, :core:common. No Android dependencies.</p>
+        </li>
+        <li class="map-timeline-item" data-step="2">
+          <h4>recipes.android.library</h4>
+          <p>Base Android config: compileSdk, minSdk, test setup. Used by :data:* modules.</p>
+        </li>
+        <li class="map-timeline-item" data-step="3">
+          <h4>recipes.android.hilt</h4>
+          <p>Hilt plugin + KSP for Hilt compiler. Applied by any module with DI.</p>
+        </li>
+        <li class="map-timeline-item" data-step="4">
+          <h4>recipes.android.feature</h4>
+          <p>Extends library + hilt + Compose. Adds :core:domain, :core:common, :core:design-system, navigation, lifecycle.</p>
+        </li>
+        <li class="map-timeline-item" data-step="5">
+          <h4>recipes.android.application</h4>
+          <p>:app module. Full Android app config, all feature modules, NavHost assembly.</p>
+        </li>
+      </ol>
+
+      <p style="text-align:center; margin-top:0.5rem; opacity:0.8;">Result: feature module build.gradle.kts is under 10 lines. All versions in libs.versions.toml.</p>
+    </section>
+
+    <!-- Before → After Comparison -->
+    <section>
+      <h2>🔄 Before → After</h2>
+
+      <table class="map-compare">
+        <thead>
+          <tr>
+            <th>Concern</th>
+            <th>Monolith</th>
+            <th>Clean Architecture</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Navigation</td>
+            <td>startActivity() + Intent extras</td>
+            <td>@Serializable routes + NavHost</td>
+          </tr>
+          <tr>
+            <td>Error handling</td>
+            <td>try/catch + Toast in Activity</td>
+            <td>ApiResult → AppException → UiError</td>
+          </tr>
+          <tr>
+            <td>Network</td>
+            <td>Raw Retrofit in Activity</td>
+            <td>CallAdapter + dual OkHttpClient</td>
+          </tr>
+          <tr>
+            <td>Build config</td>
+            <td>Single build.gradle with KAPT</td>
+            <td>Convention plugins + KSP + catalog</td>
+          </tr>
+          <tr>
+            <td>Dependencies</td>
+            <td>Everything sees everything</td>
+            <td>Unidirectional, no forbidden imports</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Common AI Mistakes -->
+    <section>
+      <h2>⚠️ Common AI Mistakes</h2>
+
+      <table class="map-compare">
+        <thead>
+          <tr>
+            <th>Mistake</th>
+            <th>What AI Does</th>
+            <th>Rule / Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Raw string routes</td>
+            <td><code>navigate("recipe/$id")</code></td>
+            <td>NAV-002: @Serializable data classes</td>
+          </tr>
+          <tr>
+            <td>Shared :core:navigation</td>
+            <td>All routes in one module</td>
+            <td>NAV-001: routes in owning feature</td>
+          </tr>
+          <tr>
+            <td>navController in ViewModel</td>
+            <td>Injects NavController</td>
+            <td>NAV-003: Effect → callback</td>
+          </tr>
+          <tr>
+            <td>IOException in ViewModel</td>
+            <td>Catches raw exceptions</td>
+            <td>ERR-001: three-tier translation</td>
+          </tr>
+          <tr>
+            <td>ApiResult in :core:domain</td>
+            <td>Leaks network concepts</td>
+            <td>ApiResult stays in :data:repository</td>
+          </tr>
+          <tr>
+            <td>KAPT instead of KSP</td>
+            <td><code>kapt(libs.hilt.compiler)</code></td>
+            <td>GRADLE-001: KSP only</td>
+          </tr>
+          <tr>
+            <td>Hardcoded versions</td>
+            <td><code>"hilt:2.59.2"</code> in build file</td>
+            <td>GRADLE-001: version catalog only</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Quick Quiz -->
+    <section>
+      <h2>🧪 Quick Quiz</h2>
+
+      <div class="map-quiz">
+        <details>
+          <summary>Where do route constants live — :app, :core:navigation, or the owning feature?</summary>
+          <p class="quiz-answer">In the owning feature module. :feature:recipe owns RecipeRoutes. :app only assembles the NavHost. A shared :core:navigation creates hidden coupling between all features.</p>
+        </details>
+        <details>
+          <summary>How does :feature:recipe navigate to :feature:books without depending on it?</summary>
+          <p class="quiz-answer">ViewModel emits an Effect → LaunchedEffect calls a callback lambda → the lambda was provided by :app's NavHost, which resolves the route to the books feature. No feature-to-feature dependency.</p>
+        </details>
+        <details>
+          <summary>What are the three tiers of the error hierarchy?</summary>
+          <p class="quiz-answer">Tier 1: ApiResult (network, in :data:repository). Tier 2: AppException (domain, in :core:domain). Tier 3: UiError (user strings, in :feature:*). Each layer translates — no tier is skipped.</p>
+        </details>
+        <details>
+          <summary>Why does the CallAdapter eliminate try/catch in repositories?</summary>
+          <p class="quiz-answer">The CallAdapter wraps every Retrofit response (success, HTTP error, network error) in ApiResult automatically. Repositories just call .toResult() to map to domain Result — no exception handling needed.</p>
+        </details>
+        <details>
+          <summary>Why KSP over KAPT?</summary>
+          <p class="quiz-answer">KSP is Kotlin-native (no Java stub generation), 2× faster compilation, better incremental build support, and is the recommended path for Hilt, Room, and Moshi annotation processing.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- Summary Strip -->
+    <section>
+      <div class="map-summary">
+        <h3>🗝️ Key Takeaways</h3>
+        <ul>
+          <li class="map-summary-item">Navigation = hallways. Type-safe @Serializable routes in owning features. NavHost assembles in :app.</li>
+          <li class="map-summary-item">Cross-feature navigation: Effect → callback lambda → :app resolves. Never feature → feature dependency.</li>
+          <li class="map-summary-item">Error handling = fire alarms. Three tiers: ApiResult → AppException → UiError. Each layer translates.</li>
+          <li class="map-summary-item">Network: CallAdapter wraps all calls in ApiResult. Dual OkHttpClient with @Authenticated/@Public qualifiers.</li>
+          <li class="map-summary-item">Gradle: Convention plugins per module type. Version catalog only. KSP everywhere, KAPT nowhere.</li>
+          <li class="map-summary-item">PKG-001: No forbidden imports. domain ← features → domain ← data. Validate after every AI pass.</li>
+          <li class="map-summary-item">AI's biggest cross-cutting mistake: ignoring module boundaries. It puts types in the wrong module and creates hidden coupling.</li>
+          <li class="map-summary-item">The cross-cutting review checklist has 11 items. Run it after every generation pass.</li>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="08-dependency-injection-map.html" class="prev">
+      <span class="nav-direction">Prev Map</span>
+      <span class="nav-chapter">Dependency Injection: Hilt Modules With AI</span>
+    </a>
+    <a href="10-testing-rewrite-map.html" class="next">
+      <span class="nav-direction">Next Map</span>
+      <span class="nav-chapter">Testing the Rewrite</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

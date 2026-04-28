@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Claude Code Workflows | Claude Certified Architect: Foundations</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">CCA-F Exam Prep</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-claude-code-config.html">&larr; Prev</a>
+      <a href="09-prompt-engineering.html">Next &rarr;</a>
+      <a href="maps/08-claude-code-workflows-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 8</div>
+    <h1>Claude Code Workflows</h1>
+    <p class="subtitle">Plan mode, worktrees, headless execution, CI/CD, and scheduled agents &mdash; the operational side of Claude Code</p>
+  </header>
+
+  <main>
+
+    <h2>Completing Domain 3</h2>
+
+    <p>This chapter finishes <strong>Domain 3: Claude Code Configuration &amp; Workflows (20%)</strong>. Chapter 7 covered the configuration side. Now we cover the <em>operational</em> side: how you actually use Claude Code in development workflows, CI/CD pipelines, and automated systems.</p>
+
+    <p>These topics map directly to two exam scenarios: <strong>Code Generation with Claude Code</strong> and <strong>Claude Code for CI/CD</strong>. If those scenarios appear on your exam, this chapter is your lifeline.</p>
+
+    <div class="highlight-box">
+      <h3>What the Exam Tests in This Chapter</h3>
+      <p>Plan mode vs direct execution, when to use worktrees, the <code>-p</code> flag for headless mode, GitHub Actions integration, <code>max_turns</code> for cost control, and the dual-agent pattern (initializer + workers). The exam gets practical &mdash; expect questions about specific flags and patterns.</p>
+    </div>
+
+    <h2>Plan Mode: Think Before You Act</h2>
+
+    <p>Plan mode is a permission mode where Claude <strong>reads and analyzes code without making changes</strong>. It's the "look before you leap" approach.</p>
+
+    <h3>How It Works</h3>
+
+    <ul>
+      <li>Claude can read files, search code, and analyze the codebase</li>
+      <li>Claude <strong>cannot</strong> write files, execute commands, or make changes</li>
+      <li>Claude uses <code>AskUserQuestion</code> to gather requirements and clarify goals</li>
+      <li>The output is a plan &mdash; a detailed proposal of what to do</li>
+    </ul>
+
+    <h3>How to Enter Plan Mode</h3>
+
+    <pre><code># Start a session in plan mode
+claude --permission-mode plan
+
+# Switch during a session: press Shift+Tab twice
+# Normal → Auto-Accept → Plan Mode
+
+# Run a one-off analysis in plan mode
+claude --permission-mode plan -p "Analyze the auth system and suggest improvements"</code></pre>
+
+    <h3>When to Use Plan Mode</h3>
+
+    <ul>
+      <li><strong>Multi-step implementation:</strong> When a feature requires editing many files, plan first</li>
+      <li><strong>Code exploration:</strong> When researching an unfamiliar codebase</li>
+      <li><strong>Architecture review:</strong> When evaluating tradeoffs before committing to an approach</li>
+      <li><strong>Interactive development:</strong> When iterating on direction with Claude before executing</li>
+    </ul>
+
+    <div class="exam-tip-box">
+      The exam tests the distinction between plan mode and direct execution. A common question: "A developer wants Claude to analyze a large codebase and propose a refactoring strategy without making any changes. Which mode should they use?" Answer: <strong>plan mode</strong> (<code>--permission-mode plan</code>). The key phrase is "without making any changes" &mdash; that's plan mode's defining characteristic.
+    </div>
+
+    <div class="architect-box">
+      <strong>The plan-first pattern.</strong> For non-trivial tasks, the recommended workflow is:
+      <br><br>
+      <strong>1. Plan:</strong> Start in plan mode. Explore the codebase, understand dependencies, propose an approach.
+      <br><br>
+      <strong>2. Review:</strong> The developer reviews the plan, asks questions, refines.
+      <br><br>
+      <strong>3. Execute:</strong> Switch to normal mode and implement the approved plan.
+      <br><br>
+      This mirrors how senior engineers work: understand the problem fully before writing code. The exam tests this as a best practice for complex changes.
+    </div>
+
+    <h2>Git Worktrees: Parallel Isolation</h2>
+
+    <p>Git worktrees give each Claude session its own <strong>isolated copy of the codebase</strong>. This means multiple Claude sessions can work simultaneously without interfering with each other.</p>
+
+    <h3>The Problem</h3>
+    <p>If you run two Claude sessions on the same repository, they'll fight over the same files. Session A writes to <code>auth.js</code> while Session B is reading it &mdash; chaos. Worktrees solve this by creating separate working directories with their own branches.</p>
+
+    <h3>How to Use Worktrees</h3>
+
+    <pre><code># Start Claude in an isolated worktree
+claude --worktree feature-auth
+# Creates .claude/worktrees/feature-auth/ with branch worktree-feature-auth
+
+# Start another session in a different worktree
+claude --worktree bugfix-123
+# Creates .claude/worktrees/bugfix-123/ with branch worktree-bugfix-123
+
+# Auto-generate a worktree name
+claude --worktree
+# Creates something like .claude/worktrees/bright-running-fox/</code></pre>
+
+    <p>Worktrees are created at <code>&lt;repo&gt;/.claude/worktrees/&lt;name&gt;</code> and branch from <code>origin/HEAD</code> (the remote's default branch).</p>
+
+    <h3>Worktree Cleanup</h3>
+    <ul>
+      <li><strong>No changes made:</strong> Worktree and branch are removed automatically</li>
+      <li><strong>Changes exist:</strong> Claude prompts you to keep or remove the worktree</li>
+    </ul>
+
+    <h3>Subagent Worktrees</h3>
+    <p>Subagents can also use worktree isolation. Add <code>isolation: worktree</code> to a subagent's frontmatter, and each spawned subagent gets its own worktree. This is how Agent Teams work: multiple agents, each in their own worktree, working in parallel.</p>
+
+    <pre><code># .claude/agents/feature-builder.md
+---
+name: feature-builder
+isolation: worktree
+allowedTools:
+  - Read
+  - Write
+  - Bash
+---
+You are a feature builder. Implement the assigned feature
+in your isolated worktree...</code></pre>
+
+    <div class="exam-tip-box">
+      When the exam describes a scenario where "multiple developers (or agents) need to work on different features simultaneously in the same repository," the answer is <strong>git worktrees</strong>. The key signal is "parallel work, same repo." Without worktrees, concurrent sessions create conflicts. With worktrees, each gets an isolated copy.
+    </div>
+
+    <h2>Headless Mode: <code>claude -p</code></h2>
+
+    <p>The <code>-p</code> (or <code>--print</code>) flag runs Claude Code in <strong>non-interactive (headless) mode</strong>. It processes the prompt and outputs results to stdout with no human interaction. This is the foundation of CI/CD integration.</p>
+
+    <pre><code># Basic headless execution
+claude -p "Explain the main architecture of this codebase"
+
+# Pipe input
+cat build-error.txt | claude -p "Explain the root cause of this build error"
+
+# Output to file
+claude -p "Review src/auth.js for security issues" > review.txt
+
+# Control output format
+claude -p "Analyze code" --output-format json > analysis.json
+claude -p "Analyze code" --output-format stream-json  # streaming
+
+# Limit agent iterations for cost control
+claude -p "Review changes" --max-turns 10
+
+# Cap the dollar amount for a single command
+claude -p "Review changes" --max-turns 10 --max-budget-usd 0.50</code></pre>
+
+    <h3>Output Formats</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Format</th>
+          <th>Description</th>
+          <th>Use For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>text</code></td>
+          <td>Plain text (default)</td>
+          <td>Simple integrations, human-readable output</td>
+        </tr>
+        <tr>
+          <td><code>json</code></td>
+          <td>JSON array with metadata (cost, duration)</td>
+          <td>Programmatic parsing, detailed logging</td>
+        </tr>
+        <tr>
+          <td><code>stream-json</code></td>
+          <td>Streaming JSON objects in real-time</td>
+          <td>Real-time monitoring, progressive display</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <strong>Cost management matters in headless mode.</strong> Without a human to say "stop," a headless Claude can run up significant API costs. Always use <code>--max-turns</code> to cap the number of agent loop iterations. This prevents runaway conversations that burn tokens on unproductive cycles. The exam specifically tests <code>max_turns</code> as a cost control mechanism.
+    </div>
+
+    <h2>CI/CD Integration</h2>
+
+    <p>Running Claude Code in CI/CD pipelines is the core of the <strong>Claude Code for CI/CD</strong> exam scenario. The official way is through GitHub Actions, but the pattern applies to any CI system.</p>
+
+    <h3>GitHub Actions Integration</h3>
+
+    <pre><code># .github/workflows/claude-review.yml
+name: Claude Code Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Review this pull request for:
+            1. Security vulnerabilities
+            2. Performance issues
+            3. Code style violations
+            Post your findings as PR comments.
+          max_turns: 10
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}</code></pre>
+
+    <p>The <code>anthropics/claude-code-action@v1</code> GitHub Action runs the full Claude Code runtime inside a GitHub Actions runner. No local installation needed.</p>
+
+    <h3>Common CI/CD Use Cases</h3>
+
+    <div class="tool-card">
+      <div class="tool-icon">PR</div>
+      <div class="tool-info">
+        <div class="tool-name">Automated Code Review</div>
+        <div class="tool-desc">Triggered on PR open/update. Claude reviews changes, posts inline comments on issues.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">T</div>
+      <div class="tool-info">
+        <div class="tool-name">Test Generation</div>
+        <div class="tool-desc">Triggered on PR. Claude generates tests for new/changed code, commits them to the PR branch.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">S</div>
+      <div class="tool-info">
+        <div class="tool-name">Security Audit</div>
+        <div class="tool-desc">Scheduled weekly. Claude scans the codebase for vulnerabilities, creates issues for findings.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">D</div>
+      <div class="tool-info">
+        <div class="tool-name">Deployment Checks</div>
+        <div class="tool-desc">Pre-deploy gate. Claude verifies config changes, migration scripts, and environment compatibility.</div>
+      </div>
+    </div>
+
+    <h3>Security Considerations for CI/CD</h3>
+
+    <ul>
+      <li><strong>API key management:</strong> Store the <code>ANTHROPIC_API_KEY</code> in GitHub Secrets, never in code or logs</li>
+      <li><strong>Permissions:</strong> Use the most restrictive permission mode. CI/CD Claude typically needs read + limited write</li>
+      <li><strong>Cost control:</strong> Always set <code>max_turns</code> to prevent runaway costs</li>
+      <li><strong>Output filtering:</strong> Don't log raw Claude output that might contain sensitive information from the codebase</li>
+    </ul>
+
+    <div class="exam-tip-box">
+      A frequent CI/CD exam question: "How should the API key be provided to Claude Code in a GitHub Actions workflow?" The answer is <strong>GitHub Secrets</strong> (<code>${{ secrets.ANTHROPIC_API_KEY }}</code>). Distractors include hardcoding in the workflow file, committing to <code>.env</code>, or using environment variables in <code>.mcp.json</code>. Only secrets are secure in CI.
+    </div>
+
+    <h2>Scheduled Agents and Remote Triggers</h2>
+
+    <p>Claude Code supports several scheduling options for recurring tasks:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Option</th>
+          <th>Where It Runs</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Routines</strong> <small>(research preview)</small></td>
+          <td>Anthropic-managed cloud</td>
+          <td>Cloud-scheduled work, API-triggered tasks, GitHub-event reactions &mdash; all from one saved configuration</td>
+        </tr>
+        <tr>
+          <td><strong>Desktop scheduled tasks</strong></td>
+          <td>Your machine (desktop app)</td>
+          <td>Tasks needing local file access</td>
+        </tr>
+        <tr>
+          <td><strong>GitHub Actions (cron)</strong></td>
+          <td>CI pipeline</td>
+          <td>Repo-event-driven or cron-based tasks</td>
+        </tr>
+        <tr>
+          <td><strong><code>/loop</code></strong></td>
+          <td>Current CLI session</td>
+          <td>Quick polling while session is open</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Routines: Three Triggers, One Config</h3>
+
+    <p><strong>Routines</strong> (launched April 14, 2026, currently in research preview) replace what was previously called "cloud scheduled tasks." A routine is a saved Claude Code configuration &mdash; prompt, repositories, environment, connectors &mdash; with one or more triggers attached:</p>
+
+    <ul>
+      <li><strong>Scheduled:</strong> recurring cron-style schedules (minimum interval: 1 hour) or one-off runs at a specific timestamp</li>
+      <li><strong>API:</strong> a per-routine HTTPS endpoint (<code>POST /v1/claude_code/routines/&lt;id&gt;/fire</code>) authenticated with a bearer token &mdash; wire it to alerting tools, deploy pipelines, or internal apps</li>
+      <li><strong>GitHub:</strong> reacts to repository events like <code>pull_request.opened</code> or <code>release.created</code>, with optional filters on author, labels, branch, etc.</li>
+    </ul>
+
+    <p>A single routine can combine triggers (e.g., a PR-review routine that runs nightly, fires from a deploy script, and reacts to every new PR). Manage routines from <code>claude.ai/code/routines</code> or from the CLI with <code>/schedule</code>, <code>/schedule list</code>, <code>/schedule update</code>, and <code>/schedule run</code>.</p>
+
+    <pre><code># Schedule via GitHub Actions cron
+on:
+  schedule:
+    - cron: '0 9 * * MON'  # Every Monday at 9 AM
+jobs:
+  weekly-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Review all open PRs labeled 'needs-review'. Post summaries."</code></pre>
+
+    <div class="tip-box">
+      When writing prompts for scheduled tasks, be <strong>explicit about what success looks like</strong> and what to do with results. The task runs autonomously &mdash; it can't ask clarifying questions. Bad: "Check the PRs." Good: "Review open PRs labeled 'needs-review', leave inline comments on issues, and post a summary in the #eng-reviews Slack channel."
+    </div>
+
+    <h2>The Dual-Agent Pattern</h2>
+
+    <p>For complex automated workflows, use the <strong>dual-agent pattern</strong>: an initializer agent that plans, then spawns worker subagents that execute.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Initializer Agent</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Plan &amp; Decompose</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Worker Agents (parallel)</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Aggregate Results</div>
+    </div>
+
+    <pre><code># Dual-agent: initializer plans, workers execute
+# Initializer (runs in plan mode)
+claude --permission-mode plan -p "
+  Analyze the PR and create a review plan:
+  1. List all changed files
+  2. Categorize changes (feature, bug fix, refactor)
+  3. Identify files that need security review
+  4. Output a JSON task list for worker agents
+"
+
+# Workers (run in parallel with worktrees)
+for task in tasks:
+    claude --worktree "review-${task.id}" -p "${task.prompt}"</code></pre>
+
+    <div class="architect-box">
+      <strong>The dual-agent pattern separates planning from execution.</strong> The initializer agent has broad read access but no write access (plan mode). It produces a structured task list. Worker agents have focused write access but limited scope (one task each, isolated worktrees).
+      <br><br>
+      This is safer than giving one agent full access to everything. It mirrors the hub-and-spoke pattern from Chapter 2, applied specifically to Claude Code workflows: the initializer is the hub, workers are the spokes.
+    </div>
+
+    <h2>Session Management</h2>
+
+    <p>Claude Code sessions persist and can be resumed, which is important for long-running workflows:</p>
+
+    <pre><code># Resume the most recent session
+claude --continue
+
+# Resume a named session
+claude --resume auth-refactor
+
+# Name a session at startup
+claude -n auth-refactor
+
+# Resume a session linked to a PR
+claude --from-pr 123</code></pre>
+
+    <p>Sessions store the full conversation history, tool results, and configuration state. When you resume, everything is restored. This is how you maintain continuity across multiple work sessions on the same feature.</p>
+
+    <h3>Session Forking</h3>
+    <p>Use <code>/branch</code> to create a fork of the current session &mdash; explore an alternative approach without losing the original conversation. Think of it like <code>git branch</code> for conversations.</p>
+
+    <h2>Cost Management</h2>
+
+    <p>For the exam, know the key cost control mechanisms:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Mechanism</th>
+          <th>How</th>
+          <th>When</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--max-turns</code></td>
+          <td>Caps agent loop iterations</td>
+          <td>CI/CD, headless mode &mdash; prevents runaway</td>
+        </tr>
+        <tr>
+          <td><code>--max-budget-usd</code></td>
+          <td>Hard dollar ceiling for a single <code>-p</code> command</td>
+          <td>Unattended execution &mdash; pairs with <code>--max-turns</code> as the cost-control duo</td>
+        </tr>
+        <tr>
+          <td>Effort level</td>
+          <td><code>/effort low|medium|high</code></td>
+          <td>Adaptive thinking &mdash; lower = fewer thinking tokens</td>
+        </tr>
+        <tr>
+          <td>Model selection</td>
+          <td><code>--model claude-sonnet-4-6</code></td>
+          <td>Sonnet for routine tasks, Opus for complex ones</td>
+        </tr>
+        <tr>
+          <td>Subagent models</td>
+          <td>Specify model in agent frontmatter</td>
+          <td>Use cheaper models for simple subagent tasks</td>
+        </tr>
+        <tr>
+          <td>JSON output format</td>
+          <td><code>--output-format json</code></td>
+          <td>Includes cost metadata for tracking</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <strong>Cost trap in CI/CD:</strong> Running Claude on every PR commit with no <code>max_turns</code> limit. If a PR has 20 commits in a day, that's 20 full Claude reviews. Use <code>types: [opened]</code> instead of <code>types: [opened, synchronize]</code> if you only want one review per PR, or add a label-based trigger.
+    </div>
+
+    <h2>Scenario Deep Dive: CI/CD Pipeline</h2>
+
+    <p>Let's wire up a complete CI/CD workflow for the <strong>Claude Code for CI/CD</strong> scenario:</p>
+
+    <pre><code># Complete CI/CD architecture
+#
+# PR opened/updated
+#     │
+#     ▼
+# ┌─────────────────┐
+# │ Initializer      │  ← Plan mode, read-only
+# │ Analyze changes  │
+# │ Create task list │
+# └────────┬────────┘
+#          │
+#     ┌────┼────┐
+#     ▼    ▼    ▼
+# ┌──────┐┌──────┐┌──────┐
+# │Review││ Test ││Secur-│  ← Workers in worktrees
+# │Agent ││Agent ││ity   │
+# └──┬───┘└──┬───┘└──┬───┘
+#    │       │       │
+#    ▼       ▼       ▼
+# ┌─────────────────────┐
+# │ Aggregator           │  ← Combine findings
+# │ Post PR comment      │
+# │ Block/approve merge  │
+# └─────────────────────┘</code></pre>
+
+    <div class="exercise-box">
+      <strong>Exercise: Design a CI/CD Workflow</strong>
+      <p>Your team wants to automate code review and test generation using Claude Code in GitHub Actions. Design the workflow:</p>
+      <ol>
+        <li>What event triggers the workflow? (PR opened, on push, scheduled?)</li>
+        <li>Should you use plan mode, normal mode, or a dual-agent pattern?</li>
+        <li>How do you store the API key securely?</li>
+        <li>What <code>max_turns</code> value do you set, and why?</li>
+        <li>How do you handle cost &mdash; what happens if PRs come in faster than expected?</li>
+        <li>Write the YAML for the GitHub Actions workflow file</li>
+      </ol>
+      <p><strong>Check yourself:</strong> Trigger on <code>pull_request: [opened]</code> (not every synchronize). Dual-agent for complex review. API key in GitHub Secrets. <code>max_turns: 15</code> is reasonable for code review (enough to read files and post comments, not enough to go wild). Add a label-based gate or concurrency limit for cost control.</p>
+    </div>
+
+    <h2>Quick Review</h2>
+
+    <ul class="checklist">
+      <li>Plan mode (<code>--permission-mode plan</code>) is read-only analysis &mdash; use it for exploration and multi-step planning before execution</li>
+      <li>Git worktrees (<code>--worktree name</code>) provide isolated copies for parallel work &mdash; subagents can use <code>isolation: worktree</code></li>
+      <li>Headless mode (<code>claude -p</code>) runs non-interactively for CI/CD &mdash; always pair <code>--max-turns</code> (iteration cap) with <code>--max-budget-usd</code> (dollar ceiling) for cost control</li>
+      <li>The dual-agent pattern separates planning (initializer, read-only) from execution (workers, isolated worktrees) for safer automation</li>
+      <li>API keys in CI/CD go in GitHub Secrets &mdash; never in code, logs, or environment files committed to git</li>
+    </ul>
+
+    <h2>What's Next</h2>
+
+    <p>Domain 3 is complete! You now know both the configuration and workflow sides of Claude Code. In <strong>Chapter 9: Prompt Engineering for Architects</strong>, we enter <strong>Domain 4: Prompt Engineering &amp; Structured Output (20%)</strong>. You'll learn production-grade prompting techniques &mdash; few-shot, chain-of-thought, system prompt design, and the patterns that make agents reliable at scale.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-claude-code-config.html">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Claude Code Configuration</span>
+      </a>
+      <a href="09-prompt-engineering.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Prompt Engineering for Architects</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

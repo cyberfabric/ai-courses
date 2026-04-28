@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6 — Context Compression: Spend Less by Sending Less</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="05-batch-apis.html">← Prev</a>
+      <a href="07-model-cascading-routing.html">Next →</a>
+      <a href="maps/06-context-compression-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 6</div>
+    <h1>Context Compression: Spend Less by Sending Less</h1>
+    <p class="chapter-subtitle">LLMLingua-2, recursive summarization, living summaries — 5–20x compression with minimal quality loss</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The overpacked suitcase</h2>
+
+      <p>
+        Anyone who's ever flown short-haul with a big suitcase knows this feeling: you paid for checked luggage, you packed the whole closet "just in case," and then you used three shirts and one pair of shoes. The rest was dead weight.
+      </p>
+
+      <p>
+        In most production prompts, <strong>40–80% of the tokens contribute almost nothing to the answer</strong>. They're polite padding, boilerplate instructions, repeated sections, full-paragraph explanations of things that need one line, verbatim policy documents where a six-line summary would do the job. You're paying list price for those tokens every single call.
+      </p>
+
+      <p>
+        Context compression is the art of packing a carry-on that still gets you through the week. Same destination, same wardrobe, lighter bag. This chapter covers the three main compression techniques of 2026 — token-level pruning (LLMLingua-2), hierarchical summarization, and semantic chunking — and how to know when each one fits.
+      </p>
+
+      <div class="highlight-box">
+        <strong>The core insight:</strong> the model doesn't need your <em>exact</em> prompt to produce a useful answer. It needs the <em>information</em> in your prompt. Sending less information-per-token (removing redundancy) is pure savings with almost no quality cost — if you do it right.
+      </div>
+    </section>
+
+    <section>
+      <h2>Where the dead weight hides</h2>
+
+      <p>
+        Before picking a compressor, you need to know what you're compressing. Real-world prompts waste tokens in five predictable places:
+      </p>
+
+      <ul>
+        <li><strong>Verbose instructions.</strong> "You are a helpful assistant who will always respond politely and thoroughly to the user's questions, making sure to…" When "Answer the user's question concisely" does the same work in 6 tokens instead of 45.</li>
+        <li><strong>Uncompressed RAG chunks.</strong> A retriever returns 10 chunks of 500 tokens each. Half the content across chunks overlaps. The model only cares about the non-overlapping signal.</li>
+        <li><strong>Full conversation history.</strong> A 40-turn chat dumps ~30K tokens into every new request, when a 1K living summary would preserve 95% of the relevant state.</li>
+        <li><strong>Over-long few-shot examples.</strong> Five five-line examples when two two-line examples already teach the format.</li>
+        <li><strong>Verbatim policy / documentation.</strong> A 20K-token terms-of-service quoted whole, when only three clauses matter for the current task.</li>
+      </ul>
+
+      <p>
+        You can usually spot these by eye. Anything with "For example," "In other words," "That is to say," or "It is important to note that" is almost always bloat.
+      </p>
+    </section>
+
+    <section>
+      <h2>Technique 1 — LLMLingua-2 (token pruning)</h2>
+
+      <p>
+        LLMLingua-2 is a small BERT-sized model that looks at every token in your prompt and decides "keep" or "drop" — independently of the downstream LLM. It's trained to preserve information density. On many tasks it achieves <strong>up to 20x compression with 95–98% accuracy retention</strong>, at 3–6x faster inference than the original LLMLingua.<sup><a href="#src-llmlingua">1</a></sup>
+      </p>
+
+      <p>
+        The workflow is simple: you pass your long prompt through LLMLingua-2, get a compressed prompt back, then send the compressed prompt to your real LLM. The compressor runs locally on CPU or cheap GPU — effectively free compared to the tokens you save.
+      </p>
+
+      <!-- source: https://llmlingua.com/llmlingua2.html as of 2026-04 -->
+      <ul>
+        <li><strong>Compression target:</strong> you choose a ratio (e.g., 0.33 keeps 33% of tokens).</li>
+        <li><strong>Task-agnostic:</strong> no fine-tuning needed for your specific task.</li>
+        <li><strong>Where it shines:</strong> unstructured text — articles, transcripts, chat history, long RAG chunks.</li>
+        <li><strong>Where it struggles:</strong> structured data (JSON, tables, code), exact-quote tasks, schema-following tasks.</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Watch out:</strong> LLMLingua-2 is great at compressing prose but poor at compressing structured outputs. If your prompt contains JSON, code, tables, or any format the downstream LLM is expected to mimic exactly, the compressor will sometimes break the format. Either exclude structured regions from compression or use a task-specific compressor instead.
+      </div>
+    </section>
+
+    <section>
+      <h2>Technique 2 — Hierarchical / recursive summarization</h2>
+
+      <p>
+        When prompts are long because the <em>source documents</em> are long — say, a 200-page contract, a multi-hour meeting transcript, or a full code repository — token pruning alone doesn't cut enough. You need <strong>hierarchical summarization</strong>: break the long input into chunks, summarize each chunk with a small cheap model, then summarize the summaries into a final compact representation.<sup><a href="#src-hier">2</a></sup>
+      </p>
+
+      <p>
+        This is the technique Anthropic uses for its own monitoring pipelines — summarize individual interactions, then summarize the summaries, then summarize those. Each level keeps the crucial signal and discards the filler.
+      </p>
+
+      <div class="workflow-steps">
+        <div class="step">200K tokens<br>raw source</div>
+        <span class="step-arrow">→</span>
+        <div class="step">Chunks of 10K</div>
+        <span class="step-arrow">→</span>
+        <div class="step">Chunk summaries<br>(1K each)</div>
+        <span class="step-arrow">→</span>
+        <div class="step">Summary of<br>summaries (2K)</div>
+        <span class="step-arrow">→</span>
+        <div class="step">Final prompt<br>to premium LLM</div>
+      </div>
+
+      <p>
+        The clever bit: the <em>chunk summarization step</em> runs on a cheap model (Haiku, GPT-5.4 Nano, Gemini Flash-Lite). The final step can go to your premium model. You spend a few cents on the cheap pre-processing and save tens of dollars on the expensive final call.
+      </p>
+    </section>
+
+    <section>
+      <h2>Technique 3 — Living summaries for chat</h2>
+
+      <p>
+        Chat applications are notorious token-wasters. A 40-message conversation at 500 tokens per turn creates a 20,000-token context that rides on <em>every</em> subsequent call. And the user usually only cares about the last four turns and two key facts from earlier.
+      </p>
+
+      <p>
+        The fix is a <strong>living summary</strong>: maintain a short running summary of the conversation so far. Every N turns (or once the raw history crosses a threshold), re-summarize in place. The prompt that ships to the model is always: living summary + recent N turns + current user message.
+      </p>
+
+      <p>
+        Implementation outline:
+      </p>
+
+      <ol>
+        <li>Keep a <code>summary</code> field on the conversation state, initialized empty.</li>
+        <li>After every 5 turns, call a cheap model with <em>previous summary + 5 new turns</em> and ask for a 500-token update.</li>
+        <li>Drop turns older than the last 10; they live only in the summary now.</li>
+        <li>Every prompt: <code>[system] + [summary] + [last 10 turns] + [user message]</code>.</li>
+      </ol>
+
+      <p>
+        Done well, living summaries keep the chat context around 3K tokens indefinitely, regardless of how many turns have passed.
+      </p>
+    </section>
+
+    <section>
+      <h2>Technique 4 — DTCRS (query-aware recursive summaries)</h2>
+
+      <p>
+        A 2026 technique specifically for RAG: <strong>Dynamic Tree Construction for Recursive Summarization</strong>. Instead of building a single static summary tree of a corpus, DTCRS decomposes the user's question, uses the sub-question embeddings as cluster centers, and builds a query-specific summary tree on the fly.<sup><a href="#src-dtcrs">3</a></sup>
+      </p>
+
+      <p>
+        The practical upshot: only the parts of the corpus relevant to <em>this</em> query get summarized in detail. Everything else gets either terse summaries or gets skipped entirely. Reported accuracy wins on multi-hop QA are substantial, and the token count shipped to the final LLM drops accordingly.
+      </p>
+
+      <p>
+        Use it when: you have a large corpus, your queries are multi-hop (need to combine evidence from different parts), and your traffic is high enough to justify the extra pipeline complexity.
+      </p>
+
+      <p>
+        Skip it when: your corpus is under ~50K tokens, your queries are single-fact retrieval, or you haven't yet maxed out simpler techniques first.
+      </p>
+    </section>
+
+    <section>
+      <h2>Technique 5 — Semantic chunking (not fixed-size)</h2>
+
+      <p>
+        "Chunk the doc every 512 tokens" is the laziest possible default, and it's still everywhere. It routinely cuts sentences in half, splits related paragraphs, and forces the retriever to over-fetch to recover the meaning.
+      </p>
+
+      <p>
+        <strong>Semantic chunking</strong> detects natural topic boundaries by measuring embedding similarity between consecutive sentences and splitting where the similarity drops. A Vectara / NAACL 2025 study across 25 chunking configurations found that chunking strategy is <em>as impactful</em> as embedding-model choice for retrieval quality.<sup><a href="#src-chunking">4</a></sup>
+      </p>
+
+      <div class="tool-card">
+        <div class="tool-icon">🦙</div>
+        <div class="tool-info">
+          <div class="tool-name">LlamaIndex — <code>SemanticSplitterNodeParser</code></div>
+          <div class="tool-desc">First-class semantic splitter. Hierarchical chunking is a built-in feature, a few lines to configure.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🦜</div>
+        <div class="tool-info">
+          <div class="tool-name">LangChain — <code>TextSplitter</code> family + <code>ContextualCompressionRetriever</code></div>
+          <div class="tool-desc">Broader, more configurable. <code>ContextualCompressionRetriever</code> + <code>CrossEncoderReranker</code> adds a re-rank step that filters retrieved chunks to the most relevant fraction.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🐿️</div>
+        <div class="tool-info">
+          <div class="tool-name">Chonkie</div>
+          <div class="tool-desc">Lightweight dedicated chunking library — just text splitting, nothing else. Good if you don't want the whole LangChain/LlamaIndex surface area.</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Real-numbers example: a RAG context compressed 5x</h2>
+
+      <p>
+        Picture a question-answering feature over a 300-page product manual. The baseline retriever returns 10 chunks of 500 tokens = 5K tokens of RAG context per call, plus a 2K system prompt and a 400-token user question. You're running on Sonnet 4.6 at 100K calls per month.<sup><a href="#src-anthropic-pricing">5</a></sup>
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>RAG QA feature — 100K calls/month, 5K RAG context (Sonnet 4.6)</h4>
+        <table>
+          <thead>
+            <tr><th>Stage</th><th>Input tokens/call</th><th>Input rate</th><th>Output tokens/call</th><th>Monthly cost</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Baseline (no compression)</td>
+              <td>2,000 sys + 5,000 RAG + 400 user = 7,400</td>
+              <td>$3 / 1M</td>
+              <td>600</td>
+              <td>Input $2,220 + Output $900 = $3,120</td>
+            </tr>
+            <tr>
+              <td>+ Semantic chunking + rerank (keep top 4 of 10)</td>
+              <td>2,000 sys + 2,000 RAG + 400 user = 4,400</td>
+              <td>$3 / 1M</td>
+              <td>600</td>
+              <td>Input $1,320 + Output $900 = $2,220</td>
+            </tr>
+            <tr>
+              <td>+ LLMLingua-2 (compress RAG to 0.5)</td>
+              <td>2,000 sys + 1,000 RAG + 400 user = 3,400</td>
+              <td>$3 / 1M</td>
+              <td>600</td>
+              <td>Input $1,020 + Output $900 = $1,920</td>
+            </tr>
+            <tr class="total-row">
+              <td>+ Prefix caching on 2K system prompt</td>
+              <td>Prefix cached: 2,000 × $0.30/M<br>Dynamic: 1,400 × $3/M</td>
+              <td></td>
+              <td>600</td>
+              <td><strong>Input $480 + Output $900 = $1,380</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="savings-callout banner">→ Stacking compression + reranking + caching: <strong>$3,120 → $1,380/month</strong> on the same feature. That's <strong>56% off</strong>, with measurable retrieval quality intact.</div>
+
+      <p>
+        Note which part of the bill stays fixed: the output tokens. Compression only helps on the input side. For output-heavy workloads (report generation, long-form writing), compression has less leverage; for input-heavy workloads (RAG, classification, extraction), compression is a top-three lever.
+      </p>
+    </section>
+
+    <section>
+      <h2>When NOT to compress</h2>
+
+      <p>
+        Compression is a trade: tokens for fidelity. Some tasks refuse the trade. Know them before you deploy:
+      </p>
+
+      <ul>
+        <li><strong>Contract / legal review.</strong> The exact wording is the whole point. Compressing "shall" to "will" can change enforceability. Never compress legal text.</li>
+        <li><strong>Exact-quote extraction.</strong> "Pull the verbatim clause that says X" — compression paraphrases, which breaks the task.</li>
+        <li><strong>Numeric / tabular data.</strong> Token pruners sometimes drop digits, unit labels, or currency symbols. Catastrophic in finance or scientific work.</li>
+        <li><strong>Code review for syntax.</strong> Spaces, parens, semicolons are not filler. Pruners may drop them.</li>
+        <li><strong>Schema-following outputs.</strong> If you want JSON out, sending a compressed JSON schema prompt often corrupts the schema.</li>
+      </ul>
+
+      <p>
+        The rule: if your downstream task needs <em>exact bytes</em>, don't compress. If it needs <em>the meaning</em>, compress freely.
+      </p>
+    </section>
+
+    <section>
+      <h2>Measuring compression quality (don't skip this)</h2>
+
+      <p>
+        Compression without measurement is dangerous. You'll save money on your next bill and then discover, two months later, that your answer quality has quietly drifted by 8% and support tickets are up. Build the quality measurement <em>before</em> you ship compression.
+      </p>
+
+      <ol>
+        <li><strong>Build an eval set.</strong> 50–200 representative inputs with known-good outputs for your task.</li>
+        <li><strong>Run baseline.</strong> Measure quality metric (exact-match, F1, rubric-based rating, human preference) at compression=0.</li>
+        <li><strong>Sweep compression ratios.</strong> Try 0.8, 0.6, 0.5, 0.4, 0.3, 0.2. Plot quality vs compression.</li>
+        <li><strong>Find the elbow.</strong> The point where further compression sharply drops quality. Deploy one step conservative of the elbow.</li>
+        <li><strong>Monitor in production.</strong> Keep logging a small sample of raw-vs-compressed prompts and quality-judge outputs. Alert when the gap exceeds threshold.</li>
+      </ol>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> A simple quality check: run the compressed prompt and the original side-by-side on 50 real inputs, and have a cheap judge model (Haiku or GPT-5.4 Mini) rate which answer is "as good or better" than the reference. A 90%+ "as good or better" rate is usually a safe go-live threshold for task-agnostic compression.
+      </div>
+    </section>
+
+    <section>
+      <h2>Stacking compression with the rest of the toolbox</h2>
+
+      <p>
+        Compression compounds beautifully with the earlier levers:
+      </p>
+
+      <ul>
+        <li><strong>Compression + caching:</strong> compress the dynamic part of your prompt so that the static part stays proportionally bigger — more of each call hits cache-read pricing.</li>
+        <li><strong>Compression + batch:</strong> on overnight eval runs, compress the inputs before batching. Fewer tokens × batch discount × caching = ~3% of list.</li>
+        <li><strong>Compression + cheap model (Chapter 7):</strong> compression narrows the performance gap between premium and mid-tier models — the less context, the easier the task. Sometimes a compressed prompt on Haiku matches an uncompressed one on Sonnet.</li>
+        <li><strong>Compression + fine-tuning (Chapter 11):</strong> compressed-prompt-trained small models are cheaper to run than prompt-stuffed large ones.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Decision tree — which compressor when</h2>
+
+      <div class="roi-box">
+        <div class="roi-side scenario-a">
+          <h4>Use LLMLingua-2 when…</h4>
+          <p>Your prompt is prose-heavy (RAG chunks, docs, transcripts) and your task tolerates paraphrase.</p>
+          <ul>
+            <li>Target: 2–5x compression with &lt;5% quality loss</li>
+            <li>Free infrastructure; small model runs local</li>
+            <li>Don't use on structured data or exact-quote tasks</li>
+          </ul>
+        </div>
+        <div class="roi-side scenario-b">
+          <h4>Use hierarchical summarization when…</h4>
+          <p>Your source is so long (100K+ tokens) that token pruning alone can't fit it in context.</p>
+          <ul>
+            <li>Target: 10–50x compression</li>
+            <li>Multi-step pipeline; cheap model does the heavy lifting</li>
+            <li>Works on chat history, long docs, code repos</li>
+          </ul>
+        </div>
+        <div class="roi-verdict">→ Start with semantic chunking + reranking (cheap &amp; safe). Then add LLMLingua-2 if RAG chunks are still oversized. Go hierarchical only if the raw source is huge.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise: find the 5x compression win</h2>
+
+      <div class="exercise-box">
+        <p>45 minutes. Pick one feature with long prompts — RAG, long-doc summarization, or a chatty multi-turn conversation.</p>
+        <ol>
+          <li><strong>Dump 50 real prompts</strong> from that feature's logs. Capture the full prompt, the model's response, and (if possible) a quality signal (user rating, task success, whatever you have).</li>
+          <li><strong>Count tokens per section.</strong> System prompt, RAG/context, user message. Identify the biggest section.</li>
+          <li><strong>Pick the right compressor.</strong> Prose-heavy and self-contained → LLMLingua-2. Document-derived → hierarchical summarization. Chat history → living summary.</li>
+          <li><strong>Run 50 side-by-side evals.</strong> Original prompt response vs compressed prompt response. A cheap judge model rates "as good or better."</li>
+          <li><strong>Compute cost delta.</strong> Compressed-prompt tokens × (calls/month) × input_rate. Your monthly savings.</li>
+          <li><strong>Decide.</strong> If quality ≥ 90% "as good or better" at 2x+ compression, ship it. Add quality monitoring to catch future drift.</li>
+        </ol>
+        <p><strong>Bonus:</strong> re-run the same compressor at two more ratios (e.g., 0.4 and 0.6) to find your task-specific elbow. Knowing where quality breaks is more valuable than the default ratio.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The mental reframe</h2>
+
+      <p>
+        Compression is a mindset shift. Most engineers write prompts the way they write emails — with full sentences, polite softeners, comprehensive explanations. LLMs <em>don't need any of that</em>. They need information density. Once you start thinking "what's the minimum text that conveys this instruction?" your bill and your latency both drop together, often by more than half.
+      </p>
+
+      <ul class="checklist">
+        <li class="checked">Most production prompts waste 40–80% of tokens on redundancy and filler.</li>
+        <li class="checked">LLMLingua-2 prunes tokens independently of your LLM — up to 20x compression, 95%+ retention.</li>
+        <li class="checked">Hierarchical summarization handles inputs too long to prune (100K+ raw tokens).</li>
+        <li class="checked">Living summaries keep chat context bounded forever.</li>
+        <li class="checked">Semantic chunking + reranking improves RAG quality while cutting tokens.</li>
+        <li class="checked">Don't compress legal, numeric, or exact-quote tasks.</li>
+        <li class="checked">Always measure quality delta before shipping — with an eval set and a monitoring sample.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>
+        You've learned three levers: caching, batching, and compression. All three work on the prompt. The next lever works on a different axis entirely: <strong>the model itself</strong>. Chapter 7 covers model cascading and routing — the pattern of using a cheap model by default and escalating only when the cheap model can't handle it. Done right, this is a 60–80% saving on the workloads where it fits.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-llmlingua"><a href="https://llmlingua.com/llmlingua2.html" target="_blank" rel="noopener">Microsoft Research — LLMLingua-2 (20x compression, 95–98% retention, 3–6x faster)</a></li>
+        <li id="src-hier"><a href="https://alignment.anthropic.com/2025/summarization-for-monitoring/" target="_blank" rel="noopener">Anthropic — Monitoring computer use via hierarchical summarization</a></li>
+        <li id="src-dtcrs"><a href="https://aclanthology.org/2025.acl-long.536/" target="_blank" rel="noopener">ACL 2025 — DTCRS: Dynamic Tree Construction for Recursive Summarization</a></li>
+        <li id="src-chunking"><a href="https://blog.premai.io/rag-chunking-strategies-the-2026-benchmark-guide/" target="_blank" rel="noopener">PremAI — RAG Chunking Strategies: The 2026 Benchmark Guide</a></li>
+        <li id="src-anthropic-pricing"><a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic — Pricing (Sonnet 4.6 $3/$15 per 1M, cache read 0.1x)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="05-batch-apis.html">← Chapter 5</a>
+    <a href="07-model-cascading-routing.html">Chapter 7 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

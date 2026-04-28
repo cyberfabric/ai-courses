@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Your First RAG System in 30 Minutes | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-how-rag-works.html">&larr; Prev</a>
+      <a href="04-embeddings-demystified.html">Next &rarr;</a>
+      <a href="maps/03-your-first-rag-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Your First RAG System in 30 Minutes</h1>
+    <p class="subtitle">Build a working RAG pipeline from scratch with just Python and an API key</p>
+  </header>
+
+  <main>
+
+    <h2>Time to Build</h2>
+
+    <p>Enough theory. In Chapters 1 and 2, you learned <em>why</em> RAG exists and <em>how</em> it works. Now you're going to build one — a complete, working RAG system that answers questions from your own documents.</p>
+
+    <p>No frameworks, no magic libraries, just Python, an API key, and about 60 lines of code.</p>
+
+    <div class="highlight-box">
+      <h3>What We're Building</h3>
+      <p>A command-line Q&amp;A bot that reads text files (a company FAQ), indexes them with embeddings, and answers questions by retrieving the most relevant passages. No vector database — just Python lists and numpy. Simple, transparent, and educational.</p>
+    </div>
+
+    <h2>Setup: What You Need</h2>
+
+    <p>You need three things:</p>
+
+    <ul>
+      <li><strong>Python 3.9+</strong> — you almost certainly have this already</li>
+      <li><strong>An OpenAI API key</strong> — for creating embeddings ($0.02 per million tokens — pennies)</li>
+      <li><strong>An Anthropic API key</strong> — for the LLM generation step (or use OpenAI for both)</li>
+    </ul>
+
+    <p>Install the dependencies:</p>
+
+    <pre><code>pip install openai anthropic numpy</code></pre>
+
+    <p>That's it. Three packages. No LangChain, no LlamaIndex, no vector database. We're building from scratch so you understand every line.</p>
+
+    <div class="tip-box">
+      You can use OpenAI for both embeddings <em>and</em> generation if you prefer. We use OpenAI for embeddings (excellent and cheap) and Claude for generation (great at following instructions to answer from context). Mix and match as you like.
+    </div>
+
+    <h2>Step 1: Create Your Knowledge Base</h2>
+
+    <p>Make a directory called <code>docs/</code> and add a few text files. Here's a sample FAQ for a fictional SaaS company:</p>
+
+    <pre><code>mkdir -p docs</code></pre>
+
+    <p>Create <code>docs/pricing.txt</code>:</p>
+
+    <pre><code>Pricing Plans
+
+We offer three pricing tiers:
+
+Starter Plan: $29/month
+- Up to 5 team members
+- 10GB storage
+- Email support
+- Basic analytics
+
+Professional Plan: $79/month
+- Up to 25 team members
+- 100GB storage
+- Priority email and chat support
+- Advanced analytics and API access
+
+Enterprise Plan: Custom pricing
+- Unlimited team members and storage
+- 24/7 phone support and dedicated account manager
+- Custom integrations, SSO, and SLA guarantees
+
+All plans include a 14-day free trial. No credit card required.
+Annual billing saves 20% compared to monthly billing.</code></pre>
+
+    <p>Create <code>docs/refunds.txt</code>:</p>
+
+    <pre><code>Refund Policy
+
+Monthly Subscriptions:
+Cancel anytime. You retain access until the end of your
+billing period. No partial refunds for monthly plans.
+
+Annual Subscriptions:
+Full refund within 30 days of purchase. After 30 days,
+prorated refund based on remaining months.
+
+How to Request a Refund:
+1. Go to Settings &gt; Billing &gt; Request Refund
+2. Or email billing@example.com
+3. Refunds processed within 5-7 business days
+
+App Store or Google Play purchases must be refunded
+through those platforms directly.</code></pre>
+
+    <p>Create <code>docs/features.txt</code>:</p>
+
+    <pre><code>Product Features
+
+Dashboard: Real-time view of team activity, project status,
+and key metrics. Customizable widgets.
+
+Collaboration: Shared workspaces, comments, @mentions, and
+activity feeds. Up to 100 concurrent editors.
+
+Integrations: Slack, Jira, GitHub, Google Workspace,
+Microsoft 365, and 50+ more through our API.
+
+Mobile App: iOS and Android with offline support.
+Changes sync automatically when back online.
+
+Security: SOC 2 Type II certified. AES-256 encryption at
+rest, TLS 1.3 in transit. Two-factor authentication required.
+Enterprise plans include SSO via SAML 2.0.</code></pre>
+
+    <h2>Step 2: Load and Chunk the Documents</h2>
+
+    <p>Create <code>rag.py</code> and start with loading and chunking:</p>
+
+    <pre><code>import os
+import numpy as np
+from openai import OpenAI
+import anthropic
+
+# Initialize API clients
+openai_client = OpenAI()   # uses OPENAI_API_KEY env var
+claude_client = anthropic.Anthropic()  # uses ANTHROPIC_API_KEY
+
+# --- Load documents ---
+def load_documents(directory):
+    documents = []
+    for filename in sorted(os.listdir(directory)):
+        if filename.endswith('.txt'):
+            path = os.path.join(directory, filename)
+            with open(path, 'r') as f:
+                documents.append({
+                    'content': f.read(),
+                    'source': filename
+                })
+    return documents
+
+# --- Chunk documents ---
+def chunk_document(doc, chunk_size=500, overlap=50):
+    text = doc['content']
+    chunks = []
+    start = 0
+    while start &lt; len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append({
+            'text': text[start:end].strip(),
+            'source': doc['source']
+        })
+        start += chunk_size - overlap
+    return chunks</code></pre>
+
+    <p>We load text files and split them into 500-character chunks with 50 characters of overlap. In Chapter 6, we'll learn much smarter chunking. For now, this works.</p>
+
+    <h2>Step 3: Create Embeddings</h2>
+
+    <p>Turn each chunk into a vector — a list of numbers that captures its meaning:</p>
+
+    <pre><code># --- Create embeddings ---
+def get_embeddings(texts):
+    response = openai_client.embeddings.create(
+        model="text-embedding-3-small",
+        input=texts
+    )
+    return [item.embedding for item in response.data]</code></pre>
+
+    <p>One function, three lines. OpenAI's <code>text-embedding-3-small</code> returns a 1536-dimensional vector per input. Embedding our three sample documents costs a fraction of a cent.</p>
+
+    <div class="embedding-box">
+      <strong>Why text-embedding-3-small?</strong> It's the best balance of quality and cost for most RAG use cases. 1536 dimensions, up to 8,191 tokens per input, $0.02 per million tokens. For higher quality at 3x cost, there's <code>text-embedding-3-large</code> (3072 dimensions). We'll compare models in Chapter 4.
+    </div>
+
+    <h2>Step 4: Search with Cosine Similarity</h2>
+
+    <p>Instead of a vector database, we use plain numpy to find the most similar chunks:</p>
+
+    <pre><code># --- Similarity search ---
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def search(query, chunks, chunk_embeddings, top_k=3):
+    query_embedding = get_embeddings([query])[0]
+
+    similarities = [
+        cosine_similarity(query_embedding, emb)
+        for emb in chunk_embeddings
+    ]
+
+    top_indices = np.argsort(similarities)[-top_k:][::-1]
+
+    return [{
+        'text': chunks[idx]['text'],
+        'source': chunks[idx]['source'],
+        'score': similarities[idx]
+    } for idx in top_indices]</code></pre>
+
+    <div class="retrieval-box">
+      <strong>Cosine similarity measures how close two vectors point in the same direction.</strong> A score of 1.0 means identical meaning, 0.0 means unrelated. For RAG, scores above 0.7 are usually strong matches. We're comparing the question against <em>every</em> chunk — this brute-force approach works for small datasets but doesn't scale to millions (that's why vector databases exist, Chapter 5).
+    </div>
+
+    <h2>Step 5: Build the Prompt and Generate</h2>
+
+    <p>Take the retrieved chunks, build a prompt, and let the LLM answer:</p>
+
+    <pre><code># --- Build prompt and generate ---
+def build_prompt(question, results):
+    context_parts = []
+    for r in results:
+        context_parts.append(f"[Source: {r['source']}]\n{r['text']}")
+    context = "\n\n---\n\n".join(context_parts)
+
+    return f"""You are a helpful customer support assistant.
+Answer the user's question based ONLY on the provided context.
+If the context doesn't contain the answer, say
+"I don't have that information in my knowledge base."
+Always cite which source document(s) your answer comes from.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+def ask(question, chunks, chunk_embeddings):
+    # Retrieve relevant chunks
+    results = search(question, chunks, chunk_embeddings)
+    # Build augmented prompt and generate
+    prompt = build_prompt(question, results)
+    response = claude_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.content[0].text, results</code></pre>
+
+    <div class="pipeline-box">
+      <strong>This is the complete RAG pipeline in one function.</strong> The <code>ask()</code> function does exactly what we described in Chapter 2: embed the question, retrieve similar chunks, build an augmented prompt, and generate an answer. Every production RAG system follows this same pattern. The rest of this course is about making each step better.
+    </div>
+
+    <h2>Step 6: Put It All Together</h2>
+
+    <pre><code># --- Main: wire everything up ---
+def main():
+    print("Loading documents...")
+    docs = load_documents("docs/")
+    print(f"  Loaded {len(docs)} documents")
+
+    print("Chunking...")
+    all_chunks = []
+    for doc in docs:
+        all_chunks.extend(chunk_document(doc))
+    print(f"  Created {len(all_chunks)} chunks")
+
+    print("Creating embeddings...")
+    texts = [c['text'] for c in all_chunks]
+    embeddings = get_embeddings(texts)
+    print(f"  Created {len(embeddings)} embeddings")
+    print(f"  Dimensions: {len(embeddings[0])}")
+
+    print("\nRAG system ready! Ask questions ('quit' to exit).\n")
+
+    while True:
+        question = input("You: ").strip()
+        if question.lower() in ('quit', 'exit', 'q'):
+            break
+        if not question:
+            continue
+
+        answer, sources = ask(question, all_chunks, embeddings)
+        print(f"\nAssistant: {answer}")
+        print(f"\n  Sources:")
+        for s in sources:
+            print(f"    - {s['source']} (score: {s['score']:.3f})")
+        print()
+
+if __name__ == "__main__":
+    main()</code></pre>
+
+    <h2>Step 7: Test It!</h2>
+
+    <p>Set your API keys and run:</p>
+
+    <pre><code>export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+python rag.py</code></pre>
+
+    <p>Here's what a real session looks like:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Sample interaction</div>
+      <div class="prompt-text">You: How much does the Professional plan cost?
+    <div class="prompt-example good">
+      <div class="prompt-label">Question about pricing</div>
+      <div class="prompt-text">You: How much does the Professional plan cost?
+
+Assistant: The Professional plan costs $79/month. It includes up to 25 team members, 100GB storage, priority email and chat support, advanced analytics, and API access. Annual billing saves 20%.
+
+(Source: pricing.txt, score: 0.847)</div>
+      <p class="prompt-explanation">Accurate answer with source citation, pulled from the pricing document.</p>
+    </div>
+
+    <p>Let us try a few more questions to see how it handles different topics:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Cross-topic retrieval</div>
+      <div class="prompt-text">You: Can I get a refund after 2 months on an annual plan?
+
+Assistant: Yes, but it will be a prorated refund. For annual subscriptions, you can get a full refund within 30 days of purchase. After 30 days, you receive a prorated refund based on the remaining months in your subscription. To request a refund, go to Settings &gt; Billing &gt; Request Refund, or email billing@example.com. Refunds are processed within 5-7 business days.
+
+(Source: refunds.txt, score: 0.891)</div>
+      <p class="prompt-explanation">The system correctly found the refunds document, not the pricing document, even though both are in the knowledge base.</p>
+    </div>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Out-of-scope question</div>
+      <div class="prompt-text">You: What is the weather in Tokyo?
+
+Assistant: I don't have that information in my knowledge base. My knowledge base contains information about our product's pricing, refund policy, and features. For weather information, please check a weather service.</div>
+      <p class="prompt-explanation">The system correctly says "I don't know" instead of hallucinating. This is the RAG system working as designed.</p>
+    </div>
+
+    <h2>What Works and What Doesn't</h2>
+
+    <p>Play with the system for a few minutes. You will notice some patterns:</p>
+
+    <h3>What works well</h3>
+
+    <ul>
+      <li><strong>Direct questions about documented topics</strong> get accurate, sourced answers</li>
+      <li><strong>Paraphrased questions</strong> work because embeddings capture meaning, not just keywords</li>
+      <li><strong>Out-of-scope questions</strong> get a proper "I don't know" response</li>
+      <li><strong>Cross-document synthesis</strong> works when relevant chunks are retrieved from multiple files</li>
+    </ul>
+
+    <h3>What breaks</h3>
+
+    <ul>
+      <li><strong>Questions about details split across chunk boundaries</strong> may miss information</li>
+      <li><strong>Very specific keyword searches</strong> (like "SOC 2") may rank lower than conceptually related but lexically different chunks</li>
+      <li><strong>Questions requiring reasoning across many chunks</strong> may get incomplete answers</li>
+    </ul>
+
+    <div class="gotcha-box">
+      <strong>Your chunking strategy is already showing its limits.</strong> Our naive 500-character split does not respect paragraph or section boundaries. A chunk might start mid-sentence or split a list item in half. This is the #1 thing we will improve in Chapter 6. Better chunking alone can boost answer quality by 20-30%.
+    </div>
+
+    <h2>The Complete Code</h2>
+
+    <p>Here is the entire RAG system in one view. Copy this into <code>rag.py</code> and you have a working system:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">~60</span>
+        <span class="stat-label">Lines of code</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3</span>
+        <span class="stat-label">pip packages</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt;$0.01</span>
+        <span class="stat-label">Cost to run this demo</span>
+      </div>
+    </div>
+
+    <h2>What We Skipped (and Why It Matters)</h2>
+
+    <p>This system works, but it cuts every corner. Here is what we deliberately skipped and where we will fix it:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>What We Skipped</th>
+          <th>Why It Matters</th>
+          <th>Where We Fix It</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Smart chunking</strong></td>
+          <td>Our fixed-size split breaks mid-sentence, losing context</td>
+          <td>Chapter 6</td>
+        </tr>
+        <tr>
+          <td><strong>Vector database</strong></td>
+          <td>numpy search is O(n) and doesn't persist; a real DB is O(log n) and durable</td>
+          <td>Chapter 5</td>
+        </tr>
+        <tr>
+          <td><strong>Hybrid search</strong></td>
+          <td>Pure semantic search misses exact keyword matches (product IDs, error codes)</td>
+          <td>Chapter 7</td>
+        </tr>
+        <tr>
+          <td><strong>Re-ranking</strong></td>
+          <td>The top-k results aren't always the best; a cross-encoder can reorder them</td>
+          <td>Chapter 7</td>
+        </tr>
+        <tr>
+          <td><strong>Evaluation</strong></td>
+          <td>"It seems to work" is not a metric. You need precision, recall, and faithfulness scores</td>
+          <td>Chapter 10</td>
+        </tr>
+        <tr>
+          <td><strong>Document loaders</strong></td>
+          <td>Real data lives in PDFs, HTML, Confluence, Notion &mdash; not clean .txt files</td>
+          <td>Chapter 8</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      Don't be discouraged by what we skipped. You just built a working RAG system from scratch in under 100 lines of code. Every improvement from here is incremental &mdash; we are not throwing this away, we are making it better, one piece at a time.
+    </div>
+
+    <div class="exercise-box">
+      <strong>Extend your RAG system.</strong> Now that you have a working system, try these experiments:
+      <ol>
+        <li><strong>Add your own documents:</strong> Drop a few .txt files from your own work (a README, a FAQ, meeting notes) into the <code>docs/</code> directory and re-run. See how it handles your real data.</li>
+        <li><strong>Experiment with chunk size:</strong> Change <code>chunk_size</code> from 500 to 200 and then to 1000. Ask the same questions and compare answer quality. Which size works best?</li>
+        <li><strong>Change top_k:</strong> Modify the <code>top_k</code> parameter in the search function from 3 to 1, then to 5. How does the number of retrieved chunks affect answer quality?</li>
+        <li><strong>Print the scores:</strong> Look at the similarity scores for retrieved chunks. What score range correlates with good answers?</li>
+      </ol>
+      <p>These experiments build intuition you will use throughout the rest of the course.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You have a working RAG system. It answers questions, cites sources, and handles out-of-scope queries gracefully. But we used embeddings as a black box &mdash; we called an API and got numbers back without understanding what those numbers mean.</p>
+
+    <p>In the next chapter, we will <strong>demystify embeddings</strong>. You will understand how text becomes numbers, why similar meanings produce similar vectors, and how to choose the right embedding model for your use case. This knowledge is essential for debugging retrieval problems and optimizing your RAG system.</p>
+
+    <nav class="chapter-nav">
+      <a href="02-how-rag-works.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">How RAG Actually Works</span>
+      </a>
+      <a href="04-embeddings-demystified.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Embeddings Demystified</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

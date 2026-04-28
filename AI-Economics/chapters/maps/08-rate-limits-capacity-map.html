@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8 Memory Map — Rate Limits &amp; Capacity Planning</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../08-rate-limits-capacity.html">Chapter</a>
+      <a href="07-model-cascading-routing-map.html">&#8592; Prev Map</a>
+      <a href="09-cost-observability-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Rate Limits, Tiering &amp; Capacity Planning</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">⚡</span>
+      <h3>The Big Idea</h3>
+      <p>Rate limits are the fuse box of your AI stack. In 2026 they&rsquo;re measured in <em>tokens</em>, they unlock by <em>cumulative spend</em>, and a single agent task can multiply your traffic 10&ndash;80&times;. Plan capacity or the next HN write-up will plan it for you.</p>
+    </div>
+
+    <h2>🧩 Core Concepts</h2>
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🎛️</span>
+        <div class="map-card-title">Token-based limits</div>
+        <div class="map-card-desc">RPM, ITPM, OTPM, TPD &mdash; all apply at once. You can pass TPM and still fail RPM.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪜</span>
+        <div class="map-card-title">Spend-gated tiers</div>
+        <div class="map-card-desc">Auto-promote as your bill grows. Top tiers need prepaid deposits or $1,000+ cumulative spend.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">Agent multiplier</div>
+        <div class="map-card-desc">One agent task = 5&ndash;30 calls. A 1,000-QPH feature quietly becomes 82&times; heavier.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚦</span>
+        <div class="map-card-title">429 vs 529</div>
+        <div class="map-card-desc">429 = <em>you</em> went over (throttle). 529 = <em>they&rsquo;re</em> saturated (retry with backoff).</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧰</span>
+        <div class="map-card-title">Graceful degradation</div>
+        <div class="map-card-desc">Concurrency caps, routing fallback, feature shrink, cached defaults &mdash; never a raw 500.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗺️</span>
+        <div class="map-card-title">Capacity forecast</div>
+        <div class="map-card-desc">peak_RPM &times; avg_tokens &times; growth = future TPM. Alert at 70 % ceiling.</div>
+      </div>
+    </div>
+
+    <h2>📊 The 2026 Tier Landscape</h2>
+    <table class="map-compare">
+      <thead>
+        <tr><th>Provider</th><th>Entry</th><th>Top tier</th><th>Style</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Anthropic</strong></td>
+          <td>Tier 1: $5 deposit, 50 RPM</td>
+          <td>Tier 4+: Standard 200 RPM / Scale 2,000 RPM</td>
+          <td>Per-model RPM + ITPM + OTPM</td>
+        </tr>
+        <tr>
+          <td><strong>OpenAI</strong></td>
+          <td>Tier 1: ~500K TPM / 1,000 RPM</td>
+          <td>Tier 5: 30M TPM ($1,000+ spend)</td>
+          <td>5 tiers by cumulative spend</td>
+        </tr>
+        <tr>
+          <td><strong>Google Gemini</strong></td>
+          <td>Free: 5&ndash;15 RPM Flash-only</td>
+          <td>Tier 3: 4,000+ RPM ($1,000 + 30 days)</td>
+          <td>Per-project bucket &mdash; keys share it</td>
+        </tr>
+        <tr>
+          <td><strong>Perplexity</strong></td>
+          <td>T0: 50 RPM most Sonar models</td>
+          <td>T3+: $500+, higher bursts</td>
+          <td>Leaky bucket: 50 cap, 50/s leak rate</td>
+        </tr>
+        <tr>
+          <td><strong>Together AI</strong></td>
+          <td>Dynamic (Jan 26, 2026)</td>
+          <td>Scale + Enterprise plans</td>
+          <td>Limits grow with sustained steady load</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🌀 The Agent Multiplier Effect</h2>
+    <div class="map-flow">
+      <div class="map-flow-step">1 user question</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Chat: 1 call<br>2.5K tokens</div>
+      <span class="map-flow-arrow">vs</span>
+      <div class="map-flow-step">Agent: 8 calls<br>204K tokens</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">~82&times; more load</div>
+    </div>
+
+    <h2>🚨 429 vs. 529: React Differently</h2>
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>429 rate_limit</th><th>529 overloaded</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Whose fault?</td><td>Yours</td><td>Theirs</td></tr>
+        <tr><td>Typical cause</td><td>You exceeded RPM / TPM</td><td>Global fleet saturation</td></tr>
+        <tr><td>Recovery time</td><td>Seconds (when your window resets)</td><td>2&ndash;5 minutes typical</td></tr>
+        <tr><td>Right response</td><td>Throttle, cache, route cheaper</td><td>Exponential backoff + jitter</td></tr>
+        <tr><td>Failover useful?</td><td>Only if your tier is actually too small</td><td>Yes &mdash; switch providers</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🧮 Capacity Forecasting in 3 Numbers</h2>
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Peak RPS</h4>
+        <p>95th-percentile hour from last month&rsquo;s logs. Multiply by 60 for peak RPM.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Avg tokens/request</h4>
+        <p>Input + output, weighted by model. Remember the agent multiplier.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Growth factor (6 months)</h4>
+        <p>If you&rsquo;re growing 3&times;/quarter, use 9&times;. Compare result to your tier ceiling.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Act early</h4>
+        <p>Under 30&nbsp;% headroom? Start the tier-bump conversation 6&ndash;12 weeks ahead of projected breach.</p>
+      </li>
+    </ol>
+
+    <h2>🧯 Graceful Degradation Pipeline</h2>
+    <div class="map-flow">
+      <div class="map-flow-step">🚦 Detect<br>429/529 or &gt;80 %</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🧯 Throttle<br>semaphore, queue</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🧭 Route<br>cheaper model / 2nd provider</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📦 Fallback<br>cache, canned, notify user</div>
+    </div>
+
+    <h2>🎯 What Surrounds Capacity Planning</h2>
+    <div class="map-relationships">
+      <div class="map-rel-node">🔢 Headers<br><small>remaining-tokens / reset</small></div>
+      <div class="map-rel-node">📈 Forecast<br><small>growth &times; tokens</small></div>
+      <div class="map-rel-center">🧠 Capacity plan</div>
+      <div class="map-rel-node">🚪 Failover<br><small>second provider warm</small></div>
+      <div class="map-rel-node">🛑 Token budget<br><small>max_output cap</small></div>
+    </div>
+
+    <h2>🕵️ Hidden Gotchas</h2>
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔐</span>
+        <div class="map-card-title">Gemini per-project quota</div>
+        <div class="map-card-desc">Rotating keys inside one project doesn&rsquo;t multiply throughput. Separate projects = separate buckets.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🌊</span>
+        <div class="map-card-title">Streaming holds sockets</div>
+        <div class="map-card-desc">TPM counts the full response even if the user closes the tab. Wire up abort-on-disconnect.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧵</span>
+        <div class="map-card-title">Thundering-herd retries</div>
+        <div class="map-card-desc">Fixed-delay retries reproduce the spike. Use exponential backoff + random jitter.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎚️</span>
+        <div class="map-card-title">Unbounded max_tokens</div>
+        <div class="map-card-desc">A chatty reasoning model can emit 30K+ tokens you never asked for. Always set an explicit cap.</div>
+      </div>
+    </div>
+
+    <h2>🗝️ Key Terms</h2>
+    <dl class="map-terms">
+      <dt>RPM / TPM</dt>
+      <dd>Requests per minute / tokens per minute &mdash; the two main rate-limit dimensions in 2026.</dd>
+      <dt>ITPM / OTPM</dt>
+      <dd>Input / output tokens per minute, counted separately on Anthropic &amp; others.</dd>
+      <dt>Leaky bucket</dt>
+      <dd>Perplexity&rsquo;s algorithm: fixed capacity that drains at a constant rate, allowing short bursts up to capacity.</dd>
+      <dt>Dynamic rate limit</dt>
+      <dd>Together AI&rsquo;s 2026 model: your limit grows if your sustained usage is steady, shrinks if you spike.</dd>
+      <dt>Usage tier</dt>
+      <dd>Spend-gated level that unlocks higher limits. Auto-promotes, or upgrade via deposit.</dd>
+      <dt>Agent multiplier</dt>
+      <dd>The factor by which agent-shaped traffic exceeds chat-shaped traffic. Commonly 10&ndash;80&times;.</dd>
+      <dt>429 vs 529</dt>
+      <dd>429 = your usage exceeded the limit; 529 = the provider&rsquo;s fleet is overloaded.</dd>
+      <dt>Token budget</dt>
+      <dd>Hard cap on tokens allowed per feature per call. Protects against runaway loops.</dd>
+    </dl>
+
+    <h2>📣 Tier-Bump Signals</h2>
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🟢</span>
+        <div class="map-card-title">Clean history</div>
+        <div class="map-card-desc">Low 429/5xx rate. If you&rsquo;re already flooding retries, fix that first.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📊</span>
+        <div class="map-card-title">Steady pattern</div>
+        <div class="map-card-desc">Smooth growth beats spiky bursts. Together AI literally rewards this.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💳</span>
+        <div class="map-card-title">Prepay / deposit</div>
+        <div class="map-card-desc">Tier 4 at Anthropic = $400 deposit. Tier 5 at OpenAI = $1,000+ spend.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📅</span>
+        <div class="map-card-title">Ask early</div>
+        <div class="map-card-desc">Approval takes 3&ndash;10 business days. A week before launch is already too late.</div>
+      </div>
+    </div>
+
+    <h2>🧠 Quick Quiz</h2>
+    <div class="map-quiz">
+      <details>
+        <summary>Why did rate limits shift from RPM to TPM in 2026?</summary>
+        <p class="quiz-answer">Because token count is the real driver of provider compute cost &mdash; a 100K-token call and a 200-token call should not count the same.</p>
+      </details>
+      <details>
+        <summary>You get an HTTP 529 &mdash; should you raise your tier?</summary>
+        <p class="quiz-answer">No. 529 is the provider&rsquo;s fleet being overloaded. Retry with exponential backoff and jitter; consider failover if it persists.</p>
+      </details>
+      <details>
+        <summary>Why is the agent multiplier such a big deal?</summary>
+        <p class="quiz-answer">A user-facing feature that looks like &ldquo;1,000 requests/hour&rdquo; on the surface can actually be 80,000+ API calls if each task refines through 8 steps &mdash; blowing through tier ceilings silently.</p>
+      </details>
+      <details>
+        <summary>Your app has 5 Gemini API keys, all in one project. Does that 5&times; your throughput?</summary>
+        <p class="quiz-answer">No. Gemini&rsquo;s quota is per-project, not per-key. Every key in the project shares the same bucket. You need separate projects to multiply throughput.</p>
+      </details>
+      <details>
+        <summary>What&rsquo;s the one rate-limit metric to put on your dashboard?</summary>
+        <p class="quiz-answer"><code>1 - (remaining_tokens / ceiling)</code> over the past hour &mdash; &ldquo;ceiling proximity.&rdquo; Alert at 80 % and you&rsquo;ll prevent most 429 outages.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>🎓 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Limits are token-based in 2026 &mdash; RPM, ITPM, OTPM, TPD all apply at once.</li>
+        <li class="map-summary-item">Tiers auto-unlock by cumulative spend; top tiers often need a prepaid deposit.</li>
+        <li class="map-summary-item">429 = your problem (throttle). 529 = their problem (retry with backoff + jitter).</li>
+        <li class="map-summary-item">A single agent task can multiply token usage 10&ndash;80&times; over chat-shaped traffic.</li>
+        <li class="map-summary-item">Forecast with peak_RPM &times; avg_tokens &times; 6-month growth. Act at 70 % ceiling, not 100 %.</li>
+        <li class="map-summary-item">Always read the rate-limit response headers and log &ldquo;remaining&rdquo; alongside cost.</li>
+        <li class="map-summary-item">Gemini quotas are per-project, not per-key &mdash; rotating keys inside one project buys you zero extra capacity.</li>
+        <li class="map-summary-item">Streaming holds sockets and burns TPM even if the user disconnects &mdash; wire up abort semantics.</li>
+        <li class="map-summary-item">Tier bumps take 3&ndash;10 business days; request them 6&ndash;12 weeks before projected breach.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="07-model-cascading-routing-map.html">
+      <span class="nav-direction">← Prev Map</span>
+      <span class="nav-chapter">Chapter 7 &mdash; Cascading &amp; Routing</span>
+    </a>
+    <a href="../08-rate-limits-capacity.html">
+      <span class="nav-direction">Back to Chapter</span>
+      <span class="nav-chapter">Read Chapter 8 →</span>
+    </a>
+    <a href="09-cost-observability-map.html">
+      <span class="nav-direction">Next Map →</span>
+      <span class="nav-chapter">Chapter 9 &mdash; Cost Observability</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

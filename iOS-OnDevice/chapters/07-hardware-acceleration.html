@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Hardware Acceleration — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-foundation-models.html">&larr; Prev</a>
+      <a href="08-model-optimization.html">Next &rarr;</a>
+      <a href="maps/07-hardware-acceleration-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Hardware Acceleration &mdash; Neural Engine and Metal</h1>
+    <p class="subtitle">What Happens When Your Model Hits Silicon</p>
+  </header>
+
+  <main>
+
+    <p>Every model you've run so far &mdash; image classification, Vision requests, Foundation Models &mdash; was executed by hardware inside your iPhone. But <em>which</em> hardware? Your iPhone has three distinct compute engines that can run ML workloads, and the one that gets the job makes a <strong>15x difference</strong> in speed.</p>
+
+    <p>This chapter cracks open Apple Silicon to show you exactly how the CPU, GPU, and Neural Engine work together. You'll learn to control which engine runs your model, benchmark each one, profile with Instruments, and handle the thermal throttling that hits during sustained workloads. The goal: turn "it works" into "it works <em>fast</em>."</p>
+
+    <h2>The Three Engines Inside Your iPhone</h2>
+
+    <p>Every Apple Silicon chip since A11 contains three compute units that can run ML inference. Think of them as three different workers with very different skills:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">CPU</div>
+        <div class="stat-label">The Generalist</div>
+        <p>Handles anything but nothing fast. Best for tiny models, simple math, and fallback. Slowest for ML.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">GPU</div>
+        <div class="stat-label">The Parallel Processor</div>
+        <p>Thousands of cores for parallel math. Great for custom Metal shaders, image processing, and models with unsupported Neural Engine ops.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">ANE</div>
+        <div class="stat-label">The ML Specialist</div>
+        <p>Purpose-built for tensor operations. 16 cores doing nothing but matrix multiply. Fastest and most power-efficient for supported models.</p>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>ANE = Apple Neural Engine.</strong> You'll see it called "Neural Engine," "ANE," or just "NE" in documentation and profiling tools. Same thing. It's the dedicated ML accelerator on the chip.
+    </div>
+
+    <h2>Neural Engine: A Brief History</h2>
+
+    <p>Apple has been building dedicated ML hardware into every chip since 2017. Each generation brings more cores and higher throughput:</p>
+
+    <div class="device-benchmark">
+      <h3>Neural Engine Progression</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Chip</th>
+            <th>Year</th>
+            <th>NE Cores</th>
+            <th>TOPS</th>
+            <th>Notable Capability</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A11 Bionic</td>
+            <td>2017</td>
+            <td>2</td>
+            <td>0.6</td>
+            <td>First Neural Engine (Face ID)</td>
+          </tr>
+          <tr>
+            <td>A12 Bionic</td>
+            <td>2018</td>
+            <td>8</td>
+            <td>5</td>
+            <td>Core ML 2, real-time inference</td>
+          </tr>
+          <tr>
+            <td>A14 Bionic</td>
+            <td>2020</td>
+            <td>16</td>
+            <td>11</td>
+            <td>16-core NE becomes standard</td>
+          </tr>
+          <tr>
+            <td>A15 Bionic</td>
+            <td>2021</td>
+            <td>16</td>
+            <td>15.8</td>
+            <td>iPhone SE (3rd gen) baseline</td>
+          </tr>
+          <tr>
+            <td>A16 Bionic</td>
+            <td>2022</td>
+            <td>16</td>
+            <td>17</td>
+            <td>4nm process</td>
+          </tr>
+          <tr>
+            <td>A17 Pro</td>
+            <td>2023</td>
+            <td>16</td>
+            <td>35</td>
+            <td>First Apple Intelligence support</td>
+          </tr>
+          <tr>
+            <td>A18 / A18 Pro</td>
+            <td>2024</td>
+            <td>16</td>
+            <td>35</td>
+            <td>2x faster ML vs A16</td>
+          </tr>
+          <tr>
+            <td>A19 / A19 Pro</td>
+            <td>2025</td>
+            <td>16</td>
+            <td>~45</td>
+            <td>GPU Neural Accelerators, 3nm</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>TOPS</strong> = Trillion Operations Per Second. The A19 Pro at ~45 TOPS can perform 45 trillion simple math operations every second. For context, a MobileNetV2 inference needs roughly 300 million operations &mdash; the Neural Engine can run it about 150,000 times per second in theory. In practice, memory bandwidth limits real throughput, but you get the idea: the hardware is <em>fast</em>.</p>
+
+    <div class="tip-box">
+      <strong>A19 Pro's secret weapon: GPU Neural Accelerators.</strong> The A19 Pro embeds dedicated tensor processing units inside each GPU core. This means the GPU itself can now run ML workloads natively, delivering up to 3x the peak GPU compute of the A18 Pro. Metal 4 exposes these through its new tensor API.
+    </div>
+
+    <h2>MLComputeUnits: Controlling Where Your Model Runs</h2>
+
+    <p>Core ML lets you choose which compute units run your model via <code>MLModelConfiguration</code>:</p>
+
+    <pre><code>import CoreML
+
+let config = MLModelConfiguration()
+
+// Let Core ML decide (usually best)
+config.computeUnits = .all
+
+// Force specific compute units
+config.computeUnits = .cpuOnly          // Slowest, always available
+config.computeUnits = .cpuAndGPU        // Skip Neural Engine
+config.computeUnits = .cpuAndNeuralEngine  // Skip GPU
+
+let model = try MLModel(contentsOf: modelURL, configuration: config)</code></pre>
+
+    <div class="apple-framework">
+      <h3>MLComputeUnits Options</h3>
+      <table>
+        <tr><td><strong><code>.all</code></strong></td><td>Core ML picks the best engine per operation. <strong>Default and usually optimal.</strong> Some ops run on ANE, others on GPU, a few on CPU.</td></tr>
+        <tr><td><strong><code>.cpuAndNeuralEngine</code></strong></td><td>Skip GPU. Use when GPU is busy rendering (games, AR). Avoids GPU contention.</td></tr>
+        <tr><td><strong><code>.cpuAndGPU</code></strong></td><td>Skip Neural Engine. Use when a model has ops unsupported by ANE (causes fallback overhead).</td></tr>
+        <tr><td><strong><code>.cpuOnly</code></strong></td><td>CPU only. Slowest, but guaranteed available on every device. Useful as a fallback.</td></tr>
+      </table>
+    </div>
+
+    <div class="warning-box">
+      <strong>Don't outsmart Core ML.</strong> In most cases, <code>.all</code> is the best choice. Core ML's runtime analyzes your model and dispatches each operation to the fastest available engine. Only override if you've profiled and found a specific reason (GPU contention, ANE-unsupported ops, thermal budget).
+    </div>
+
+    <h2>Why the First Inference Is Always Slow</h2>
+
+    <p>You run your model for the first time and it takes 500ms. You run it again &mdash; 3ms. What happened?</p>
+
+    <p>The first inference triggers <strong>model compilation</strong>: Core ML compiles the model for the specific hardware, allocates memory buffers, initializes the Neural Engine pipeline, and compiles any Metal shaders needed for GPU operations. This is a one-time cost that gets cached for subsequent runs.</p>
+
+    <pre><code>// Warm-up pattern: run a few dummy inferences before measuring
+func warmUp(model: VNCoreMLModel, request: VNCoreMLRequest) {
+    let dummyImage = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: 224, height: 224))
+    let handler = VNImageRequestHandler(ciImage: dummyImage)
+
+    for _ in 0..&lt;3 {
+        try? handler.perform([request])
+    }
+    // Now the model is warm — subsequent inferences will be fast
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Warm up before measuring.</strong> Always run 3&ndash;5 dummy inferences before benchmarking. The first-run compilation cost can be 50&ndash;100x slower than steady-state performance. If your app has a splash screen or loading state, warm up the model there.
+    </div>
+
+    <h2>Building a Benchmark Harness</h2>
+
+    <p>To truly understand your model's performance, you need to measure it systematically. Here's a minimal benchmark harness:</p>
+
+    <pre><code>import CoreML
+
+func benchmarkModel(
+    modelURL: URL,
+    computeUnits: MLComputeUnits,
+    iterations: Int = 50
+) async throws -> (p50: Double, p95: Double, p99: Double) {
+    let config = MLModelConfiguration()
+    config.computeUnits = computeUnits
+    let model = try MLModel(contentsOf: modelURL, configuration: config)
+
+    // Warm up
+    let dummyInput = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: [:]))
+    _ = dummyInput  // discard
+
+    // Measure
+    var times: [Double] = []
+    for _ in 0..&lt;iterations {
+        let start = CFAbsoluteTimeGetCurrent()
+        _ = try model.prediction(from: createSampleInput(for: model))
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000  // ms
+        times.append(elapsed)
+    }
+
+    times.sort()
+    return (
+        p50: times[iterations / 2],
+        p95: times[Int(Double(iterations) * 0.95)],
+        p99: times[Int(Double(iterations) * 0.99)]
+    )
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Why p50/p95/p99?</strong> Average latency hides outliers. p50 (median) is your typical experience. p95 tells you what 1 in 20 users sees. p99 catches rare spikes. For real-time features (camera), p95 matters more than average.
+    </div>
+
+    <h2>Real Device Benchmarks</h2>
+
+    <p>Here's what MobileNetV2 inference actually looks like across devices and compute units:</p>
+
+    <div class="device-benchmark">
+      <h3>MobileNetV2 Inference Benchmarks (p50 latency)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Device</th>
+            <th>.all (ANE)</th>
+            <th>.cpuAndGPU</th>
+            <th>.cpuOnly</th>
+            <th>ANE Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>iPhone SE (3rd, A15)</td>
+            <td><strong>4 ms</strong></td>
+            <td>14 ms</td>
+            <td>48 ms</td>
+            <td>12x vs CPU</td>
+          </tr>
+          <tr>
+            <td>iPhone 15 (A16)</td>
+            <td><strong>3.5 ms</strong></td>
+            <td>12 ms</td>
+            <td>45 ms</td>
+            <td>13x vs CPU</td>
+          </tr>
+          <tr>
+            <td>iPhone 15 Pro (A17 Pro)</td>
+            <td><strong>3 ms</strong></td>
+            <td>10 ms</td>
+            <td>42 ms</td>
+            <td>14x vs CPU</td>
+          </tr>
+          <tr>
+            <td>iPhone 16 (A18)</td>
+            <td><strong>2.5 ms</strong></td>
+            <td>8 ms</td>
+            <td>38 ms</td>
+            <td>15x vs CPU</td>
+          </tr>
+          <tr>
+            <td>iPhone 16 Pro (A18 Pro)</td>
+            <td><strong>2 ms</strong></td>
+            <td>7 ms</td>
+            <td>35 ms</td>
+            <td>17x vs CPU</td>
+          </tr>
+          <tr>
+            <td>iPhone 17 Pro (A19 Pro)</td>
+            <td><strong>1.5 ms</strong></td>
+            <td>5 ms</td>
+            <td>30 ms</td>
+            <td>20x vs CPU</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The pattern is clear: the Neural Engine is <strong>12&ndash;20x faster than CPU</strong> and <strong>3&ndash;5x faster than GPU</strong> for this typical classification model. And the gap widens with each generation.</p>
+
+    <div class="highlight-box">
+      <strong>Device diversity is your design constraint.</strong> Your fastest user (iPhone 17 Pro) gets 1.5ms inference. Your slowest supported user (iPhone SE 3rd gen) gets 4ms. That's a manageable 2.7x spread for MobileNetV2, but for larger models the gap grows dramatically. Always benchmark on your minimum supported device.
+    </div>
+
+    <h2>Metal 4: GPU-Accelerated ML</h2>
+
+    <p>Metal 4 (iOS 26) introduces first-class tensor support in the GPU pipeline. This matters because you can now run ML inference <em>inside a Metal shader</em> &mdash; no round-trip through device memory between the GPU and ML model.</p>
+
+    <div class="model-pipeline">
+      <h3>Metal 4 ML Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>GPU Shader</strong>
+            <small>Processing pixels</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Metal Tensor</strong>
+            <small>First-class tensor type</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>ML Pass</strong>
+            <small>Inference in shader</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Post-Process</strong>
+            <small>Still on GPU</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>Render Output</strong>
+            <small>No memory round-trip</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>Before Metal 4, running ML on the GPU meant: render frame &rarr; copy to CPU memory &rarr; run Core ML &rarr; copy results back to GPU &rarr; render with results. Each copy added latency. Metal 4 eliminates those copies by keeping everything on the GPU.</p>
+
+    <h3>When to Use Metal 4 for ML</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Good Use Cases for Metal 4 ML</h4>
+        <ul>
+          <li>Real-time image effects that need per-pixel ML (style transfer, super-resolution)</li>
+          <li>Games with AI-driven graphics (upscaling, denoising)</li>
+          <li>AR pipelines where ML and rendering share data</li>
+          <li>Custom model architectures not supported by Core ML</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Stick with Core ML + ANE</h4>
+        <ul>
+          <li>Standard classification or detection models</li>
+          <li>Vision framework requests (already optimized)</li>
+          <li>Foundation Models (managed by the system)</li>
+          <li>Any model that runs fine on Neural Engine</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>Metal 4 ML is advanced.</strong> Most iOS developers will never need to write Metal shaders for ML. Core ML + the Neural Engine handle 90%+ of use cases. Metal 4 is for the 10% where you need GPU-ML fusion &mdash; games, AR, and custom graphics pipelines.
+    </div>
+
+    <h2>Thermal Throttling: The Hidden Performance Killer</h2>
+
+    <p>Your model runs at 2ms for the first 30 seconds, then suddenly slows to 8ms. The iPhone got warm and started <strong>thermal throttling</strong> &mdash; reducing clock speeds to prevent overheating.</p>
+
+    <p>This is the #1 surprise for developers who benchmark in short bursts but deploy for sustained use. A fitness app tracking body pose needs to run for 30+ minutes. A document scanner processes 50 pages in a row. A camera classifier runs continuously.</p>
+
+    <pre><code>import Foundation
+
+// Monitor thermal state
+NotificationCenter.default.addObserver(
+    forName: ProcessInfo.thermalStateDidChangeNotification,
+    object: nil, queue: .main
+) { _ in
+    switch ProcessInfo.processInfo.thermalState {
+    case .nominal:
+        // Full speed — use your fastest model
+        useHighQualityModel()
+    case .fair:
+        // Slightly warm — still OK
+        useHighQualityModel()
+    case .serious:
+        // Getting hot — reduce workload
+        useLightweightModel()
+        reduceFrameRate(to: 15)
+    case .critical:
+        // About to throttle hard — minimize ML work
+        pauseInference()
+        showCooldownMessage()
+    @unknown default: break
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Design for <code>.serious</code>, not <code>.nominal</code>.</strong> If your app does sustained ML inference (camera, audio, fitness), your steady-state performance is the <code>.serious</code> thermal state, not <code>.nominal</code>. Benchmark for 60+ seconds to see real-world performance, not just the first-second burst.
+    </div>
+
+    <h2>Profiling with Instruments</h2>
+
+    <p>Xcode's Instruments includes dedicated tools for ML profiling:</p>
+
+    <div class="checklist">
+      <h3>Instruments for ML Profiling</h3>
+      <ul>
+        <li><strong>Core ML Instrument</strong> &mdash; Shows model load time, prediction latency, and which compute units each operation uses. The first tool to reach for.</li>
+        <li><strong>Neural Engine Instrument</strong> &mdash; Visualizes compute running on the Neural Engine. See when ops fall back to CPU or GPU.</li>
+        <li><strong>Metal System Trace</strong> &mdash; GPU utilization, shader execution, and memory transfers. Use when profiling Metal 4 ML pipelines.</li>
+        <li><strong>Core ML Performance Report</strong> &mdash; Generate without writing code: Xcode &rarr; Product &rarr; Profile &rarr; select your model. Shows per-operation breakdown.</li>
+      </ul>
+    </div>
+
+    <h3>Spotting Neural Engine Fallbacks</h3>
+
+    <p>The Core ML Instrument shows you exactly which operations run where. If you see operations falling back to CPU (marked in a different color), that's your bottleneck. Common reasons for ANE fallback:</p>
+
+    <ul>
+      <li><strong>Unsupported operations</strong> &mdash; Some custom layers or exotic activations aren't supported by ANE</li>
+      <li><strong>Dynamic shapes</strong> &mdash; ANE works best with fixed input dimensions</li>
+      <li><strong>Very small tensors</strong> &mdash; The overhead of dispatching to ANE isn't worth it for tiny operations</li>
+      <li><strong>Quantization format</strong> &mdash; Some quantization schemes aren't ANE-compatible</li>
+    </ul>
+
+    <div class="tip-box">
+      <strong>Quick profiling without code:</strong> In Xcode, click on your .mlmodel or .mlpackage file, then click the <strong>Performance</strong> tab. Xcode will run the model on a connected device and show you load time, prediction time, and compute unit usage per operation &mdash; no code needed.
+    </div>
+
+    <h2>Unified Memory: Apple Silicon's Secret Advantage</h2>
+
+    <p>On traditional computers, the CPU and GPU have separate memory. Moving data between them takes time. Apple Silicon uses <strong>unified memory</strong> &mdash; CPU, GPU, and Neural Engine all share the same memory pool.</p>
+
+    <p>What this means for ML:</p>
+
+    <ul>
+      <li><strong>No memory copies</strong> between compute units. A texture rendered on the GPU can be fed directly to the Neural Engine.</li>
+      <li><strong>Larger models fit</strong> because you're not duplicating buffers across memory pools.</li>
+      <li><strong>Faster pipeline transitions</strong> when Core ML dispatches different operations to different engines.</li>
+    </ul>
+
+    <p>This is why Apple Silicon devices punch above their weight in ML benchmarks compared to competitors with higher raw TOPS but separate memory architectures.</p>
+
+    <h2>Practical Guidelines</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Do</h4>
+        <ul>
+          <li>Use <code>.all</code> compute units by default</li>
+          <li>Warm up models with 3&ndash;5 dummy inferences</li>
+          <li>Benchmark for 60+ seconds (not just first inference)</li>
+          <li>Monitor thermal state for sustained workloads</li>
+          <li>Profile with Core ML Instrument before optimizing</li>
+          <li>Benchmark on your minimum supported device</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Don't</h4>
+        <ul>
+          <li>Force a specific compute unit without profiling</li>
+          <li>Trust first-inference timing (compilation overhead)</li>
+          <li>Ignore thermal throttling in sustained workloads</li>
+          <li>Assume GPU is faster than ANE for ML</li>
+          <li>Benchmark only on your newest device</li>
+          <li>Optimize before profiling</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Exercise: Benchmark Your Compute Units</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: The Compute Unit Showdown</h3>
+      <p>Take the image classifier from Chapter 3 and measure real performance across all compute units:</p>
+      <ol>
+        <li><strong>Set up the harness</strong> &mdash; Create a benchmark function that runs 50 inference iterations with MobileNetV2 and records each timing</li>
+        <li><strong>Test all four modes</strong> &mdash; Run with <code>.all</code>, <code>.cpuAndGPU</code>, <code>.cpuAndNeuralEngine</code>, and <code>.cpuOnly</code></li>
+        <li><strong>Record p50/p95/p99</strong> &mdash; For each mode, calculate the median, 95th percentile, and 99th percentile latency</li>
+        <li><strong>Sustained test</strong> &mdash; Run 500 iterations with <code>.all</code> and plot latency over time. Note when thermal throttling kicks in.</li>
+        <li><strong>Display results</strong> &mdash; Build a SwiftUI view showing a comparison table of all four modes</li>
+      </ol>
+      <h4>Questions to Answer:</h4>
+      <ul>
+        <li>Which compute unit is fastest on your device? By how much?</li>
+        <li>At what iteration count does thermal throttling become visible?</li>
+        <li>What's the p95/p50 ratio? (A high ratio means inconsistent performance.)</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Now you know <em>where</em> your model runs and how fast it goes. But what if it's still too slow or too big? In <strong>Chapter 8: Model Optimization &mdash; Making Models iPhone-Ready</strong>, we'll shrink and speed up models using quantization (float32 &rarr; int8 or int4), palettization (Apple's unique compression trick), and pruning. You'll take a model that's too large for iPhone and make it fit &mdash; with less than 2% accuracy loss.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-foundation-models.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Foundation Models and Apple Intelligence</span>
+      </a>
+      <a href="08-model-optimization.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Model Optimization &mdash; Making Models iPhone-Ready</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

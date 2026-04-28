@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Custom Claude Code Skills | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-automation-toolkit.html">&larr; Prev</a>
+      <a href="04-hooks.html">Next &rarr;</a>
+      <a href="maps/03-custom-skills-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Custom Claude Code Skills</h1>
+    <p class="subtitle">Build reusable /commands that turn repetitive workflows into one-liners</p>
+  </header>
+
+  <main>
+
+    <h2>From Typing to Commanding</h2>
+
+    <p>In Chapter 2, you learned that skills become /commands. You even created a simple <code>/explain</code> skill. Now we&rsquo;re going deep &mdash; including the modern <code>SKILL.md</code> form that lets Claude Code invoke your skills automatically when relevant.</p>
+
+    <p>By the end of this chapter, you&rsquo;ll have a library of practical skills that save real time &mdash; scaffolding features, writing PR descriptions, explaining legacy code, and converting XML layouts to Compose. All copy-paste-ready, all shareable with your team.</p>
+
+    <p>Think of skills as your personal army of junior developers who each know how to do exactly one thing perfectly.</p>
+
+    <h2>Anatomy of a Skill File</h2>
+
+    <p>A skill comes in one of two forms &mdash; and both produce the same <code>/&lt;name&gt;</code> command. The simple form is a single markdown file under <code>.claude/commands/</code>. The richer form is a directory under <code>.claude/skills/</code> with a <code>SKILL.md</code> inside, which unlocks YAML frontmatter, supporting files, and automatic invocation by Claude.</p>
+
+    <pre><code># Form 1: a single markdown file (simplest, still fully supported)
+.claude/commands/pr-description.md        →  /pr-description
+.claude/commands/scaffold.md              →  /scaffold
+~/.claude/commands/standup.md             →  /standup (personal, all projects)
+
+# Form 2: a directory with SKILL.md (recommended for new skills)
+.claude/skills/pr-description/SKILL.md    →  /pr-description
+~/.claude/skills/standup/SKILL.md         →  /standup (personal, all projects)</code></pre>
+
+    <p>Custom commands and skills have been merged. A file at <code>.claude/commands/deploy.md</code> and a skill at <code>.claude/skills/deploy/SKILL.md</code> both create <code>/deploy</code> and behave the same when you invoke them. Your existing <code>commands/</code> files keep working forever &mdash; nothing to migrate. The <code>SKILL.md</code> form just adds optional features when you want them: a directory for supporting files, frontmatter that lets Claude decide when to invoke the skill, and tool pre-approval.</p>
+
+    <h3>Frontmatter unlocks the good stuff</h3>
+
+    <p>Frontmatter is the YAML block between <code>---</code> markers at the top of the file. It&rsquo;s what turns a skill from &ldquo;a snippet I type <code>/foo</code> to run&rdquo; into &ldquo;a capability Claude Code knows about and can decide to use on its own.&rdquo;</p>
+
+    <pre><code># File: .claude/skills/pr-description/SKILL.md
+
+---
+name: pr-description
+description: Generate a PR description from the current diff. Use when the user finishes a branch and is ready to open a pull request.
+allowed-tools: Bash(git diff *) Bash(git log *) Read
+---
+
+You are writing a pull request description.
+&hellip;</code></pre>
+
+    <p>The fields you&rsquo;ll use most:</p>
+
+    <ul>
+      <li><code>name</code> &mdash; The slash command. Lowercase letters, numbers, and hyphens only, max 64 characters. If omitted, the directory name is used.</li>
+      <li><code>description</code> &mdash; What the skill does <em>and when to use it</em>. Claude reads this to decide whether to invoke the skill automatically. Front-load the key use case &mdash; the listing is capped at 1,536 characters.</li>
+      <li><code>allowed-tools</code> &mdash; Tools Claude can use without asking for permission while this skill is active.</li>
+      <li><code>disable-model-invocation: true</code> &mdash; You-only invocation. Use this for skills with side effects (deploy, commit, send-slack) so Claude can&rsquo;t trigger them on its own.</li>
+      <li><code>argument-hint</code> &mdash; Hint shown in autocomplete, e.g. <code>[component-name]</code>.</li>
+    </ul>
+
+    <div class="tip-box">
+      <p><strong>When to reach for SKILL.md.</strong> Pick the bare-markdown form when the skill is yours, you&rsquo;ll only ever invoke it manually, and you don&rsquo;t need supporting files. Pick <code>SKILL.md</code> when you want Claude to invoke the skill on its own (e.g. an <code>/explain-code</code> skill that should kick in whenever someone asks &ldquo;how does this work?&rdquo;), when you need to bundle scripts or templates next to the prompt, or when you want to pre-approve specific tools so the skill runs without permission prompts.</p>
+    </div>
+
+    <h3>The three parts of a good skill</h3>
+
+    <ol>
+      <li><strong>Context</strong> &mdash; Tell Claude Code what it&rsquo;s looking at and what role to play</li>
+      <li><strong>Instructions</strong> &mdash; Step-by-step what to do, in the order you want it done</li>
+      <li><strong>Output format</strong> &mdash; What the result should look like</li>
+    </ol>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Well-structured skill</p>
+      <div class="prompt-text"># /pr-description
+
+You are writing a pull request description.
+
+## Steps
+1. Read the current git diff (staged + unstaged)
+2. Read CLAUDE.md for the PR template and conventions
+3. Identify what changed and why (infer from code and commit messages)
+
+## Output
+Write a PR description in markdown with:
+- **Title**: concise, under 70 characters, imperative mood
+- **## What**: bullet list of changes
+- **## Why**: motivation and context
+- **## Testing**: how to verify the changes
+- **## Screenshots**: placeholder if UI changed</div>
+      <p class="prompt-explanation">Clear context, numbered steps, explicit output format. Claude Code knows exactly what to do.</p>
+    </div>
+
+    <div class="prompt-example bad">
+      <p class="prompt-label">Vague skill</p>
+      <div class="prompt-text">Write a good PR description for my changes.</div>
+      <p class="prompt-explanation">No structure, no format specification, no context about your team&rsquo;s conventions. You&rsquo;ll get a generic result every time.</p>
+    </div>
+
+    <h2>Your First Real Skill: /generate-boilerplate</h2>
+
+    <p>Let&rsquo;s build something useful. Every Android developer creates the same set of files for a new feature: a ViewModel, a Repository interface, a Repository implementation, a UI screen, and maybe a use case. That&rsquo;s five files with predictable boilerplate. Let&rsquo;s automate it.</p>
+
+    <div class="recipe-box">
+      <h3>Building the /generate-boilerplate Skill</h3>
+      <ol>
+        <li>Create the file: <code>.claude/commands/generate-boilerplate.md</code></li>
+        <li>Add this content:</li>
+      </ol>
+      <pre><code># Generate Feature Boilerplate
+
+Generate the boilerplate files for a new Android feature: **$ARGUMENTS**
+
+## Steps
+1. Read CLAUDE.md for project conventions and architecture patterns
+2. Create these files in the appropriate package:
+
+### ViewModel
+- File: `feature/{name}/{Name}ViewModel.kt`
+- Extends the project's base ViewModel
+- Uses StateFlow for UI state
+- Includes a sealed interface for UI events
+
+### Repository
+- Interface: `domain/repository/{Name}Repository.kt`
+- Implementation: `data/repository/{Name}RepositoryImpl.kt`
+- Uses the project's ApiResult wrapper for network calls
+
+### UI Screen
+- File: `feature/{name}/{Name}Screen.kt`
+- Jetpack Compose screen with preview
+- Collects state from ViewModel
+- Handles UI events
+
+### Use Case (if the feature involves business logic)
+- File: `domain/usecase/{Name}UseCase.kt`
+- Single responsibility, injectable via Hilt
+
+## Rules
+- Follow existing code style in the project
+- Add @Inject and @HiltViewModel annotations
+- Use the naming conventions from CLAUDE.md
+- Add KDoc to public classes</code></pre>
+      <ol start="3">
+        <li>Test it: <code>/generate-boilerplate UserProfile</code></li>
+        <li>Claude Code creates all the files, following your project&rsquo;s patterns</li>
+      </ol>
+    </div>
+
+    <p>That&rsquo;s five files created in seconds, all following your team&rsquo;s conventions, all consistent with each other. No copy-pasting from an old feature, no forgetting the Hilt annotation, no creating the ViewModel but forgetting the Repository interface.</p>
+
+    <h2>The Power of $ARGUMENTS</h2>
+
+    <p><code>$ARGUMENTS</code> is the magic variable that makes skills flexible. Whatever the user types after the command name gets injected into the prompt as <code>$ARGUMENTS</code>.</p>
+
+    <pre><code># When you type:
+/generate-boilerplate UserProfile
+
+# Claude Code sees:
+# $ARGUMENTS = "UserProfile"</code></pre>
+
+    <p>This lets you build skills that work for any input, not just a hardcoded case:</p>
+
+    <pre><code># A skill that works for any file
+Explain the file at $ARGUMENTS for a new team member.
+
+# A skill that works for any component type
+Generate tests for the component described by: $ARGUMENTS
+
+# A skill that accepts multiple parameters
+# /deploy staging v2.1.0
+Deploy version to environment. Arguments: $ARGUMENTS
+Parse the first word as environment and second as version.</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Pro tip:</strong> You can use <code>$ARGUMENTS</code> anywhere in your skill file &mdash; in headings, in code blocks, even in conditional instructions. Claude Code does the substitution before processing the prompt, so it works everywhere.</p>
+    </div>
+
+    <h3>Positional and named arguments</h3>
+
+    <p>For skills that take more than one input, you have two ergonomic upgrades over plain <code>$ARGUMENTS</code>. Grab specific arguments by position with <code>$ARGUMENTS[0]</code>, <code>$ARGUMENTS[1]</code>, &hellip; or the shorthand <code>$0</code>, <code>$1</code>, &hellip; for the first, second, and so on. Even better, when you use the <code>SKILL.md</code> form you can declare named arguments in frontmatter and reference them by name &mdash; which reads a lot like a function signature:</p>
+
+    <pre><code># File: .claude/skills/migrate-component/SKILL.md
+
+---
+name: migrate-component
+description: Migrate a UI component from one framework to another
+arguments: [component, from, to]
+---
+
+Migrate the $component component from $from to $to.
+Preserve all existing behavior and tests.</code></pre>
+
+    <p>Running <code>/migrate-component SearchBar React Vue</code> expands <code>$component</code> to <code>SearchBar</code>, <code>$from</code> to <code>React</code>, and <code>$to</code> to <code>Vue</code>. Multi-word values? Wrap them in quotes: <code>/migrate-component "User Profile" React Vue</code>.</p>
+
+    <h2>Skill Gallery: Four Skills Every Team Needs</h2>
+
+    <p>Here are four production-ready skills you can copy into your project right now. Each one addresses a task from the automation audit you did in Chapter 1.</p>
+
+    <h3>1. /scaffold-feature &mdash; Full Feature Generator</h3>
+
+    <pre><code># File: .claude/commands/scaffold-feature.md
+
+Generate a complete feature module for: **$ARGUMENTS**
+
+## What to create
+Read the project structure and CLAUDE.md first. Then generate:
+
+1. **Data layer**: Repository interface + implementation, DTOs, mapper
+2. **Domain layer**: Use case(s), domain model
+3. **Presentation layer**: ViewModel with UiState, Screen composable with preview
+4. **DI**: Hilt module binding the repository
+5. **Navigation**: Add the route to the nav graph
+6. **Tests**: Unit tests for ViewModel and Repository (JUnit 5 + MockK)
+
+## Rules
+- Match existing package structure exactly
+- Use existing base classes (BaseViewModel, ApiResult, etc.)
+- Follow naming patterns from similar features in the codebase
+- Every public class gets KDoc
+- Compose previews use the project's preview theme wrapper</code></pre>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Scaffolding a Feature Manually</h4>
+        <ol>
+          <li>Find a similar feature in the codebase</li>
+          <li>Copy 6&ndash;8 files to new locations</li>
+          <li>Rename every class, function, and variable</li>
+          <li>Update package declarations</li>
+          <li>Wire up Hilt bindings</li>
+          <li>Add navigation route</li>
+          <li>Fix the inevitable typos</li>
+        </ol>
+        <p><strong>Time: 20&ndash;30 minutes, error-prone</strong></p>
+      </div>
+      <div class="after">
+        <h4>With /scaffold-feature</h4>
+        <ol>
+          <li>Type <code>/scaffold-feature PaymentHistory</code></li>
+          <li>Review the generated files</li>
+          <li>Start implementing the actual logic</li>
+        </ol>
+        <p><strong>Time: 2 minutes, consistent every time</strong></p>
+      </div>
+    </div>
+
+    <h3>2. /pr-description &mdash; PR Body from Diff</h3>
+
+    <pre><code># File: .claude/commands/pr-description.md
+
+Generate a pull request description for the current changes.
+
+## Steps
+1. Run `git diff main...HEAD` to see all changes on this branch
+2. Run `git log main..HEAD --oneline` for commit history
+3. Read CLAUDE.md for the PR template
+
+## Output format
+```markdown
+## What
+- [bullet list of what changed, grouped by area]
+
+## Why
+[1-2 sentences on motivation — what problem this solves]
+
+## How
+[Brief technical approach — key decisions, trade-offs]
+
+## Testing
+- [ ] [Specific test steps a reviewer can follow]
+- [ ] [Include relevant test commands]
+
+## Screenshots
+[If UI changes, note where screenshots should go]
+```
+
+## Rules
+- Title should be imperative mood, under 70 characters
+- Be specific — "Add retry logic to PaymentRepository" not "Update code"
+- If there are breaking changes, add a ⚠️ Breaking section
+- Mention any new dependencies added</code></pre>
+
+    <h3>3. /explain-code &mdash; Onboarding-Friendly Explanations</h3>
+
+    <pre><code># File: .claude/commands/explain-code.md
+
+Explain **$ARGUMENTS** for a developer who is new to this codebase.
+
+## Steps
+1. Read the specified file or component
+2. Read related files (imports, parent classes, interfaces it implements)
+3. Check CLAUDE.md for architecture context
+
+## Explain
+- **What it does** — purpose in plain English, no jargon
+- **How it fits** — where it sits in the architecture, what calls it, what it calls
+- **Key patterns** — design patterns used (Repository, Factory, etc.) and why
+- **Data flow** — how data moves through this component
+- **Gotchas** — non-obvious behavior, edge cases, things that trip people up
+- **Related files** — what to read next to understand the full picture
+
+## Style
+- Use analogies where they help
+- Short paragraphs, bullet lists for technical details
+- Assume the reader knows Kotlin/Android but not this specific codebase</code></pre>
+
+    <h3>4. /refactor-to-compose &mdash; XML to Compose Converter</h3>
+
+    <pre><code># File: .claude/commands/android/refactor-to-compose.md
+
+Convert the XML layout at **$ARGUMENTS** to Jetpack Compose.
+
+## Steps
+1. Read the XML layout file
+2. Read the Activity/Fragment that uses this layout to understand data binding and click handlers
+3. Read the ViewModel for state management patterns
+4. Read CLAUDE.md for Compose conventions
+
+## Generate
+1. A `@Composable` function matching the layout's visual structure
+2. Replace XML views with Compose equivalents:
+   - `TextView` → `Text`
+   - `RecyclerView` → `LazyColumn`/`LazyRow`
+   - `ConstraintLayout` → `Column`/`Row` or `ConstraintLayout` composable
+   - `ImageView` → `AsyncImage` (Coil) or `Image`
+3. State hoisting — UI state comes from ViewModel via `collectAsStateWithLifecycle()`
+4. A `@Preview` composable with sample data
+
+## Rules
+- Use Material 3 components where applicable
+- Follow project's Compose conventions from CLAUDE.md
+- Preserve all accessibility — contentDescription, semantics
+- Keep the same visual behavior (margins → padding, weights → Modifier.weight)
+- Add a TODO comment for any behavior that doesn't have a direct Compose equivalent</code></pre>
+
+    <div class="automation-box">
+      <p><strong>Skills are team knowledge, codified.</strong> That senior developer who always writes perfect PR descriptions? Their pattern is now a <code>/pr-description</code> skill that everyone gets. The architect who knows how to structure features? Their approach lives in <code>/scaffold-feature</code>. Skills capture expertise and make it available to the entire team, instantly.</p>
+    </div>
+
+    <h2>Skill Chaining: Composing Workflows</h2>
+
+    <p>Individual skills are powerful. Chained skills are transformative. You can reference other skills in your skill file, and you can build &ldquo;meta-skills&rdquo; that orchestrate multiple steps.</p>
+
+    <pre><code># File: .claude/commands/ship-feature.md
+
+Complete the full shipping workflow for the current branch.
+
+## Steps (execute in order)
+1. Run the project's linter and fix any issues
+2. Generate tests for any new or changed source files that don't have tests yet
+3. Run the full test suite and fix any failures
+4. Generate a PR description from the diff (follow the format in CLAUDE.md)
+5. Create the PR on GitHub using the gh CLI
+
+## Rules
+- Stop and report if tests fail after 2 fix attempts
+- Include test coverage for all new public functions
+- PR title should reference the ticket number if found in branch name</code></pre>
+
+    <p>One command. Lint, test, describe, create PR. What used to be a 15-minute manual process is now <code>/ship-feature</code>.</p>
+
+    <h2>Organizing Your Skill Library</h2>
+
+    <p>As your skill collection grows, organization matters. Here&rsquo;s a structure that scales:</p>
+
+    <pre><code>.claude/commands/
+├── pr-description.md           # General workflow
+├── explain-code.md             # General workflow
+├── ship-feature.md             # General workflow
+├── android/
+│   ├── scaffold-feature.md     # Android-specific
+│   ├── refactor-to-compose.md  # Android-specific
+│   └── generate-tests.md       # Android test generation
+├── review/
+│   ├── security-review.md      # Security-focused review
+│   ├── performance-review.md   # Performance-focused review
+│   └── accessibility-review.md # Accessibility check
+└── docs/
+    ├── generate-readme.md      # Documentation
+    └── generate-adr.md         # Architecture Decision Records</code></pre>
+
+    <p>Subdirectories help you organize a growing library, but they don&rsquo;t change the slash command name. A file at <code>.claude/commands/android/scaffold-feature.md</code> still produces <code>/scaffold-feature</code> &mdash; the subdirectory just shows up in the autocomplete description so you can see how the skill is grouped. Colon syntax like <code>plugin-name:skill-name</code> is reserved for skills shipped via plugins, where it prevents naming collisions across third-party packages. We&rsquo;ll meet plugins later in the course.</p>
+
+    <div class="tip-box">
+      <p><strong>Discoverability matters.</strong> Name your skills so that a new team member can guess what they do. <code>/sf</code> saves keystrokes but <code>/scaffold-feature</code> tells you what it does. Future you (and your teammates) will thank present you.</p>
+    </div>
+
+    <h2>Debugging Skills</h2>
+
+    <p>Your skill doesn&rsquo;t always produce what you expect on the first try. Here&rsquo;s how to fix it:</p>
+
+    <h3>Common problems and fixes</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Problem</th>
+          <th>Likely Cause</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Output is too generic</td>
+          <td>Skill doesn&rsquo;t reference project context</td>
+          <td>Add &ldquo;Read CLAUDE.md&rdquo; and &ldquo;Follow existing patterns&rdquo;</td>
+        </tr>
+        <tr>
+          <td>Wrong file locations</td>
+          <td>Skill doesn&rsquo;t read project structure</td>
+          <td>Add &ldquo;Read the project structure first&rdquo; as step 1</td>
+        </tr>
+        <tr>
+          <td>Inconsistent style</td>
+          <td>No style reference</td>
+          <td>Add &ldquo;Match the style of existing files in this directory&rdquo;</td>
+        </tr>
+        <tr>
+          <td>Missing imports or DI</td>
+          <td>Skill doesn&rsquo;t check dependencies</td>
+          <td>Add &ldquo;Check existing Hilt modules and update if needed&rdquo;</td>
+        </tr>
+        <tr>
+          <td>$ARGUMENTS not working</td>
+          <td>Typo or wrong case</td>
+          <td>Must be exactly <code>$ARGUMENTS</code> (all caps, with $)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <p><strong>Iterate, don&rsquo;t overengineer.</strong> Start with a simple skill. Use it a few times. Notice what&rsquo;s missing. Add instructions to fix the gaps. The best skills evolve through use, not through upfront design. Three rounds of &ldquo;use it, tweak it&rdquo; beats an hour of trying to write the perfect prompt.</p>
+    </div>
+
+    <h2>Skill Versioning and Evolution</h2>
+
+    <p>Skills live in your repo. They get committed, reviewed, and versioned just like code. This means:</p>
+
+    <ul>
+      <li><strong>PRs for skill changes</strong> &mdash; When someone improves a skill, the team can review the new prompt</li>
+      <li><strong>Git blame for context</strong> &mdash; Why was this instruction added? Check the commit message</li>
+      <li><strong>Branch-specific skills</strong> &mdash; Try a new version on a feature branch before merging</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>When to Update a Skill</h3>
+      <p>Update your skills when: your architecture changes, your team adopts new conventions, you notice repeated manual fixes after running the skill, or a new team member finds the output confusing. A skill that isn&rsquo;t evolving is a skill that&rsquo;s falling behind your codebase.</p>
+    </div>
+
+    <h2>Team Skill Libraries</h2>
+
+    <p>The real multiplier is when skills become shared. Every developer on your team gets the same /commands, producing consistent results.</p>
+
+    <ul class="checklist">
+      <li class="checked">Project skills (<code>.claude/commands/</code>) are checked into git &mdash; everyone gets them</li>
+      <li class="checked">CLAUDE.md rules mean skills produce team-consistent output</li>
+      <li class="checked">New team members get the full skill library on day one</li>
+      <li class="checked">Skill improvements benefit everyone via normal git workflow</li>
+    </ul>
+
+    <p>Onboarding goes from &ldquo;here&rsquo;s a wiki page about our conventions, good luck&rdquo; to &ldquo;run <code>/scaffold-feature</code> and everything follows our patterns automatically.&rdquo;</p>
+
+    <h2>Exercise: Build Your Skill Starter Kit</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Create Three Skills for Your Project</h3>
+      <p>Build these three skills right now. Each one takes about 5 minutes.</p>
+
+      <h4>Skill 1: /pr-description</h4>
+      <ol>
+        <li>Create <code>.claude/commands/pr-description.md</code></li>
+        <li>Copy the PR description skill from this chapter</li>
+        <li>Customize it: add your team&rsquo;s PR template sections, any required fields, and your branch naming convention</li>
+        <li>Test it on your current branch: type <code>/pr-description</code></li>
+      </ol>
+
+      <h4>Skill 2: /explain-code</h4>
+      <ol>
+        <li>Create <code>.claude/commands/explain-code.md</code></li>
+        <li>Copy the explain-code skill from this chapter</li>
+        <li>Test it: <code>/explain-code src/data/repository/UserRepository.kt</code></li>
+      </ol>
+
+      <h4>Skill 3: Your automation audit pick</h4>
+      <ol>
+        <li>Look at your automation audit from Chapter 1</li>
+        <li>Pick one task you flagged as &ldquo;high impact, low effort&rdquo;</li>
+        <li>Write a skill for it: context, instructions, output format</li>
+        <li>Test it and iterate until the output is what you&rsquo;d produce manually</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Commit all three to your project repo. Run <code>/pr-description</code> to generate the PR description for this very commit.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Skills are powerful, but they still require you to type a command. What if automations ran <em>without you doing anything?</em></p>
+
+    <p>In <strong>Chapter 4: Hooks That Work For You</strong>, you&rsquo;ll set up event-driven automation. When Claude Code edits a file, a hook auto-lints it. When it writes Kotlin, a hook auto-formats it. When it changes a source file, a hook runs the relevant tests. Zero manual intervention, zero forgotten steps.</p>
+
+    <p>From on-demand to always-on. Let&rsquo;s go.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-automation-toolkit.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Your Automation Toolkit</span>
+      </a>
+      <a href="04-hooks.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Hooks That Work For You</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

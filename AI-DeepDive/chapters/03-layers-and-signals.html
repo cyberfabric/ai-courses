@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Layers, Weights &amp; Signals | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="02-inside-a-neuron.html">&larr; Prev</a>
+      <a href="04-training-step-by-step.html">Next &rarr;</a>
+      <a href="maps/03-layers-and-signals-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>How Networks Think &mdash; Layers, Weights &amp; Signals</h1>
+    <p class="chapter-subtitle">From one neuron to a full network &mdash; trace a complete forward pass with real numbers</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/02-neural-networks.html">AI-Intro Ch 2: Neural Networks Without the Math</a>. You saw the big picture there. Now we&rsquo;ll trace every multiplication.
+    </div>
+
+    <p>In <a href="02-inside-a-neuron.html">Chapter 2</a>, you mastered the single neuron: multiply inputs by weights, add bias, apply activation. But one neuron can only draw one decision boundary. Real problems need hundreds, thousands, or millions of neurons working together.</p>
+
+    <p>In this chapter, we&rsquo;ll connect neurons into <strong>layers</strong>, represent weights as <strong>matrices</strong>, and trace a complete <strong>forward pass</strong> through a multi-layer network &mdash; with every number visible. By the end, you&rsquo;ll be able to compute what a neural network outputs for a given input, entirely by hand.</p>
+
+    <!-- ============================================== -->
+    <h2>From One Neuron to a Layer</h2>
+    <!-- ============================================== -->
+
+    <p>A <strong>layer</strong> is simply a group of neurons that all receive the same inputs. Each neuron has its own weights and bias, so each one computes something different from the same data.</p>
+
+    <p>Let&rsquo;s build a layer with <strong>3 inputs</strong> and <strong>4 neurons</strong>:</p>
+
+    <div class="operation-box">
+      <h4>What a Layer Does</h4>
+      <p>Every neuron in the layer receives all 3 inputs. Each neuron multiplies those inputs by its <em>own</em> weights, adds its <em>own</em> bias, and applies the activation function. The result is 4 outputs &mdash; one per neuron.</p>
+      <p><strong>3 inputs in, 4 outputs out.</strong> The layer has transformed the data from 3 dimensions to 4 dimensions.</p>
+    </div>
+
+    <p>How many individual operations? Each of the 4 neurons does 3 multiplications (one per input). That&rsquo;s <code>4 &times; 3 = 12</code> multiplications, plus 4 bias additions, plus 4 activations. Not bad &mdash; but writing it neuron-by-neuron gets tedious fast. Enter matrices.</p>
+
+    <!-- ============================================== -->
+    <h2>Weights as a Matrix</h2>
+    <!-- ============================================== -->
+
+    <p>Instead of writing out each neuron&rsquo;s weights separately, we pack them into a <strong>weight matrix</strong>. Each column is one neuron&rsquo;s weights:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Neuron 1</th>
+          <th>Neuron 2</th>
+          <th>Neuron 3</th>
+          <th>Neuron 4</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Input 1</strong></td>
+          <td><code>0.2</code></td>
+          <td><code>-0.1</code></td>
+          <td><code>0.4</code></td>
+          <td><code>0.3</code></td>
+        </tr>
+        <tr>
+          <td><strong>Input 2</strong></td>
+          <td><code>0.5</code></td>
+          <td><code>0.3</code></td>
+          <td><code>-0.2</code></td>
+          <td><code>0.1</code></td>
+        </tr>
+        <tr>
+          <td><strong>Input 3</strong></td>
+          <td><code>-0.3</code></td>
+          <td><code>0.7</code></td>
+          <td><code>0.1</code></td>
+          <td><code>-0.5</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>This is a <strong>3&times;4 matrix</strong> (3 rows for inputs, 4 columns for neurons). We&rsquo;ll call it <strong>W</strong>.</p>
+
+    <p>The biases form a vector: <code>b = [0.1, -0.2, 0.3, 0.0]</code></p>
+
+    <p>The inputs are also a vector: <code>x = [1.0, 0.5, -0.5]</code></p>
+
+    <div class="intuition-box">
+      <h4>Why Matrices?</h4>
+      <p>A matrix is just a compact way to write &ldquo;every neuron&rsquo;s weights, all at once.&rdquo; The mathematical operation &mdash; <strong>matrix multiplication</strong> &mdash; computes all 4 neurons&rsquo; weighted sums in one step. This is why GPUs are so important for AI: they&rsquo;re designed to do matrix math blazingly fast.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Matrix Multiplication: Row Times Column</h2>
+    <!-- ============================================== -->
+
+    <p>Matrix multiplication sounds intimidating, but the rule is simple: <strong>each output is a dot product of the input row with one column of the weight matrix</strong>.</p>
+
+    <div class="operation-box">
+      <h4>The Dot Product Rule</h4>
+      <p>To get the output for neuron <em>j</em>:</p>
+      <ol>
+        <li>Take the input vector</li>
+        <li>Take column <em>j</em> of the weight matrix</li>
+        <li>Multiply element-by-element</li>
+        <li>Sum all the products</li>
+      </ol>
+      <p>That&rsquo;s the same weighted sum from Chapter 2 &mdash; just organized differently.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Computing All 4 Neurons at Once</h4>
+
+      <p><strong>Inputs:</strong> <code>x = [1.0, 0.5, -0.5]</code></p>
+
+      <p><strong>Neuron 1</strong> (column 1 of W):</p>
+      <p><code>z<sub>1</sub> = (1.0 &times; 0.2) + (0.5 &times; 0.5) + (-0.5 &times; -0.3) + 0.1</code></p>
+      <p><code>z<sub>1</sub> = 0.2 + 0.25 + 0.15 + 0.1 = 0.70</code></p>
+
+      <p><strong>Neuron 2</strong> (column 2 of W):</p>
+      <p><code>z<sub>2</sub> = (1.0 &times; -0.1) + (0.5 &times; 0.3) + (-0.5 &times; 0.7) + (-0.2)</code></p>
+      <p><code>z<sub>2</sub> = -0.1 + 0.15 + (-0.35) + (-0.2) = -0.50</code></p>
+
+      <p><strong>Neuron 3</strong> (column 3 of W):</p>
+      <p><code>z<sub>3</sub> = (1.0 &times; 0.4) + (0.5 &times; -0.2) + (-0.5 &times; 0.1) + 0.3</code></p>
+      <p><code>z<sub>3</sub> = 0.4 + (-0.1) + (-0.05) + 0.3 = 0.55</code></p>
+
+      <p><strong>Neuron 4</strong> (column 4 of W):</p>
+      <p><code>z<sub>4</sub> = (1.0 &times; 0.3) + (0.5 &times; 0.1) + (-0.5 &times; -0.5) + 0.0</code></p>
+      <p><code>z<sub>4</sub> = 0.3 + 0.05 + 0.25 + 0.0 = 0.60</code></p>
+
+      <p><strong>Weighted sums:</strong> <code>z = [0.70, -0.50, 0.55, 0.60]</code></p>
+
+      <p><strong>Apply ReLU:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Neuron</th><th>z</th><th>ReLU(z)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code>0.70</code></td><td><code>0.70</code></td></tr>
+          <tr><td>2</td><td><code>-0.50</code></td><td><code>0.00</code></td></tr>
+          <tr><td>3</td><td><code>0.55</code></td><td><code>0.55</code></td></tr>
+          <tr><td>4</td><td><code>0.60</code></td><td><code>0.60</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Layer output:</strong> <code>h = [0.70, 0.00, 0.55, 0.60]</code></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What Just Happened?</h4>
+      <p>Three numbers went in, four numbers came out. The layer <strong>transformed</strong> our 3-dimensional input into a 4-dimensional representation. Neuron 2 output zero (ReLU killed its negative sum) &mdash; it found nothing relevant in this input. The other three neurons each detected different patterns and passed their signals forward.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>How many individual multiplications did we just do?</p>
+      <p><em>Answer: 12 &mdash; each of the 4 neurons multiplied 3 inputs by 3 weights. This is why we call it a 3&times;4 matrix: 3 inputs, 4 neurons, 12 products.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Forward Pass: Layer by Layer</h2>
+    <!-- ============================================== -->
+
+    <p>A neural network is just <strong>layers stacked in sequence</strong>. The output of one layer becomes the input to the next. This process of feeding data forward through the network is called the <strong>forward pass</strong>.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>Input</h4>
+        <p>3 values</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Hidden Layer</h4>
+        <p>4 neurons (ReLU)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Output Layer</h4>
+        <p>2 neurons (softmax)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Prediction</h4>
+        <p>2 probabilities</p>
+      </div>
+    </div>
+
+    <p>We already computed the hidden layer output: <code>h = [0.70, 0.00, 0.55, 0.60]</code>. Now this becomes the input to the output layer.</p>
+
+    <!-- ============================================== -->
+    <h2>The Output Layer</h2>
+    <!-- ============================================== -->
+
+    <p>Our output layer has <strong>2 neurons</strong> (for binary classification &mdash; say, &ldquo;cat&rdquo; vs. &ldquo;dog&rdquo;). It takes 4 inputs (from the hidden layer) and produces 2 raw scores.</p>
+
+    <p>Output layer weights (4&times;2 matrix):</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Out 1 (&ldquo;Cat&rdquo;)</th>
+          <th>Out 2 (&ldquo;Dog&rdquo;)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>h<sub>1</sub></strong></td>
+          <td><code>0.6</code></td>
+          <td><code>-0.4</code></td>
+        </tr>
+        <tr>
+          <td><strong>h<sub>2</sub></strong></td>
+          <td><code>-0.2</code></td>
+          <td><code>0.5</code></td>
+        </tr>
+        <tr>
+          <td><strong>h<sub>3</sub></strong></td>
+          <td><code>0.3</code></td>
+          <td><code>0.1</code></td>
+        </tr>
+        <tr>
+          <td><strong>h<sub>4</sub></strong></td>
+          <td><code>-0.1</code></td>
+          <td><code>0.7</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Output biases: <code>b<sub>out</sub> = [0.1, -0.1]</code></p>
+
+    <div class="math-walkthrough">
+      <h4>Full Forward Pass: Hidden to Output</h4>
+
+      <p><strong>Hidden output:</strong> <code>h = [0.70, 0.00, 0.55, 0.60]</code></p>
+
+      <p><strong>Output neuron 1 (&ldquo;Cat&rdquo;):</strong></p>
+      <p><code>z<sub>cat</sub> = (0.70&times;0.6) + (0.00&times;-0.2) + (0.55&times;0.3) + (0.60&times;-0.1) + 0.1</code></p>
+      <p><code>z<sub>cat</sub> = 0.42 + 0.00 + 0.165 + (-0.06) + 0.1 = 0.625</code></p>
+
+      <p><strong>Output neuron 2 (&ldquo;Dog&rdquo;):</strong></p>
+      <p><code>z<sub>dog</sub> = (0.70&times;-0.4) + (0.00&times;0.5) + (0.55&times;0.1) + (0.60&times;0.7) + (-0.1)</code></p>
+      <p><code>z<sub>dog</sub> = -0.28 + 0.00 + 0.055 + 0.42 + (-0.1) = 0.095</code></p>
+
+      <p><strong>Raw scores:</strong> <code>[0.625, 0.095]</code></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Softmax: Turning Scores into Probabilities</h2>
+    <!-- ============================================== -->
+
+    <p>Raw scores are hard to interpret. Is <code>0.625</code> confident? The <strong>softmax</strong> function converts scores into probabilities that sum to 1.</p>
+
+    <div class="operation-box">
+      <h4>Softmax</h4>
+      <p>For each score, softmax does:</p>
+      <ol>
+        <li>Raise <em>e</em> to the power of each score</li>
+        <li>Divide each result by the sum of all results</li>
+      </ol>
+      <p>This guarantees all outputs are positive and they sum to exactly 1.0 &mdash; a valid probability distribution. We&rsquo;ll dive deep into softmax in <a href="06-attention-mechanism.html">Chapter 6</a>.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Softmax Step by Step</h4>
+
+      <p><strong>Raw scores:</strong> <code>[0.625, 0.095]</code></p>
+
+      <p><strong>Step 1 &mdash; Exponentiate:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Class</th><th>Score</th><th>e<sup>score</sup></th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Cat</td><td><code>0.625</code></td><td><code>e<sup>0.625</sup> = 1.868</code></td></tr>
+          <tr><td>Dog</td><td><code>0.095</code></td><td><code>e<sup>0.095</sup> = 1.100</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Step 2 &mdash; Sum:</strong> <code>1.868 + 1.100 = 2.968</code></p>
+
+      <p><strong>Step 3 &mdash; Divide:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Class</th><th>e<sup>score</sup></th><th>Probability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Cat</td><td><code>1.868</code></td><td><code>1.868 / 2.968 = 0.63</code></td></tr>
+          <tr><td>Dog</td><td><code>1.100</code></td><td><code>1.100 / 2.968 = 0.37</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Final prediction:</strong> 63% Cat, 37% Dog. The network thinks this input is more likely a cat.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The Full Journey</h4>
+      <p>Let&rsquo;s trace the complete path: 3 raw numbers went into the hidden layer, got transformed into 4 hidden values (one was zeroed by ReLU), then those 4 values were combined into 2 scores, and softmax turned those scores into a probability distribution. <strong>That&rsquo;s a forward pass.</strong> Every prediction you&rsquo;ve ever gotten from ChatGPT, Claude, or any neural network follows this same pattern &mdash; just with many more layers and neurons.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What Each Layer &ldquo;Sees&rdquo;</h2>
+    <!-- ============================================== -->
+
+    <p>Each layer transforms its input into something more useful for the next layer. In a deep network, this creates a <strong>feature hierarchy</strong>:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Image Model</h4>
+        <ul>
+          <li>Layer 1: edges, gradients</li>
+          <li>Layer 2: textures, corners</li>
+          <li>Layer 3: eyes, ears, noses</li>
+          <li>Layer 4+: faces, objects</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <h4>Text Model (LLM)</h4>
+        <ul>
+          <li>Layer 1: character patterns</li>
+          <li>Layer 2: word fragments</li>
+          <li>Layer 3: grammar, syntax</li>
+          <li>Layer 4+: meaning, context</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>Nobody programs these features. The network discovers them automatically during training (Chapter 4). Each layer builds on the previous one, composing simple patterns into complex concepts.</p>
+
+    <!-- ============================================== -->
+    <h2>Why Depth Matters More Than Width</h2>
+    <!-- ============================================== -->
+
+    <p>You might think: &ldquo;Instead of 4 layers of 100 neurons, why not 1 layer of 400 neurons?&rdquo; Mathematically, these are very different:</p>
+
+    <div class="highlight-box">
+      <p><strong>Width</strong> (more neurons in one layer) lets you detect more patterns <em>at the same level of abstraction</em>. <strong>Depth</strong> (more layers) lets you detect patterns <em>built on top of other patterns</em>.</p>
+      <p>A wide network might detect 400 different edges. A deep network detects edges, then builds shapes from edges, then builds objects from shapes. Depth creates <strong>composition</strong> &mdash; and composition is how you go from pixels to &ldquo;that&rsquo;s a golden retriever.&rdquo;</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>The Factory Assembly Line</h4>
+      <p>A multi-layer network is like a factory assembly line. Raw materials (inputs) enter at one end. Each station (layer) performs one transformation: cutting, shaping, polishing, assembling. No single station does something impressive on its own, but the sequence of stations turns raw metal into a finished product. Adding more workers to one station (width) helps, but adding more stations (depth) is what enables building complex things.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Counting Parameters</h2>
+    <!-- ============================================== -->
+
+    <p>For our tiny network, let&rsquo;s count every learnable parameter:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th>Shape</th>
+          <th>Weights</th>
+          <th>Biases</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Hidden (input &rarr; hidden)</td>
+          <td>3 &times; 4</td>
+          <td><code>12</code></td>
+          <td><code>4</code></td>
+          <td><code>16</code></td>
+        </tr>
+        <tr>
+          <td>Output (hidden &rarr; output)</td>
+          <td>4 &times; 2</td>
+          <td><code>8</code></td>
+          <td><code>2</code></td>
+          <td><code>10</code></td>
+        </tr>
+        <tr>
+          <td colspan="4"><strong>Grand total</strong></td>
+          <td><strong><code>26</code></strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The formula per layer: <code>(inputs &times; neurons) + neurons</code>. The first term is the weight matrix; the second is the bias vector.</p>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If you added a second hidden layer with 8 neurons (so the architecture becomes 3 &rarr; 4 &rarr; 8 &rarr; 2), how many <em>total</em> parameters would the network have?</p>
+      <p><em>Answer: Layer 1: (3&times;4)+4 = 16. Layer 2: (4&times;8)+8 = 40. Layer 3: (8&times;2)+2 = 18. Total: 16 + 40 + 18 = <strong>74 parameters</strong>.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Scaling Up: From 26 to 1.8 Trillion</h2>
+    <!-- ============================================== -->
+
+    <p>Our toy network has 26 parameters. Real networks:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">26</div>
+        <div class="stat-label">Our toy network</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">110M</div>
+        <div class="stat-label">BERT-base</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">175B</div>
+        <div class="stat-label">GPT-3</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">~1.8T</div>
+        <div class="stat-label">GPT-4 (estimated)</div>
+      </div>
+    </div>
+
+    <p>The math is identical. GPT-4 doesn&rsquo;t do anything our toy network doesn&rsquo;t &mdash; it just does it with 96 layers, 96 attention heads (Chapter 6), and embedding dimensions of 12,288 instead of 3. The weight matrices are enormous, but each individual multiplication is the same <code>w &times; x</code> you traced by hand today.</p>
+
+    <div class="warning-box">
+      <h4>Why You Can&rsquo;t Run GPT-4 on Your Laptop</h4>
+      <p>1.8 trillion parameters stored as 16-bit floats = ~3.6 terabytes of memory just for the weights. That&rsquo;s before you account for activations, gradients, and the KV cache (Chapter 10). This is why large models need clusters of GPUs with hundreds of gigabytes of memory each.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Complete Forward Pass: Summary Table</h2>
+    <!-- ============================================== -->
+
+    <p>Here&rsquo;s our entire network&rsquo;s computation in one view:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Stage</th>
+          <th>Operation</th>
+          <th>Values</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Input</strong></td>
+          <td>&mdash;</td>
+          <td><code>[1.0, 0.5, -0.5]</code></td>
+        </tr>
+        <tr>
+          <td><strong>Hidden (weighted sum)</strong></td>
+          <td>x &times; W<sub>1</sub> + b<sub>1</sub></td>
+          <td><code>[0.70, -0.50, 0.55, 0.60]</code></td>
+        </tr>
+        <tr>
+          <td><strong>Hidden (ReLU)</strong></td>
+          <td>max(0, z)</td>
+          <td><code>[0.70, 0.00, 0.55, 0.60]</code></td>
+        </tr>
+        <tr>
+          <td><strong>Output (weighted sum)</strong></td>
+          <td>h &times; W<sub>2</sub> + b<sub>2</sub></td>
+          <td><code>[0.625, 0.095]</code></td>
+        </tr>
+        <tr>
+          <td><strong>Output (softmax)</strong></td>
+          <td>e<sup>z</sup> / &Sigma;e<sup>z</sup></td>
+          <td><code>[0.63, 0.37]</code></td>
+        </tr>
+        <tr>
+          <td><strong>Prediction</strong></td>
+          <td>argmax</td>
+          <td>Cat (63%)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Six stages. Three inputs became a prediction with confidence. That&rsquo;s the forward pass.</p>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Compute a Forward Pass</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Exercise: Your Turn as a Neural Network</h4>
+
+      <p>A 2-layer network with architecture <strong>2 &rarr; 3 &rarr; 1</strong> (2 inputs, 3 hidden neurons, 1 output).</p>
+
+      <p><strong>Input:</strong> <code>x = [2, 1]</code></p>
+
+      <p><strong>Hidden layer weights (W<sub>1</sub>):</strong></p>
+      <table>
+        <thead>
+          <tr><th></th><th>N1</th><th>N2</th><th>N3</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>x<sub>1</sub></strong></td><td><code>0.3</code></td><td><code>-0.5</code></td><td><code>0.2</code></td></tr>
+          <tr><td><strong>x<sub>2</sub></strong></td><td><code>0.4</code></td><td><code>0.1</code></td><td><code>-0.3</code></td></tr>
+        </tbody>
+      </table>
+      <p>Hidden biases: <code>[0.1, 0.0, -0.1]</code>. Activation: ReLU.</p>
+
+      <p><strong>Output layer weights (W<sub>2</sub>):</strong></p>
+      <table>
+        <thead>
+          <tr><th></th><th>Out</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>h<sub>1</sub></strong></td><td><code>0.5</code></td></tr>
+          <tr><td><strong>h<sub>2</sub></strong></td><td><code>-0.3</code></td></tr>
+          <tr><td><strong>h<sub>3</sub></strong></td><td><code>0.8</code></td></tr>
+        </tbody>
+      </table>
+      <p>Output bias: <code>[0.2]</code>. Output activation: sigmoid.</p>
+
+      <p><strong>Your tasks:</strong></p>
+      <ol>
+        <li>Compute the hidden layer weighted sums (z<sub>1</sub>, z<sub>2</sub>, z<sub>3</sub>)</li>
+        <li>Apply ReLU to get hidden outputs (h<sub>1</sub>, h<sub>2</sub>, h<sub>3</sub>)</li>
+        <li>Compute the output weighted sum</li>
+        <li>Apply sigmoid to get the final prediction</li>
+        <li>How many total parameters does this network have?</li>
+      </ol>
+
+      <p><em>Solution:</em></p>
+      <p><strong>Hidden weighted sums:</strong></p>
+      <ul>
+        <li><code>z<sub>1</sub> = (2&times;0.3) + (1&times;0.4) + 0.1 = 0.6 + 0.4 + 0.1 = 1.1</code></li>
+        <li><code>z<sub>2</sub> = (2&times;-0.5) + (1&times;0.1) + 0.0 = -1.0 + 0.1 + 0.0 = -0.9</code></li>
+        <li><code>z<sub>3</sub> = (2&times;0.2) + (1&times;-0.3) + (-0.1) = 0.4 - 0.3 - 0.1 = 0.0</code></li>
+      </ul>
+      <p><strong>After ReLU:</strong> <code>h = [1.1, 0.0, 0.0]</code> (two neurons killed!)</p>
+      <p><strong>Output:</strong></p>
+      <p><code>z<sub>out</sub> = (1.1&times;0.5) + (0.0&times;-0.3) + (0.0&times;0.8) + 0.2 = 0.55 + 0 + 0 + 0.2 = 0.75</code></p>
+      <p><code>sigmoid(0.75) = 1/(1 + e<sup>-0.75</sup>) &asymp; 0.68</code></p>
+      <p><strong>Final prediction:</strong> <code>0.68</code> (68% confidence for the positive class).</p>
+      <p><strong>Parameters:</strong> Hidden: (2&times;3)+3 = 9. Output: (3&times;1)+1 = 4. Total: <strong>13 parameters</strong>.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>You can now compute what a network <em>outputs</em> for any given input. But there&rsquo;s a catch: we used weights that were given to us. Where do those weights come from? The answer is <strong>training</strong> &mdash; and training is a loop: make a prediction (forward pass), measure how wrong it is (loss), figure out which weights to blame (backward pass), and nudge them in the right direction (update).</p>
+
+    <p>In <a href="04-training-step-by-step.html">Chapter 4: Training Step by Step &mdash; Forward, Loss, Backward</a>, we&rsquo;ll take this exact network, feed it a labeled training example, compute the error, and trace how each weight gets adjusted. You&rsquo;ll see the full training loop with numbers.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="02-inside-a-neuron.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Inside a Neuron</span>
+    </a>
+    <a href="04-training-step-by-step.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Training Step by Step</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

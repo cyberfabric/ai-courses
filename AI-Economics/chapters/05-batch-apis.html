@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5 — Batch APIs: Half Price for Patient Workloads</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="04-prompt-caching.html">← Prev</a>
+      <a href="06-context-compression.html">Next →</a>
+      <a href="maps/05-batch-apis-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">Chapter 5</div>
+    <h1>Batch APIs: Half Price for Patient Workloads</h1>
+    <p class="chapter-subtitle">The flat 50% discount across providers — and how stacking batch + caching gets you to 95% off</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Overnight shipping vs next-day air</h2>
+
+      <p>
+        Anyone who's ever shipped a package knows the rule: if you need it tomorrow morning, pay the premium; if you can wait until end-of-day, it's half the price. FedEx and UPS figured this out decades ago. Every major LLM provider in 2026 has adopted the same two-tier model — <strong>real-time and batch</strong>. Real-time costs sticker price, responds in seconds. Batch costs <strong>exactly half</strong>, responds within 24 hours.
+      </p>
+
+      <p>
+        The discount is the same on Anthropic, OpenAI, and Google. There's no "cheapest batch provider" to hunt for — they've all converged on 50%. So the question isn't which provider; it's <strong>which of your workloads are patient enough</strong> to move to batch. If you've never audited your workloads for batch-eligibility, you're probably paying double for 20–60% of your traffic.
+      </p>
+
+      <div class="highlight-box">
+        <strong>The core principle:</strong> batch trades latency for cost — linearly, cleanly, no quality difference. If the user isn't waiting on the response in the current HTTP request, you almost always belong on batch.
+      </div>
+    </section>
+
+    <section>
+      <h2>What a Batch API actually is</h2>
+
+      <p>
+        You upload a file with many prompts. The provider processes them asynchronously, at their own pace, within 24 hours. You poll for status or receive a webhook. When it's done, you download a file with the answers. That's it. No WebSockets, no long-lived connections, no SSE streams. Just upload → wait → download.
+      </p>
+
+      <p>
+        The trade-off is straightforward. Because the provider has 24 hours to fill the order, they can schedule your requests on spare capacity — filling the troughs between the real-time traffic spikes. That's the cost saving they pass back. From your side, nothing about the <em>response</em> changes: same model, same quality, same output. Just delayed.
+      </p>
+
+      <p>
+        Every provider uses the same file format: <strong>JSONL</strong> (one JSON request per line). The schema is essentially the same request body you'd send to the real-time endpoint, plus a <code>custom_id</code> field so you can match responses back to your original request. This makes cross-provider batch migrations surprisingly painless.
+      </p>
+    </section>
+
+    <section>
+      <h2>Anthropic — Message Batches API</h2>
+
+      <p>
+        Anthropic's Message Batches API launched in 2024 and has remained unchanged in structure through April 2026: upload a JSONL file of Messages API requests, get a batch ID, poll until it's done, download the output file.<sup><a href="#src-anthropic-batch">1</a></sup>
+      </p>
+
+      <!-- source: https://platform.claude.com/docs/en/build-with-claude/batch-processing as of 2026-04 -->
+      <ul>
+        <li><strong>Discount:</strong> 50% off both input and output tokens, on every Claude model.</li>
+        <li><strong>SLA:</strong> results within 24 hours of submission. Often much faster in practice (often under 2 hours for moderate-sized batches).</li>
+        <li><strong>File format:</strong> JSONL, one Messages request per line, with a <code>custom_id</code> per row.</li>
+        <li><strong>Max batch size:</strong> 100,000 requests or ~256 MB per batch.</li>
+        <li><strong>Caching stacks:</strong> prompt caching still applies inside batch. Cache reads in a batch = 0.1x input × 0.5 batch discount = <strong>5%</strong> of normal input cost.</li>
+      </ul>
+
+      <p>
+        Anthropic is the provider where batch + caching stacking is most dramatic. If your batch workload has any repeated prefix (RAG, common system prompt, fixed few-shot examples), you can routinely pay 5–10% of the real-time rate.<sup><a href="#src-stacking">2</a></sup>
+      </p>
+    </section>
+
+    <section>
+      <h2>OpenAI — Batch API</h2>
+
+      <p>
+        OpenAI's Batch API pioneered the JSONL + Files pattern that everyone else copied. Upload through the Files API, create a batch job referencing the file, poll or use webhooks, download when complete.<sup><a href="#src-openai-batch">3</a></sup>
+      </p>
+
+      <!-- source: https://platform.openai.com/docs/guides/batch as of 2026-04 -->
+      <ul>
+        <li><strong>Discount:</strong> 50% off both input and output, on all supported models (GPT-5.4 family, GPT-5, GPT-4.1, o-series).</li>
+        <li><strong>SLA:</strong> 24 hours.</li>
+        <li><strong>Max batch size:</strong> 50,000 requests per file.</li>
+        <li><strong>Files API flow:</strong> upload JSONL → create batch with the file ID → poll via <code>batches.retrieve</code> → download output and error files when status is <code>completed</code>.</li>
+        <li><strong>Caching stacks:</strong> prompt caching still applies inside batch. Cached input tokens in batch = 0.1x input × 0.5 = 5% of list input. Uncached input is 50% of list.</li>
+      </ul>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> OpenAI batch jobs can finish much faster than the 24-hour SLA — many overnight jobs complete in 1–4 hours. But never design for that: the SLA is 24h, and during high-demand periods (end-of-quarter, major model launches) your job can genuinely take most of a day. Build the pipeline to handle the worst case, not the best.
+      </div>
+    </section>
+
+    <section>
+      <h2>Google Gemini — Batch API (Developer &amp; Vertex)</h2>
+
+      <p>
+        Google offers batch mode through both the Gemini Developer API and Vertex AI. Same core deal, same 50% discount, same 24-hour latency. One important asterisk, though: <strong>on Gemini, batch does NOT stack with context caching</strong>. The cache discount takes precedence; you get whichever of the two is cheaper for that specific request, not both.<sup><a href="#src-gemini-batch">4</a></sup>
+      </p>
+
+      <!-- source: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/batch-prediction-gemini as of 2026-04 -->
+      <!-- source: https://yingtu.ai/en/blog/gemini-api-batch-vs-caching as of 2026-04 -->
+      <ul>
+        <li><strong>Discount:</strong> 50% off both input and output tokens.</li>
+        <li><strong>SLA:</strong> "up to 24 hours" — explicitly <em>no guaranteed SLA</em> for batch mode on the Developer API.</li>
+        <li><strong>Caching + batch:</strong> do not stack. If a request would hit cache (90% off), you pay the cache rate. If it wouldn't hit cache, you pay the batch rate (50% off). Never both.</li>
+        <li><strong>Input options:</strong> Cloud Storage bucket for Vertex; inline JSON for the Developer API; BigQuery for Vertex with structured data.</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Watch out:</strong> if you're migrating a batch-heavy workload between providers, the non-stacking rule on Gemini can catch you off guard. A workload that costs 5% of list on Anthropic (caching + batch combined) may cost 10% on Gemini (cache-only OR batch-only, whichever applies per request). Always model the real effective rate, not the headline percentages.
+      </div>
+    </section>
+
+    <section>
+      <h2>Cross-provider cheat sheet</h2>
+
+      <div class="pricing-table-box">
+        <h4>Batch API — across the big three (April 2026)</h4>
+        <table>
+          <thead>
+            <tr><th>Provider</th><th>Discount</th><th>SLA</th><th>Max/file</th><th>Caching stack?</th><th>Effective rate w/ cache</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Anthropic</td><td>50%</td><td>24h</td><td>100K / 256MB</td><td>✅ Yes</td><td>~5% of list</td></tr>
+            <tr><td>OpenAI</td><td>50%</td><td>24h</td><td>50K / 200MB</td><td>✅ Yes</td><td>~5% of list</td></tr>
+            <tr><td>Google Gemini</td><td>50%</td><td>up to 24h (no SLA)</td><td>large (Vertex)</td><td>❌ No (takes best)</td><td>~10% of list</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        The "flat 50%" rule is the 2026 industry standard — no one is cheaper than anyone else on batch alone. Differentiation comes from the <em>stacking behavior</em> and the <em>batch size limits</em>. For workloads with heavy prefix repetition, Anthropic and OpenAI are structurally 2x cheaper than Gemini on batch. For workloads with huge file sizes (millions of records), Vertex's BigQuery integration is the easier plumbing.
+      </p>
+    </section>
+
+    <section>
+      <h2>When batch fits (and when it doesn't)</h2>
+
+      <p>
+        The decision is nearly mechanical: is a human waiting on this response in the current HTTP request? If yes, real-time. If no, batch.
+      </p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="prompt-label">Batch-friendly workloads</div>
+          <div class="prompt-text">Overnight evaluation / regression test runs
+Daily report generation
+Embedding backfills for new corpora
+Dataset labeling / classification
+Translation of static content libraries
+Summarization of long archives
+Synthetic data generation for fine-tuning
+Monthly content audits
+Email digest generation (send at 6am)</div>
+          <div class="prompt-explanation">None of these block a user's interaction. They can all wait a few hours.</div>
+        </div>
+
+        <div class="prompt-example bad">
+          <div class="prompt-label">Not batch-friendly</div>
+          <div class="prompt-text">Chat responses (user is waiting)
+Live search / autocomplete
+Agentic loops with tool-calling
+Real-time content moderation
+Streaming responses
+Interactive code completion
+Anything with a timeout &lt; 1 min
+Anything driving a UI state transition</div>
+          <div class="prompt-explanation">Users won't tolerate 4-hour waits; the workflow needs sub-second responses.</div>
+        </div>
+      </div>
+
+      <p>
+        A common middle case: an async job triggered by a user action (e.g., "analyze my uploaded PDF"). If your SLA to the user is "we'll email you the result within an hour," that's borderline. Batch <em>usually</em> finishes in under an hour, but you can't rely on it. Either set expectations to 24h or use real-time with a worker queue. Don't pretend batch is "probably fast enough."
+      </p>
+    </section>
+
+    <section>
+      <h2>The crown jewel — stacking batch + caching</h2>
+
+      <p>
+        On Anthropic and OpenAI, batch and prompt caching multiply. Do the arithmetic: a cached read on Anthropic Sonnet 4.6 is 0.1x input, which is $0.30 per 1M tokens. Hit that in batch mode and you pay half again — $0.15 per 1M. That's <strong>5% of the $3/M list price</strong>.
+      </p>
+
+      <p>
+        Compare workloads where the same prefix is reused heavily (think: a classifier with a 15K-token system prompt scoring 100,000 documents):
+      </p>
+
+      <!-- source: https://platform.claude.com/docs/en/build-with-claude/batch-processing as of 2026-04 -->
+      <!-- source: https://platform.claude.com/docs/en/build-with-claude/prompt-caching as of 2026-04 -->
+      <div class="cost-breakdown-box">
+        <h4>Document classifier — 100K docs/day, 15K-token system prompt + 500-token doc + 10-token label (Sonnet 4.6)</h4>
+        <table>
+          <thead>
+            <tr><th>Strategy</th><th>Input cost</th><th>Output cost</th><th>Daily total</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Real-time, no caching</td>
+              <td>100K × 15.5K × $3/M = $4,650</td>
+              <td>100K × 10 × $15/M = $15</td>
+              <td>$4,665</td>
+            </tr>
+            <tr>
+              <td>Real-time + prefix caching</td>
+              <td>Prefix cached: 100K × 15K × $0.30/M = $450<br>Dynamic: 100K × 500 × $3/M = $150</td>
+              <td>$15</td>
+              <td>$615</td>
+            </tr>
+            <tr>
+              <td>Batch, no caching</td>
+              <td>100K × 15.5K × $1.50/M = $2,325</td>
+              <td>100K × 10 × $7.50/M = $7.50</td>
+              <td>$2,333</td>
+            </tr>
+            <tr class="total-row">
+              <td>Batch + prefix caching (both discounts)</td>
+              <td>Prefix cached: 100K × 15K × $0.15/M = $225<br>Dynamic: 100K × 500 × $1.50/M = $75</td>
+              <td>$7.50</td>
+              <td><strong>$308</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="savings-callout banner">→ Stacking batch + caching: <strong>$4,665 → $308/day</strong> — that's <strong>93% off</strong> the real-time list price for the same work.</div>
+
+      <p>
+        This is why, for any workload where you can reasonably batch, you almost always want to. Embedding generation, eval runs, synthetic data generation, daily reports — none of these need to be real-time. Almost all of them have heavily repeated prefixes. Almost all of them therefore belong on batch + cache.
+      </p>
+    </section>
+
+    <section>
+      <h2>Architecture — the patient pipeline</h2>
+
+      <p>
+        A production batch pipeline has five moving parts. None of them are complicated; all of them are important to get right the first time.
+      </p>
+
+      <div class="workflow-steps">
+        <div class="step">1. Assemble</div>
+        <span class="step-arrow">→</span>
+        <div class="step">2. Submit</div>
+        <span class="step-arrow">→</span>
+        <div class="step">3. Poll</div>
+        <span class="step-arrow">→</span>
+        <div class="step">4. Download</div>
+        <span class="step-arrow">→</span>
+        <div class="step">5. Reconcile</div>
+      </div>
+
+      <ol>
+        <li><strong>Assemble:</strong> build the JSONL file. Each row gets a <code>custom_id</code> — a stable identifier you can match back to your data. Never rely on row ordering; always rely on <code>custom_id</code>.</li>
+        <li><strong>Submit:</strong> upload the file; create the batch; store the batch ID alongside your data in a table or queue. Treat the batch ID as the primary key for subsequent polling.</li>
+        <li><strong>Poll:</strong> check status every few minutes. Most providers now offer webhooks — use them if available, but always keep a poll fallback (webhooks miss, especially on network hiccups).</li>
+        <li><strong>Download:</strong> when status is <code>completed</code>, fetch both the output file and the error file. Error files are non-empty surprisingly often — always handle them.</li>
+        <li><strong>Reconcile:</strong> join output rows back to source data by <code>custom_id</code>. Write idempotently. Requeue failed rows to a real-time or next batch retry path.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Operational gotchas you'll hit</h2>
+
+      <p>
+        Batch looks simple on paper; the production reality has some corners. Here are the ones that bite teams in their first week.
+      </p>
+
+      <ul>
+        <li><strong>Partial failures are normal.</strong> A 100K-row batch with 150 failed rows is expected. Some are malformed prompts, some are transient provider issues. Always parse the error file and have a retry path.</li>
+        <li><strong>Result ordering is not guaranteed.</strong> The output JSONL comes back in whatever order the provider finished processing. Always key by <code>custom_id</code>.</li>
+        <li><strong>Rate-limit interactions.</strong> Batch submissions still count against your account-level limits on some providers. If you submit 10 batches of 100K each in a minute, you may get throttled. Pace submissions.</li>
+        <li><strong>No streaming responses.</strong> Batch doesn't support Server-Sent Events or streaming. If your prompt depends on streaming for long outputs, you'll need to adjust <code>max_tokens</code> or split the work.</li>
+        <li><strong>Idempotency keys don't exist natively.</strong> If your orchestrator crashes mid-submit and restarts, you can accidentally submit the same batch twice. Use your own idempotency token (hash the payload + timestamp) before calling the API.</li>
+        <li><strong>Error files can be large.</strong> A batch with 10% failures at 100K rows produces a 10K-row error file. Stream-parse it; don't load into memory wholesale.</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Warning — cost attribution blind spot:</strong> batch invoices land in your billing dashboard as one lumpy line item per batch. If you don't tag your batches (via <code>metadata</code> or a naming convention), you'll have no way to attribute spend back to specific features. Tag every batch with the feature, environment, and requester — future-you will thank present-you.
+      </div>
+    </section>
+
+    <section>
+      <h2>Graceful degradation — when batch has to become real-time</h2>
+
+      <p>
+        Sometimes a workload lives on batch 95% of the time but occasionally needs a "right now" execution — a CEO asked for a re-run, a bug was discovered and last night's batch has to be redone before noon. Design for that from the start:
+      </p>
+
+      <ul>
+        <li><strong>Parameterize the execution path.</strong> The same business logic should flip between "submit this to batch" and "run this now via the real-time endpoint" with one config.</li>
+        <li><strong>Chunk the real-time fallback.</strong> 100K requests fired at the real-time endpoint will eat your rate limit. Split into 500-request chunks with backoff.</li>
+        <li><strong>Compute the real cost of the fallback path.</strong> A rerun at real-time rates costs 2x (no batch discount) and sometimes 20x (if it also means busting the cache). Always know this number.</li>
+        <li><strong>Page a human if fallback volume is high.</strong> Several batches bouncing to real-time in the same week usually means the batch SLA is genuinely broken and someone needs to call the provider's support.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>ROI comparison: eval runs</h2>
+
+      <p>
+        Consider a team that runs a 10K-prompt evaluation suite every deploy — about 15 deploys per month, so 150K eval calls monthly. Each call has a 2K-token prompt and a 300-token response, on Sonnet 4.6. Both paths produce identical outputs (evals don't need speed):
+      </p>
+
+      <div class="roi-box">
+        <div class="roi-side scenario-a">
+          <h4>Real-time eval</h4>
+          <p>Every eval deploys runs through the synchronous API.</p>
+          <ul>
+            <li>Input: 150K × 2K × $3/M = $900</li>
+            <li>Output: 150K × 300 × $15/M = $675</li>
+            <li><strong>Monthly cost: $1,575</strong></li>
+            <li>p95 run time: 12 minutes (serial) or 2 min (parallelized with rate-limit juggling)</li>
+          </ul>
+        </div>
+        <div class="roi-side scenario-b">
+          <h4>Batch eval (with shared system prompt cached)</h4>
+          <p>Every eval submitted as a batch; shared 1.5K-token system prompt cached.</p>
+          <ul>
+            <li>Prefix cached: 150K × 1.5K × $0.15/M = $34</li>
+            <li>Dynamic input: 150K × 500 × $1.50/M = $113</li>
+            <li>Output: 150K × 300 × $7.50/M = $338</li>
+            <li><strong>Monthly cost: $485</strong></li>
+            <li>p95 run time: 60–90 min (batch)</li>
+          </ul>
+        </div>
+        <div class="roi-verdict">→ Verdict: batch + caching cuts the monthly eval bill by 69% — $13,080/year saved. Only cost: evals take an hour not 12 minutes. Almost always an acceptable trade.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise: find one workload to move to batch</h2>
+
+      <div class="exercise-box">
+        <p>30-minute audit. Pick one AI feature in your stack and ask:</p>
+        <ol>
+          <li><strong>Who's waiting on the response?</strong> If the answer isn't "a user watching a loading spinner," this is a batch candidate.</li>
+          <li><strong>What's the monthly call volume and token shape?</strong> Record (calls/month, avg input tokens, avg output tokens).</li>
+          <li><strong>Does it have a repeated prefix?</strong> System prompt, fixed few-shot, shared RAG context? Write down the prefix token count.</li>
+          <li><strong>Compute current monthly cost.</strong> calls × (input × in_rate + output × out_rate).</li>
+          <li><strong>Compute batch-only cost.</strong> Same formula, with both rates at 50% of list.</li>
+          <li><strong>Compute batch + caching cost.</strong> Prefix tokens × calls × 0.05x rate (batch × cache) + dynamic tokens × calls × 0.5x rate + output × calls × 0.5x rate.</li>
+          <li><strong>Decide.</strong> If batch + cache would save &gt; 40% AND latency tolerance is &gt; 30 min, add "move to batch" to your next sprint.</li>
+        </ol>
+        <p><strong>Bonus:</strong> identify three <em>more</em> eligible workloads. Most teams have at least five, and every one of them is leaking money on real-time rates it doesn't need.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The mental reframe</h2>
+
+      <p>
+        Most teams default to real-time because that's what the "quick-start" docs showed, not because the workload needs it. The instinctual question is: <em>"why would I use batch?"</em> That's the wrong question. The right question is: <em>"why am I using real-time?"</em> If the answer isn't "because a user is waiting," you're paying double for no reason.
+      </p>
+
+      <ul class="checklist">
+        <li class="checked">Every provider offers a flat 50% batch discount in April 2026.</li>
+        <li class="checked">Batch + caching stacks on Anthropic and OpenAI (5% of list).</li>
+        <li class="checked">Batch + caching does NOT stack on Gemini (best-of, not both).</li>
+        <li class="checked">Default question: "why am I paying real-time for this?"</li>
+        <li class="checked">JSONL in, JSONL out, keyed by <code>custom_id</code>. Cross-provider plumbing is nearly identical.</li>
+        <li class="checked">Always parse error files, reconcile by custom_id, and tag batches for cost attribution.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>
+        Caching and batch are the two "free money" levers — free because they don't change your prompts, your model, or your output. Chapter 6 moves to the next lever, which does change your prompts: <strong>context compression</strong>. If you send less, you pay less. We'll cover LLMLingua-2, recursive summarization, living summaries for chat, and the quality/cost trade-off when you shrink a 50K-token RAG context down to 5K.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-anthropic-batch"><a href="https://platform.claude.com/docs/en/build-with-claude/batch-processing" target="_blank" rel="noopener">Anthropic — Batch processing (Message Batches API, 50% off, 24h SLA, stacks with caching)</a></li>
+        <li id="src-stacking"><a href="https://tokenmix.ai/blog/prompt-caching-guide" target="_blank" rel="noopener">TokenMix — Prompt Caching Guide 2026 (batch + caching stacking on OpenAI/Anthropic)</a></li>
+        <li id="src-openai-batch"><a href="https://platform.openai.com/docs/guides/batch" target="_blank" rel="noopener">OpenAI — Batch API guide (JSONL, Files API, 50K max, 50% discount, 24h SLA)</a></li>
+        <li id="src-gemini-batch"><a href="https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/batch-prediction-gemini" target="_blank" rel="noopener">Google Cloud — Batch inference with Gemini (Vertex AI)</a></li>
+        <li id="src-gemini-nostack"><a href="https://yingtu.ai/en/blog/gemini-api-batch-vs-caching" target="_blank" rel="noopener">YingTu — Gemini API Batch vs Context Caching (non-stacking rule confirmed)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="04-prompt-caching.html">← Chapter 4</a>
+    <a href="06-context-compression.html">Chapter 6 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

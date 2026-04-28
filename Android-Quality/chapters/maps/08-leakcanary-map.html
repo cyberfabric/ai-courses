@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map &mdash; Chapter 8 | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../08-leakcanary.html">Chapter</a>
+      <a href="07-strictmode-map.html">&larr; Prev Map</a>
+      <a href="09-debug-build-inspectors-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>LeakCanary</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🐦</span>
+      <h3>The Big Idea</h3>
+      <p>Two lines of Gradle. Zero code changes. Auto-installs in debug. LeakCanary catches leaked Activities, Fragments, and Views before they OOM your users &mdash; and tells you the exact reference chain holding them, in plain English.</p>
+    </div>
+
+    <h2>⚙️ How it works in 60 seconds</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">ObjectWatcher<br>(lifecycle hook)</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">5-second<br>grace</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">Heap dump<br>(HPROF)</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">Shark<br>analyzer</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">Leak trace<br>+ retained heap</div>
+    </div>
+
+    <p style="text-align:center;color:var(--color-text-light);font-size:0.9rem;">If a destroyed Activity / Fragment / View is still in memory after 5 seconds, the heap is dumped, walked from every GC root, and the shortest reference path to the leaked object becomes your trace.</p>
+
+    <h2>📦 The two-line install</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Add the dependency</h4>
+        <p><code>debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")</code> &mdash; one line in <code>app/build.gradle.kts</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Sync &amp; install debug APK</h4>
+        <p>LeakCanary auto-initializes via a <code>ContentProvider</code>. No Application code, no setup.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Use the app for 10 min</h4>
+        <p>Launch, sign in, navigate, rotate, sign out. LeakCanary runs in the background; leaks surface as a notification.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Verify it's debug-only</h4>
+        <p><code>./gradlew :app:dependencies --configuration releaseRuntimeClasspath | grep leakcanary</code> &mdash; should print nothing.</p>
+      </li>
+    </ol>
+
+    <h2>📖 Reading a leak trace</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🌳</span>
+        <div class="map-card-title">GC root (top)</div>
+        <div class="map-card-desc">Always alive. The chain starts here. Skip past until you hit a class in <em>your</em> package.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">〰️</span>
+        <div class="map-card-title">The squiggle (~~~)</div>
+        <div class="map-card-desc">LeakCanary's call-out under a field name: "this is the suspicious link." That field's assignment is what to fix.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💀</span>
+        <div class="map-card-title">Leaked object (bottom)</div>
+        <div class="map-card-desc">Marked <code>Leaking: YES</code>. Usually <code>Activity#mDestroyed = true</code> &mdash; should have been GC'd, isn't.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📊</span>
+        <div class="map-card-title">Retained heap</div>
+        <div class="map-card-desc">The MB number at the bottom &mdash; the memory freed if you fix this leak. Triage by size: 14MB = fire; 200KB = paper cut.</div>
+      </div>
+    </div>
+
+    <h2>🐛 The 7 classic Android leak patterns</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Pattern</th><th>Telltale in trace</th><th>Fix</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Static field holds Activity</td><td><code>SomeManager.INSTANCE</code> &rarr; <code>activity</code></td><td>App context; weak ref; clear in <code>onDestroy</code></td></tr>
+        <tr><td>Inner class with implicit outer</td><td><code>$1.this$0</code> link</td><td>Make inner class <code>static</code> / top-level</td></tr>
+        <tr><td>Handler with delayed message</td><td>Looper queue &rarr; Message &rarr; Handler &rarr; Activity</td><td>Cancel pending in <code>onDestroy</code></td></tr>
+        <tr><td>Unregistered listener</td><td>Singleton &rarr; listenerList &rarr; Activity</td><td>Pair register with unregister</td></tr>
+        <tr><td><strong>ViewBinding leak (most common)</strong></td><td>Fragment &rarr; <code>_binding</code> &rarr; root view</td><td><code>_binding = null</code> in <code>onDestroyView</code></td></tr>
+        <tr><td>Bitmap in static cache</td><td>Static cache &rarr; Bitmap &rarr; ImageView &rarr; Activity</td><td>App context; LRU + weak refs</td></tr>
+        <tr><td>LiveData no LifecycleOwner</td><td>LiveData &rarr; ObserverWrapper &rarr; Activity</td><td>Always pass a <code>LifecycleOwner</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>🔑 The Fragment + ViewBinding fix</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">onCreateView</div>
+      <div class="map-rel-node">_binding = inflate()</div>
+      <div class="map-rel-center">_binding = null<br>in onDestroyView</div>
+      <div class="map-rel-node">Fragment</div>
+      <div class="map-rel-node">View hierarchy</div>
+      <div class="map-rel-node">Konsist test</div>
+    </div>
+
+    <p style="text-align:center;color:var(--color-text-light);font-size:0.9rem;">Fragment views die before Fragment instances. Without the null-out, the whole view hierarchy stays in memory until the Fragment dies &mdash; sometimes minutes later. One line fix; lift to a Konsist test for forever protection.</p>
+
+    <h2>🎨 Compose-era considerations</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🌐</span>
+        <div class="map-card-title">Captured Activity context</div>
+        <div class="map-card-desc"><code>LocalContext.current</code> in a <code>remember</code> referenced by a singleton = leaked Activity. Watch your captures.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔄</span>
+        <div class="map-card-title">Manually-created scopes</div>
+        <div class="map-card-desc"><code>CoroutineScope(Job() + Dispatchers.Main)</code> in a <code>remember</code> needs <code>onDispose</code> cancellation.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧭</span>
+        <div class="map-card-title">Compose nav backstacks</div>
+        <div class="map-card-desc">Some libraries cache backstack entries longer than expected; Activity-scoped repos can leak through that chain.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚡</span>
+        <div class="map-card-title">Less, but not never</div>
+        <div class="map-card-desc"><code>remember</code>, <code>LaunchedEffect</code>, and <code>rememberCoroutineScope</code> are auto-managed &mdash; but you can still leak through static state.</div>
+      </div>
+    </div>
+
+    <h2>🛡️ Suppressions &amp; CI integration</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Use case</th><th>How</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Third-party SDK leak</td><td><code>IgnoredReferenceMatcher(InstanceFieldPattern(class, field))</code> in <code>app/src/debug/</code> with comment + resolution date</td></tr>
+        <tr><td>Audit suppressions</td><td>Quarterly review &mdash; expired ones become noise that hides real leaks</td></tr>
+        <tr><td>Instrumented-test gate</td><td><code>androidTestImplementation</code> + <code>LeakAssertions.assertNoLeaks()</code> in your top user-flow tests</td></tr>
+        <tr><td>Where suppressions live</td><td><strong>Never</strong> in main; <strong>never</strong> in release; <em>always</em> in <code>app/src/debug/</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>🪜 Adoption ladder</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">1️⃣</span>
+        <div class="map-card-title">Day 1</div>
+        <div class="map-card-desc">Add <code>debugImplementation</code>. Use the app for 10 min. Run <code>/explain-leak-trace</code> on the top 1; fix it.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">2️⃣</span>
+        <div class="map-card-title">Week 1</div>
+        <div class="map-card-desc">Fix all surfaced leaks. Konsist test for the ViewBinding pattern. Suppress legit third-party leaks with comments + dates.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">3️⃣</span>
+        <div class="map-card-title">Month 1</div>
+        <div class="map-card-desc">Add <code>androidTestImplementation</code>. Wire <code>assertNoLeaks()</code> into top 3 user flows. CI fails on any new leak.</div>
+      </div>
+    </div>
+
+    <h2>🤖 Reusable Claude Code skills</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔍</span>
+        <div class="map-card-title">/explain-leak-trace</div>
+        <div class="map-card-desc">Paste the full trace. Get leaked-object type + retained-heap size + classic-pattern match + smallest fix (with diff).</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤐</span>
+        <div class="map-card-title">/draft-leakcanary-suppression</div>
+        <div class="map-card-desc">For non-actionable third-party leaks: produce the right <code>IgnoredReferenceMatcher</code> with comment + resolution date.</div>
+      </div>
+    </div>
+
+    <h2>📖 Key terms</h2>
+
+    <dl class="map-terms">
+      <dt>ObjectWatcher</dt>
+      <dd>The lifecycle hook that adds destroyed Activities/Fragments/Views to a watched-set with a weak reference.</dd>
+      <dt>5-second window</dt>
+      <dd>The grace period between "should have been GC'd" and "let's dump the heap." Long enough that normal GC catches up; short enough to feel responsive.</dd>
+      <dt>Shark</dt>
+      <dd>Square's heap analyzer that walks the HPROF dump from GC roots to find the shortest reference path to the leaked object.</dd>
+      <dt>Retained heap</dt>
+      <dd>The total memory that would be freed if you fixed this one leak. Triage signal: 14MB = fire; 200KB = paper cut.</dd>
+      <dt>GC root</dt>
+      <dd>An object that's always alive (system class, JVM stack, JNI ref). The starting point of every reference chain.</dd>
+      <dt>The squiggle (~~~)</dt>
+      <dd>LeakCanary's annotation under a field name: "this is the suspicious link." The fix is wherever that field gets set.</dd>
+      <dt>debugImplementation</dt>
+      <dd>The Gradle scope that compiles a dependency only into debug variants. Non-negotiable for LeakCanary &mdash; <code>implementation</code> would ship it to users.</dd>
+      <dt>IgnoredReferenceMatcher</dt>
+      <dd>The suppression API for known third-party leaks. Lives in <code>app/src/debug/</code>; needs a comment and a follow-up date.</dd>
+    </dl>
+
+    <h2>⚠️ Pitfalls</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🚀</span>
+        <div class="map-card-title"><code>implementation</code> instead of <code>debugImplementation</code></div>
+        <div class="map-card-desc">LeakCanary ends up in your release APK &mdash; size + exposed internals. Always use the debug scope.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📏</span>
+        <div class="map-card-title">Ignoring sub-1MB leaks</div>
+        <div class="map-card-desc">Tempting, but a 200KB leak per screen visit becomes 50MB by hour 2. Triage by frequency, not just size.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤐</span>
+        <div class="map-card-title">Reasonless suppressions</div>
+        <div class="map-card-desc">Every suppression needs a comment (which SDK, why) and a follow-up date. Otherwise nobody re-evaluates.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🏃</span>
+        <div class="map-card-title">No CI integration</div>
+        <div class="map-card-desc">The notification only fires for the dev who tripped the leak. Without instrumentation tests, others' leaks slip through.</div>
+      </div>
+    </div>
+
+    <div class="map-quiz">
+      <h3>Quick Quiz</h3>
+      <details>
+        <summary>Why <code>debugImplementation</code> and not <code>implementation</code>?</summary>
+        <p class="quiz-answer">Because <code>implementation</code> ships the dependency in release builds. LeakCanary is a developer tool that adds APK size, exposes internal class names, and hooks lifecycle callbacks &mdash; none of which belong in production. <code>debugImplementation</code> guarantees it only compiles into your debug variant.</p>
+      </details>
+      <details>
+        <summary>What does the squiggle (<code>~~~</code>) under a field name mean?</summary>
+        <p class="quiz-answer">It's LeakCanary's annotation marking the suspicious link in the reference chain &mdash; the field that's holding the leaked object alive. The fix is wherever that field gets <em>set</em>: search the codebase for the field name, find the assignment, and either null it out at the right lifecycle moment or change to a weak reference.</p>
+      </details>
+      <details>
+        <summary>How do you triage which leak to fix first?</summary>
+        <p class="quiz-answer">Sort by retained heap size, then weight by frequency. A 14MB leak fixed first buys more headroom than five 200KB leaks fixed first. But a 200KB leak that fires per screen visit can outgrow a one-time 14MB leak quickly &mdash; consider both axes.</p>
+      </details>
+      <details>
+        <summary>Why is <code>_binding = null</code> the canonical Fragment fix?</summary>
+        <p class="quiz-answer">Fragment views are destroyed earlier than Fragment instances (e.g., when the Fragment is on the back stack but not yet popped). Without nulling <code>_binding</code> in <code>onDestroyView</code>, the entire view hierarchy stays in memory until the Fragment itself dies &mdash; sometimes minutes later, sometimes never.</p>
+      </details>
+      <details>
+        <summary>How do you make leak detection a CI gate?</summary>
+        <p class="quiz-answer">Add the <code>leakcanary-android-instrumentation</code> dep with <code>androidTestImplementation</code> scope. Wrap your top user-flow instrumented tests with <code>LeakAssertions.assertNoLeaks()</code>. Run on every PR &mdash; any new leak fails the build before it merges.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item"><strong>Two lines of Gradle</strong> &mdash; <code>debugImplementation("...:leakcanary-android:2.14")</code> &mdash; auto-installs, no code changes, debug-only.</li>
+        <li class="map-summary-item">Pipeline: ObjectWatcher &rarr; 5-sec window &rarr; heap dump &rarr; Shark analyzer &rarr; leak trace + retained heap.</li>
+        <li class="map-summary-item">Read traces top-to-bottom: skip framework frames, find the squiggle (<code>~~~</code>), fix where the suspicious field is <em>set</em>.</li>
+        <li class="map-summary-item">Triage by <strong>retained heap size</strong>. 14MB = fire; 200KB = paper cut. Fix the biggest first.</li>
+        <li class="map-summary-item">The <strong>Fragment + ViewBinding leak</strong> is the most common Android leak in 2025. <code>_binding = null</code> in <code>onDestroyView</code>. Lift to a Konsist test.</li>
+        <li class="map-summary-item">Suppressions live in <code>app/src/debug/</code>, need a comment + follow-up date, audit quarterly. Without it, suppressions become noise that hides real leaks.</li>
+        <li class="map-summary-item">CI gate via <code>androidTestImplementation</code> + <code>LeakAssertions.assertNoLeaks()</code> on top user flows = regression protection forever.</li>
+        <li class="map-summary-item">Highest leverage debug-build dep in the entire Android ecosystem &mdash; if you adopt one runtime tool from this course, adopt LeakCanary.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="07-strictmode-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 7</span>
+      </a>
+      <a href="09-debug-build-inspectors-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Chapter 9</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

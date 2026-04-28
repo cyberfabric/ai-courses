@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Siri, App Intents &amp; System Integration | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-voice-audio.html">&larr; Prev</a>
+      <a href="11-personalization.html">Next &rarr;</a>
+      <a href="maps/10-siri-app-intents-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Siri, App Intents &amp; System Integration</h1>
+    <p class="subtitle">Make your AI features accessible everywhere &mdash; Siri, Shortcuts, Spotlight, widgets, and the Lock Screen</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <p>You&rsquo;ve built amazing AI features. They summarize text, understand images, transcribe speech, and generate creative content. But here&rsquo;s the problem: <strong>they only work when the user opens your app.</strong></p>
+
+    <p>That&rsquo;s like building a great restaurant and hiding it in a basement with no sign. The food is incredible &mdash; but nobody can find it.</p>
+
+    <p>System integration is the sign, the menu in the window, and the delivery service. It makes your AI features discoverable and accessible from <em>anywhere</em> on iOS &mdash; Siri, Shortcuts, Spotlight, widgets, the Lock Screen, and even the Action button.</p>
+
+    <div class="highlight-box">
+      <h3>The Multiplier Effect</h3>
+      <p>An AI feature inside your app has <strong>one entry point</strong>. The same feature exposed through App Intents has <strong>six</strong>: Siri voice, Siri Type to Siri, Shortcuts automations, Spotlight suggestions, widgets, and your app&rsquo;s own UI. Same code, 6&times; the surface area.</p>
+    </div>
+
+    <!-- User Story -->
+    <div class="user-story-box">
+      <h3>User Story: AI Without Opening the App</h3>
+      <p>Marcus is driving. He says, &ldquo;Hey Siri, summarize my latest note in SmartNotes.&rdquo; Siri reads back a 3-bullet summary. When he arrives at the office, a Shortcut automation triggers: summarize unread notes, extract action items, and push them to a Home Screen widget. At lunch, he searches Spotlight for &ldquo;meeting action items&rdquo; &mdash; his AI-generated summaries appear alongside system results. He never opened the app once.</p>
+    </div>
+
+    <!-- App Intents 101 -->
+    <h2>App Intents Framework 101</h2>
+
+    <p>App Intents is Apple&rsquo;s modern framework for exposing your app&rsquo;s functionality to the system. It replaced the old SiriKit with something dramatically simpler. Instead of conforming to Apple&rsquo;s predefined domains, you define <em>any action</em> your app can perform.</p>
+
+    <h3>The Three Building Blocks</h3>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">AppIntent</div>
+        <div class="stat-label">Actions</div>
+        <div class="stat-detail">What your app can <em>do</em>. &ldquo;Summarize a note,&rdquo; &ldquo;Classify a photo,&rdquo; &ldquo;Generate a cover image.&rdquo;</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">AppEntity</div>
+        <div class="stat-label">Data</div>
+        <div class="stat-detail">What your app operates <em>on</em>. Notes, photos, recipes, tasks &mdash; the nouns of your app.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">EntityQuery</div>
+        <div class="stat-label">Discovery</div>
+        <div class="stat-detail">How the system <em>finds</em> your data. Search by ID, property, or suggested entities.</div>
+      </div>
+    </div>
+
+    <!-- API Recipe -->
+    <div class="api-recipe">
+      <h3>API Recipe: Your First App Intent for an AI Feature</h3>
+      <p><strong>Goal:</strong> Make &ldquo;Summarize my latest note&rdquo; available to Siri and Shortcuts.</p>
+
+      <h4>Step 1: Define the entity</h4>
+<pre><code>import AppIntents
+
+struct NoteEntity: AppEntity {
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Note")
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(title)")
+    }
+
+    let id: UUID
+    let title: String
+    let body: String
+
+    static var defaultQuery = NoteQuery()
+}</code></pre>
+
+      <h4>Step 2: Define the query</h4>
+<pre><code>struct NoteQuery: EntityQuery {
+    func entities(for identifiers: [UUID]) async throws -> [NoteEntity] {
+        NoteStore.shared.notes(for: identifiers)
+    }
+
+    func suggestedEntities() async -> [NoteEntity] {
+        NoteStore.shared.recentNotes(limit: 5)
+    }
+}</code></pre>
+
+      <h4>Step 3: Define the intent</h4>
+<pre><code>struct SummarizeNoteIntent: AppIntent {
+    static var title: LocalizedStringResource = "Summarize Note"
+    static var description = IntentDescription(
+        "Summarizes a note using on-device AI."
+    )
+
+    @Parameter(title: "Note") var note: NoteEntity
+
+    func perform() async throws -> some ReturnsValue&lt;String&gt; {
+        let session = LanguageModelSession()
+        let summary = try await session.respond(
+            to: "Summarize in 3 bullets: \(note.body)"
+        )
+        return .result(value: summary.content)
+    }
+}</code></pre>
+
+      <h4>Step 4: Register Siri phrases</h4>
+<pre><code>struct SmartNotesShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: SummarizeNoteIntent(),
+            phrases: [
+                "Summarize my note in \(.applicationName)",
+                "Summarize \(\.$note) in \(.applicationName)"
+            ],
+            shortTitle: "Summarize Note",
+            systemImageName: "doc.text.magnifyingglass"
+        )
+    }
+}</code></pre>
+
+      <p><strong>Result:</strong> &ldquo;Hey Siri, summarize my note in SmartNotes&rdquo; works immediately. The intent also appears in Shortcuts and Spotlight suggestions.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>Tip: openAppWhenRun</h4>
+      <p>By default, App Intents open your app when run. For AI features that return a simple result (a summary, a classification), set <code>static var openAppWhenRun = false</code> so the intent runs headlessly. Siri shows the result inline without launching your app &mdash; much better UX.</p>
+    </div>
+
+    <!-- The 12 App Intent Domains -->
+    <h2>The 12 App Intent Domains</h2>
+
+    <p>Apple defines 12 <strong>domains</strong> &mdash; categories of app functionality where Siri gets deeper integration. If your app fits a domain, conform to its pre-defined intent types and Siri handles natural language resolution with minimal custom code.</p>
+
+    <table>
+      <thead>
+        <tr><th>Domain</th><th>Example Siri Request</th><th>AI Feature Opportunity</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Books</td><td>&ldquo;Open my book in [App]&rdquo;</td><td>AI-generated reading summaries</td></tr>
+        <tr><td>Browsers</td><td>&ldquo;Open [URL] in [App]&rdquo;</td><td>Page summarization</td></tr>
+        <tr><td>Camera</td><td>&ldquo;Take a photo with [App]&rdquo;</td><td>AI-powered scene detection</td></tr>
+        <tr><td>Document Readers</td><td>&ldquo;Open document in [App]&rdquo;</td><td>Document intelligence (Ch 7)</td></tr>
+        <tr><td>File Management</td><td>&ldquo;Find files in [App]&rdquo;</td><td>Semantic file search</td></tr>
+        <tr><td>Journals</td><td>&ldquo;Create entry in [App]&rdquo;</td><td>AI-assisted journal prompts</td></tr>
+        <tr><td>Mail</td><td>&ldquo;Send email with [App]&rdquo;</td><td>Smart compose, reply suggestions</td></tr>
+        <tr><td>Photos</td><td>&ldquo;Show recent photos in [App]&rdquo;</td><td>AI categorization, search</td></tr>
+        <tr><td>Presentations</td><td>&ldquo;Open slides in [App]&rdquo;</td><td>AI-generated slide summaries</td></tr>
+        <tr><td>Spreadsheets</td><td>&ldquo;Open spreadsheet in [App]&rdquo;</td><td>Data analysis, insights</td></tr>
+        <tr><td>Whiteboards</td><td>&ldquo;Create board in [App]&rdquo;</td><td>AI-generated diagrams</td></tr>
+        <tr><td>Word Processors</td><td>&ldquo;Create document in [App]&rdquo;</td><td>Writing Tools, AI drafting</td></tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <h4>Tip: Don&rsquo;t Force a Domain</h4>
+      <p>If your app doesn&rsquo;t fit a domain, don&rsquo;t force it. Generic <code>AppIntent</code> works perfectly for custom AI actions. Domains add deeper Siri integration, but your intent is still fully functional without one.</p>
+    </div>
+
+    <!-- Writing Tools -->
+    <h2>Writing Tools: Free AI for Text Views</h2>
+
+    <p>Here&rsquo;s the best deal in iOS development: if your app uses standard text views (<code>UITextView</code>, <code>TextEditor</code>, <code>WKWebView</code>), it gets Apple&rsquo;s Writing Tools <strong>for free</strong>. No code. No setup. Your users can Rewrite, Proofread, and Summarize any text in your app.</p>
+
+    <div class="product-pattern">
+      <h3>Product Pattern: Custom Writing Tools Actions</h3>
+      <p><strong>The pattern:</strong> Extend Apple&rsquo;s Writing Tools with app-specific actions that appear alongside Rewrite, Proofread, and Summarize.</p>
+      <p><strong>Why it works:</strong> Users already know the Writing Tools menu. Adding your actions there means zero learning curve. &ldquo;Convert to Action Items,&rdquo; &ldquo;Simplify for Client,&rdquo; or &ldquo;Translate to Spanish&rdquo; feel like native system features.</p>
+      <p><strong>Where to use it:</strong> Any app with text editing &mdash; notes, email, documents, messaging, project management.</p>
+      <p><strong>How to implement:</strong> Define an <code>AppIntent</code> that conforms to the Word Processor domain&rsquo;s writing intent types. Your custom action appears in the Writing Tools menu alongside Apple&rsquo;s built-in options.</p>
+    </div>
+
+    <!-- Spotlight Integration -->
+    <h2>Spotlight: Making AI Content Discoverable</h2>
+
+    <p>Every AI-generated summary, classification, or extraction your app creates is <em>content</em>. If it stays locked inside your app, users have to remember it exists and navigate to find it. Spotlight fixes this.</p>
+
+    <h3>IndexedEntity: The Modern Approach</h3>
+
+<pre><code>struct NoteEntity: IndexedEntity {
+    // ... existing AppEntity properties ...
+
+    static var defaultQuery = NoteQuery()
+
+    @Property(indexingKey: .title)
+    var title: String
+
+    @Property(indexingKey: .description)
+    var summary: String  // AI-generated summary
+
+    @Property(indexingKey: .keywords)
+    var tags: [String]  // AI-extracted topics
+}</code></pre>
+
+    <p>Then index your entities at app launch or when content changes:</p>
+
+<pre><code>import CoreSpotlight
+
+CSSearchableIndex.default().indexAppEntities(
+    NoteStore.shared.allNotes()
+)</code></pre>
+
+    <p>Now when a user searches Spotlight for &ldquo;meeting action items,&rdquo; your AI-generated summaries and tags make those notes discoverable &mdash; even with semantic search matching.</p>
+
+    <div class="tip-box">
+      <h4>Tip: Index AI Outputs, Not Just Titles</h4>
+      <p>Index the AI-generated summary and extracted tags alongside the original content. A note titled &ldquo;Monday standup&rdquo; might not match a Spotlight search for &ldquo;API deadline.&rdquo; But the AI summary that says &ldquo;API migration deadline moved to Friday&rdquo; will.</p>
+    </div>
+
+    <!-- Widgets -->
+    <h2>Widget Intelligence</h2>
+
+    <p>Widgets are your AI features&rsquo; storefront. A well-designed widget shows AI-generated insights <em>without the user lifting a finger</em>.</p>
+
+    <h3>AI Widget Ideas</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Great AI Widgets</h4>
+        <ul>
+          <li><strong>&ldquo;Today&rsquo;s Summary&rdquo;</strong> &mdash; AI-generated daily briefing from your app&rsquo;s content</li>
+          <li><strong>&ldquo;Smart Suggestions&rdquo;</strong> &mdash; proactive recommendations based on usage patterns</li>
+          <li><strong>&ldquo;Action Items&rdquo;</strong> &mdash; extracted from recent voice notes or meetings</li>
+          <li><strong>&ldquo;Quick Capture&rdquo;</strong> &mdash; one-tap to voice-record + AI-summarize</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Avoid These</h4>
+        <ul>
+          <li><strong>&ldquo;AI Chatbot&rdquo;</strong> &mdash; widgets aren&rsquo;t interactive enough for conversations</li>
+          <li><strong>&ldquo;Full Transcript&rdquo;</strong> &mdash; too much text for a widget. Show the summary, link to the full content</li>
+          <li><strong>&ldquo;Live AI Processing&rdquo;</strong> &mdash; widgets refresh on a timeline, not in real time. Don&rsquo;t show stale &ldquo;processing&rdquo; states</li>
+          <li><strong>&ldquo;Settings&rdquo;</strong> &mdash; don&rsquo;t waste widget space on configuration</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="warning-box">
+      <h4>Warning: Widget Timeline vs Real-Time</h4>
+      <p>Widgets refresh on a system-managed timeline, not in real time. Generate AI content in your main app and pass it to the widget via a shared App Group container. Don&rsquo;t try to run Foundation Models inside a widget extension &mdash; the memory budget is too small and the runtime too short.</p>
+    </div>
+
+    <!-- Live Activities -->
+    <h2>Live Activities for Long AI Tasks</h2>
+
+    <p>Some AI features take time: batch-analyzing 120 photos, processing a 30-minute meeting transcript, or generating multiple cover images. Live Activities let you show real-time progress on the Lock Screen and Dynamic Island.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>Start</h4>
+          <p>User triggers batch AI processing. Start a Live Activity with initial state.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Update</h4>
+          <p>Push progress updates: &ldquo;Analyzing photos&hellip; 47/120.&rdquo; Dynamic Island shows compact progress.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h4>Complete</h4>
+          <p>Final update with result summary. Lock Screen shows &ldquo;Done &mdash; 8 categories found.&rdquo; Tap to open.</p>
+        </div>
+      </div>
+    </div>
+
+<pre><code>import ActivityKit
+
+struct AIProcessingAttributes: ActivityAttributes {
+    let taskName: String  // "Analyzing photos"
+
+    struct ContentState: Codable, Hashable {
+        var progress: Int      // 47
+        var total: Int         // 120
+        var currentStep: String  // "Classifying..."
+        var isComplete: Bool
+    }
+}
+
+// Start the activity
+let attributes = AIProcessingAttributes(taskName: "Analyzing photos")
+let state = AIProcessingAttributes.ContentState(
+    progress: 0, total: 120,
+    currentStep: "Starting...", isComplete: false
+)
+let activity = try Activity.request(
+    attributes: attributes, content: .init(state: state, staleDate: nil)
+)</code></pre>
+
+    <div class="tip-box">
+      <h4>Tip: Don&rsquo;t Overuse Live Activities</h4>
+      <p>Reserve Live Activities for tasks that take 10+ seconds and where the user genuinely cares about progress. A 2-second text summary doesn&rsquo;t need a Live Activity &mdash; it needs a loading spinner. Batch photo analysis or long meeting processing? That&rsquo;s Live Activity territory.</p>
+    </div>
+
+    <!-- Shortcuts Automation -->
+    <h2>Shortcuts: AI Automation Superpowers</h2>
+
+    <p>Once you define an App Intent, it automatically appears in Shortcuts. This lets users chain your AI features with other apps in ways you never imagined.</p>
+
+    <h3>Powerful Automation Combinations</h3>
+
+    <div class="checklist">
+      <label><input type="checkbox"> <strong>Morning briefing:</strong> &ldquo;At 7 AM &rarr; Summarize unread notes &rarr; Read aloud via Siri&rdquo;</label>
+      <label><input type="checkbox"> <strong>Meeting prep:</strong> &ldquo;When Calendar event starts &rarr; Pull related notes &rarr; Generate summary widget&rdquo;</label>
+      <label><input type="checkbox"> <strong>Photo organization:</strong> &ldquo;When new screenshots saved &rarr; Classify content &rarr; Move to smart folders&rdquo;</label>
+      <label><input type="checkbox"> <strong>Travel assistant:</strong> &ldquo;When arriving at airport &rarr; Surface boarding pass &rarr; Show gate info widget&rdquo;</label>
+      <label><input type="checkbox"> <strong>Content pipeline:</strong> &ldquo;When voice note saved &rarr; Transcribe &rarr; Extract action items &rarr; Create reminders&rdquo;</label>
+    </div>
+
+    <p>The beauty: you write the intent <em>once</em>. Users build the automations themselves. Your AI feature becomes a building block in their personal workflow &mdash; and that&rsquo;s what creates loyalty.</p>
+
+    <!-- Focus Modes -->
+    <h2>Focus Modes &amp; Smart Notifications</h2>
+
+    <p>Not all AI insights are relevant all the time. Focus modes let you customize what your app surfaces based on context.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Work Focus</h4>
+        <ul>
+          <li>Show project summaries and action items</li>
+          <li>Surface meeting-related notes</li>
+          <li>Prioritize work-tagged content</li>
+          <li>Widget shows &ldquo;Today&rsquo;s priorities&rdquo;</li>
+        </ul>
+      </div>
+      <div class="prompt-example good">
+        <h4>Personal Focus</h4>
+        <ul>
+          <li>Show recipe suggestions and personal notes</li>
+          <li>Surface weekend plans</li>
+          <li>Prioritize personal-tagged content</li>
+          <li>Widget shows &ldquo;Weekend ideas&rdquo;</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>Implement Focus filters by conforming to <code>SetFocusFilterIntent</code>:</p>
+
+<pre><code>struct SmartNotesFocusFilter: SetFocusFilterIntent {
+    static var title: LocalizedStringResource = "SmartNotes Filter"
+
+    @Parameter(title: "Category")
+    var category: NoteCategory?
+
+    func perform() async throws -> some IntentResult {
+        NotificationCenter.default.post(
+            name: .focusCategoryChanged,
+            object: category
+        )
+        return .result()
+    }
+}</code></pre>
+
+    <!-- On-Screen Entity (iOS 26) -->
+    <h2>On-Screen Awareness (iOS 26)</h2>
+
+    <p>iOS 26 introduces a powerful new capability: Siri can understand what&rsquo;s visible on screen in your app. Users can ask questions about content they&rsquo;re looking at &mdash; &ldquo;What&rsquo;s this recipe&rsquo;s calorie count?&rdquo; or &ldquo;Summarize this article&rdquo; &mdash; and Siri routes to your intent.</p>
+
+    <p>This works by associating <code>AppEntity</code> instances with SwiftUI views using the <code>.appIntentBindings()</code> modifier. When Siri is invoked while your view is on screen, it can access the bound entity and run the appropriate intent.</p>
+
+    <div class="warning-box">
+      <h4>Warning: Privacy with On-Screen Entities</h4>
+      <p>On-screen awareness means Siri can read your app&rsquo;s visible content. Only bind entities that the user would expect Siri to access. Sensitive content (financial details, health data, private messages) should be excluded or require explicit opt-in.</p>
+    </div>
+
+    <!-- The Integration Checklist -->
+    <h2>The System Integration Checklist</h2>
+
+    <p>Here&rsquo;s the priority order for exposing your AI features to the system. Start at the top, work your way down.</p>
+
+    <div class="checklist">
+      <label><input type="checkbox"> <strong>1. App Intent:</strong> Define the core action. This is the foundation &mdash; everything else builds on it.</label>
+      <label><input type="checkbox"> <strong>2. Siri phrases:</strong> Register natural language phrases via <code>AppShortcutsProvider</code>. Users discover via &ldquo;Hey Siri, what can [App] do?&rdquo;</label>
+      <label><input type="checkbox"> <strong>3. Shortcuts:</strong> Your intent automatically appears. Add <code>openAppWhenRun = false</code> for headless execution.</label>
+      <label><input type="checkbox"> <strong>4. Spotlight:</strong> Make <code>AppEntity</code> conform to <code>IndexedEntity</code>. Index AI-generated summaries and tags.</label>
+      <label><input type="checkbox"> <strong>5. Widget:</strong> Show AI-generated insights. Pre-compute content in the main app, pass via App Group.</label>
+      <label><input type="checkbox"> <strong>6. Live Activity:</strong> For long-running AI tasks only. Show progress on Lock Screen and Dynamic Island.</label>
+      <label><input type="checkbox"> <strong>7. Focus filters:</strong> Customize AI content based on the user&rsquo;s current Focus mode.</label>
+      <label><input type="checkbox"> <strong>8. On-screen awareness:</strong> Bind entities to views for Siri context (iOS 26+).</label>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Make Smart Notes System-Wide</h3>
+      <p>Take the &ldquo;Smart Notes&rdquo; feature from Chapter 4 and make it accessible everywhere:</p>
+      <ol>
+        <li><strong>App Intent:</strong> Define <code>SummarizeNoteIntent</code> that takes a <code>NoteEntity</code> parameter and returns an AI-generated summary using Foundation Models</li>
+        <li><strong>Siri:</strong> Register phrases via <code>AppShortcutsProvider</code> &mdash; &ldquo;Summarize my latest note in SmartNotes&rdquo; and &ldquo;Summarize [note name] in SmartNotes&rdquo;</li>
+        <li><strong>Spotlight:</strong> Make <code>NoteEntity</code> conform to <code>IndexedEntity</code>. Index the note title, AI summary, and extracted tags</li>
+        <li><strong>Widget:</strong> Create a &ldquo;Latest Summary&rdquo; widget that shows the most recent AI-generated note summary</li>
+        <li><strong>Shortcut automation:</strong> Build a Shortcut that runs every morning, summarizes unread notes, and shows a notification with the daily briefing</li>
+      </ol>
+      <p><strong>Stretch goal:</strong> Add a Live Activity that shows progress when batch-summarizing multiple notes, with Dynamic Island showing &ldquo;Summarizing&hellip; 3/12.&rdquo;</p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your AI features are now accessible everywhere on the device. But they treat every user the same. In Chapter 11, we&rsquo;ll make them <strong>personal</strong> &mdash; custom LoRA adapters that learn your user&rsquo;s language, on-device recommendation engines, and proactive features that anticipate what the user needs before they ask. All private. All on-device.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-voice-audio.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Voice &amp; Audio Intelligence</span>
+      </a>
+      <a href="11-personalization.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Smart Personalization &amp; Recommendations</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

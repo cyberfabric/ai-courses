@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Memory Leak Detection with AI | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-anr-diagnosis.html">&larr; Prev</a>
+      <a href="05-compose-recomposition.html">Next &rarr;</a>
+      <a href="maps/04-memory-leaks-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Memory Leak Detection with AI</h1>
+    <p class="subtitle">LeakCanary output meets Claude Code &mdash; find and fix memory leaks systematically</p>
+  </header>
+
+  <main>
+
+    <h2>The Silent Killer</h2>
+
+    <p>Crashes are loud. ANRs are visible. Memory leaks are <em>neither</em>. Your app doesn&rsquo;t crash right away. It just gets slower. GC pauses get longer. Frame rates drop. The system starts killing your background processes more aggressively. And after a few screen rotations or navigation cycles, you get the dreaded <code>OutOfMemoryError</code>.</p>
+
+    <p>Chapter 3 showed you how ANRs freeze the app temporarily. Memory leaks are the slow version of death &mdash; like a faucet dripping into a bucket. Each drip is invisible. The overflow is catastrophic.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">256 MB</span>
+        <span class="stat-label">typical heap limit for an Android app (varies by device)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">8x</span>
+        <span class="stat-label">memory cost of keeping one leaked Activity vs. GC-ing it</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">#3</span>
+        <span class="stat-label">most common cause of OOM crashes on Android</span>
+      </div>
+    </div>
+
+    <p>The good news: memory leaks follow patterns, and AI is excellent at pattern recognition. LeakCanary gives you structured leak traces. Claude Code tells you exactly what&rsquo;s holding the reference and how to break it.</p>
+
+    <h2>LeakCanary 101</h2>
+
+    <p>If you&rsquo;re not using LeakCanary, stop reading and add it now. It&rsquo;s the single most valuable debugging library for Android memory issues.</p>
+
+    <pre><code>// build.gradle.kts (app module)
+dependencies {
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+}</code></pre>
+
+    <p>That&rsquo;s it. No initialization code. No configuration. LeakCanary automatically watches destroyed Activities, destroyed Fragments, cleared ViewModels, and dismissed Dialogs. When it detects one of these objects surviving garbage collection, it dumps a leak trace.</p>
+
+    <h3>How LeakCanary Works</h3>
+
+    <div class="workflow-steps">
+      <span class="step">Object destroyed</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Wait for GC</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Still in memory?</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Dump heap</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Analyze</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Show leak trace</span>
+    </div>
+
+    <p>LeakCanary uses <code>WeakReference</code> to track objects that should be garbage collected. If an object survives two GC cycles after it should have been collected, LeakCanary dumps the heap and finds the reference chain keeping it alive.</p>
+
+    <h2>Reading a LeakCanary Trace</h2>
+
+    <p>A leak trace is structured data that reads like a chain of custody &mdash; from the GC root (the thing that&rsquo;s <em>supposed</em> to be alive) down to the leaking object (the thing that should have been collected).</p>
+
+    <div class="debug-trace">
+      <h4>LeakCanary Leak Trace: Activity Held by Listener</h4>
+<pre><code>====================================
+HEAP ANALYSIS RESULT
+====================================
+1 APPLICATION LEAKS
+
+References underlined with "~~~" are suspected causes.
+Signature: a3f1e2d4
+
+┬───
+│ GC Root: Global variable in runtime internals
+│
+├─ com.example.shopapp.data.location.LocationTracker instance
+│    Leaking: NO (LocationTracker↓ is not leaking and target Activity↓ is leaking)
+│    ↓ LocationTracker.callback
+│                      ~~~~~~~~
+├─ com.example.shopapp.ui.map.MapActivity instance
+│    Leaking: YES (Activity#mDestroyed is true)
+│    Retaining 14.2 MB in 2,847 objects
+│    key = "com.example.shopapp.ui.map.MapActivity_c5a8b..."
+│    mApplication = com.example.shopapp.ShopApplication
+│    mBase = android.app.ContextImpl
+╰→
+====================================
+0 LIBRARY LEAKS</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>The chain:</strong> <code>LocationTracker</code> (alive, singleton or long-lived) holds a <code>callback</code> reference to <code>MapActivity</code> (destroyed). The <code>~~~</code> under <code>callback</code> marks the suspected cause.</p>
+      <p><strong>Translation:</strong> <code>MapActivity</code> registered itself as a location callback listener but never unregistered when the Activity was destroyed. The <code>LocationTracker</code> lives longer than the Activity, so it keeps the dead Activity in memory.</p>
+      <p><strong>Impact:</strong> 14.2 MB retained across 2,847 objects. Every time the user opens and closes the map screen, another 14 MB leaks.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: Unregistered Callback in Long-Lived Object</h4>
+      <p><code>MapActivity</code> registers itself as a <code>LocationTracker.callback</code> in <code>onCreate()</code> but never clears the reference in <code>onDestroy()</code>. Since <code>LocationTracker</code> is a singleton (or Application-scoped), it outlives the Activity and holds a strong reference to the destroyed Activity&rsquo;s entire view hierarchy.</p>
+      <p>This is the &ldquo;listener registration without cleanup&rdquo; pattern &mdash; the single most common memory leak on Android.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Unregister in onDestroy (or Use Lifecycle-Aware Components)</h4>
+<pre><code>// Option 1: Manual cleanup
+class MapActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        locationTracker.callback = this::onLocationUpdate
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        locationTracker.callback = null  // Break the reference
+    }
+}
+
+// Option 2: Lifecycle-aware (better)
+class LocationTracker @Inject constructor() : DefaultLifecycleObserver {
+    private var callback: ((Location) -> Unit)? = null
+
+    fun observe(owner: LifecycleOwner, onLocation: (Location) -> Unit) {
+        callback = onLocation
+        owner.lifecycle.addObserver(this)
+    }
+
+    override fun onDestroy(owner: LifecycleOwner) {
+        callback = null  // Automatically cleaned up
+        owner.lifecycle.removeObserver(this)
+    }
+}</code></pre>
+      <p>Option 2 is strictly better. By implementing <code>DefaultLifecycleObserver</code>, the cleanup happens automatically when the lifecycle owner is destroyed. No chance of forgetting the cleanup.</p>
+    </div>
+
+    <h2>Building an <code>/analyze-leak</code> Skill</h2>
+
+    <p>LeakCanary traces are perfectly structured for AI analysis. Let&rsquo;s build a skill that processes them consistently.</p>
+
+    <p>Create <code>.claude/commands/analyze-leak.md</code>:</p>
+
+    <pre><code># /analyze-leak — LeakCanary Trace Analysis
+
+Analyze a LeakCanary leak trace and return a structured diagnosis.
+
+## Input
+The user will paste a LeakCanary heap analysis result, including the
+reference chain from GC root to leaking object.
+
+## Analysis Steps
+
+1. **Identify the leaking object** — the node marked "Leaking: YES"
+2. **Identify the GC root** — what's keeping it alive (the top of chain)
+3. **Find the suspected cause** — the reference marked with ~~~ underline
+4. **Classify the leak pattern:**
+   - Listener/callback not unregistered
+   - Static reference holding Activity/Fragment context
+   - Inner class holding outer class reference
+   - ViewModel outliving Activity (configuration change)
+   - ViewBinding not cleared in onDestroyView
+   - Handler/Runnable holding Activity reference
+   - Singleton holding short-lived object reference
+5. **Calculate impact** — retained memory size and object count
+6. **Suggest fix** — with Kotlin code
+
+## Output Format
+
+### Leaking Object
+[Class name, retained size]
+
+### Retention Chain
+[Simplified: Root → intermediate → leaking object]
+
+### Suspected Cause
+[The ~~~ reference and why it's the problem]
+
+### Leak Classification
+[Pattern name from the list above]
+
+### Fix
+```kotlin
+[Code]
+```
+
+### Prevention
+[Architectural pattern to avoid this class of leak]</code></pre>
+
+    <h2>The Classic Android Memory Leaks</h2>
+
+    <p>AI recognizes these patterns instantly because they appear in nearly every Android codebase. Let&rsquo;s walk through each one.</p>
+
+    <h3>Leak #1: Activity Reference in Static Field</h3>
+
+    <pre><code>// The leak:
+companion object {
+    var lastActivity: Activity? = null  // NEVER do this
+}
+
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    lastActivity = this  // Leaked forever
+}</code></pre>
+
+    <p>A <code>companion object</code> property lives for the entire process lifetime. Storing an Activity reference there prevents it from ever being garbage collected.</p>
+
+    <h3>Leak #2: Inner Class Holding Outer Reference</h3>
+
+    <pre><code>// Anonymous inner classes hold an implicit reference to the outer class:
+class ProfileActivity : AppCompatActivity() {
+    fun startTimer() {
+        // This Runnable holds a reference to ProfileActivity!
+        handler.postDelayed(object : Runnable {
+            override fun run() {
+                updateUI()  // Implicitly: this@ProfileActivity.updateUI()
+                handler.postDelayed(this, 1000)
+            }
+        }, 1000)
+    }
+    // If the Activity is destroyed while the Runnable is pending,
+    // the Handler keeps the Activity alive via the Runnable reference.
+}</code></pre>
+
+    <div class="tip-box">
+      Use <code>lifecycleScope.launch</code> instead of <code>Handler.postDelayed</code>. Coroutines launched with <code>lifecycleScope</code> are automatically cancelled when the lifecycle is destroyed &mdash; no manual cleanup needed, no leak possible.
+    </div>
+
+    <h3>Leak #3: ViewBinding in Fragments</h3>
+
+    <p>This one catches even experienced developers. Fragment views are destroyed and recreated during configuration changes, but the Fragment instance itself survives.</p>
+
+    <pre><code>// The leak:
+class SettingsFragment : Fragment(R.layout.fragment_settings) {
+    private var binding: FragmentSettingsBinding? = null
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        binding = FragmentSettingsBinding.bind(view)
+    }
+    // Missing: onDestroyView doesn't clear binding!
+    // The Fragment outlives its view, holding onto the entire view tree.
+}
+
+// The fix:
+class SettingsFragment : Fragment(R.layout.fragment_settings) {
+    private var _binding: FragmentSettingsBinding? = null
+    private val binding get() = _binding!!
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        _binding = FragmentSettingsBinding.bind(view)
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null  // Critical! Release the view references
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      This leak doesn&rsquo;t apply to Jetpack Compose. Compose handles view lifecycle automatically. If you&rsquo;re using ViewBinding in Fragments alongside Compose, though, you still need the cleanup pattern above.
+    </div>
+
+    <h3>Leak #4: ViewModel Holding View References</h3>
+
+    <pre><code>// The leak:
+class ProductViewModel : ViewModel() {
+    // ViewModels survive configuration changes.
+    // Holding a View/Context reference = guaranteed leak.
+    lateinit var recyclerView: RecyclerView  // NEVER do this
+}
+
+// The fix: ViewModels should only hold data, never views.
+class ProductViewModel : ViewModel() {
+    private val _products = MutableStateFlow&lt;List&lt;Product&gt;&gt;(emptyList())
+    val products: StateFlow&lt;List&lt;Product&gt;&gt; = _products.asStateFlow()
+    // Let the Fragment/Activity observe this and update the view.
+}</code></pre>
+
+    <h2>Compose-Era Memory Considerations</h2>
+
+    <p>Jetpack Compose eliminates many classic leaks (no ViewBinding, no manual view references), but introduces its own memory gotchas.</p>
+
+    <h3><code>remember</code> vs. <code>rememberSaveable</code></h3>
+
+    <pre><code>// remember: survives recomposition but NOT configuration changes
+val scrollState = remember { ScrollState(0) }
+
+// rememberSaveable: survives recomposition AND configuration changes
+val scrollPosition = rememberSaveable { 0 }</code></pre>
+
+    <p>The memory concern with <code>remember</code> is storing large objects that should be scoped to a ViewModel instead:</p>
+
+    <pre><code>// Potential memory issue:
+@Composable
+fun ProductList() {
+    // This re-creates a large list on every composition!
+    val products = remember { loadAllProducts() }  // Bad if loadAllProducts() is heavy
+}
+
+// Better: hoist to ViewModel
+@Composable
+fun ProductList(viewModel: ProductViewModel = hiltViewModel()) {
+    val products by viewModel.products.collectAsState()
+}</code></pre>
+
+    <h3>LaunchedEffect Scope Leaks</h3>
+
+    <pre><code>// Potential leak: LaunchedEffect capturing an Activity reference
+@Composable
+fun TrackScreen(activity: Activity) {
+    LaunchedEffect(Unit) {
+        // If this coroutine outlives the composable, it holds
+        // the Activity reference via the captured parameter
+        analytics.trackScreen(activity.localClassName)
+    }
+}
+
+// Safe: pass only the data you need, not the Activity
+@Composable
+fun TrackScreen(screenName: String) {
+    LaunchedEffect(Unit) {
+        analytics.trackScreen(screenName)  // No Activity reference captured
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      When feeding Compose memory issues to Claude Code, describe the composable hierarchy and what&rsquo;s captured in <code>remember</code> and <code>LaunchedEffect</code> blocks. AI can spot closure captures that hold unexpected references.
+    </div>
+
+    <h2>Building a <code>/scan-for-leaks</code> Skill</h2>
+
+    <p>Like our ANR prevention skill, this one scans your code proactively.</p>
+
+    <p>Create <code>.claude/commands/scan-for-leaks.md</code>:</p>
+
+    <pre><code># /scan-for-leaks — Memory Leak Pattern Scanner
+
+Scan the codebase for known Android memory leak patterns.
+
+## Patterns to Detect
+
+1. **Static Activity/Context references** — companion object or
+   top-level properties holding Activity, Fragment, View, or Context
+2. **Missing onDestroyView cleanup** — Fragments with ViewBinding that
+   don't null the binding in onDestroyView
+3. **ViewModel holding View/Context** — ViewModels with View, Activity,
+   Fragment, or Context properties
+4. **Unregistered listeners** — registerListener/addCallback without
+   matching unregister/removeCallback in onDestroy/onDestroyView
+5. **Handler.postDelayed without removeCallbacks** — Runnables posted
+   to Handlers without cleanup on destroy
+6. **Anonymous inner classes in long-lived scopes** — object expressions
+   in companion objects, singletons, or Application class that capture
+   Activity/Fragment references
+7. **Compose captures** — LaunchedEffect or remember blocks that
+   capture Activity or other lifecycle-scoped objects
+
+## Output Format
+For each potential leak found:
+- **File:line** — location
+- **Severity** — High (guaranteed leak), Medium (likely leak),
+  Low (potential leak under certain conditions)
+- **Pattern** — which leak pattern
+- **Fix** — specific code change</code></pre>
+
+    <h2>AI-Assisted Heap Dump Analysis</h2>
+
+    <p>Sometimes LeakCanary isn&rsquo;t enough. You need to dig into a full heap dump &mdash; for example, when your app uses too much memory overall, not just from a single leak.</p>
+
+    <h3>Capturing and Summarizing Heap Data</h3>
+
+    <pre><code># Capture heap dump from Android Studio:
+# 1. Open Profiler > Memory
+# 2. Click "Dump Java Heap"
+# 3. Export as .hprof
+
+# Or from command line:
+adb shell am dumpheap com.example.myapp /data/local/tmp/heap.hprof
+adb pull /data/local/tmp/heap.hprof
+
+# Convert to standard format (required for some tools):
+hprof-conv heap.hprof heap-std.hprof</code></pre>
+
+    <p>You can&rsquo;t paste a raw .hprof file into Claude Code. Instead, use Android Studio&rsquo;s Memory Profiler to extract key metrics, then feed those to AI:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here's a summary from my heap dump after 10 minutes of normal app usage:
+
+Total heap: 187 MB / 256 MB limit
+Top allocations by retained size:
+- Bitmap: 72 MB (847 instances)
+- byte[]: 34 MB (12,432 instances)
+- Activity instances: 5 (should be 1 — user is on HomeActivity)
+- Fragment instances: 12 (should be ~3 for current navigation)
+- String: 18 MB (89,201 instances)
+
+The app has only one Activity visible. Why are there 5 Activity instances retained?</div>
+      <div class="prompt-explanation">Extracted metrics + a specific question = AI can identify that 4 Activities leaked, likely during rotation or navigation, and suggest where to look.</div>
+    </div>
+
+    <h2>Measuring Leak Fixes</h2>
+
+    <p>Here&rsquo;s the impact of finding and fixing the <code>LocationTracker</code> callback leak from our example:</p>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Leaking MapActivity</h4>
+        <p><strong>Heap after 5 map opens:</strong> 187 MB</p>
+        <p><strong>Retained leaked objects:</strong> 14,235</p>
+        <p><strong>Leaked memory:</strong> 71 MB (5 &times; 14.2 MB)</p>
+        <p><strong>GC pause frequency:</strong> every ~3 seconds</p>
+        <p><strong>Outcome:</strong> OOM crash after 12 map visits</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: Lifecycle-Aware Cleanup</h4>
+        <p><strong>Heap after 5 map opens:</strong> 118 MB</p>
+        <p><strong>Retained leaked objects:</strong> 0</p>
+        <p><strong>Leaked memory:</strong> 0 MB</p>
+        <p><strong>GC pause frequency:</strong> every ~15 seconds</p>
+        <p><strong>Outcome:</strong> Stable, no OOM</p>
+      </div>
+    </div>
+
+    <h2>Your Memory Leak Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Add LeakCanary to your <code>debugImplementation</code> dependencies</li>
+      <li class="checked">Never store Activity, Fragment, View, or Context in static/companion fields</li>
+      <li class="checked">Always null ViewBinding in <code>onDestroyView()</code> for Fragments</li>
+      <li class="checked">Use <code>DefaultLifecycleObserver</code> for automatic listener cleanup</li>
+      <li class="checked">ViewModels hold data only &mdash; never views or contexts</li>
+      <li class="checked">Prefer <code>lifecycleScope</code> over <code>Handler.postDelayed</code></li>
+      <li class="checked">In Compose, don&rsquo;t capture Activity references in <code>LaunchedEffect</code> or <code>remember</code></li>
+      <li class="checked">Set up <code>/analyze-leak</code> and <code>/scan-for-leaks</code> skills</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Leak-Free Mindset</h3>
+      <p>Every time you pass <code>this</code> (an Activity or Fragment) to something that lives longer than it does &mdash; a singleton, a companion object, a callback, a ViewModel &mdash; you&rsquo;re creating a potential leak. The question is always: &ldquo;What happens to this reference when my Activity/Fragment is destroyed?&rdquo; If the answer is &ldquo;nothing,&rdquo; you have a leak.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Create, Detect, and Fix a Memory Leak</h4>
+      <ol>
+        <li><strong>Add LeakCanary</strong> to your app if you haven&rsquo;t already (one line in <code>build.gradle.kts</code>).</li>
+        <li><strong>Create a deliberate leak:</strong> Add a <code>companion object</code> property in any Activity and assign <code>this</code> to it in <code>onCreate()</code>:
+          <pre><code>companion object {
+    var leakedActivity: Activity? = null
+}
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    leakedActivity = this
+}</code></pre>
+        </li>
+        <li><strong>Trigger it:</strong> Open the Activity, then press Back. Rotate the device. Open it again. LeakCanary should notify you within 5&ndash;10 seconds.</li>
+        <li><strong>Capture the trace:</strong> Open the LeakCanary notification and copy the full leak trace.</li>
+        <li><strong>Run <code>/analyze-leak</code>:</strong> Paste the trace into Claude Code. Verify it identifies the <code>companion object</code> reference as the cause.</li>
+        <li><strong>Fix and verify:</strong> Remove the static reference, rebuild, and repeat the trigger steps. LeakCanary should stay silent.</li>
+        <li><strong>Bonus:</strong> Run <code>/scan-for-leaks</code> on your actual codebase. How many potential leaks does AI find?</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Memory leaks waste RAM silently. But there&rsquo;s another performance drain that&rsquo;s just as invisible: <strong>excessive recomposition</strong> in Jetpack Compose. Your composables redraw themselves 50 times during a single scroll, burning CPU and dropping frames, and you never notice until a user complains about jank.</p>
+
+    <p>In <strong>Chapter 5: Compose Recomposition Performance</strong>, we&rsquo;ll use AI to analyze recomposition counts, identify unstable parameters, and build an <code>/analyze-recomposition</code> skill that catches Compose performance issues before your users feel them.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-anr-diagnosis.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">ANR Diagnosis and Prevention</span>
+      </a>
+      <a href="05-compose-recomposition.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Compose Recomposition Performance</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9 — Cost Observability | AI Economics</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="08-rate-limits-capacity.html">← Prev</a>
+      <a href="10-self-hosting-math.html">Next →</a>
+      <a href="maps/09-cost-observability-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Cost Observability: You Can&rsquo;t Optimize What You Can&rsquo;t See</h1>
+    <p class="chapter-subtitle">Tools, dashboards, and the 2026 gateway + eval-tool pattern for knowing what every AI feature actually costs.</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The electricity-meter analogy</h2>
+      <p>
+        Imagine living in a house with no electricity meter. You get one invoice per month &mdash; sometimes $40, sometimes $400 &mdash; and the bill never tells you which appliance ate the watts. The fridge? The AC? The teenager gaming at 3 a.m.?
+      </p>
+      <p>
+        That&rsquo;s your AI stack without observability. The provider sends you a number at the end of the month. You squint at it, shrug, and pay. Next month it&rsquo;s double and nobody knows why.
+      </p>
+      <p>
+        Cost observability is the meter. It breaks that monthly number down to <strong>per-feature</strong>, <strong>per-user</strong>, and <strong>per-request</strong> cost &mdash; in real time, not at the end of the billing cycle. Without it, every optimization you&rsquo;ve learned so far is guesswork.
+      </p>
+
+      <div class="highlight-box">
+        <p><strong>The rule in one sentence:</strong> if you can&rsquo;t point at a specific feature and say &ldquo;this costs $X per request, $Y per user per month, and we could cut it by Z&nbsp;% by doing W,&rdquo; you&rsquo;re not cost-engineering. You&rsquo;re hoping.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What to instrument (the &ldquo;non-negotiable ten&rdquo;)</h2>
+      <p>
+        Before you pick a tool, know what it has to capture. Any AI request that hits your logs should record at least these ten fields:
+      </p>
+      <ol>
+        <li><strong>Request ID</strong> &mdash; unique, correlates to app logs</li>
+        <li><strong>Feature tag</strong> &mdash; <code>summarizer</code>, <code>support-bot</code>, <code>code-review</code> (metadata field)</li>
+        <li><strong>User ID / tenant ID</strong> &mdash; for per-user and B2B showback</li>
+        <li><strong>Model used</strong> &mdash; and the provider it was routed to</li>
+        <li><strong>Input tokens</strong> and <strong>output tokens</strong> (separate)</li>
+        <li><strong>Cache read / cache write</strong> counts (for prompt-cache attribution)</li>
+        <li><strong>Cost in USD</strong> &mdash; computed, not inferred</li>
+        <li><strong>Latency</strong> &mdash; p50 / p95 / p99 breakdowns later</li>
+        <li><strong>Status</strong> &mdash; success, 429, 529, 5xx, user-cancelled</li>
+        <li><strong>Quality proxy</strong> &mdash; schema valid? user thumbs-up? eval score?</li>
+      </ol>
+
+      <div class="tip-box">
+        <p><strong>Feature tagging is the single highest-leverage decision.</strong> Without a <code>feature</code> attribute on every request, your dashboards are just a single giant line labelled &ldquo;LLM spend.&rdquo; With it, you get pre-built breakdowns per feature, per team, per user, per environment &mdash; the raw material for every optimization decision in this course.<sup><a href="#src-tagging">[1]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The 2026 tool landscape</h2>
+      <p>
+        The observability space has consolidated fast over the past year. Here&rsquo;s who&rsquo;s still building features, who&rsquo;s coasting, and who&rsquo;s the safe bet for production.
+      </p>
+
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Tool</th>
+              <th>Free tier</th>
+              <th>Paid entry</th>
+              <th>What it&rsquo;s good at</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Langfuse</strong></td>
+              <td>Hobby: 50K units/mo, 30-day retention, unlimited users<sup><a href="#src-langfuse">[2]</a></sup></td>
+              <td>Core $29/mo (100K units)<br>Pro $199/mo (SOC 2, HIPAA, 3-yr retention)<sup><a href="#src-langfuse">[2]</a></sup></td>
+              <td>Open-source core, cheapest team plan, OpenTelemetry-friendly</td>
+            </tr>
+            <tr>
+              <td><strong>Braintrust</strong></td>
+              <td>Free: 1M spans, 10K scores, unlimited users<sup><a href="#src-braintrust">[3]</a></sup></td>
+              <td>Pro $249/mo (unlimited spans &amp; scores)<sup><a href="#src-braintrust">[3]</a></sup></td>
+              <td>Evals-first: 25+ built-in scorers, strong per-request cost breakdowns, Brainstore DB</td>
+            </tr>
+            <tr>
+              <td><strong>LangSmith</strong></td>
+              <td>Developer: 5K traces, 14-day retention, 1 seat<sup><a href="#src-langsmith">[4]</a></sup></td>
+              <td>Plus $39/seat/mo, 10K traces incl. (+ $0.50&ndash;$2.50 per 1K overage)<sup><a href="#src-langsmith">[4]</a></sup></td>
+              <td>Tight LangChain integration, per-seat pricing (watch the math)</td>
+            </tr>
+            <tr>
+              <td><strong>Phoenix (Arize)</strong></td>
+              <td>Fully open source, self-hostable, no feature gates<sup><a href="#src-phoenix">[5]</a></sup></td>
+              <td>Arize Cloud (SaaS), custom</td>
+              <td>OpenTelemetry native, tracing + evals, 2.5M monthly downloads</td>
+            </tr>
+            <tr>
+              <td><strong>Helicone</strong></td>
+              <td>Maintenance mode since March 3, 2026 acquisition by Mintlify<sup><a href="#src-helicone">[6]</a></sup></td>
+              <td>&mdash;</td>
+              <td><strong>⚠️ Do not build new integrations.</strong> Security fixes only; Mintlify is guiding migrations</td>
+            </tr>
+            <tr>
+              <td><strong>Portkey</strong></td>
+              <td>Open-source gateway core</td>
+              <td>Paid tiers for enterprise governance</td>
+              <td>Gateway-first: routing, retries, logging, guardrails in one hop<sup><a href="#src-portkey">[7]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>TruLens</strong></td>
+              <td>Open source (Snowflake)</td>
+              <td>&mdash;</td>
+              <td>OpenTelemetry-based, feedback-function evals</td>
+            </tr>
+            <tr>
+              <td><strong>OpenLLMetry</strong></td>
+              <td>Fully open source</td>
+              <td>&mdash;</td>
+              <td>Most vendor-neutral &mdash; pure OTEL, one-line Python/TypeScript setup</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="warning-box">
+        <p><strong>Helicone is in maintenance mode.</strong> Mintlify acquired Helicone on March 3, 2026. Services keep running; security updates, new-model support, and bug fixes keep shipping. But <em>no new features are coming</em> and Mintlify is actively helping customers migrate. If you&rsquo;re evaluating tools today, pick something else. If you&rsquo;re already on Helicone, start the migration conversation.<sup><a href="#src-helicone">[6]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The gateway + eval-tool pattern (2026 best practice)</h2>
+      <p>
+        A year ago teams mixed and matched. In 2026 the de-facto architecture is two layers:
+      </p>
+      <div class="workflow-steps">
+        <div class="step">🧑‍💻<br><strong>Your app</strong><br>Calls LLM via SDK</div>
+        <div class="step-arrow">→</div>
+        <div class="step">🚪<br><strong>Gateway</strong><br>Portkey / OpenRouter<br>routing + retries + logs</div>
+        <div class="step-arrow">→</div>
+        <div class="step">🌐<br><strong>Providers</strong><br>Anthropic / OpenAI / Gemini</div>
+        <div class="step-arrow">→</div>
+        <div class="step">📊<br><strong>Eval &amp; trace</strong><br>Langfuse / Braintrust / Phoenix<br>cost + quality + latency</div>
+      </div>
+      <p>
+        The gateway catches <em>every</em> call (no matter which provider). The eval tool adds the quality layer on top. Together they give you unified cost attribution and quality tracking without having to wrap every SDK yourself.<sup><a href="#src-gateway">[8]</a></sup>
+      </p>
+
+      <div class="tip-box">
+        <p><strong>Why two layers, not one?</strong> Gateways are great at capturing raw traffic. Eval tools are great at scoring quality and running A/B tests. A gateway alone misses <em>did this answer actually help?</em>; an eval tool alone misses the requests your gateway routed via failover. Running both is cheap and covers both sides.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Per-feature cost attribution: the metadata trick</h2>
+      <p>
+        Every modern SDK supports a metadata bag on each request. Tag every call with <code>feature</code>, <code>user_id</code>, <code>environment</code>, and (optionally) <code>version</code>. That&rsquo;s it &mdash; the rest is just filtering.
+      </p>
+
+      <pre><code>client.messages.create(
+    model="claude-haiku-4-5",
+    messages=[...],
+    metadata={
+        "feature": "ticket-summarizer",
+        "user_id": "u_42",
+        "environment": "prod",
+        "version": "v3",
+    },
+)</code></pre>
+
+      <p>
+        Once every request carries these tags, your Langfuse / Braintrust / Phoenix dashboard groups them automatically. You can ask the question every finance partner asks &mdash; &ldquo;what does <em>ticket-summarizer</em> cost us this month?&rdquo; &mdash; and get an answer in seconds instead of days.
+      </p>
+    </section>
+
+    <section>
+      <h2>A worked example: finding the hog</h2>
+      <p>
+        A team shipped three AI features and got a $12,000 monthly bill. Nobody could say where the money went. Here&rsquo;s what instrumentation revealed:
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>Before instrumentation &mdash; $12,000/month, mystery</h4>
+        <p>Bill grew from $4K to $12K over three months. No per-feature breakdown. Team assumed &ldquo;users grew, so it grew.&rdquo;</p>
+      </div>
+
+      <div class="cost-breakdown-box">
+        <h4>After Langfuse + feature tagging &mdash; the real picture</h4>
+        <ul>
+          <li><strong>ticket-summarizer:</strong> 85&nbsp;% of traffic but only <strong>$1,400</strong> &mdash; cheap Haiku calls, well-cached</li>
+          <li><strong>meeting-notes:</strong> 12&nbsp;% of traffic, <strong>$3,200</strong> &mdash; Opus calls, no caching</li>
+          <li><strong>draft-assistant:</strong> 3&nbsp;% of traffic but <strong>$7,400</strong> &mdash; 30K-token context on every call, never cached, Opus-only</li>
+        </ul>
+      </div>
+
+      <div class="savings-callout banner">→ One feature (3&nbsp;% of traffic) ate 62&nbsp;% of the bill. Moving it to Sonnet + cache dropped total spend to $4,800/month &mdash; a $7,200 saving in one sprint.</div>
+
+      <p>
+        This is the most important truth about cost observability: <strong>the distribution of spend is always weirder than the distribution of traffic.</strong> Find the outlier feature first. Fix that. Everything else is rounding error.
+      </p>
+    </section>
+
+    <section>
+      <h2>Per-user attribution for B2B SaaS</h2>
+      <p>
+        If you sell AI features to businesses, every customer&rsquo;s usage is a line item in your unit economics. The 80/20 rule bites hard here &mdash; one enterprise customer can eat as much token volume as your next 50 customers combined.
+      </p>
+
+      <ul>
+        <li><strong>Tag every request</strong> with the tenant/organization ID as a first-class field.</li>
+        <li><strong>Dashboards grouped by tenant</strong> make outliers visible in one glance.</li>
+        <li><strong>Alerts on per-user anomalies.</strong> If a single user&rsquo;s daily token count jumps 10&times;, they&rsquo;re either running an agent loop or doing something abusive. Either way, you want to know.</li>
+        <li><strong>Showback reports.</strong> Send customers their own usage monthly. Upsell opportunity, fairness, and trust all in one pattern.</li>
+      </ul>
+
+      <div class="warning-box">
+        <p><strong>User IDs are PII &mdash; hash or pseudonymize them.</strong> Don&rsquo;t send raw email addresses into your observability tool. Use a stable hash (e.g., SHA-256 of the user ID + a pepper). Most tools offer a PII-scrubbing layer; turn it on before day one.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Alerts that don&rsquo;t wake you at 3 a.m.</h2>
+      <p>
+        Cost spikes are rarely sudden outages. They&rsquo;re usually slow drifts &mdash; a bad prompt change, a retry loop on a flaky endpoint, an agent that starts hallucinating longer and longer outputs. You want alerts that catch the drift before it becomes a bill.
+      </p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <div class="example-label">❌ Threshold alerts</div>
+          <p>&ldquo;Alert if daily cost &gt; $500.&rdquo;</p>
+          <p>Problem: $500 yesterday was normal but today it&rsquo;s a crisis. The threshold stays flat while traffic grows, so you get false positives or silent misses.</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="example-label">✅ Anomaly alerts</div>
+          <p>&ldquo;Alert if cost per feature deviates more than 3&sigma; from the 30-day rolling mean.&rdquo;</p>
+          <p>Catches drift and scales with growth. Most modern tools (Langfuse, Braintrust, Phoenix) have this built-in.</p>
+        </div>
+      </div>
+
+      <p>
+        Good alert types to wire up:
+      </p>
+      <ul>
+        <li><strong>Per-feature cost anomaly</strong> &mdash; 3&sigma; over baseline</li>
+        <li><strong>Per-user runaway</strong> &mdash; single user exceeds their historical daily p99 by 5&times;</li>
+        <li><strong>Cache hit rate collapse</strong> &mdash; drops below a floor (e.g., 70&nbsp;% on a cached prompt)</li>
+        <li><strong>Retry ratio spike</strong> &mdash; 429/529 rate rises above 1&nbsp;%</li>
+        <li><strong>Model drift</strong> &mdash; a feature suddenly routing 80&nbsp;% to Opus when it used to be 10&nbsp;%</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>The dashboard that matters</h2>
+      <p>
+        Build one page &mdash; a weekly cost review dashboard &mdash; with exactly five panels:
+      </p>
+      <ol>
+        <li><strong>Weekly cost trendline</strong> (30-day rolling, stacked by feature)</li>
+        <li><strong>Top-10 most expensive requests</strong> (drill-down to the prompt for debugging)</li>
+        <li><strong>Cache hit rate per feature</strong> (chart: currently-cached / should-be-cached)</li>
+        <li><strong>Cost per user / per tenant</strong> (sorted descending, filter outliers)</li>
+        <li><strong>Model-mix distribution</strong> (stacked bar: Haiku / Sonnet / Opus / OSS over time)</li>
+      </ol>
+      <p>
+        Look at this dashboard every Monday for 15 minutes. Most of the cost wins you find all year come from five to ten glances at this one page.
+      </p>
+    </section>
+
+    <section>
+      <h2>Build vs. buy: the 5-line SDK wrapper</h2>
+      <p>
+        Before paying for a SaaS, you can roll basic observability in an afternoon. Here&rsquo;s a wrapper that handles feature tagging, cost attribution, and structured logging for Anthropic calls:
+      </p>
+
+      <pre><code>def call_llm(messages, feature, user_id, model="claude-haiku-4-5"):
+    start = time.time()
+    resp = anthropic.messages.create(
+        model=model, messages=messages,
+        metadata={"feature": feature, "user_id": hashlib.sha256(user_id.encode()).hexdigest()[:16]},
+    )
+    cost = compute_cost(model, resp.usage)  # per-model rate table
+    logger.info({
+        "feature": feature, "user_hash": metadata["user_id"],
+        "model": model, "in": resp.usage.input_tokens, "out": resp.usage.output_tokens,
+        "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0),
+        "cost_usd": cost, "latency_ms": int((time.time() - start) * 1000),
+        "status": "ok",
+    })
+    return resp</code></pre>
+
+      <p>
+        Ship this, pipe the logs to Datadog / CloudWatch / your data warehouse, and you have 80&nbsp;% of what a cost-observability SaaS gives you. Graduate to Langfuse or Braintrust when your team starts asking for quality evals, A/B tests, and per-user dashboards.
+      </p>
+
+      <div class="roi-box">
+        <div class="roi-scenarios">
+          <div class="scenario-a">
+            <h4>🏗️ Roll your own</h4>
+            <ul>
+              <li>1&ndash;2 eng-days to ship</li>
+              <li>$0 SaaS cost</li>
+              <li>You own the data and schema</li>
+              <li>No evals, no UI, no alerting &mdash; DIY</li>
+              <li><strong>Best for:</strong> small teams, simple cost tracking, early-stage products</li>
+            </ul>
+          </div>
+          <div class="scenario-b">
+            <h4>💳 Buy (Langfuse / Braintrust / Phoenix Cloud)</h4>
+            <ul>
+              <li>Under an hour to ship</li>
+              <li>$29&ndash;$249/month entry paid tiers</li>
+              <li>Built-in evals, dashboards, anomaly alerts</li>
+              <li>Quality tracking on day one</li>
+              <li><strong>Best for:</strong> teams running evals, teams doing showback, B2B SaaS</li>
+            </ul>
+          </div>
+        </div>
+        <div class="roi-verdict">
+          <strong>Verdict:</strong> start with the wrapper. Migrate to a SaaS when evals or per-user dashboards become the bottleneck. The wrapper stays useful &mdash; many teams keep it even after adopting a tool.
+        </div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>🧪 Exercise: Instrument one feature this week</h3>
+      <ol>
+        <li>Pick one AI feature currently running in production.</li>
+        <li>Add feature + user_id metadata to every request.</li>
+        <li>Log the 10 non-negotiable fields (request ID, model, tokens, cost, status, latency, cache, quality proxy, feature, user).</li>
+        <li>Pipe logs into Langfuse Hobby (free) or your existing logging platform.</li>
+        <li>Wait 7 days. Pull a dashboard showing cost per user, cost per model, and p95 latency.</li>
+        <li>Identify the outlier &mdash; the one user, prompt, or model that&rsquo;s disproportionately expensive.</li>
+        <li>Write down the projected monthly saving if you fix it. Then fix it.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>The production observability checklist</h2>
+      <div class="checklist">
+        <ul>
+          <li>✅ Every request carries <code>feature</code>, <code>user_id</code>, and <code>environment</code> metadata.</li>
+          <li>✅ Cost is computed per request, not inferred from the bill.</li>
+          <li>✅ Cache read / write counts are captured alongside tokens.</li>
+          <li>✅ Quality proxy (schema pass, thumbs-up, eval score) logged on every request.</li>
+          <li>✅ Weekly dashboard with 5 panels exists and gets looked at.</li>
+          <li>✅ Anomaly alerts, not thresholds, on per-feature cost.</li>
+          <li>✅ User IDs are hashed before leaving your app.</li>
+          <li>✅ You&rsquo;re NOT betting the farm on Helicone for new work (maintenance-mode).</li>
+          <li>✅ Gateway + eval-tool layered architecture, or a deliberate reason not to.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+      <p>
+        You now have all five request-side levers (caching, batching, compression, routing, capacity) <em>plus</em> the observability to know whether they&rsquo;re working. That&rsquo;s a complete API-consumer playbook.
+      </p>
+      <p>
+        But the observability data might eventually tell you something interesting: you&rsquo;re spending millions of tokens a month on a narrow task that a smaller open-source model could handle. Chapter 10 takes you to the other side of the fence &mdash; self-hosting math. When OSS + GPUs genuinely beat APIs, when they don&rsquo;t, and why in 2026 the break-even is higher than most developers think.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-tagging"><a href="https://www.traceloop.com/blog/from-bills-to-budgets-how-to-track-llm-token-usage-and-cost-per-user" target="_blank" rel="noopener">Traceloop &mdash; From bills to budgets: tracking LLM token cost per user (feature_name metadata best practice)</a></li>
+        <li id="src-langfuse"><a href="https://langfuse.com/pricing" target="_blank" rel="noopener">Langfuse &mdash; Pricing (Hobby free 50K units/30-day; Core $29 100K; Pro $199 HIPAA 3-yr; Enterprise $2,499; $8 per 100K overage)</a></li>
+        <li id="src-braintrust"><a href="https://www.braintrust.dev/pricing" target="_blank" rel="noopener">Braintrust &mdash; Pricing (Free 1M spans 10K scores; Pro $249/mo unlimited; SOC 2 Type II)</a></li>
+        <li id="src-langsmith"><a href="https://www.langchain.com/pricing" target="_blank" rel="noopener">LangChain &mdash; LangSmith pricing (Developer free 5K traces 14-day; Plus $39/seat 10K traces + overage)</a></li>
+        <li id="src-phoenix"><a href="https://phoenix.arize.com/" target="_blank" rel="noopener">Arize &mdash; Phoenix (fully open-source, OpenTelemetry-native, 2.5M monthly downloads)</a></li>
+        <li id="src-helicone"><a href="https://www.helicone.ai/blog/joining-mintlify" target="_blank" rel="noopener">Helicone &mdash; Joining Mintlify (acquired March 3, 2026; maintenance mode; security + bug fixes only)</a></li>
+        <li id="src-portkey"><a href="https://portkey.ai/features/ai-gateway" target="_blank" rel="noopener">Portkey &mdash; AI Gateway (1,600+ models, observability native, guardrails, retries)</a></li>
+        <li id="src-gateway"><a href="https://www.braintrust.dev/articles/best-llm-gateways-observability-2026" target="_blank" rel="noopener">Braintrust &mdash; 4 best LLM gateways for observability 2026 (gateway + eval-tool pattern)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="08-rate-limits-capacity.html">← Chapter 8</a>
+    <a href="10-self-hosting-math.html">Chapter 10 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7 — Model Cascading &amp; Routing | AI Economics</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="06-context-compression.html">← Prev</a>
+      <a href="08-rate-limits-capacity.html">Next →</a>
+      <a href="maps/07-model-cascading-routing-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Model Cascading &amp; Routing: Right Model, Right Job</h1>
+    <p class="chapter-subtitle">Why your cheapest model should answer most of the questions &mdash; and your expensive model should only show up when it&rsquo;s actually needed.</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The support-team analogy</h2>
+      <p>
+        Picture a well-run customer support team. A tier-1 agent picks up the phone for most calls &mdash; reset passwords, track orders, read the FAQ out loud. A tier-2 specialist handles refunds and weird edge cases. The CEO gets involved when a journalist calls about a lawsuit.
+      </p>
+      <p>
+        Nobody would dream of having the CEO take every call. It&rsquo;s not just expensive &mdash; it&rsquo;s <em>wasteful</em>. Most questions don&rsquo;t need a CEO.
+      </p>
+      <p>
+        Now look at your AI stack. If every request goes to Claude Opus or GPT-5.4 Standard, you&rsquo;re running a support team where the CEO picks up every call. Cascading and routing are how you build the tier-1 / tier-2 / tier-3 discipline into your API layer.
+      </p>
+
+      <div class="highlight-box">
+        <p><strong>The rule in one sentence:</strong> send the easy 80&nbsp;% of traffic to the cheapest model that works, and reserve the premium model for the 20&nbsp;% that actually needs it. Done right, this is a 60&ndash;80&nbsp;% cut on total spend without a visible quality drop.<sup><a href="#src-routellm">[1]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Cascading vs. routing: two flavors of the same idea</h2>
+      <p>
+        These two words get used interchangeably, but they aren&rsquo;t the same pattern. The difference matters because it changes where you pay the overhead.
+      </p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="example-label">Cascading &mdash; try cheap first</div>
+          <p><strong>Mechanic:</strong> call the cheap model. If its answer is confident / passes a check, ship it. Otherwise, retry on the expensive model.</p>
+          <p><strong>Overhead:</strong> the easy 80&nbsp;% pays for 1 cheap call. The hard 20&nbsp;% pays for 1 cheap call <em>plus</em> 1 expensive call.</p>
+          <p><strong>Best when:</strong> you can tell from the <em>output</em> whether the cheap model succeeded (structured output, self-rated confidence, schema check).</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="example-label">Routing &mdash; classify, then dispatch</div>
+          <p><strong>Mechanic:</strong> a small classifier (another LLM call, a keyword rule, or an embedding similarity) looks at the request and picks the right model up front.</p>
+          <p><strong>Overhead:</strong> every request pays for the classifier plus the chosen model.</p>
+          <p><strong>Best when:</strong> the request type is predictable from the <em>input</em> &mdash; FAQ vs. coding, short vs. long, extraction vs. reasoning.</p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <p><strong>Cascade feels like a retry; routing feels like a switchboard.</strong> If you already have quality checks on your output (JSON-schema validators, downstream evals, a confidence field), cascading slots in cleanly. If your tasks split cleanly into buckets (support tickets by topic, queries by length), routing is simpler.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>How cascading actually works</h2>
+      <p>
+        A cascade needs three ingredients: a <strong>cheap model</strong>, an <strong>escalation signal</strong>, and an <strong>expensive model</strong>. The signal is the tricky part. You have four practical options:
+      </p>
+      <ol>
+        <li><strong>Self-reported confidence.</strong> Ask the cheap model to score its own answer 0&ndash;1. Escalate if below a threshold (typical: 0.7).</li>
+        <li><strong>Structured-output check.</strong> If the task produces JSON, YAML, or SQL, fail the validator &rarr; escalate.</li>
+        <li><strong>Consistency vote.</strong> Call the cheap model twice with slight variation. If answers disagree, escalate.</li>
+        <li><strong>Downstream eval.</strong> Run the output through a cheap rubric (another small LLM call, or a deterministic test) &rarr; escalate on failure.</li>
+      </ol>
+
+      <div class="warning-box">
+        <p><strong>Self-reported confidence is poorly calibrated.</strong> A 2026 cascade paper (<em>CascadeDebate</em>) reported that static confidence thresholds are &ldquo;brittle under distribution shifts&rdquo; &mdash; models routinely say &ldquo;0.9 confident&rdquo; when they&rsquo;re wrong, especially on edge cases.<sup><a href="#src-cascade">[2]</a></sup> Use confidence as <em>one</em> signal, not the only one.</p>
+      </div>
+
+      <h3>A 2-level cascade in pseudocode</h3>
+      <pre><code>def answer(query):
+    draft = call_haiku(query)           # cheap
+    if draft.confidence &gt;= 0.75
+       and validator(draft) == "ok":
+        return draft                     # ship it
+    return call_sonnet(query)           # escalate</code></pre>
+
+      <p>
+        That&rsquo;s the whole pattern. Ten lines of code can move most of your traffic from a $3-per-million-input model to a $1-per-million-input model.<sup><a href="#src-anthropic-pricing">[3]</a></sup>
+      </p>
+    </section>
+
+    <section>
+      <h2>How routing actually works</h2>
+      <p>
+        Routing replaces the retry loop with a classifier. Before the &ldquo;real&rdquo; model gets involved, a smaller and faster step decides which one to use.
+      </p>
+
+      <div class="workflow-steps">
+        <div class="step">📨<br><strong>Request</strong><br>User query arrives</div>
+        <div class="step-arrow">→</div>
+        <div class="step">🏷️<br><strong>Classify</strong><br>Keyword, embedding, or tiny-LLM tag</div>
+        <div class="step-arrow">→</div>
+        <div class="step">🧭<br><strong>Dispatch</strong><br>Haiku / Sonnet / Opus</div>
+        <div class="step-arrow">→</div>
+        <div class="step">📦<br><strong>Respond</strong><br>Return answer</div>
+      </div>
+
+      <h3>Three ways to build the classifier</h3>
+      <ul>
+        <li><strong>Regex / keyword rules</strong> &mdash; nearly free, brittle. Fine for narrow domains (&ldquo;if message contains <code>refund</code>, route to refund-model&rdquo;).</li>
+        <li><strong>Embedding similarity</strong> &mdash; cheap (~$0.02 per 1M tokens for OpenAI <code>text-embedding-3-small</code>), robust to rewording. Build a library of labeled example prompts, take cosine similarity, dispatch to the bucket with the nearest neighbor.</li>
+        <li><strong>Tiny-LLM tagger</strong> &mdash; call Haiku 4.5 with a short classification prompt. Typical tagger cost: 300 tokens in, 10 tokens out = ~$0.0003 per request.<sup><a href="#src-anthropic-pricing">[3]</a></sup> Worth it if rules and embeddings aren&rsquo;t accurate enough.</li>
+      </ul>
+
+      <div class="tip-box">
+        <p><strong>The router-overhead break-even rule.</strong> A router is only profitable if its classification cost is smaller than the savings it creates. If the premium model costs $0.01 per request and the cheap model costs $0.001, a $0.0005 tagger pays for itself whenever it correctly routes one request per two to the cheap model.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The break-even math (worked example)</h2>
+      <p>
+        Imagine a customer-support bot receiving 1&nbsp;million requests per month. Average input: 2,000 tokens. Average output: 300 tokens. Let&rsquo;s cost this three ways on Anthropic&rsquo;s Claude family at April 2026 rates: Haiku 4.5 at $1/$5 per 1M, Sonnet 4.6 at $3/$15 per 1M, Opus 4.7 at $5/$25 per 1M.<sup><a href="#src-anthropic-pricing">[3]</a></sup>
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>Scenario A: Everything on Sonnet (the &ldquo;safe&rdquo; default)</h4>
+        <ul>
+          <li>Input: 1,000,000 req &times; 2,000 tokens = 2,000M tokens &times; $3 = <strong>$6,000</strong></li>
+          <li>Output: 1,000,000 req &times; 300 tokens = 300M tokens &times; $15 = <strong>$4,500</strong></li>
+          <li>Monthly total: <strong>$10,500</strong></li>
+        </ul>
+      </div>
+
+      <div class="cost-breakdown-box">
+        <h4>Scenario B: Cascade &mdash; Haiku first, Sonnet on 20 % failure</h4>
+        <ul>
+          <li>Haiku on 100 % of traffic: 2,000M in &times; $1 + 300M out &times; $5 = <strong>$3,500</strong></li>
+          <li>Sonnet on 20 % escalations: 400M in &times; $3 + 60M out &times; $15 = <strong>$2,100</strong></li>
+          <li>Monthly total: <strong>$5,600</strong></li>
+        </ul>
+      </div>
+
+      <div class="cost-breakdown-box">
+        <h4>Scenario C: Router with Haiku tagger &mdash; 80 % Haiku, 18 % Sonnet, 2 % Opus</h4>
+        <ul>
+          <li>Tagger (tiny-LLM): 1M req &times; 300 in + 10 out on Haiku = <strong>$305</strong></li>
+          <li>Haiku 80 %: 1,600M in &times; $1 + 240M out &times; $5 = <strong>$2,800</strong></li>
+          <li>Sonnet 18 %: 360M in &times; $3 + 54M out &times; $15 = <strong>$1,890</strong></li>
+          <li>Opus 2 %: 40M in &times; $5 + 6M out &times; $25 = <strong>$350</strong></li>
+          <li>Monthly total: <strong>$5,345</strong></li>
+        </ul>
+      </div>
+
+      <div class="savings-callout banner">
+        <strong>→ Sonnet-everything $10,500 vs. 3-tier router $5,345 = 49&nbsp;% saved per month, or $61,860 over a year.</strong>
+      </div>
+
+      <p>
+        Scenario B (cascade) and Scenario C (router) land within 5&nbsp;% of each other on pure cost. The tie-breaker is usually quality and engineering effort: cascades are easier to build but add latency on hard queries; routers are harder to calibrate but keep latency flat.
+      </p>
+    </section>
+
+    <section>
+      <h2>The 2026 tooling landscape</h2>
+      <p>
+        You don&rsquo;t have to build this yourself. A handful of platforms offer drop-in routers and gateways that do the dispatch logic for you.
+      </p>
+
+      <div class="tool-card">
+        <h4>🛣️ OpenRouter</h4>
+        <p>The most popular neutral aggregator. One OpenAI-compatible endpoint, 300+ models from 60+ providers, passthrough pricing (no markup on model rates) plus a 5.5&nbsp;% fee on credit purchases. Its <strong>Auto Router</strong> meta-model (2M-token context) picks a model per request and bills at the routed model&rsquo;s rate.<sup><a href="#src-openrouter">[4]</a></sup></p>
+      </div>
+
+      <div class="tool-card">
+        <h4>🧠 Martian</h4>
+        <p>One of the first production routers, with &ldquo;model mapping&rdquo; interpretability under the hood. Claims 20&ndash;97&nbsp;% cost reductions with GPT-4-level quality. Free tier: 2,500 requests. Developer plan: $20/month for API access. Used at Amazon, Zapier, and through Accenture&rsquo;s Project Spotlight.<sup><a href="#src-martian">[5]</a></sup></p>
+      </div>
+
+      <div class="tool-card">
+        <h4>💎 Not Diamond</h4>
+        <p>Routing-as-a-model: upload an evaluation dataset and Not Diamond returns a router tuned to your workload. Teams report 10&ndash;100&times; inference savings for narrow tasks. Bills on inference cost incurred during optimization (you only pay if the model you picked is actually improved).<sup><a href="#src-notdiamond">[6]</a></sup></p>
+      </div>
+
+      <div class="tool-card">
+        <h4>🔬 RouteLLM (open source)</h4>
+        <p>Academic framework from LMSYS. Trains routers on preference data. Published benchmarks: up to 85&nbsp;% cost reduction at 95&nbsp;% of GPT-4&rsquo;s MT-Bench score; 45&nbsp;% reduction on MMLU; 35&nbsp;% on GSM8K. Drop-in OpenAI-client replacement.<sup><a href="#src-routellm">[1]</a></sup></p>
+      </div>
+
+      <div class="tool-card">
+        <h4>🚪 Portkey Gateway</h4>
+        <p>Full AI gateway &mdash; not just a router. 1,600+ models, weighted routing, automatic retry with exponential backoff (up to 5 attempts), per-provider fallback, observability, guardrails, PII detection. Free open-source core; paid plans add enterprise controls.<sup><a href="#src-portkey">[7]</a></sup></p>
+      </div>
+
+      <div class="warning-box">
+        <p><strong>The tool landscape still shifts fast.</strong> Routers that were hot two years ago have been acquired, shuttered, or turned into enterprise-only products. Before building a dependency on a third-party router, check their pricing page and their GitHub commit graph. If the last commit was six months ago, treat it as a red flag.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>When the 60&ndash;80&nbsp;% savings claim is real (and when it isn&rsquo;t)</h2>
+      <p>
+        You&rsquo;ll see &ldquo;save 80&nbsp;% with cascading!&rdquo; all over marketing copy. The number is real in specific conditions and fictional in others. Know which side of the line you&rsquo;re on.
+      </p>
+
+      <div class="roi-box">
+        <div class="roi-scenarios">
+          <div class="scenario-a">
+            <h4>✅ Where the big savings are real</h4>
+            <ul>
+              <li>FAQ / knowledge-base answers (90&nbsp;% cheap-model-capable)</li>
+              <li>Intent classification &amp; tagging</li>
+              <li>Structured extraction from clean inputs</li>
+              <li>Short summaries &amp; rewrites</li>
+              <li>Translation between common languages</li>
+              <li>SQL generation for simple queries</li>
+            </ul>
+          </div>
+          <div class="scenario-b">
+            <h4>❌ Where the savings evaporate</h4>
+            <ul>
+              <li>Multi-step agentic workflows (small errors compound)</li>
+              <li>Complex code reasoning across a codebase</li>
+              <li>Long-form creative writing</li>
+              <li>Legal or medical reasoning with edge cases</li>
+              <li>Tasks where quality degradation is silent and only surfaces in production</li>
+              <li>Workloads already dominated by a long system prompt (cache that first &mdash; see Chapter 4)</li>
+            </ul>
+          </div>
+        </div>
+        <div class="roi-verdict">
+          <strong>Verdict:</strong> cascading / routing wins when tasks are heterogeneous and most of them are easy. It loses on uniformly-hard workloads.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Failure modes to watch for</h2>
+      <ul>
+        <li><strong>Silent quality drift.</strong> The cheap model starts handling more traffic over time because your escalation signal drifts. You notice only when a user complains. Mitigation: sample 1&nbsp;% of requests and score both models in parallel, weekly.</li>
+        <li><strong>Miscalibrated confidence.</strong> The cheap model says &ldquo;0.9 confident&rdquo; and is still wrong. Mitigation: pair confidence with a deterministic check (schema, test, embedding similarity to known-good answer).</li>
+        <li><strong>Cache miss on escalation.</strong> If you cache the cheap model&rsquo;s system prompt but not the expensive model&rsquo;s, every escalation pays cache-write costs on the big model. Mitigation: cache both tiers&rsquo; system prompts symmetrically.</li>
+        <li><strong>Latency tail.</strong> A cascade that escalates 20&nbsp;% of the time adds a big number to p95 latency. Mitigation: time-box the cheap attempt; speculatively fire the expensive model in parallel on high-stakes requests.</li>
+        <li><strong>Router feedback loop.</strong> If the router is trained on its own historical choices, it will keep routing the same way and never explore. Mitigation: inject 2&ndash;5&nbsp;% random traffic to the other tiers and evaluate.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Build your own router in ten lines</h2>
+      <p>
+        Before paying for a third-party service, try the hand-rolled version. It&rsquo;s usually enough.
+      </p>
+      <pre><code>def route(query: str) -&gt; str:
+    length = len(query.split())
+    has_code = "```" in query or "def " in query
+    needs_reasoning = any(k in query.lower()
+        for k in ["why", "explain", "prove", "compare"])
+
+    if has_code or needs_reasoning or length &gt; 500:
+        return "sonnet-4-6"
+    if length &lt; 20:
+        return "haiku-4-5"
+    return "haiku-4-5"  # default cheap
+
+answer = call_model(route(query), query)</code></pre>
+
+      <p>
+        That&rsquo;s a working router. Not as smart as Not Diamond. Not as flexible as Martian. But free, deterministic, and auditable. Start here. Graduate to a paid service when your evals tell you you&rsquo;re leaving money on the table.
+      </p>
+
+      <div class="tip-box">
+        <p><strong>Always measure before you migrate.</strong> The first router you ship should log every routing decision with the model chosen, the cost, and a quality proxy (schema pass? length reasonable? user thumbs-up?). Without those logs you can&rsquo;t tell if the router is helping or quietly degrading the product.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Cascade depth: 2-tier vs 3-tier vs 4-tier</h2>
+      <p>
+        The cascade examples above use two tiers (cheap &rarr; expensive). In production, you&rsquo;ll often want more rungs on the ladder. But each rung adds complexity and latency variance.
+      </p>
+
+      <table class="map-compare">
+        <thead>
+          <tr><th>Depth</th><th>Typical tiers</th><th>When it wins</th><th>What it costs you</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>2-tier</strong></td>
+            <td>Haiku &rarr; Sonnet</td>
+            <td>Homogeneous traffic, clear easy/hard split</td>
+            <td>Simplest. Escalates a lot for &ldquo;medium&rdquo; requests that don&rsquo;t really need Sonnet.</td>
+          </tr>
+          <tr>
+            <td><strong>3-tier</strong></td>
+            <td>Haiku &rarr; Sonnet &rarr; Opus</td>
+            <td>Mixed workload with a small fraction of genuinely hard queries</td>
+            <td>Catches the 2&ndash;5 % of really hard cases. Escalation logic gets 2&times; more code.</td>
+          </tr>
+          <tr>
+            <td><strong>4-tier</strong></td>
+            <td>Free OSS &rarr; Haiku &rarr; Sonnet &rarr; Opus</td>
+            <td>High-volume, cost-obsessed workloads (content moderation, embeddings)</td>
+            <td>Free tiers bring quality floor risk and rate-limit ceilings. Monitor drift weekly.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Most production teams land at 2-tier or 3-tier. Going beyond that makes the routing logic harder to audit than the savings are worth. As a rule of thumb, each extra rung should save at least 15&nbsp;% over the rung above it on <em>its</em> traffic slice &mdash; otherwise the complexity isn&rsquo;t paying for itself.
+      </p>
+    </section>
+
+    <section>
+      <h2>Free-tier routing: a 2026 wildcard</h2>
+      <p>
+        OpenRouter exposes 29 free models as of April 2026 &mdash; DeepSeek R1, Llama 3.3 70B, Gemma 3, and a rotating cast &mdash; at zero marginal cost, rate-limited to 20 requests per minute and 200 per day.<sup><a href="#src-openrouter">[4]</a></sup> That changes the cascade math on high-volume workloads.
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>Content-moderation classifier: 10M classifications / month</h4>
+        <ul>
+          <li><strong>Naive (Sonnet-only):</strong> 10M req &times; 600 tokens in &times; $3 / 1M + 10M &times; 20 tokens out &times; $15 / 1M = <strong>$21,000</strong></li>
+          <li><strong>Haiku-only:</strong> 10M &times; 600 in &times; $1 + 10M &times; 20 out &times; $5 = <strong>$7,000</strong></li>
+          <li><strong>Cascade: free OSS (80 %) &rarr; Haiku (20 %):</strong> OSS free + 2M req &times; (600 &times; $1 + 20 &times; $5) / 1M = <strong>$1,400</strong></li>
+        </ul>
+      </div>
+
+      <div class="savings-callout banner">→ Adding a free OSS tier in front of Haiku drops the monthly bill from $7,000 to $1,400 &mdash; an additional 80 % saving on top of the &ldquo;cheap-only&rdquo; baseline.</div>
+
+      <div class="warning-box">
+        <p><strong>Free tiers come with a ceiling.</strong> 20 RPM / 200 RPD on OpenRouter free models means you can&rsquo;t route more than ~6,000 daily requests through them per key. For higher volumes, you need self-hosted OSS (Chapter 10) or paid inference at bulk rates. Free is a great <em>first rung</em> &mdash; never your only rung.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Stacking with the other levers</h2>
+      <p>
+        Cascading and routing stack cleanly with everything in the earlier chapters:
+      </p>
+      <ul>
+        <li><strong>+ Caching (Chapter 4):</strong> the cheap model&rsquo;s long system prompt caches beautifully because it&rsquo;s called on 100&nbsp;% of traffic &mdash; highest cache-hit rate in your stack.</li>
+        <li><strong>+ Batch (Chapter 5):</strong> route batchable work to the cheap model and batch it &rarr; 50&nbsp;% discount on top of the already-cheap tier.</li>
+        <li><strong>+ Compression (Chapter 6):</strong> compress the context <em>once</em>, then feed the shrunken context through the router. Every tier enjoys the compression.</li>
+      </ul>
+
+      <div class="savings-callout">→ Stacking a router + caching + compression routinely clears 80&nbsp;% total savings on support workloads.</div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>🧪 Exercise: Profile &amp; router-size your app</h3>
+      <ol>
+        <li>Export a week of request logs from one AI endpoint in your app.</li>
+        <li>Tag each request by complexity: <em>trivial</em> (FAQ, extraction), <em>medium</em> (summarization, short reasoning), <em>hard</em> (multi-step reasoning, code gen).</li>
+        <li>Count the distribution. What percentage is trivial?</li>
+        <li>Recompute monthly cost under a router: <em>trivial</em> &rarr; Haiku, <em>medium</em> &rarr; Sonnet, <em>hard</em> &rarr; Opus.</li>
+        <li>Compare to your current bill. If the delta is over 30&nbsp;%, schedule a routing sprint.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>The production checklist</h2>
+      <div class="checklist">
+        <ul>
+          <li>✅ You&rsquo;ve profiled request distribution (trivial / medium / hard).</li>
+          <li>✅ You&rsquo;ve defined an escalation signal that isn&rsquo;t just self-reported confidence.</li>
+          <li>✅ You log model choice + cost + quality proxy on every request.</li>
+          <li>✅ You sample both tiers in parallel on ~1 % of traffic to catch drift.</li>
+          <li>✅ Cache is configured on both tiers, not just the expensive one.</li>
+          <li>✅ You have a latency budget for the cascade case (cheap + escalation).</li>
+          <li>✅ If using a third-party router, you&rsquo;ve verified the vendor is still active.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+      <p>
+        You&rsquo;ve now seen four levers on the request side: caching, batching, compression, and now routing. Together they can drop a well-engineered workload to 5&ndash;15&nbsp;% of its naive cost.
+      </p>
+      <p>
+        But there&rsquo;s a ceiling you&rsquo;ll hit long before &ldquo;zero cost&rdquo; &mdash; the <strong>provider&rsquo;s rate limits</strong>. You can&rsquo;t spend if they won&rsquo;t let you. Chapter 8 covers the 2026 rate-limit landscape, tiering systems (Perplexity T0&ndash;T5, Together AI dynamic tiering), and how to plan capacity when your workload is growing 3&times; a quarter and agents can multiply your traffic 30&times; overnight.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-routellm"><a href="https://github.com/lm-sys/RouteLLM" target="_blank" rel="noopener">LMSYS &mdash; RouteLLM framework (up to 85% cost reduction, 95% GPT-4 MT-Bench score)</a></li>
+        <li id="src-cascade"><a href="https://arxiv.org/abs/2604.12262" target="_blank" rel="noopener">arXiv 2026 &mdash; CascadeDebate: multi-agent deliberation for cost-aware LLM cascades (confidence threshold brittleness)</a></li>
+        <li id="src-anthropic-pricing"><a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic &mdash; Pricing (Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.7 $5/$25 per 1M tokens)</a></li>
+        <li id="src-openrouter"><a href="https://openrouter.ai/pricing" target="_blank" rel="noopener">OpenRouter &mdash; pricing &amp; Auto Router (300+ models, passthrough rates, 5.5% credit fee)</a></li>
+        <li id="src-martian"><a href="https://withmartian.com/pricing" target="_blank" rel="noopener">Martian &mdash; pricing (Free 2,500 requests; Developer $20/mo; 20&ndash;97% cost reduction claims)</a></li>
+        <li id="src-notdiamond"><a href="https://www.notdiamond.ai/" target="_blank" rel="noopener">Not Diamond &mdash; routing-as-a-model (10&ndash;100&times; inference savings)</a></li>
+        <li id="src-portkey"><a href="https://portkey.ai/features/ai-gateway" target="_blank" rel="noopener">Portkey &mdash; AI Gateway (1,600+ models, weighted routing, exponential-backoff retries)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="06-context-compression.html">← Chapter 6</a>
+    <a href="08-rate-limits-capacity.html">Chapter 8 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

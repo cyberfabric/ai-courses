@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Your First Core ML Model — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../03-first-core-ml-model.html">Chapter</a>
+      <a href="02-ml-models-apple-silicon-map.html">&larr; Prev Map</a>
+      <a href="04-vision-framework-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Your First Core ML Model</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- Big Idea -->
+    <h2>&#128161; The Core Insight</h2>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">&#128161;</span>
+      <h3>Convert, integrate, classify &mdash; in one afternoon.</h3>
+      <p>A working on-device AI feature is just 4 components: a Core ML model, an AVCaptureSession for camera frames, VNCoreMLRequest for inference, and a SwiftUI overlay for results. Three threads, zero cloud calls, ~3ms per prediction on the Neural Engine.</p>
+    </div>
+
+    <!-- The Build Timeline -->
+    <h2>&#128295; The 8-Step Build</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Create Xcode Project</h4>
+        <p>iOS App, SwiftUI, physical iPhone as run target.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Convert Model (or Download)</h4>
+        <p>coremltools: PyTorch &rarr; .mlpackage. Or grab MobileNetV2 from Apple's gallery.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Load Model in Swift</h4>
+        <p><code>MLModelConfiguration</code> + <code>VNCoreMLModel</code> wrapper.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>Build VNCoreMLRequest</h4>
+        <p>Completion handler receives <code>VNClassificationObservation</code> results, sorted by confidence.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>Set Up Camera</h4>
+        <p><code>AVCaptureSession</code> + <code>AVCaptureVideoDataOutput</code> on a background queue.</p>
+      </li>
+      <li class="map-timeline-item" data-step="6">
+        <h4>Display Camera Preview</h4>
+        <p><code>UIViewRepresentable</code> bridging <code>AVCaptureVideoPreviewLayer</code> into SwiftUI.</p>
+      </li>
+      <li class="map-timeline-item" data-step="7">
+        <h4>Wire Everything Together</h4>
+        <p><code>ContentView</code>: camera.onFrame &rarr; classifier.classify &rarr; @Published results &rarr; SwiftUI Text.</p>
+      </li>
+      <li class="map-timeline-item" data-step="8">
+        <h4>Add Threading &amp; Throttling</h4>
+        <p>Dedicated inference queue + <code>isProcessing</code> guard to skip frames during slow inference.</p>
+      </li>
+    </ol>
+
+    <!-- The Data Flow -->
+    <h2>&#128260; Frame-by-Frame Data Flow</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">&#128247; AVCaptureSession<br><small>Captures frame</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128444;&#65039; CVPixelBuffer<br><small>Raw pixels</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128065;&#65039; VNImageRequestHandler<br><small>Preprocesses</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#129504; VNCoreMLRequest<br><small>Neural Engine inference</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128241; SwiftUI Text<br><small>Label + confidence</small></div>
+    </div>
+
+    <!-- App Architecture -->
+    <h2>&#127959;&#65039; The 4 Components</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">&#128247;</span>
+        <div class="map-card-title">CameraManager</div>
+        <div class="map-card-desc">AVCaptureSession + VideoDataOutput. Captures frames on a dedicated serial queue. Calls <code>onFrame</code> closure with each CVPixelBuffer.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#129504;</span>
+        <div class="map-card-title">ImageClassifier</div>
+        <div class="map-card-desc">Loads VNCoreMLModel once. Runs VNCoreMLRequest on inference queue. Publishes topLabel and confidence via @Published.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128250;</span>
+        <div class="map-card-title">CameraPreview</div>
+        <div class="map-card-desc">UIViewRepresentable bridging AVCaptureVideoPreviewLayer into SwiftUI. Handles layout with resizeAspectFill.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#127912;</span>
+        <div class="map-card-title">ContentView</div>
+        <div class="map-card-desc">ZStack: camera preview + classification overlay. Wires camera.onFrame to classifier.classify on appear.</div>
+      </div>
+    </div>
+
+    <!-- Threading Model -->
+    <h2>&#128208; Three Threads, No Blocking</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Thread</th>
+          <th>Component</th>
+          <th>Work</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Camera Queue</strong> (serial)</td>
+          <td>CameraManager</td>
+          <td>Captures frames, delivers CVPixelBuffer</td>
+        </tr>
+        <tr>
+          <td><strong>Inference Queue</strong> (serial)</td>
+          <td>ImageClassifier</td>
+          <td>VNCoreMLRequest + Neural Engine inference</td>
+        </tr>
+        <tr>
+          <td><strong>Main Thread</strong></td>
+          <td>ContentView + CameraPreview</td>
+          <td>SwiftUI rendering + camera preview layer</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; color: var(--color-text-muted); margin-top: 0.5rem;"><small>&#128161; The <code>isProcessing</code> guard ensures: if inference is still running, skip the current frame. Always classify the latest frame, never a stale one.</small></p>
+
+    <!-- coremltools Conversion -->
+    <h2>&#128295; The coremltools Conversion Recipe</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">&#128640; PyTorch Model<br><small>torchvision.models</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128270; torch.jit.trace<br><small>Capture computation graph</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128295; ct.convert()<br><small>ImageType + scale/bias</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128230; .mlpackage<br><small>Drag into Xcode</small></div>
+    </div>
+
+    <p style="text-align: center; color: var(--color-text-muted); margin-top: 0.5rem;"><small><code>scale</code> and <code>bias</code> = ImageNet normalization constants. They tell Core ML how to transform raw pixels into the range the model expects.</small></p>
+
+    <!-- Common Pitfalls -->
+    <h2>&#9888;&#65039; The 6 Pitfalls Everyone Hits</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">&#128163;</span>
+        <div class="map-card-title">Crash on Launch</div>
+        <div class="map-card-desc">Missing <code>NSCameraUsageDescription</code> in Info.plist. Add it before your first run.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128270;</span>
+        <div class="map-card-title">Model Not Found</div>
+        <div class="map-card-desc">Model file not added to app target. Check File Inspector &rarr; Target Membership.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128260;</span>
+        <div class="map-card-title">Wrong Predictions</div>
+        <div class="map-card-desc">Image orientation not handled. Pass <code>orientation: .right</code> to VNImageRequestHandler. <strong>The #1 gotcha.</strong></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128260;</span>
+        <div class="map-card-title">Dropped Frames</div>
+        <div class="map-card-desc">Inference blocking camera queue. Use a separate inference queue + isProcessing throttle.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128290;</span>
+        <div class="map-card-title">Numeric Labels</div>
+        <div class="map-card-desc">Missing classifier labels during coremltools conversion. Re-convert with <code>classifier_config</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128683;</span>
+        <div class="map-card-title">Background Kill</div>
+        <div class="map-card-desc">Camera session not stopped. Call <code>session.stopRunning()</code> in onDisappear.</div>
+      </div>
+    </div>
+
+    <!-- Performance -->
+    <h2>&#9889; Performance Snapshot</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Compute Units</th>
+          <th>Inference Time</th>
+          <th>FPS Headroom</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>.all</code> (Neural Engine)</td>
+          <td>~3 ms</td>
+          <td>333 fps</td>
+        </tr>
+        <tr>
+          <td><code>.cpuAndGPU</code></td>
+          <td>~12 ms</td>
+          <td>83 fps</td>
+        </tr>
+        <tr>
+          <td><code>.cpuOnly</code></td>
+          <td>~45 ms</td>
+          <td>22 fps</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; color: var(--color-text-muted); margin-top: 0.5rem;"><small>MobileNetV2 on iPhone 15 Pro. Neural Engine is 15x faster than CPU-only.</small></p>
+
+    <!-- Quiz -->
+    <h2>&#129300; Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <h3>Test Yourself</h3>
+
+      <details>
+        <summary>Why do we wrap Core ML models in VNCoreMLModel instead of calling prediction() directly?</summary>
+        <p class="quiz-answer">Vision's <code>VNCoreMLRequest</code> handles all image preprocessing automatically &mdash; resizing, normalizing, orientation. Without it, you'd do all that work manually for every frame.</p>
+      </details>
+
+      <details>
+        <summary>What does imageCropAndScaleOption = .centerCrop do?</summary>
+        <p class="quiz-answer">It tells Vision how to resize the camera frame (e.g., 1280&times;720) to the model's expected size (224&times;224). Center-crop takes the center square and scales it, which works well for classification.</p>
+      </details>
+
+      <details>
+        <summary>Why set alwaysDiscardsLateVideoFrames = true?</summary>
+        <p class="quiz-answer">If inference is slower than the camera frame rate, this drops old frames instead of queuing them. Without it, you'd process increasingly stale frames and eventually run out of memory.</p>
+      </details>
+
+      <details>
+        <summary>Camera frames arrive in what orientation?</summary>
+        <p class="quiz-answer"><code>.right</code> (landscape-right). If you don't tell Vision about this, the model sees a rotated image and predictions are wrong. Always pass <code>orientation: .right</code> to VNImageRequestHandler.</p>
+      </details>
+
+      <details>
+        <summary>What are the scale and bias in coremltools ImageType?</summary>
+        <p class="quiz-answer">ImageNet normalization constants. They transform raw pixel values (0&ndash;255) into the normalized range the PyTorch model was trained on. Core ML applies them automatically during preprocessing.</p>
+      </details>
+    </div>
+
+    <!-- Summary Strip -->
+    <h2>&#128203; Key Takeaways</h2>
+
+    <div class="map-summary">
+      <h3>If You Remember Nothing Else</h3>
+      <ul>
+        <li class="map-summary-item">Convert: <code>torch.jit.trace</code> &rarr; <code>ct.convert()</code> with <code>ImageType</code> &rarr; .mlpackage. Or download from Apple's gallery.</li>
+        <li class="map-summary-item">Load once: <code>MLModelConfiguration(.all)</code> &rarr; <code>VNCoreMLModel</code>. First load is slow (~100&ndash;500ms), predictions are fast (~3ms).</li>
+        <li class="map-summary-item">Use <code>VNCoreMLRequest</code> &mdash; Vision handles resize, normalize, and orientation automatically.</li>
+        <li class="map-summary-item">Camera: AVCaptureSession + VideoDataOutput + <code>.hd1280x720</code> + <code>alwaysDiscardsLateVideoFrames</code>.</li>
+        <li class="map-summary-item">Three threads: camera queue, inference queue, main thread. Never block any of them.</li>
+        <li class="map-summary-item">Always pass <code>orientation: .right</code> for camera frames. The #1 gotcha in Core ML camera apps.</li>
+        <li class="map-summary-item">MobileNetV2 on Neural Engine: ~3ms. That's 10x faster than the camera's 30fps frame rate.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-ml-models-apple-silicon-map.html" class="prev">
+        <span class="nav-direction">&larr; Prev Map</span>
+        <span class="nav-chapter">How ML Models Work on Apple Silicon</span>
+      </a>
+      <a href="../03-first-core-ml-model.html" class="next">
+        <span class="nav-direction">Back to Chapter &rarr;</span>
+        <span class="nav-chapter">Your First Core ML Model</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Gradle Build Performance | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../07-gradle-build-performance.html">Chapter</a>
+      <a href="06-network-debugging-map.html">&#8592; Prev Map</a>
+      <a href="08-battery-power-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Gradle Build Performance</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Every minute of build time is a minute of broken flow state. A <strong>22-second</strong> incremental build keeps you in the zone. A 2-minute build sends you to a browser tab. Run <code>--profile</code>, feed it to Claude Code, fix the top 3 bottlenecks.</p>
+    </div>
+
+    <!-- ====== THE BUILD OPTIMIZATION FLOW ====== -->
+    <h2>🔄 The Build Optimization Flow</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step"><code>--profile</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Extract top tasks</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step"><code>/analyze-build</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Apply top fix</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Measure again</div>
+    </div>
+
+    <p style="text-align:center; color: var(--color-text-muted); margin-top: 0.5rem;">35-50 builds/day × 4 min each = 2+ hours of daily wait time. At $50K+ annual cost per developer.</p>
+
+    <!-- ====== THE 4 BUILD KILLERS ====== -->
+    <h2>💀 The Build Killers</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🐌</span>
+        <div class="map-card-title">kapt (Not KSP)</div>
+        <div class="map-card-desc">kapt reprocesses <strong>all</strong> annotations from scratch on every build. KSP is incremental &mdash; 40-60% faster. Migrate Hilt, Room, and Moshi first.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔗</span>
+        <div class="map-card-title"><code>api</code> vs <code>implementation</code></div>
+        <div class="map-card-desc"><code>api</code> exposes dependencies to all dependents. When that dep changes, <em>everything</em> recompiles. Use <code>implementation</code> unless the type is in your public API.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title">Disabled Caches</div>
+        <div class="map-card-desc">Build cache + configuration cache together cut incremental builds by 50-80%. Config cache alone dropped 18s → 0.4s in the chapter example.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Monolith Module</div>
+        <div class="map-card-desc">847 files in one module = recompile everything on every change. Modularize: a change in <code>:feature-cart</code> only rebuilds that module.</div>
+      </div>
+    </div>
+
+    <!-- ====== KAPT vs KSP ====== -->
+    <h2>⚔️ kapt vs. KSP</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>kapt</th>
+          <th>KSP</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Processing model</td>
+          <td>Full reprocess every build</td>
+          <td>Incremental (only changed files)</td>
+        </tr>
+        <tr>
+          <td>Kotlin awareness</td>
+          <td>Delegates to Java APT (lossy)</td>
+          <td>Native Kotlin support</td>
+        </tr>
+        <tr>
+          <td>Typical speed</td>
+          <td>62s for annotation processing</td>
+          <td>15-25s for same project</td>
+        </tr>
+        <tr>
+          <td>Hilt/Dagger support</td>
+          <td>✅ Original</td>
+          <td>✅ Supported</td>
+        </tr>
+        <tr>
+          <td>Room support</td>
+          <td>✅ Original</td>
+          <td>✅ Supported</td>
+        </tr>
+        <tr>
+          <td>Migration effort</td>
+          <td>N/A</td>
+          <td>Low: <code>kapt()</code> → <code>ksp()</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== GRADLE PROPERTIES CHEAT SHEET ====== -->
+    <h2>⚙️ Essential gradle.properties</h2>
+
+    <dl class="map-terms">
+      <dt><code>org.gradle.caching=true</code></dt>
+      <dd>Stores task outputs and reuses them when inputs haven't changed. Target: &gt;85% cache hit rate.</dd>
+
+      <dt><code>org.gradle.configuration-cache=true</code></dt>
+      <dd>Caches the configuration phase result. Drops 18s config phase to &lt;1s. Gradle 9&rsquo;s <em>preferred</em> execution mode &mdash; AGP 9.x and most mainstream plugins ship with support; expected to become mandatory in a future major release.</dd>
+
+      <dt><code>org.gradle.parallel=true</code></dt>
+      <dd>Executes independent tasks across modules in parallel. Essential for multi-module projects.</dd>
+
+      <dt><code>org.gradle.jvmargs=-Xmx4g</code></dt>
+      <dd>Heap size for the Gradle daemon. Too low (512m) triggers GC pauses. Use 4g for typical projects, 6g for large ones.</dd>
+
+      <dt><code>org.gradle.daemon=false</code></dt>
+      <dd>CI-only: skip daemon overhead since each CI run starts fresh. Keep <code>true</code> (default) for local development.</dd>
+    </dl>
+
+    <!-- ====== MONOLITH vs MODULAR ====== -->
+    <h2>🏗️ Monolith vs. Modular Build Path</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Change in :feature-cart</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Recompile :feature-cart</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Relink :app</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Done ✅ (~180 files)</div>
+    </div>
+
+    <p style="text-align:center; color: var(--color-text-muted); margin: 0.5rem 0;">vs.</p>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Change anywhere</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Recompile everything</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Relink everything</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Done 🐌 (847 files)</div>
+    </div>
+
+    <div class="tip-box" style="margin-top: 1rem;">
+      Consider modularization when you have <strong>300+ Kotlin files</strong> in a single module. Ask Claude Code: "Based on this package layout, what module boundaries give the best build speed improvement?"
+    </div>
+
+    <!-- ====== BEFORE / AFTER ====== -->
+    <h2>📊 Before vs. After (28-Module Project)</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">4m12s → 2m31s<br>Clean build</div>
+      <div class="map-rel-node">1m48s → 22s<br>Incremental build</div>
+      <div class="map-rel-center">KSP + Caches<br>+ Remote Cache</div>
+      <div class="map-rel-node">6m34s → 2m08s<br>CI build</div>
+      <div class="map-rel-node">62% → 91%<br>Cache hit rate</div>
+    </div>
+
+    <!-- ====== SKILL BUILT ====== -->
+    <h2>🤖 Skill Built This Chapter</h2>
+
+    <div class="map-card" style="max-width: 500px; margin: 0 auto;">
+      <span class="map-card-icon">🏗️</span>
+      <div class="map-card-title"><code>/analyze-build</code></div>
+      <div class="map-card-desc">Feed Gradle <code>--profile</code> output + <code>gradle.properties</code> + dependency blocks. Returns: top bottlenecks, kapt→KSP migration plan, cache optimization, JVM args tuning, and dependency audit.</div>
+    </div>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Why is kapt slow and KSP fast?</summary>
+        <p class="quiz-answer">kapt delegates to Java's annotation processing API, which requires a <strong>full reprocessing pass</strong> on every build. KSP is Kotlin-native and supports <strong>incremental processing</strong> &mdash; it only reprocesses files that actually changed.</p>
+      </details>
+      <details>
+        <summary>What's the danger of using <code>api</code> instead of <code>implementation</code>?</summary>
+        <p class="quiz-answer"><code>api</code> exposes the dependency to all dependent modules. When that dependency changes, every dependent module recompiles &mdash; creating cascade rebuilds. Use <code>implementation</code> unless the dependency's types appear in your module's public API.</p>
+      </details>
+      <details>
+        <summary>What's a remote build cache and why is it the biggest CI win?</summary>
+        <p class="quiz-answer">A remote build cache stores task outputs on a shared server. When one CI run builds a task, subsequent CI runs (and local devs) download the cached output instead of rebuilding. This can cut CI times by <strong>40-70%</strong>.</p>
+      </details>
+      <details>
+        <summary>Your config phase takes 18 seconds for 32 projects. How do you fix it?</summary>
+        <p class="quiz-answer">Enable configuration cache: <code>org.gradle.configuration-cache=true</code>. It stores the result of the configuration phase and reuses it. In the chapter example, this dropped 18s to 0.4s.</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Run <code>./gradlew assembleDebug --profile</code> to identify your top 5 slowest tasks before optimizing anything.</li>
+        <li class="map-summary-item">Migrate from kapt to KSP &mdash; the single biggest win for most Android projects (40-60% annotation processing reduction).</li>
+        <li class="map-summary-item">Enable both build cache and configuration cache in <code>gradle.properties</code> &mdash; together they cut incremental builds by 50-80%.</li>
+        <li class="map-summary-item">Use <code>implementation</code> not <code>api</code> for dependencies unless the type is in your module's public API &mdash; prevents cascade recompilation.</li>
+        <li class="map-summary-item">Set up a remote build cache for CI &mdash; it's the single biggest CI optimization (40-70% reduction).</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-network-debugging-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">Network Debugging with AI</span>
+      </a>
+      <a href="../07-gradle-build-performance.html" class="next">
+        <span class="nav-direction">Back to Chapter</span>
+        <span class="nav-chapter">Gradle Build Performance</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 1 &mdash; Why You Keep Putting This Off | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="02-auditing-and-baselining.html">Next &rarr;</a>
+      <a href="maps/01-why-you-keep-putting-this-off-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 1</span>
+    <h1>Why You Keep Putting This Off (And How to Stop)</h1>
+    <p class="subtitle">Quality tooling isn't a tax. It's the leverage you've been refusing for the last four years.</p>
+  </header>
+
+  <main>
+
+    <h2>The conversation you keep almost having</h2>
+
+    <p>You know the one. It's Friday afternoon. You just merged a feature. Someone in <code>#android-eng</code> drops a link to a blog post titled <em>&ldquo;We Cut Crash-Free Sessions From 97% to 99.6% In a Quarter.&rdquo;</em> You skim it. You think, <em>&ldquo;we should really turn on detekt.&rdquo;</em> You add a TODO. You close the tab.</p>
+
+    <p>That was two years ago. The TODO is still there. The crash-free rate is still 97%.</p>
+
+    <p>This course is for you &mdash; the developer who knows what detekt is, knows what <code>StrictMode</code> does, has heard of LeakCanary in three job interviews, and has somehow never wired any of it up. Not because you don't believe in it. Because every sprint there's a shipping deadline, and quality tooling has always felt like the kind of thing you'll &ldquo;do properly&rdquo; the next time you have a slow week.</p>
+
+    <p>Spoiler: you will never have a slow week. So we're going to do this differently. We're going to bolt the entire stack onto your existing, messy, real-world Android codebase &mdash; one tool at a time, baseline file in hand, without grinding feature work to a halt. By Chapter 12 you'll have lint, detekt, ktlint, StrictMode, LeakCanary, version catalogs, R8, convention plugins, and a CI gate. None of it greenfield. All of it retrofit.</p>
+
+    <h2>The five lies you've told yourself</h2>
+
+    <p>Before we touch any tooling, let's name the excuses. Every Android team I've worked with has used at least three of these. You probably have a favorite.</p>
+
+    <ol>
+      <li><strong>&ldquo;We'll add it later.&rdquo;</strong> &mdash; Translation: never. &ldquo;Later&rdquo; is the graveyard where good intentions go. The team that adds quality tooling is the team that schedules an afternoon for it. There is no &ldquo;later.&rdquo;</li>
+      <li><strong>&ldquo;We don't have time.&rdquo;</strong> &mdash; You spent six hours last sprint debugging an NPE that detekt's <code>UnsafeCallOnNullableType</code> rule would have caught at build time. The math doesn't favor you.</li>
+      <li><strong>&ldquo;The team won't follow it.&rdquo;</strong> &mdash; They will, if the rule fails the CI build. They won't, if the rule prints a warning to a log nobody reads. The trick is enforcement, not exhortation.</li>
+      <li><strong>&ldquo;Our codebase is too messy now.&rdquo;</strong> &mdash; This is the only one that sounds true and is the most wrong. The whole point of <em>baseline files</em> (you'll meet them in Chapter 2) is to freeze the existing mess and only enforce the rules on new code. Your codebase being messy is the reason to start, not the reason to wait.</li>
+      <li><strong>&ldquo;Linters are nitpicky and slow.&rdquo;</strong> &mdash; Default-config linters are nitpicky. Tuned linters catch real bugs in two seconds. Tuning them is half of this course. The other half is teaching you which knobs to never touch.</li>
+    </ol>
+
+    <div class="tip-box">
+      <p>Notice that none of these excuses are technical. They're all about <em>permission</em> &mdash; permission to take an afternoon, permission to ignore the legacy mess, permission to say &ldquo;new rules apply going forward.&rdquo; This whole course is permission, with config snippets attached.</p>
+    </div>
+
+    <h2>What it actually costs you to skip the stack</h2>
+
+    <p>Here's the thing about not having quality tooling: the cost is invisible. You don't see the bugs detekt would have caught, because they ship instead. You don't see the leaks LeakCanary would have flagged, because they show up six weeks later as &ldquo;app feels slow on long sessions&rdquo; in a Play Store review. The cost is real, but it lands somewhere else &mdash; in PR-review time, in production crashes, in 2 a.m. pages.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">~30%</div>
+        <p>of Android crashes I've triaged in the last decade are kotlin <code>NullPointerException</code>s on platform-typed values. Detekt + lint catch most of them at compile time.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">8 min</div>
+        <p>average PR review time on a team that auto-formats with ktlint. <strong>40 min</strong> on a team that argues about indentation in the comments.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">3-6 wks</div>
+        <p>typical lag between a memory leak shipping and someone noticing in production. LeakCanary surfaces it in dev within minutes.</p>
+      </div>
+    </div>
+
+    <p>None of these numbers are theoretical. They are the bug categories the quality stack catches automatically:</p>
+
+    <ul>
+      <li><strong>NPEs from unchecked nullables</strong> &mdash; detekt's <code>UnsafeCallOnNullableType</code>, lint's <code>NullableProblems</code></li>
+      <li><strong>Leaked Activities and Fragments</strong> &mdash; LeakCanary, automatically, with a stack trace pointing at the offender</li>
+      <li><strong>Network and disk I/O on the main thread</strong> &mdash; StrictMode, in your face, the moment it happens in dev</li>
+      <li><strong>Dead code and unused resources</strong> &mdash; lint's <code>UnusedResources</code>, R8's <code>shrinkResources</code></li>
+      <li><strong>Unused or duplicated dependencies</strong> bloating your APK &mdash; the <code>dependency-analysis-gradle-plugin</code></li>
+      <li><strong>Unreadable release stack traces</strong> because nobody committed <code>mapping.txt</code> &mdash; R8 + Crashlytics symbol upload</li>
+      <li><strong>Architecture drift</strong> &mdash; <code>presentation</code> classes importing from <code>data</code> &mdash; Konsist tests</li>
+      <li><strong>Style and formatting bikeshed</strong> on every PR &mdash; ktlint + Spotless, configured once, enforced forever</li>
+    </ul>
+
+    <p>Every item above is something you currently catch with your eyeballs in code review, or don't catch at all. The whole project of this course is to move that work from your eyeballs to a Gradle task.</p>
+
+    <h2>The four pillars of &ldquo;the stack&rdquo;</h2>
+
+    <p>When I say &ldquo;the stack&rdquo; I mean four categories of tooling that work together. None of them is sufficient alone. All of them are cheap to install. They divide the work like this:</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <h4>1. Static analysis</h4>
+        <p>Catches bugs at <em>build time</em>, before the app even runs. Lint, detekt, ktlint, Konsist. The cheapest tier &mdash; you pay once at build time, you find bugs forever.</p>
+        <p><em>Chapters 3, 4, 5.</em></p>
+      </div>
+      <div class="tool-card">
+        <h4>2. Runtime safety nets</h4>
+        <p>Catches bugs in <em>debug builds</em>, when the app is running on your machine. StrictMode, LeakCanary, Chucker. The team's smoke detectors.</p>
+        <p><em>Chapters 7, 8, 9.</em></p>
+      </div>
+      <div class="tool-card">
+        <h4>3. Build-time foundation</h4>
+        <p>Keeps the foundation under everything else healthy. Version catalogs, R8 minification, convention plugins. The boring infrastructure that compounds.</p>
+        <p><em>Chapters 10, 11, 12.</em></p>
+      </div>
+      <div class="tool-card">
+        <h4>4. CI gate</h4>
+        <p>The enforcement layer. GitHub Actions runs the whole stack on every PR. Branch protection makes it a merge blocker. This is what makes quality stick.</p>
+        <p><em>Chapter 12.</em></p>
+      </div>
+    </div>
+
+    <p>Notice the asymmetry: the static-analysis pillar is where most of the daily wins live, but the CI-gate pillar is where most teams fail. Tools that only run on your machine become &ldquo;the thing only Yavor runs.&rdquo; A tool in CI is a tool on the whole team.</p>
+
+    <h2>Dismantling the &ldquo;no time&rdquo; objection</h2>
+
+    <div class="highlight-box">
+      <p>You don't add quality tooling for next quarter. You add it so this Friday's PR review takes 10 minutes instead of 40. The payback is <em>that fast</em>.</p>
+    </div>
+
+    <p>The &ldquo;no time&rdquo; objection assumes the cost is upfront and the payoff is downstream. It isn't. Almost every tool in this course pays back inside the first week:</p>
+
+    <ul>
+      <li><strong>Spotless + ktlint</strong> &mdash; one-shot &ldquo;format the entire repo&rdquo; PR, 30 minutes. Style debates on PRs drop to zero. Day-one payback.</li>
+      <li><strong>Android lint with a baseline</strong> &mdash; one afternoon. The next merge to master is held to the new standard. New <code>HardcodedText</code> findings become CI failures. Week-one payback.</li>
+      <li><strong>StrictMode in debug</strong> &mdash; ten minutes of code, plus a half-day fixing the screaming violations. The first week you avoid one main-thread SharedPreferences crash, you've broken even.</li>
+      <li><strong>LeakCanary</strong> &mdash; literally two lines in <code>build.gradle.kts</code>. The first leak it surfaces is one you would not have caught by reading the code.</li>
+    </ul>
+
+    <div class="tip-box">
+      <p>If your manager says &ldquo;no time,&rdquo; show them the Spotless PR. It's the cheapest demo. Style debates vanish overnight, the team feels the win, and you've earned the social capital to install detekt next.</p>
+    </div>
+
+    <h2>The adoption ladder, in general</h2>
+
+    <p>Every tool chapter in this course follows the same rollout pattern. We're going to call it the <em>adoption ladder</em> &mdash; three rungs, each one safe to climb and stop at if you need to. The point is: <strong>you do not have to do everything in one sprint</strong>. You don't even have to do everything in one quarter.</p>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        <p>Install the plugin. Run it. Generate a <em>baseline file</em> that captures every existing finding so they don't break the build. Commit. Ship.</p>
+        <p><strong>Effort:</strong> 1&ndash;3 hours. <strong>Risk:</strong> near zero.</p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        <p>Tune severities. Promote 3&ndash;5 high-signal rules to <code>error</code>. Hook the IDE inspections so the team sees findings as they type. Fix the cheapest 10% of findings.</p>
+        <p><strong>Effort:</strong> a half-day. <strong>Risk:</strong> low &mdash; the baseline still hides everything else.</p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        <p>Add the tool to the CI gate. Make it a merge blocker via branch protection. Write one custom rule that codifies a team-specific anti-pattern. Optionally start chipping away at the baseline.</p>
+        <p><strong>Effort:</strong> spread across a sprint. <strong>Risk:</strong> low &mdash; CI catches problems before merge, never after.</p>
+      </div>
+    </div>
+
+    <p>That's it. Three rungs, twelve tools, twelve weeks if you do one a week. Most teams do two a week and finish in six.</p>
+
+    <h2>The baseline file is the entire unlock</h2>
+
+    <p>If you remember one concept from this chapter, make it this: <strong>the baseline file</strong>.</p>
+
+    <p>A baseline file is a snapshot of every existing rule violation in your codebase, captured the first time you run the tool. The tool reads the baseline on every subsequent run and silently ignores anything in it. New violations &mdash; in new code &mdash; fail the build. Old violations &mdash; in old code &mdash; do not.</p>
+
+    <p>This is what makes adoption on a legacy codebase tractable. You are not signing up for a multi-week cleanup PR. You are signing up for &ldquo;new code, from today, is held to the standard.&rdquo; The baseline shrinks over time as people incidentally fix things while working in the area. You never have to schedule the cleanup.</p>
+
+    <div class="warning-box">
+      <p>The baseline is <strong>not</strong> &ldquo;we'll fix this later.&rdquo; It's &ldquo;we will not regress.&rdquo; The distinction matters: people who treat baselines as a TODO list end up frustrated when nobody clears them. People who treat baselines as a high-water mark just keep shipping.</p>
+    </div>
+
+    <p>Lint, detekt, and ktlint all support baselines. The mechanics differ slightly per tool, but the concept is universal. Chapter 2 walks you through generating your first ones.</p>
+
+    <h2>A taste of where you're headed</h2>
+
+    <p>Below is what your <code>app/build.gradle.kts</code> will look like by Chapter 12 &mdash; not all of it, just the quality stanzas. I'm showing this now so the destination feels concrete. If it looks short, that's because it is. The whole stack lives in maybe 30 lines of Gradle.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/build.gradle.kts</div>
+<pre><code>plugins {
+  id("com.android.application")
+  id("org.jetbrains.kotlin.android")
+  id("io.gitlab.arturbosch.detekt")        // Chapter 4
+  id("com.diffplug.spotless")              // Chapter 5
+  id("my.app.quality")                     // Chapter 12 &mdash; convention plugin
+}
+
+android {
+  // ...
+
+  lint {
+    abortOnError = true                    // CI-gate-friendly: fail the build
+    warningsAsErrors = false               // ...but don't fail on lint warnings yet
+    checkReleaseBuilds = true              // run lint on release variant too
+    baseline = file("lint-baseline.xml")   // freeze legacy findings
+    htmlReport = true                      // human-readable report
+    xmlReport  = true                      // CI-readable report
+  }
+}
+
+detekt {
+  config.setFrom("$rootDir/config/detekt/detekt.yml")
+  baseline = file("$rootDir/config/detekt/baseline.xml")
+  buildUponDefaultConfig = true            // start from sane defaults, override
+  parallel = true                          // faster on multi-module repos
+}
+
+dependencies {
+  debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")  // Chapter 8
+  debugImplementation("com.github.chuckerteam.chucker:library:4.0.0")     // Chapter 9
+}</code></pre>
+      <div class="recipe-note">Don't copy this yet &mdash; you don't have a <code>lint-baseline.xml</code> or a <code>detekt.yml</code> yet. We generate them in Chapters 2, 3, and 4. This is just the postcard from the destination.</div>
+    </div>
+
+    <h2>The light AI thread</h2>
+
+    <p>Throughout this course, every chapter ends with a short <em>AI-Assisted Setup</em> section. The premise: the tooling is the main act &mdash; AI is the speed-up. Claude Code is unreasonably good at the boring parts of this work: drafting an initial detekt config that matches your existing codebase's style, triaging a 10,000-finding lint baseline by category and likely effort, generating ProGuard <code>-keep</code> rules from a release-only stack trace, writing a custom detekt rule from a one-sentence description.</p>
+
+    <p>None of this replaces understanding the tools. All of it removes the tedious config-drafting that makes people give up halfway through a Saturday afternoon.</p>
+
+    <h3>Your first reusable Claude Code skill: <code>/audit-quality-debt</code></h3>
+
+    <p>The first skill we'll build &mdash; in Chapter 2 &mdash; takes your existing <code>build.gradle.kts</code>, <code>settings.gradle.kts</code>, and a sample of your source tree, and produces a one-page audit: which of the four pillars you have, which you're missing, and a prioritized 30-day plan. Here's what calling it looks like:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Good prompt</div>
+      <div class="prompt-text">/audit-quality-debt
+
+Project root: ~/work/MyApp
+Modules: app, :feature:home, :feature:profile, :data, :domain
+Min SDK: 24, Target SDK: 34, AGP 8.4
+Build flavors: free, paid
+
+I want a prioritized 30-day adoption plan for the Android quality stack. Skip anything we already have.</div>
+    </div>
+
+    <p>Claude reads your build files, looks for what's already wired up, and gives you back a ranked list. The skill itself is a markdown file in <code>.claude/commands/audit-quality-debt.md</code> &mdash; we write it together in Chapter 2.</p>
+
+    <p>For contrast, here's the version of that prompt that wastes everyone's time:</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Bad prompt</div>
+      <div class="prompt-text">Add quality tooling to my Android project.</div>
+    </div>
+
+    <p>You'll get a generic checklist that doesn't know your AGP version, doesn't know your module structure, and doesn't know what you already have. The skill version above gets you something specific to <em>your</em> codebase &mdash; that's the entire point of building reusable skills instead of typing prompts from scratch every time.</p>
+
+    <h2>A short tour of the next eleven chapters</h2>
+
+    <p>Here's the arc. Notice the order: foundations first, then static analysis (cheapest wins), then runtime safety nets (highest-signal bugs), then build-time foundation (compounding leverage), then the CI gate (the layer that makes everything stick).</p>
+
+    <div class="workflow-steps">
+      <div class="step">02 &middot; Audit</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">03 &middot; Lint</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">04 &middot; Detekt</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">05 &middot; Ktlint</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">06 &middot; Pre-commit</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">07 &middot; StrictMode</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">08 &middot; LeakCanary</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">09 &middot; Debug kit</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">10 &middot; Catalogs</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">11 &middot; R8</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">12 &middot; CI gate</div>
+    </div>
+
+    <ul>
+      <li><strong>Chapter 2 &mdash; Auditing &amp; baselining.</strong> A 30-minute honest look at where your project stands. Output: a one-page report you bring to the team.</li>
+      <li><strong>Chapter 3 &mdash; Android lint.</strong> The built-in linter, properly configured. Severity tuning, baseline, CI gate.</li>
+      <li><strong>Chapter 4 &mdash; Detekt + Konsist.</strong> Kotlin smells, complexity metrics, and architecture-as-code tests.</li>
+      <li><strong>Chapter 5 &mdash; Ktlint &amp; Spotless.</strong> One-click formatting. The end of style debates.</li>
+      <li><strong>Chapter 6 &mdash; Pre-commit hooks.</strong> Move quality checks left so feedback comes in seconds, not in CI minutes.</li>
+      <li><strong>Chapter 7 &mdash; StrictMode.</strong> Main-thread offenses, leaked closeables, and accidental SQLite-on-main, surfaced in dev.</li>
+      <li><strong>Chapter 8 &mdash; LeakCanary.</strong> Two-line install. Heap traces. The end of mystery memory creep.</li>
+      <li><strong>Chapter 9 &mdash; Debug-build inspectors.</strong> Chucker, debug menus, debug-only feature flags &mdash; gated so none ship.</li>
+      <li><strong>Chapter 10 &mdash; Version catalogs &amp; dep health.</strong> <code>libs.versions.toml</code>, the dependency-analysis plugin, automated bumps.</li>
+      <li><strong>Chapter 11 &mdash; R8 minification.</strong> Smaller APKs, faster startups, no more <code>ClassNotFoundException</code> in release.</li>
+      <li><strong>Chapter 12 &mdash; Convention plugins &amp; CI gate.</strong> Package the entire stack into one plugin. Wire it into GitHub Actions. Branch-protect it. Done.</li>
+    </ul>
+
+    <h2>Self-assessment: your project, right now</h2>
+
+    <p>Before you read another line, take three minutes and run this checklist against your real project. Be honest. The score is for you, not for the team channel.</p>
+
+    <div class="exercise-box">
+      <h3>Exercise: where are you on the ladder?</h3>
+      <p>Open your project. For each item, tick it if it's <em>currently true</em>. No partial credit. &ldquo;We have it but it's broken&rdquo; counts as no.</p>
+      <ul class="checklist">
+        <li>Android lint runs on every PR and fails the build on new findings.</li>
+        <li>You have a <code>lint-baseline.xml</code> committed to the repo.</li>
+        <li>Detekt is wired up and runs in CI.</li>
+        <li>The team agrees on a formatter (ktlint or Spotless) and it runs on every PR.</li>
+        <li><code>StrictMode</code> is enabled in your debug <code>Application</code>.</li>
+        <li>LeakCanary is in <code>debugImplementation</code>.</li>
+        <li>Your dependencies live in a <code>libs.versions.toml</code> version catalog.</li>
+        <li>Your release builds run R8 with <code>minifyEnabled = true</code>.</li>
+        <li>You upload <code>mapping.txt</code> to Crashlytics (or equivalent) on every release.</li>
+        <li>Your CI has branch protection that requires the quality checks to pass before merge.</li>
+      </ul>
+      <p><strong>Then ask:</strong> of your last three production bugs, how many would have been caught by an item you didn't tick? Write the answer in your <code>quality-debt.md</code> doc &mdash; you're going to need it for Chapter 2.</p>
+    </div>
+
+    <p>Most teams I've audited tick 0&ndash;3 of these. If you ticked 7+, this course will still be useful for the chapters where you didn't &mdash; but you've already done the hard part.</p>
+
+    <h2>Permission to start small</h2>
+
+    <p>One last reframing before we get to work. The trap with adopting a quality stack is treating it as a single monolithic project: &ldquo;the quality initiative.&rdquo; That framing always loses. It implies a multi-week tax up front, which is exactly what the team will not approve. So instead, do the opposite:</p>
+
+    <div class="tip-box">
+      <p>Pick <em>one</em> tool. The cheapest one for your team's specific pain. Install it. Generate the baseline. Ship the PR. Stop. Wait two weeks. Pick the next one. Repeat.</p>
+    </div>
+
+    <p>If your team argues about formatting on PRs &mdash; start with ktlint and Spotless (Chapter 5). If you have mystery release crashes &mdash; start with R8 and StrictMode (Chapters 7 and 11). If your dependency tree is a swamp &mdash; start with version catalogs (Chapter 10). The order in this course is one defensible order, not the only one.</p>
+
+    <h2>Talking to your team about this</h2>
+
+    <p>Tooling adoption on a real team is half technical, half political. You will get pushback. Here are the four objections you will hear, in roughly the order you'll hear them, and the answers that have actually worked for me.</p>
+
+    <h3>&ldquo;Why are we doing this now?&rdquo;</h3>
+
+    <p>Because the cost of <em>not</em> doing it has been compounding for two years and we just don't see it. Pull up the last 10 production crashes. Tag each one with the tool that would have caught it. That's your slide deck. You don't need a roadmap; you need a list.</p>
+
+    <h3>&ldquo;This is going to slow us down.&rdquo;</h3>
+
+    <p>Only if we add it the wrong way. The baseline file means we don't fix the legacy mess. The adoption ladder means we install one tool a week, not all twelve at once. The CI gate runs in parallel with builds &mdash; it adds maybe 60 seconds to a PR check. If the team feels slowed down after week one, we roll the change back. (You will not roll it back. But promising to is what gets buy-in.)</p>
+
+    <h3>&ldquo;We tried this two years ago and it didn't stick.&rdquo;</h3>
+
+    <p>Almost certainly because it wasn't enforced. Tools that print warnings to a log nobody reads do not stick. Tools that fail the CI build stick. The only difference between &ldquo;the team adopted detekt&rdquo; and &ldquo;the team ignored detekt for nine months&rdquo; is whether the merge button is grey or green when there's a violation.</p>
+
+    <h3>&ldquo;Can we just use IDE inspections?&rdquo;</h3>
+
+    <p>IDE inspections are great for the developer who turns them on. They're invisible to the developer who doesn't. The CI gate is the only place where every developer's code is held to the same standard. IDE inspections plus a CI gate is the goal &mdash; not IDE inspections instead of one.</p>
+
+    <div class="warning-box">
+      <p>The biggest single mistake teams make is enabling a tool, generating warnings, and never wiring it into CI. Six months later the warning count is 4,000 and nobody reads them. <strong>If a tool isn't going to land in CI within 30 days, don't install it yet.</strong> The CI gate is what makes the tool real.</p>
+    </div>
+
+    <h2>Bolting on, not greenfield</h2>
+
+    <p>One last thing. This course is not for greenfield projects. There are plenty of those courses. This course assumes:</p>
+
+    <ul>
+      <li>Your project is at least two years old.</li>
+      <li>It has more than one Gradle module.</li>
+      <li>It has dead code in it that nobody's brave enough to delete.</li>
+      <li>It has a <code>TODO(deprecated)</code> from 2022 in a file someone left the company over.</li>
+      <li>It has a <code>build.gradle.kts</code> with more <code>// TODO: clean this up</code> comments than you'd care to admit.</li>
+    </ul>
+
+    <p>That's fine. That's the whole audience. The baseline file is here precisely so you don't have to clean any of it up first. Bolt on. Move on. Ship.</p>
+
+    <p>One more thing. The single biggest reason teams never finish a quality-tooling rollout is that they treat it as a side project. A side project gets pre-empted by the next feature. The fix is to schedule it as one PR per Friday afternoon for twelve weeks &mdash; a recurring calendar block, an actual ticket, an actual reviewer. The PRs are small (most are under 100 lines), they're self-contained, and they are very easy to approve. Twelve Fridays from now you have the entire stack. That's the rhythm this course is designed around.</p>
+
+    <h2>What's next</h2>
+
+    <p>In Chapter 2 we run the actual audit. Thirty minutes with <code>./gradlew dependencies</code>, <code>./gradlew lint</code>, and a Claude Code skill that produces your one-page report. By the end of the chapter you'll know exactly which tool to install first, why, and what your <code>quality-debt.md</code> looks like. Then we'll dive into the baseline-file mechanics that make the rest of the course work.</p>
+
+    <p>Bring a real project. This only works if you're applying it to code you actually ship.</p>
+
+    <footer class="chapter-nav">
+      <a href="index.html">
+        <span class="nav-direction">&larr; Back</span>
+        <span class="nav-chapter">Contents</span>
+      </a>
+      <a href="02-auditing-and-baselining.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Auditing &amp; Baselining</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

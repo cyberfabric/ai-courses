@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Memory &amp; State Management | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-first-agent.html">&larr; Prev</a>
+      <a href="06-human-in-the-loop.html">Next &rarr;</a>
+      <a href="maps/05-memory-state-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Memory &amp; State Management</h1>
+    <p class="subtitle">How agents remember &mdash; because the conversation history is not enough</p>
+  </header>
+
+  <main>
+
+    <h2>The Memory Problem</h2>
+
+    <p>Your Chapter 4 agent has a dirty secret: it&rsquo;s an amnesiac. Run it twice with the same question and it starts from scratch both times. Ask it to &ldquo;continue where you left off&rdquo; and it has no idea what you&rsquo;re talking about. Ask it to reference research from yesterday and it draws a complete blank.</p>
+
+    <p>This is the <strong>memory problem</strong>. LLMs are stateless by design &mdash; every API call starts with a blank slate. The only reason your agent &ldquo;remembers&rdquo; anything within a single session is because you keep appending to the <code>messages</code> list and sending the full history back with each call. That works until it doesn&rsquo;t.</p>
+
+    <p>In this chapter, you&rsquo;ll learn the three types of agent memory, how to manage the context window as it grows, and how to give your agent persistent memory that survives across sessions.</p>
+
+    <div class="highlight-box">
+      <h3>Agent memory is like a developer&rsquo;s workflow</h3>
+      <p>You have your <strong>current task</strong> in your head (working memory), your <strong>Slack thread</strong> with the team (short-term memory), and your <strong>wiki/docs</strong> where you write things down for next week (long-term memory). An agent needs all three levels too.</p>
+    </div>
+
+    <h2>The Three Types of Agent Memory</h2>
+
+    <div class="architecture-box">
+      <h3>Memory Architecture for Agents</h3>
+      <p>Every agent system has three distinct memory layers, each serving a different purpose:</p>
+      <div class="workflow-steps">
+        <span class="step">Working Memory</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Short-Term Memory</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Long-Term Memory</span>
+      </div>
+      <ul>
+        <li><strong>Working memory</strong> &mdash; variables and scratchpads the agent uses during a single task. Lives in code, not in the conversation.</li>
+        <li><strong>Short-term memory</strong> &mdash; the conversation history (<code>messages</code> list). Grows with every step. Limited by the context window.</li>
+        <li><strong>Long-term memory</strong> &mdash; persistent storage (files, databases, vector stores) that survives across sessions.</li>
+      </ul>
+      <p>The key insight: <strong>context quality matters more than context quantity</strong>. A 1M-token context window doesn&rsquo;t help if 90% of it is irrelevant tool output from 50 steps ago. Memory management is about curating what&rsquo;s in the context &mdash; keeping useful information close and pushing stale data out.</p>
+    </div>
+
+    <h2>Working Memory: The Agent&rsquo;s Scratchpad</h2>
+
+    <p>Working memory is the simplest form: variables in your code that the agent uses during a single task. The agent doesn&rsquo;t directly see or control these &mdash; your code manages them.</p>
+
+<pre><code>class AgentState:
+    """Working memory for a single agent run."""
+    def __init__(self, task: str):
+        self.task = task
+        self.steps_taken = 0
+        self.tools_called = []
+        self.total_tokens = 0
+        self.findings = []        # Intermediate results
+        self.errors = []          # Errors encountered
+        self.plan = []            # Current plan steps
+
+    def log_step(self, tool_name: str, tokens: int):
+        self.steps_taken += 1
+        self.tools_called.append(tool_name)
+        self.total_tokens += tokens
+
+    def is_over_budget(self, max_tokens: int = 100_000) -> bool:
+        return self.total_tokens > max_tokens</code></pre>
+
+    <p>This state object tracks what the agent has done, how much it&rsquo;s spent, and whether it&rsquo;s time to stop. The agent loop checks <code>state.is_over_budget()</code> at each step and can use <code>state.findings</code> to inform its next move.</p>
+
+    <div class="tip-box">
+      Working memory is cheap and reliable because it&rsquo;s just Python variables. Use it for anything the agent needs to track within a single run: step counters, token budgets, error counts, lists of files already processed.
+    </div>
+
+    <h2>Short-Term Memory: The Conversation History</h2>
+
+    <p>Short-term memory is the <code>messages</code> list you built in Chapter 4. Every user message, assistant response, tool call, and tool result gets appended. The LLM sees this full history at every step, which is how it &ldquo;remembers&rdquo; what happened earlier.</p>
+
+    <p>The problem: <strong>it grows without bound</strong>.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">~5KB</span>
+        <span class="stat-label">Average web page content returned by read_page</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">10 pages</span>
+        <span class="stat-label">Agent reads during a typical research task</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">50KB+</span>
+        <span class="stat-label">Context consumed &mdash; and growing with every step</span>
+      </div>
+    </div>
+
+    <p>Even with Claude&rsquo;s 200K-token context window (or 1M with extended context), you&rsquo;ll hit problems. Models suffer from the <strong>&ldquo;lost in the middle&rdquo; effect</strong> &mdash; information in the middle of the context gets less attention than information at the start or end. After ~32K tokens of context, accuracy starts to drop.</p>
+
+    <h3>Strategy 1: Truncate Tool Outputs</h3>
+
+    <p>The simplest fix: don&rsquo;t let tool outputs bloat the context. We already did this in Chapter 4 with <code>text[:5000]</code>, but you can be smarter:</p>
+
+<pre><code>def truncate_result(result: str, max_chars: int = 3000) -> str:
+    """Truncate tool output, keeping the start and end."""
+    if len(result) <= max_chars:
+        return result
+    half = max_chars // 2
+    return (result[:half]
+            + f"\n\n[...{len(result) - max_chars} chars truncated...]\n\n"
+            + result[-half:])</code></pre>
+
+    <h3>Strategy 2: Observation Masking</h3>
+
+    <p>A technique from the LangChain &ldquo;Deep Agents&rdquo; framework: <strong>replace old tool outputs with short placeholders</strong> while keeping the tool call metadata visible. The agent can see <em>what</em> it did (called <code>search_web</code> with query X) without the full 5KB result clogging the context.</p>
+
+<pre><code>def mask_old_observations(messages: list, keep_recent: int = 4) -> list:
+    """Replace old tool results with summaries to save context."""
+    masked = []
+    tool_result_count = sum(
+        1 for m in messages
+        if isinstance(m.get("content"), list)
+        and any(isinstance(b, dict) and b.get("type") == "tool_result"
+                for b in m["content"])
+    )
+
+    results_seen = 0
+    for msg in messages:
+        if (isinstance(msg.get("content"), list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in msg["content"])):
+            results_seen += 1
+            if results_seen <= tool_result_count - keep_recent:
+                # Replace old results with placeholders
+                masked_content = []
+                for block in msg["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        masked_content.append({
+                            **block,
+                            "content": "[previous result — see summary above]"
+                        })
+                    else:
+                        masked_content.append(block)
+                masked.append({**msg, "content": masked_content})
+                continue
+        masked.append(msg)
+    return masked</code></pre>
+
+    <h3>Strategy 3: Summarize and Compress</h3>
+
+    <p>When the context hits 70&ndash;80% capacity, ask the LLM to summarize the conversation so far, then replace the old messages with the summary:</p>
+
+<pre><code>def compress_history(client, messages: list, threshold: int = 50_000) -> list:
+    """Compress conversation history when it gets too long."""
+    # Estimate token count (rough: 1 token ≈ 4 chars)
+    total_chars = sum(len(str(m)) for m in messages)
+    if total_chars < threshold:
+        return messages  # Not yet needed
+
+    # Ask the LLM to summarize
+    summary_response = client.messages.create(
+        model="claude-haiku-4-5-20251001",  # Use a cheap model
+        max_tokens=1000,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Summarize the key findings and decisions from this "
+                "conversation. Include: what was searched, what was found, "
+                "what conclusions were reached, and what remains to be done.\n\n"
+                + str(messages)
+            )
+        }]
+    )
+    summary = summary_response.content[0].text
+
+    # Replace old messages with the summary
+    return [
+        {"role": "user", "content": f"[Previous conversation summary]\n{summary}"},
+        *messages[-4:]  # Keep the last 4 messages for continuity
+    ]</code></pre>
+
+    <div class="pitfall-box">
+      <strong>Don&rsquo;t summarize too aggressively.</strong> If you compress too early or too much, the agent loses critical context and starts repeating work or making contradictory decisions. The sweet spot: keep the last 4&ndash;6 tool interactions verbatim, summarize everything older. And always keep the original user request in full.
+    </div>
+
+    <h2>Long-Term Memory: Surviving Across Sessions</h2>
+
+    <p>Short-term memory dies when the process ends. For agents that need to remember things across sessions &mdash; past research, user preferences, learned patterns &mdash; you need <strong>long-term memory</strong>.</p>
+
+    <h3>Option 1: File-Based Memory (Simplest)</h3>
+
+    <p>Claude Code uses this approach: a <code>MEMORY.md</code> file that the agent reads at the start of each session and updates during work. It&rsquo;s simple, versioned (it&rsquo;s just a file in your repo), and surprisingly effective.</p>
+
+    <div class="pattern-box">
+      <h3>The Memory Tool Pattern</h3>
+      <p><strong>Problem:</strong> The agent needs to remember information across sessions but you don&rsquo;t want to build a complex storage system.</p>
+      <p><strong>Solution:</strong> Give the agent two tools &mdash; <code>save_memory</code> and <code>recall_memory</code> &mdash; that read/write to local files. The agent decides what&rsquo;s worth remembering.</p>
+      <p><strong>How it works:</strong></p>
+      <ol>
+        <li>At session start, the agent reads memory files into its context</li>
+        <li>During work, it can call <code>save_memory</code> to persist a fact or finding</li>
+        <li>When it needs past information, it calls <code>recall_memory</code> with a query</li>
+      </ol>
+      <p><strong>When to use:</strong> Single-user agents, prototypes, agents that need to remember user preferences or project-specific knowledge. This is how Claude Code manages per-project context.</p>
+    </div>
+
+<pre><code>import os, json
+from pathlib import Path
+
+MEMORY_DIR = Path("agent_memory")
+MEMORY_DIR.mkdir(exist_ok=True)
+
+memory_tools = [
+    {
+        "name": "save_memory",
+        "description": (
+            "Save a piece of information to persistent memory. Use this "
+            "to remember important findings, user preferences, or facts "
+            "you'll need in future sessions. Each memory has a topic "
+            "(key) and content (value)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Short topic key, e.g. 'user_preference_language'"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The information to remember"
+                }
+            },
+            "required": ["topic", "content"]
+        }
+    },
+    {
+        "name": "recall_memory",
+        "description": (
+            "Recall information from persistent memory. Returns all "
+            "saved memories if no topic specified, or a specific memory "
+            "by topic. Use this at the start of a session or when you "
+            "need context from past work."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Topic to recall. Omit to list all memories."
+                }
+            }
+        }
+    }
+]
+
+def save_memory(topic: str, content: str) -> str:
+    filepath = MEMORY_DIR / f"{topic}.json"
+    data = {"topic": topic, "content": content, "saved_at": str(datetime.now())}
+    filepath.write_text(json.dumps(data, indent=2))
+    return json.dumps({"status": "success", "message": f"Saved memory: {topic}"})
+
+def recall_memory(topic: str = None) -> str:
+    if topic:
+        filepath = MEMORY_DIR / f"{topic}.json"
+        if filepath.exists():
+            return filepath.read_text()
+        return json.dumps({"status": "not_found", "message": f"No memory for '{topic}'"})
+    # List all memories
+    memories = []
+    for f in MEMORY_DIR.glob("*.json"):
+        data = json.loads(f.read_text())
+        memories.append({"topic": data["topic"], "saved_at": data["saved_at"]})
+    return json.dumps({"status": "success", "memories": memories})</code></pre>
+
+    <p>Add these tools to your Chapter 4 agent and it can now remember things across runs. The agent decides what&rsquo;s worth saving &mdash; you don&rsquo;t need to wire up any triggers.</p>
+
+    <h3>Option 2: Vector Store Memory (For Search)</h3>
+
+    <p>When the agent has hundreds of memories, file lookup by exact topic breaks down. You need <strong>semantic search</strong> &mdash; finding memories by meaning, not by exact key. That&rsquo;s where vector stores come in.</p>
+
+<pre><code># pip install chromadb
+import chromadb
+
+# Create a persistent vector store
+chroma = chromadb.PersistentClient(path="./agent_memory_db")
+collection = chroma.get_or_create_collection("agent_memories")
+
+def save_to_vector_store(text: str, metadata: dict = None):
+    """Save a memory with semantic search capability."""
+    doc_id = f"mem_{collection.count()}"
+    collection.add(
+        documents=[text],
+        metadatas=[metadata or {}],
+        ids=[doc_id]
+    )
+
+def recall_from_vector_store(query: str, n_results: int = 3) -> list:
+    """Find memories semantically similar to the query."""
+    results = collection.query(query_texts=[query], n_results=n_results)
+    return results["documents"][0] if results["documents"] else []</code></pre>
+
+    <p>ChromaDB embeds your text automatically and stores it locally. When the agent calls <code>recall_from_vector_store("What did we learn about authentication?")</code>, it returns the most semantically similar memories, even if they don&rsquo;t contain the exact word &ldquo;authentication.&rdquo;</p>
+
+    <div class="tip-box">
+      <strong>Start with files, graduate to vectors.</strong> File-based memory is perfect for agents with fewer than ~100 memories. Once you need semantic search across hundreds of entries, switch to a vector store. Don&rsquo;t start with a vector store &mdash; it&rsquo;s unnecessary complexity for most agents.
+    </div>
+
+    <h2>Structured State: Tracking Progress</h2>
+
+    <p>For complex tasks, the agent needs to track not just what it remembers but <strong>where it is in the task</strong>. This is structured state &mdash; an explicit record of completed steps, pending work, and intermediate results.</p>
+
+    <p>Remember the &ldquo;planning as a tool&rdquo; pattern from Chapter 2? Combine it with state tracking:</p>
+
+<pre><code>task_state = {
+    "goal": "Research and compare 3 AI agent frameworks",
+    "steps": [
+        {"step": "Search for framework comparisons", "status": "done",
+         "result": "Found 5 relevant articles"},
+        {"step": "Read and analyze top 3 articles", "status": "in_progress",
+         "result": "Read 2 of 3"},
+        {"step": "Synthesize findings into report", "status": "pending"},
+        {"step": "Save report to file", "status": "pending"}
+    ],
+    "findings": {
+        "LangGraph": {"stars": "44K", "strengths": "state management, persistence"},
+        "CrewAI": {"stars": "44.6K", "strengths": "role-based multi-agent"}
+    }
+}</code></pre>
+
+    <h2>Checkpointing: Resume Where You Left Off</h2>
+
+    <p>What if the agent crashes mid-task? Or hits a rate limit and needs to pause? <strong>Checkpointing</strong> saves the full agent state so you can resume later.</p>
+
+<pre><code>import json
+from datetime import datetime
+
+def save_checkpoint(messages, state, checkpoint_file="checkpoint.json"):
+    """Save agent state so we can resume later."""
+    # Convert message objects to serializable format
+    serializable_messages = []
+    for msg in messages:
+        if isinstance(msg.get("content"), list):
+            # Handle content blocks (tool results, etc.)
+            serializable_messages.append({
+                "role": msg["role"],
+                "content": [
+                    block if isinstance(block, dict)
+                    else {"type": "text", "text": str(block)}
+                    for block in msg["content"]
+                ]
+            })
+        else:
+            serializable_messages.append(msg)
+
+    checkpoint = {
+        "timestamp": str(datetime.now()),
+        "messages": serializable_messages,
+        "state": state.__dict__ if hasattr(state, '__dict__') else state,
+    }
+    with open(checkpoint_file, "w") as f:
+        json.dump(checkpoint, f, indent=2, default=str)
+    print(f"  [Checkpoint saved: {checkpoint_file}]")
+
+def load_checkpoint(checkpoint_file="checkpoint.json"):
+    """Load a saved checkpoint to resume work."""
+    with open(checkpoint_file) as f:
+        return json.load(f)</code></pre>
+
+    <div class="warning-box">
+      <strong>Checkpoints include conversation history.</strong> That means they can contain sensitive information from tool outputs &mdash; API responses, file contents, search results. Store checkpoint files securely and clean them up when no longer needed.
+    </div>
+
+    <h2>Agent Trace: Memory in Action</h2>
+
+    <p>Here&rsquo;s what a memory-aware agent looks like during a second session:</p>
+
+    <div class="agent-trace">
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>The user wants me to continue researching AI frameworks. Let me check if I have any previous findings.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>recall_memory({})</code> &mdash; list all saved memories</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span>Found 2 memories: &ldquo;framework_comparison&rdquo; (saved yesterday), &ldquo;user_preference_detail_level&rdquo; (saved 3 days ago)</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>recall_memory({"topic": "framework_comparison"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">Result</span>
+        <span>Previous findings: compared LangGraph and CrewAI. Haven&rsquo;t covered Claude Agent SDK or OpenAI Agents SDK yet.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">Think</span>
+        <span>Great, I already have data on LangGraph and CrewAI. I need to research Claude Agent SDK and OpenAI Agents SDK to complete the comparison. The user prefers detailed analysis.</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">Tool</span>
+        <span><code>search_web({"query": "Claude Agent SDK features 2026"})</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">Respond</span>
+        <span>Continuing from where we left off &mdash; I already have notes on LangGraph and CrewAI. Now researching the remaining frameworks&hellip;</span>
+      </div>
+    </div>
+
+    <p>Notice how the agent <strong>doesn&rsquo;t repeat work</strong>. It checks memory first, finds previous findings, and continues from where it stopped. This is the difference between a tool and an assistant.</p>
+
+    <h2>When NOT to Use Memory</h2>
+
+    <p>Memory adds complexity, cost, and potential bugs. Keep your agent stateless when possible:</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>One-shot tasks</strong> &mdash; if the agent runs once and is done, it doesn&rsquo;t need memory</li>
+      <li class="checked"><strong>Idempotent operations</strong> &mdash; if the agent can re-derive everything from the input, memory is redundant</li>
+      <li class="checked"><strong>Security-sensitive contexts</strong> &mdash; memory persists data, which means it can leak if not secured</li>
+      <li class="checked"><strong>High-throughput systems</strong> &mdash; memory lookups add latency to every step</li>
+    </ul>
+
+    <p>The rule: <strong>start stateless, add memory only when the agent clearly needs it</strong>. If users complain that the agent &ldquo;forgot&rdquo; something important, that&rsquo;s the signal to add memory.</p>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Add Memory to Your Research Agent</h3>
+      <p>Take the agent from Chapter 4 and add persistent memory:</p>
+      <ol>
+        <li><strong>Add the <code>save_memory</code> and <code>recall_memory</code> tools</strong> from this chapter to your agent&rsquo;s tool set</li>
+        <li><strong>Modify the system prompt</strong> to instruct the agent: &ldquo;At the start of each session, check your memory for relevant past research. Before finishing, save key findings to memory.&rdquo;</li>
+        <li><strong>Test cross-session memory:</strong>
+          <ul>
+            <li>Run 1: &ldquo;Research the pros and cons of Rust for web development.&rdquo;</li>
+            <li>Run 2: &ldquo;Now compare that to Go for the same use case.&rdquo; (The agent should recall the Rust findings)</li>
+          </ul>
+        </li>
+        <li><strong>Add context compression</strong> &mdash; implement the <code>compress_history</code> function and trigger it when the conversation exceeds 40KB</li>
+      </ol>
+      <p>Bonus: implement a simple checkpoint system that saves state every 5 steps. Kill the agent mid-task and resume from the checkpoint.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your agent now remembers things. But there&rsquo;s a bigger question: <strong>should it be allowed to act on those memories without asking you first?</strong> Should it delete files, send emails, or make API calls based on what it &ldquo;remembers&rdquo; a user wanted?</p>
+
+    <p>In <a href="06-human-in-the-loop.html">Chapter 6: Human-in-the-Loop Patterns</a>, we&rsquo;ll tackle the most critical pattern for production agents: keeping humans in control. You&rsquo;ll learn about approval gates, escalation strategies, confidence thresholds, and how to build trust gradually &mdash; from tight supervision to supervised autonomy.</p>
+
+    <nav class="chapter-nav">
+      <a href="04-first-agent.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Your First Agent</span>
+      </a>
+      <a href="06-human-in-the-loop.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Human-in-the-Loop Patterns</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

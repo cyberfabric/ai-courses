@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2 &mdash; Auditing &amp; Baselining | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="01-why-you-keep-putting-this-off.html">&larr; Prev</a>
+      <a href="03-android-lint.html">Next &rarr;</a>
+      <a href="maps/02-auditing-and-baselining-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Auditing Your Project + Baselining Existing Sins</h1>
+    <p class="subtitle">Thirty minutes of honest looking, one page of findings, and the single concept that unlocks everything else: the baseline file.</p>
+  </header>
+
+  <main>
+
+    <h2>From "we should do this" to "here's the audit"</h2>
+
+    <p>Last chapter we agreed: you've been putting quality tooling off, the cost is invisible-but-real, and the way out is one tool a week with a baseline file in hand. Good. This chapter is where it stops being a pep talk.</p>
+
+    <p>The first thing every team does wrong is install detekt before they understand their own project. They generate 4,000 findings, panic, disable half the rules, and abandon the whole thing by Friday. We're going to do the opposite. Before we touch a single plugin, we're going to spend 30 minutes <em>looking</em>. The output is a one-page audit you can show your team. It tells you which tool to install first and why.</p>
+
+    <div class="tip-box">
+      <p>The audit is not optional and it is not for show. It's a forcing function: it makes you describe your project's actual problems in writing, which prevents the most common adoption failure &mdash; installing whatever tool is currently fashionable instead of the one your codebase needs.</p>
+    </div>
+
+    <h2>The 30-minute honest audit</h2>
+
+    <p>You can learn an embarrassing amount about your project's quality posture by running three Gradle tasks. None of them require new plugins. None of them modify anything. All of them work on your real project, today.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">Run from your project root</div>
+<pre><code># 1. What's actually in your dependency graph?
+./gradlew :app:dependencies --configuration releaseRuntimeClasspath > deps.txt
+
+# 2. What does the built-in linter already know about your code?
+./gradlew :app:lintDebug
+
+# 3. What verification tasks does your project already expose?
+./gradlew tasks --group verification</code></pre>
+      <div class="recipe-note">Replace <code>:app</code> with whichever module is your application. On a multi-module repo, also run <code>./gradlew dependencies</code> at the root to see plugin dependencies.</div>
+    </div>
+
+    <p>Total runtime: ~5 minutes on a typical project. Total reading time: ~25 minutes. Output: three text files you'll read with the eyes of someone who has never seen this codebase before.</p>
+
+    <h3>What each command tells you</h3>
+
+    <ul>
+      <li><strong><code>:app:dependencies</code></strong> &mdash; the actual dependency tree. You'll see direct deps (your <code>build.gradle.kts</code>) and transitive deps (what they pulled in). Look for: version conflicts, unexpected libraries, duplicate logging frameworks, three different JSON parsers.</li>
+      <li><strong><code>:app:lintDebug</code></strong> &mdash; HTML report at <code>app/build/reports/lint-results-debug.html</code>. This is what Android Lint, with its default config, already thinks of your code. You probably haven't read it in months. Read it now.</li>
+      <li><strong><code>tasks --group verification</code></strong> &mdash; tells you what quality gates already exist (the <code>test</code> task, lint, anything custom). On most legacy projects this list is short.</li>
+    </ul>
+
+    <h2>Reading the dependency tree without crying</h2>
+
+    <p>The output of <code>./gradlew dependencies</code> is intimidating but the structure is simple. Each line is a dependency, indentation shows the parent, and the right-hand annotations tell you what Gradle did:</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">Excerpt from deps.txt &mdash; reading the annotations</div>
+<pre><code>+--- androidx.core:core-ktx:1.12.0
+|    \--- androidx.core:core:1.12.0           # ← transitive: pulled in by core-ktx
++--- com.squareup.retrofit2:retrofit:2.9.0
+|    \--- com.squareup.okhttp3:okhttp:3.14.9 -> 4.12.0   # ← (*) version override
++--- com.squareup.okhttp3:okhttp:4.12.0       # ← direct: you declared this
++--- com.google.code.gson:gson:2.10.1
+\--- com.squareup.moshi:moshi:1.15.0          # ← also direct: TWO JSON parsers</code></pre>
+      <div class="recipe-note">The <code>-> 4.12.0</code> arrow means Gradle resolved a conflict by upgrading. The <code>(*)</code> at the end of a line (not shown) means "shown earlier, see above." Two JSON parsers is a smell &mdash; standardize.</div>
+    </div>
+
+    <p>Three things to flag while reading:</p>
+
+    <ol>
+      <li><strong>Version conflicts</strong> &mdash; lines with <code>-&gt;</code> arrows. Usually fine, but worth knowing about. If a critical lib is being downgraded, that's a bug waiting to happen.</li>
+      <li><strong>Duplicate solutions to the same problem</strong> &mdash; two JSON parsers, two image loaders, two networking stacks. This is technical debt you can pay down once you have a version catalog (Chapter 10).</li>
+      <li><strong>Surprises</strong> &mdash; libraries you don't recognize. Find them. Sometimes they're transitive deps of a SDK you forgot about. Sometimes they're a former colleague's experiment that nobody removed.</li>
+    </ol>
+
+    <div class="warning-box">
+      <p>Do not "fix" anything you find here yet. The point of the audit is to <em>see</em>, not to solve. Cleanup PRs that touch dependencies in week one are a classic way to lose buy-in &mdash; you'll inevitably bump something subtle and break a build. We bump dependencies behind the safety net of the version catalog and dep-analysis tooling in Chapter 10.</p>
+    </div>
+
+    <h2>The three categories of quality debt</h2>
+
+    <p>What you find in the audit will fall into three buckets. Sorting them this way isn't pedantic &mdash; each bucket has a different set of tools and a different rollout strategy.</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <h4>📝 Codebase debt</h4>
+        <p>Things wrong with your <em>code</em>: lint findings, Kotlin smells, formatting drift, dead code, unsafe nullables, deprecated APIs. Surfaced by static analysis (lint, detekt, ktlint).</p>
+        <p><strong>Tools:</strong> Chapters 3, 4, 5.</p>
+      </div>
+      <div class="tool-card">
+        <h4>📦 Dependency debt</h4>
+        <p>Things wrong with your <em>libraries</em>: outdated versions, unused declarations, transitive bloat, CVEs, two libs doing one job. Surfaced by dependency-analysis tooling.</p>
+        <p><strong>Tools:</strong> Chapter 10.</p>
+      </div>
+      <div class="tool-card">
+        <h4>⚙️ Process debt</h4>
+        <p>Things wrong with your <em>workflow</em>: no CI gate, no formatter, no pre-commit hooks, no branch protection. The reason "we already had detekt" turned into "nobody runs detekt."</p>
+        <p><strong>Tools:</strong> Chapters 6, 12.</p>
+      </div>
+    </div>
+
+    <p>Most teams have all three, in different proportions. A 6-year-old codebase with a small team usually has a lot of codebase debt. A team that's grown fast has more dependency debt (everyone added their favorite library). A team that hasn't invested in CI has overwhelming process debt regardless of the code itself.</p>
+
+    <h2>The baseline file: the entire unlock</h2>
+
+    <p>This is the concept the rest of the course depends on. Read it twice.</p>
+
+    <div class="highlight-box">
+      <p>A baseline file is a snapshot of every existing rule violation in your codebase, captured the first time you run the tool. The tool reads the baseline on every subsequent run and silently ignores anything in it. <strong>New violations &mdash; in new code &mdash; fail the build. Old violations &mdash; in old code &mdash; do not.</strong></p>
+    </div>
+
+    <p>That's the whole idea. It's deceptively simple, and it is the only reason you can adopt these tools on a real, messy, four-year-old codebase without committing to a multi-week cleanup PR.</p>
+
+    <h3>What a baseline is</h3>
+
+    <ul>
+      <li>An XML or text file, committed to your repo</li>
+      <li>Generated by the tool itself, on demand, with one Gradle task</li>
+      <li>Read by the tool on every subsequent run</li>
+      <li>Updated when you intentionally regenerate it (after fixing a batch of issues, or as part of a quarterly cleanup)</li>
+      <li>Versioned. You can diff it across PRs. New entries appearing means somebody silenced a violation rather than fixing it &mdash; that's a code-review signal, not a normal occurrence.</li>
+    </ul>
+
+    <h3>What a baseline is <em>not</em></h3>
+
+    <ul>
+      <li><strong>Not</strong> a TODO list. The whole team treating it as "we'll fix this later" is the path to never fixing any of it. The right framing: <em>we will not regress</em>.</li>
+      <li><strong>Not</strong> permanent. It shrinks naturally as people fix things while working in a file (most tools re-emit a violation if it moves; many tools auto-update on next regenerate).</li>
+      <li><strong>Not</strong> a way to silence rules you disagree with. If a rule is wrong for your codebase, disable it &mdash; don't baseline its findings. Baselines are for rules you agree with but can't fix all the violations of immediately.</li>
+      <li><strong>Not</strong> something you regenerate every CI run. The whole point is the diff &mdash; new violations should fail the build, not silently disappear into the baseline.</li>
+    </ul>
+
+    <h2>How baselines work across the stack</h2>
+
+    <p>Almost every tool in this course supports baselines. The mechanics differ slightly per tool, but the concept is universal. Here's the cheat sheet &mdash; deep dives are in the relevant chapters.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/build.gradle.kts &mdash; baseline declarations</div>
+<pre><code>android {
+  // Android Lint &mdash; the file Gradle reads/writes
+  lint {
+    baseline = file("lint-baseline.xml")    // Chapter 3
+  }
+}
+
+// Detekt &mdash; the baseline file path is a property
+detekt {
+  baseline = file("$rootDir/config/detekt/baseline.xml")  // Chapter 4
+}
+
+// Ktlint &mdash; via the spotless plugin, no separate file: format runs in-place
+spotless {
+  kotlin { ktlint("1.3.1") }                // Chapter 5 &mdash; you "baseline" by formatting once
+}</code></pre>
+      <div class="recipe-note">Each tool has a "generate the baseline" command: <code>./gradlew :app:updateLintBaseline</code>, <code>./gradlew detektBaseline</code>, etc. Generate, commit, ship.</div>
+    </div>
+
+    <p>The pattern across all of them is the same:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Install plugin</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Generate baseline</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Commit baseline</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Wire into CI</div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">Ship</div>
+    </div>
+
+    <h2>The one-page audit report</h2>
+
+    <p>Here's what you walk away from this chapter with: a single page, in your repo, that summarizes what you found. This is the document you bring to the team standup. The point is that it's <em>short</em> &mdash; nobody reads a 12-page audit; everyone reads one page.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">docs/quality-debt.md</div>
+<pre><code># Quality Debt Audit &mdash; 2026-04-25
+
+## Top 10 lint categories (by count, from lintDebug report)
+1. HardcodedText                 412
+2. UnusedResources               189
+3. ContentDescription            156
+4. NewApi                         87
+5. MissingPermission              43
+6. SetTextI18n                    38
+7. ObsoleteSdkInt                 22
+8. AppCompatCustomView            18
+9. InvalidPackage                 12
+10. WrongConstant                   7
+
+## Top 5 dependency risks
+- okhttp resolved 3.14.9 -> 4.12.0 (transitive override)
+- gson AND moshi both present (standardize on moshi)
+- com.android.support:* still on classpath (migrate to androidx)
+- 3 dependencies last updated >2 years ago (kotlin-stdlib-jdk7, etc.)
+- No CVE scanning configured
+
+## Process gaps
+- No CI quality checks (only :app:assembleDebug runs)
+- No formatter (PR style debates frequent)
+- No pre-commit hooks
+- No branch protection on main
+- No mapping.txt uploaded on release
+
+## Recommendation: start with Ktlint + Spotless (Chapter 5)
+PR style debates are the most-felt pain. Format-on-save kills them in week 1
+and earns social capital for installing detekt next.</code></pre>
+      <div class="recipe-note">This is the entire deliverable. One page. Top 10 / Top 5 / Process gaps / Recommendation. Not 12 pages.</div>
+    </div>
+
+    <p>Be specific in the recommendation. "Adopt the quality stack" is a non-decision. "Start with ktlint + Spotless because PR debates are our biggest pain" is a decision. The audit is what lets you make a defensible one.</p>
+
+    <h2>AI-Assisted Audit: <code>/audit-android-project</code></h2>
+
+    <p>Reading three text files and writing a one-page report is exactly the kind of task Claude Code does well. We're going to build a reusable skill for it &mdash; a markdown file in <code>.claude/commands/</code> that you invoke any time you onboard onto a new project, audit a sibling repo, or want a sanity check on your own work.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">.claude/commands/audit-android-project.md</div>
+<pre><code>---
+description: Produce a one-page Android quality-debt audit
+---
+
+You are auditing the Android project at the current working directory.
+Your output is a single markdown document at `docs/quality-debt.md`
+following this structure:
+
+  # Quality Debt Audit &mdash; YYYY-MM-DD
+  ## Top 10 lint categories (by count)
+  ## Top 5 dependency risks
+  ## Process gaps
+  ## Recommendation
+
+Steps:
+1. Read the project's `app/build.gradle.kts` (or `build.gradle`) and the
+   root `build.gradle.kts`. Note: AGP version, Kotlin version, applied plugins,
+   modules, build types, product flavors.
+2. Run `./gradlew :app:dependencies --configuration releaseRuntimeClasspath`
+   and identify: version conflicts, transitive overrides, duplicate libraries,
+   outdated direct deps (>1y old).
+3. Run `./gradlew :app:lintDebug`. Parse the HTML/XML report at
+   `app/build/reports/`. Group findings by issue ID; report top 10 by count.
+4. Look for evidence of process debt: `.github/workflows/`, `.editorconfig`,
+   `.git/hooks/`, branch protection (skip if no remote).
+5. Pick ONE recommendation for which tool to adopt first. Defend it in 2-3
+   sentences based on what you found.
+
+Be terse. The whole report should fit on one printed page (~50 lines).
+Do not propose fixes &mdash; only describe findings.</code></pre>
+      <div class="recipe-note">Save this file once. Run <code>/audit-android-project</code> from any Android project root. The skill stays with you.</div>
+    </div>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Good prompt</div>
+      <div class="prompt-text">/audit-android-project
+
+This is a 4-year-old Kotlin Android app, AGP 8.4, single :app module plus
+:data and :domain. We have no quality tooling beyond the AGP defaults.
+Skip anything we already have.</div>
+    </div>
+
+    <h2>Picking your starting point</h2>
+
+    <p>Once you have the audit, the question is which tool to install first. There is no universal right answer; it depends on which kind of debt is loudest in your project. Here's the rough heuristic:</p>
+
+    <table>
+      <thead>
+        <tr><th>If your audit screams...</th><th>Start with</th><th>Chapter</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Lots of unsafe nullable handling, complex methods, exception-swallow</td><td>Detekt</td><td>4</td></tr>
+        <tr><td>Mystery release crashes you can't decode</td><td>R8 + Crashlytics mapping</td><td>11</td></tr>
+        <tr><td>Team conflicts on PR style</td><td>Ktlint + Spotless</td><td>5</td></tr>
+        <tr><td>App leaks memory after long sessions</td><td>LeakCanary</td><td>8</td></tr>
+        <tr><td>Frame drops, ANRs, jank you can't repro</td><td>StrictMode</td><td>7</td></tr>
+        <tr><td>Dependency mess, version drift, unused libs</td><td>Version catalogs + dep-analysis</td><td>10</td></tr>
+        <tr><td>Quality is high in IDEs but bad code still merges</td><td>CI gate + convention plugin</td><td>12</td></tr>
+      </tbody>
+    </table>
+
+    <p>If two of these apply, pick the one with the highest team morale impact. PR style debates feel terrible even when the actual cost is small &mdash; eliminating them earns you the social capital to do everything else.</p>
+
+    <h2>"Don't fix it all" &mdash; the cleanup-PR trap</h2>
+
+    <p>The single most common way teams blow up an adoption is the multi-week cleanup PR. The story goes: someone gets ambitious, decides "let's just fix all the lint warnings in one big PR," and disappears for two weeks. The PR is 4,000 files. Three of them have subtle behavior changes. The reviewer is dead inside. It never merges. Quality tooling is now associated with that experience.</p>
+
+    <div class="warning-box">
+      <p>The first PR after installing a tool should add the tool, generate the baseline, and ship. <strong>That's it.</strong> Fix the existing violations <em>incidentally, while doing other work</em>, over weeks and months &mdash; never as a single sprint goal. The whole point of the baseline is to make this possible.</p>
+    </div>
+
+    <p>If your team really wants to do a cleanup, scope it: "this sprint, we'll fix the top 3 categories from the lint baseline" &mdash; that's a defensible chunk. "Fix the entire baseline" is not.</p>
+
+    <h2>Tracking progress: <code>quality-debt.md</code></h2>
+
+    <p>The audit document doesn't disappear after week one. It lives in your repo and gets updated. A useful pattern: at the end of each tool chapter, append a section to it noting what you adopted, when, and what the baseline file is named.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">docs/quality-debt.md &mdash; growing log</div>
+<pre><code>## Adoption log
+| Date       | Tool           | Baseline file                  | Lead       |
+|------------|----------------|--------------------------------|------------|
+| 2026-04-25 | Audit          | n/a                            | @yavor     |
+| 2026-05-02 | Ktlint+Spotless| n/a (one-shot format)          | @yavor     |
+| 2026-05-09 | Android Lint   | app/lint-baseline.xml          | @yavor     |
+| 2026-05-16 | Detekt         | config/detekt/baseline.xml     | @priya     |
+| 2026-05-23 | StrictMode     | n/a (debug-only runtime)       | @priya     |
+| 2026-05-30 | LeakCanary     | n/a (debug-only runtime)       | @yavor     |</code></pre>
+      <div class="recipe-note">A simple table is enough. The audit + log together become the document new joiners read to understand the team's stance on quality.</div>
+    </div>
+
+    <h2>The audit-and-baseline rollout</h2>
+
+    <p>Even the audit itself follows the adoption-ladder pattern from Chapter 1. The audit is not a one-and-done event; it's the first checkpoint on a recurring cadence.</p>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        <p>Run the three Gradle commands. Skim the lint HTML report. Skim the dependency tree. Write the one-page <code>quality-debt.md</code>. Open the audit PR.</p>
+        <p><strong>Effort:</strong> 45 minutes. <strong>Output:</strong> a document.</p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        <p>Install the first tool you recommended. Generate its baseline. Commit. Wire into CI. Append the row to the adoption log in <code>quality-debt.md</code>.</p>
+        <p><strong>Effort:</strong> a half-day.</p>
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        <p>Re-run the audit at the end of the month. Compare. The lint count should be flat or down. The dep risks should be unchanged (we haven't gotten there yet). The process gaps should have one fewer entry.</p>
+        <p><strong>Effort:</strong> 30 minutes per month.</p>
+      </div>
+    </div>
+
+    <p>The recurring audit is what surfaces drift. Without it, you'll genuinely forget what the codebase looked like before you started, and that makes it impossible to demonstrate progress to your manager. With it, you have a number every month that goes down.</p>
+
+    <h2>Common audit pitfalls</h2>
+
+    <p>Three traps to watch for as you read your own audit output:</p>
+
+    <ul>
+      <li><strong>Confusing transitive deps with direct ones.</strong> A library you've never heard of in <code>deps.txt</code> is usually transitive &mdash; pulled in by something else you depend on. Don't try to remove it. Remove the parent if you don't need it.</li>
+      <li><strong>Misreading lint counts.</strong> 412 <code>HardcodedText</code> findings sounds catastrophic, but most of them are probably in three or four screens. Severity matters more than count. Prioritize <code>error</code>-level findings first; <code>warning</code>-level can wait.</li>
+      <li><strong>Confusing &ldquo;old&rdquo; with &ldquo;risky&rdquo;.</strong> A 2-year-old library is not automatically a problem. <code>kotlin-stdlib-jdk7</code> hasn't moved because it doesn't need to. The risk is libraries that have moved <em>and you haven't</em>, especially if security patches landed in the gap.</li>
+    </ul>
+
+    <div class="tip-box">
+      <p>If you find yourself spending more than 45 minutes on the audit, you're trying to fix things instead of describe them. Stop. Write what you have. The fixing happens in the next 11 chapters.</p>
+    </div>
+
+    <h2>Exercise: audit your real project</h2>
+
+    <div class="exercise-box">
+      <h3>Run the audit on the project you actually ship</h3>
+      <p>Set aside 45 minutes. From your project root:</p>
+      <ol>
+        <li>Run the three Gradle commands from earlier in this chapter. Save outputs.</li>
+        <li>Open <code>app/build/reports/lint-results-debug.html</code>. Scroll. Read the top 10 issue categories. Note the counts.</li>
+        <li>Skim <code>deps.txt</code>. Flag: any version conflicts? Any duplicate solutions to the same problem? Any libraries you don't recognize?</li>
+        <li>Create <code>docs/quality-debt.md</code> in your repo following the template above.</li>
+        <li>Pick one recommendation and write it as the last section. Be specific about why.</li>
+        <li>(Optional but recommended) Save the <code>/audit-android-project</code> skill in <code>.claude/commands/</code>. Re-run it. See if Claude's audit matches yours.</li>
+        <li>Open a PR with just the new <code>docs/quality-debt.md</code>. No code changes. The PR is a document.</li>
+      </ol>
+      <p><strong>Done.</strong> You now have a written, defensible starting point. Next chapter we install the first tool.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>Chapter 3 starts the static-analysis pillar with Android Lint &mdash; the linter you already have, the one that's currently shouting into a log nobody reads. We'll tune it from "ignored noise" to "high-signal first line of defense," generate your first baseline file, and put it on the CI gate. By the end of Chapter 3, lint failures on new code will block merges. By the end of Chapter 4, detekt will join it. The path from here is mostly downhill.</p>
+
+    <footer class="chapter-nav">
+      <a href="01-why-you-keep-putting-this-off.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Why You Keep Putting This Off</span>
+      </a>
+      <a href="03-android-lint.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Android Lint, Properly Configured</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

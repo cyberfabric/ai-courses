@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: CI/CD Meets AI | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-automating-tests.html">&larr; Prev</a>
+      <a href="08-documentation.html">Next &rarr;</a>
+      <a href="maps/07-cicd-meets-ai-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>CI/CD Meets AI</h1>
+    <p class="subtitle">Claude Code in your pipeline &mdash; changelogs, reviews, and deployment checks that run themselves</p>
+  </header>
+
+  <main>
+
+    <h2>Taking AI Out of Your Terminal</h2>
+
+    <p>Everything up to this point has run on your machine, in your Claude Code session. You type a command, you get a result. Powerful, but limited &mdash; it only works when you&rsquo;re at the keyboard.</p>
+
+    <p>This chapter moves Claude Code into the cloud. Into GitHub Actions workflows that trigger on every push, every PR, every scheduled cron. Into pipelines that run while you&rsquo;re asleep, reviewing PRs, writing changelogs, diagnosing build failures, and checking deployment readiness.</p>
+
+    <p>Your pipeline is about to get an AI brain.</p>
+
+    <h2>Why Put AI in Your Pipeline?</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">100%</span>
+        <span class="stat-label">of PRs reviewed (not just the ones a human gets to)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3 min</span>
+        <span class="stat-label">from push to AI review comment</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">0</span>
+        <span class="stat-label">changelogs forgotten at release time</span>
+      </div>
+    </div>
+
+    <p>CI/CD AI automation isn&rsquo;t about replacing your existing pipeline. It&rsquo;s about adding intelligence to the steps that currently require human judgment. Your linter already runs in CI. Now your AI reviewer does too.</p>
+
+    <h2>The Easy Path: anthropics/claude-code-action@v1</h2>
+
+    <p>The shortest path to Claude Code in CI is Anthropic&rsquo;s official GitHub Action. It runs Claude Code, posts comments to PRs natively, and handles authentication &mdash; no manual install, no separate <code>actions/github-script</code> step.</p>
+
+    <pre><code>- uses: anthropics/claude-code-action@v1
+  with:
+    anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+    prompt: |
+      Review this PR's diff for bugs, security issues, and Android pitfalls.
+      Post findings as PR review comments.
+    claude_args: --max-turns 5 --tools "Read,Grep,Bash(git *)"</code></pre>
+
+    <p>Two key inputs:</p>
+
+    <ul>
+      <li><code>prompt</code> &mdash; instructions for Claude. Plain text or a skill name (your <code>/scaffold-feature</code> and <code>/review</code> skills work in CI too).</li>
+      <li><code>claude_args</code> &mdash; anything you&rsquo;d pass to the <code>claude</code> CLI: <code>--max-turns</code>, <code>--model</code>, <code>--tools</code>, <code>--mcp-config</code>, &hellip;</li>
+    </ul>
+
+    <p>The action auto-detects mode. With an <code>issue_comment</code> trigger, it listens for <code>@claude</code> mentions; with a <code>pull_request</code> trigger and a <code>prompt:</code> set, it runs immediately. No <code>mode</code> parameter to configure.</p>
+
+    <div class="tip-box">
+      <p><strong>Quick setup:</strong> run <code>/install-github-app</code> in your Claude Code terminal. It installs the GitHub App, sets up the API key secret, and writes a starter workflow &mdash; all in one go.</p>
+    </div>
+
+    <h2>The Manual Approach (For Raw Control)</h2>
+
+    <p>The recipes in this chapter mostly use the manual pattern: install Claude Code via npm, then invoke <code>claude -p</code> directly. That pattern still works and gives you raw control &mdash; piping output through <code>jq</code>, branching on exit codes, chaining multiple Claude calls in one job. Reach for it when the official action&rsquo;s surface area isn&rsquo;t enough.</p>
+
+    <pre><code># The universal setup step
+- name: Install Claude Code
+  run: npm install -g @anthropic-ai/claude-code
+
+# The universal execution pattern
+- name: Run Claude Code
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: claude -p "your prompt here" --tools "Read,Grep" > output.md</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Pick the right tool flag.</strong> <code>--tools "Read,Grep"</code> <em>restricts which tools are available at all</em> &mdash; the safest pattern for CI. <code>--allowedTools "Read,Grep"</code> auto-approves those tools but doesn&rsquo;t block others; use it when you want fewer permission prompts but still want every tool reachable. <code>--disallowedTools "Bash(rm *),Write"</code> explicitly blocks specific tools and takes precedence over allow-rules &mdash; great for &ldquo;everything except&rdquo; setups. For deny-by-default review jobs, prefer <code>--tools</code>.</p>
+    </div>
+
+    <h2>Automated Changelog Generation</h2>
+
+    <p>Nobody likes writing changelogs. But users and stakeholders love reading them. Let&rsquo;s automate the entire thing.</p>
+
+    <div class="recipe-box">
+      <h3>Auto-Generate CHANGELOG.md on Every Release</h3>
+      <ol>
+        <li>Create the workflow file: <code>.github/workflows/changelog.yml</code></li>
+        <li>Add this content:</li>
+      </ol>
+      <pre><code>name: Generate Changelog
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.2.0
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "tag=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog entry
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          RANGE="${{ steps.prev_tag.outputs.tag }}..HEAD"
+          git log --oneline $RANGE | claude -p \
+            "Write a changelog entry for version ${{ github.ref_name }}.
+             Group changes into: Features, Bug Fixes, Performance,
+             Breaking Changes (if any).
+             Use bullet points. Be concise but specific.
+             Start with ## ${{ github.ref_name }} - $(date +%Y-%m-%d)" \
+            --tools "" \
+            > new-entry.md
+
+      - name: Prepend to CHANGELOG
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            cat new-entry.md <(echo -e "\n") CHANGELOG.md > temp.md
+            mv temp.md CHANGELOG.md
+          else
+            mv new-entry.md CHANGELOG.md
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for ${{ github.ref_name }}"
+          git push origin HEAD:main</code></pre>
+      <ol start="3">
+        <li>Add your <code>ANTHROPIC_API_KEY</code> to GitHub repository secrets</li>
+        <li>Tag a release: <code>git tag v1.3.0 && git push --tags</code></li>
+        <li>Watch the changelog appear automatically</li>
+      </ol>
+    </div>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Changelog Without Automation</h4>
+        <ol>
+          <li>Release day arrives</li>
+          <li>Scroll through 47 commits since last release</li>
+          <li>Try to remember what each one did</li>
+          <li>Write vague bullet points: &ldquo;Bug fixes and improvements&rdquo;</li>
+          <li>Miss half the changes</li>
+          <li>Stakeholders complain they don&rsquo;t know what shipped</li>
+        </ol>
+        <p><strong>Time: 30+ minutes. Quality: low.</strong></p>
+      </div>
+      <div class="after">
+        <h4>Changelog With AI</h4>
+        <ol>
+          <li>Tag the release: <code>git tag v1.3.0</code></li>
+          <li>GitHub Action runs, generates detailed changelog</li>
+          <li>CHANGELOG.md updates automatically</li>
+          <li>Every change documented, grouped, and readable</li>
+        </ol>
+        <p><strong>Time: 0 minutes from you. Quality: comprehensive.</strong></p>
+      </div>
+    </div>
+
+    <h2>Release Notes from Commits</h2>
+
+    <p>Changelogs are for developers. Release notes are for users. Same data, different audience:</p>
+
+    <pre><code>- name: Generate release notes
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    git log --oneline ${{ steps.prev_tag.outputs.tag }}..HEAD | claude -p \
+      "Write user-facing release notes for a mobile app.
+       Audience: non-technical users.
+       Tone: friendly, clear, no jargon.
+       Group into: What's New, Improvements, Bug Fixes.
+       Max 8 bullet points total — combine related changes.
+       Each bullet should explain the user benefit, not the code change.
+       Example: 'Faster app launch time' not 'Optimized DI initialization'" \
+      --tools "" \
+      > release-notes.md</code></pre>
+
+    <h2>Version Bump Automation</h2>
+
+    <p>If you use conventional commits (<code>feat:</code>, <code>fix:</code>, <code>breaking:</code>), Claude Code can determine the right version bump:</p>
+
+    <pre><code>- name: Determine version bump
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    CURRENT_VERSION=$(cat version.txt)
+    git log --oneline ${{ steps.prev_tag.outputs.tag }}..HEAD | claude -p \
+      "Current version: $CURRENT_VERSION
+       Based on these conventional commits, determine the semantic version bump:
+       - feat: → minor bump
+       - fix: → patch bump
+       - Any BREAKING CHANGE or ! after type → major bump
+
+       Output ONLY the new version number, nothing else." \
+      --tools "" \
+      > new-version.txt</code></pre>
+
+    <h2>Build Failure Diagnosis</h2>
+
+    <p>When CI fails, someone has to read the logs, understand the error, and figure out the fix. Usually that takes 10&ndash;20 minutes of scrolling through verbose output. Let AI do the scrolling:</p>
+
+    <pre><code>name: Diagnose Build Failure
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+
+jobs:
+  diagnose:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download build logs
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const logs = await github.rest.actions.downloadWorkflowRunLogs({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.payload.workflow_run.id
+            });
+            require('fs').writeFileSync('build-logs.txt',
+              Buffer.from(logs.data));
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Diagnose failure
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          cat build-logs.txt | tail -500 | claude -p \
+            "This CI build failed. Analyze the logs and report:
+             1. **Root cause**: What specifically failed and why
+             2. **Error location**: Which file/line/test
+             3. **Suggested fix**: Exact steps to resolve
+             4. **Category**: compilation / test failure / dependency /
+                config / infrastructure
+
+             Be specific. Quote the relevant error messages." \
+            --tools "" \
+            > diagnosis.md
+
+      - name: Post diagnosis to PR
+        if: github.event.workflow_run.pull_requests[0]
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const diagnosis = fs.readFileSync('diagnosis.md', 'utf8');
+            const pr = context.payload.workflow_run.pull_requests[0];
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: `## Build Failure Diagnosis\n\n${diagnosis}\n\n---\n*Automated by Claude Code*`
+            });</code></pre>
+
+    <div class="automation-box">
+      <p><strong>Build failure diagnosis changes the feedback loop.</strong> Instead of a developer seeing &ldquo;CI failed&rdquo; and spending 15 minutes figuring out why, they see a comment that says &ldquo;Compilation failed in UserRepository.kt line 42 because the new ApiResult.Loading state isn&rsquo;t handled in the when expression. Add the missing branch.&rdquo; Fix time drops from 15 minutes to 2 minutes.</p>
+    </div>
+
+    <h2>Scheduled Agents</h2>
+
+    <p>Not everything should run on push or PR. Some tasks need to run on a schedule &mdash; daily, weekly, or monthly. Claude Code supports scheduled agents that run on cron:</p>
+
+    <pre><code>name: Weekly Maintenance
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9 AM UTC
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Dependency audit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          ./gradlew dependencies --configuration releaseRuntimeClasspath \
+            > deps.txt 2>&1
+          cat deps.txt | claude -p \
+            "Analyze these Android project dependencies:
+             1. Flag any with known CVEs (check version numbers)
+             2. Flag any that are 2+ major versions behind latest
+             3. Flag deprecated libraries with suggested replacements
+             4. Summarize as a markdown report" \
+            --tools "" \
+            > dep-report.md
+
+      - name: Create issue if findings
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('dep-report.md', 'utf8');
+            if (report.includes('CVE') || report.includes('deprecated')) {
+              github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Weekly dependency audit — ${new Date().toISOString().split('T')[0]}`,
+                body: report,
+                labels: ['maintenance', 'dependencies']
+              });
+            }</code></pre>
+
+    <h3>Other scheduled agent ideas</h3>
+
+    <ul>
+      <li><strong>Documentation freshness check</strong> &mdash; weekly audit of docs vs. code</li>
+      <li><strong>Test coverage report</strong> &mdash; weekly coverage gap detection with <code>/find-coverage-gaps</code></li>
+      <li><strong>Tech debt inventory</strong> &mdash; monthly scan for TODOs, FIXMEs, and deprecated API usage</li>
+      <li><strong>Security scanning</strong> &mdash; daily check for new CVEs in your dependency tree</li>
+    </ul>
+
+    <h2>Deployment Pre-Checks</h2>
+
+    <p>Before a release goes out, verify that everything is in order:</p>
+
+    <pre><code>- name: Deployment readiness check
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    claude -p "Deployment readiness check for Android release.
+      Verify:
+      1. Read version.txt — is version bumped from last tag?
+      2. Read CHANGELOG.md — does it have an entry for this version?
+      3. Check git log for any 'WIP' or 'fixup' commits
+      4. Check AndroidManifest.xml — any debug-only permissions left?
+      5. Check build.gradle.kts — is debuggable set to false for release?
+      6. Any TODO comments with 'BEFORE_RELEASE' markers?
+
+      Output a GO / NO-GO decision with details." \
+      --allowedTools "Read,Bash(git log*),Bash(grep*)" \
+      > readiness.md</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Be careful with CI costs.</strong> Claude Code API calls cost money. A review on every push to every branch adds up. Cost-control levers, in order of impact:</p>
+      <ul>
+        <li><strong>Lean on prompt caching.</strong> Claude Code automatically caches stable prompt prefixes (CLAUDE.md, skill content, large diffs you reference repeatedly). Cache hits cost about <em>10% of standard input price</em>, so a CI job that re-runs the same review prompt across many PRs gets dramatically cheaper. The current TTL is 5 minutes, so back-to-back jobs benefit most.</li>
+        <li><strong>Cap iterations.</strong> Pass <code>--max-turns 5</code> (or lower) in <code>claude_args</code> to stop runaway loops. Most CI prompts only need 1&ndash;3 turns.</li>
+        <li><strong>Filter triggers.</strong> Run AI review only on PRs to main, not every push to every branch. Use <code>paths:</code> filters to skip docs-only changes.</li>
+        <li><strong>Use the right model size.</strong> Sonnet for review, Haiku for simple classification (e.g. version-bump decisions). Override per-job via <code>claude_args: --model claude-haiku-4-5</code>.</li>
+        <li><strong>Add concurrency limits.</strong> A <code>concurrency: { group: review-${{ github.ref }}, cancel-in-progress: true }</code> block stops parallel runs on the same PR from piling up.</li>
+        <li><strong>Set workflow timeouts.</strong> <code>timeout-minutes: 10</code> on the job is your circuit breaker.</li>
+      </ul>
+      <p>Monitor your Anthropic API usage weekly and set billing alerts on the console.</p>
+    </div>
+
+    <h2>Android-Specific CI/CD Recipes</h2>
+
+    <h3>Play Store listing update</h3>
+
+    <pre><code>- name: Generate Play Store release notes
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    git log --oneline $PREV_TAG..HEAD | claude -p \
+      "Write Google Play Store release notes.
+       Requirements:
+       - Max 500 characters
+       - Friendly, user-facing language
+       - No technical jargon
+       - Focus on top 3-4 changes users will notice
+       - End with a positive note encouraging updates" \
+      --tools "" \
+      > play-store-notes.txt</code></pre>
+
+    <h3>PR merge automation</h3>
+
+    <pre><code>name: Auto-Merge
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  auto-merge:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all status checks passed
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.payload.pull_request.head.sha
+            });
+            const allPassed = checks.check_runs.every(
+              c => c.conclusion === 'success' || c.conclusion === 'skipped'
+            );
+            if (allPassed) {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                merge_method: 'squash'
+              });
+            }</code></pre>
+
+    <h2>The CI/CD AI Pipeline</h2>
+
+    <div class="workflow-steps">
+      <div class="step">Push / PR</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">AI Review</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Build + Test</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Diagnose Failures</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Auto-Merge</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Changelog + Release</div>
+    </div>
+
+    <p>Each step is a GitHub Actions workflow. Together, they form an intelligent pipeline that reviews, tests, diagnoses, merges, and documents &mdash; all without you watching.</p>
+
+    <h2>Exercise: Add AI to Your Pipeline</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Set Up Two CI/CD AI Workflows</h3>
+      <p>Pick two from the list below. Each takes about 15 minutes.</p>
+
+      <h4>Option A: Automated Changelog</h4>
+      <ol>
+        <li>Create <code>.github/workflows/changelog.yml</code> using the template above</li>
+        <li>Add <code>ANTHROPIC_API_KEY</code> to your repo&rsquo;s GitHub Secrets</li>
+        <li>Tag a test release: <code>git tag v0.0.1-test &amp;&amp; git push --tags</code></li>
+        <li>Watch the changelog generate and commit automatically</li>
+      </ol>
+
+      <h4>Option B: Build Failure Diagnosis</h4>
+      <ol>
+        <li>Create the diagnosis workflow from this chapter</li>
+        <li>Intentionally break a test in a PR</li>
+        <li>Watch the diagnosis comment appear on the PR</li>
+        <li>Fix the issue using the AI&rsquo;s suggested fix</li>
+      </ol>
+
+      <h4>Option C: Weekly Dependency Audit</h4>
+      <ol>
+        <li>Create the scheduled maintenance workflow</li>
+        <li>Test it manually: <code>gh workflow run weekly-maintenance</code></li>
+        <li>Check if a GitHub issue was created with the dependency report</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Set up all three. You now have an AI-powered pipeline that reviews, diagnoses, documents, and audits &mdash; while you focus on building features.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your pipeline now handles reviews, changelogs, failure diagnosis, and scheduled maintenance. But there&rsquo;s one category of output that&rsquo;s always the first to go stale: <strong>documentation.</strong></p>
+
+    <p>In <strong>Chapter 8: Documentation That Writes Itself</strong>, you&rsquo;ll build automations that generate READMEs, API docs, architecture decision records, and onboarding guides &mdash; and keep them perpetually in sync with your code. No more &ldquo;the docs are outdated.&rdquo;</p>
+
+    <p>Let&rsquo;s make docs that stay fresh.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-automating-tests.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Automating Tests with AI</span>
+      </a>
+      <a href="08-documentation.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Documentation That Writes Itself</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

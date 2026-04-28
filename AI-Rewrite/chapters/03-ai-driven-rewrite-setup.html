@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Setting Up the AI-Driven Rewrite | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="02-teaching-ai-standards.html">&larr; Prev</a>
+      <a href="04-monolith-to-multimodule.html">Next &rarr;</a>
+      <a href="maps/03-ai-driven-rewrite-setup-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Setting Up the AI-Driven Rewrite</h1>
+    <p class="subtitle">CLAUDE.md, rewrite skills, quality gate hooks, and migration tracking</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Building the Workshop</h2>
+
+      <p>You've got the blueprints (architecture rules) and the renovation plan (migration inventory). Now you need the workshop &mdash; the tooling infrastructure that makes AI an efficient rewrite partner instead of a talented intern who keeps forgetting what you told them last session.</p>
+
+      <p>This chapter sets up four systems:</p>
+
+      <div class="workflow-steps">
+        <div class="step">CLAUDE.md</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Rewrite Skills</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Quality Hooks</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Migration Tracker</div>
+      </div>
+
+      <p>Together, these form your <strong>rewrite command center</strong>. Every AI session starts with the right context, uses purpose-built skills for migration tasks, gets blocked from writing bad code, and updates a dashboard that shows progress. For the general deep-dive on project configuration, see <a href="../../AI-Engineering/chapters/01-ai-ready-gap.html">AI-Ready Engineering Chapters 1-5</a>. This chapter applies those patterns to rewrite scenarios specifically.</p>
+    </section>
+
+    <section>
+      <h2>The Rewrite CLAUDE.md</h2>
+
+      <p>Your CLAUDE.md from Chapter 2 already has architecture rules. Now you need rewrite-specific sections that tell AI about the migration context: what's been migrated, what hasn't, and what the rules of engagement are.</p>
+
+      <div class="migration-step">
+        <h3>Generic CLAUDE.md vs Rewrite CLAUDE.md</h3>
+        <div class="before-code">
+          <h4>Generic (Incomplete for Rewrites)</h4>
+<pre><code>## Architecture Rules
+- Follow Clean Architecture
+- Use MVI pattern
+- See rules/ctx/ for details
+
+## Project Structure
+Standard Android project with Gradle modules.</code></pre>
+        </div>
+        <div class="after-code">
+          <h4>Rewrite-Specific (Complete)</h4>
+<pre><code>## Rewrite Status
+Active migration from monolith to 10-module architecture.
+Migration tracker: docs/migration-tracker.md
+
+## Module Boundaries
+- :app — navigation host + DI wiring ONLY
+- :core:domain — pure Kotlin, NO Android deps
+- :data:local — Room only, entities never leave
+- :feature:* — Compose + ViewModel, depends on :core:domain
+
+## Forbidden During Rewrite
+- NO new files in app/src/main/java/legacy/
+- NO new Activities or Fragments (Compose only)
+- NO direct SQLiteDatabase usage (Room only)
+- Every new file MUST have a corresponding test
+
+## Architecture Rules
+(rules from Chapter 2)
+
+## Available Skills
+/migrate-to-module — Move a class to its target module
+/extract-domain — Extract domain models from legacy code
+/add-di — Generate Hilt module for a Gradle module
+/generate-tests-for-migration — Tests before deleting legacy
+
+## Naming Conventions
+- Use cases: {Action}{Entity}UseCase (GetRecipesByCategory)
+- ViewModels: {Screen}ViewModel (RecipeListViewModel)
+- Entities: {Name}Entity (RecipeEntity) — data layer only
+- Mappers: {Name}Mapper (RecipeMapper) — at boundaries</code></pre>
+        </div>
+      </div>
+
+      <p>The rewrite CLAUDE.md has three things the generic one doesn't: a migration status section, explicit forbidden patterns during the rewrite, and purpose-built skills. AI reads this on every session and knows exactly where the rewrite stands.</p>
+
+      <div class="rule-callout">
+        <span class="rule-id">SETUP-001</span>
+        <span class="rule-text">The CLAUDE.md MUST include a "Forbidden During Rewrite" section that prevents AI from adding new code to legacy locations. This is the single most important quality gate.</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Rewrite-Specific Skills</h2>
+
+      <p>Skills are reusable prompt templates that you invoke with a slash command. For a rewrite, you need four core skills that automate the repetitive parts of migration. Each lives in <code>.claude/commands/</code>.</p>
+
+      <div class="module-map">
+        <h3>Skills Directory Structure</h3>
+<pre>
+.claude/
+  commands/
+    migrate-to-module.md      — Move a file to its target module
+    extract-domain.md         — Extract domain models from legacy
+    add-di.md                 — Generate Hilt module for a Gradle module
+    generate-tests-for-migration.md  — Tests for code about to be deleted
+</pre>
+      </div>
+
+      <h3>Skill: /migrate-to-module</h3>
+
+      <p>This is the workhorse skill. It takes a legacy file and moves it to the correct target module, transforming it along the way.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">/migrate-to-module Skill Template</div>
+        <div class="prompt-text">Given the legacy file at `$FILE_PATH`:
+
+1. Read the file and identify which target module it belongs to
+   (check docs/migration-tracker.md for the mapping)
+2. Read the target module's .ctx rules
+3. Create the new file in the target module following:
+   - Package naming: com.recipes.{module}.{feature}
+   - Architecture rules from the relevant .ctx files
+   - Naming conventions from CLAUDE.md
+4. Create or update the mapper if crossing a layer boundary
+5. Update the migration tracker: mark this file as MIGRATED
+6. Generate a test file for the migrated code
+7. List all files in the legacy module that still reference this file
+
+DO NOT delete the legacy file yet — that happens after tests pass.</div>
+        <div class="prompt-explanation">Seven-step workflow in one command. AI reads the mapping, applies rules, creates the file, writes tests, and updates tracking — all from a single /migrate-to-module invocation.</div>
+      </div>
+
+      <h3>Skill: /extract-domain</h3>
+
+      <p>This skill reads a God Activity or legacy class and extracts the pure domain logic: data classes, repository interfaces, and use cases.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">/extract-domain Skill Template</div>
+        <div class="prompt-text">Analyze `$LEGACY_FILE` and extract domain concepts:
+
+1. Identify all data structures → create domain data classes in :core:domain
+2. Identify all data operations → create repository interface in :core:domain
+3. Identify all business logic → create use cases in :core:domain
+4. Apply DOM-* rules from rules/ctx/domain.ctx
+5. Every use case: single operator fun invoke(), returns Result
+6. Every domain model: pure Kotlin, no Android annotations
+7. Generate unit tests for each use case in :core:testing
+
+Output: list of created files with their full paths.</div>
+        <div class="prompt-explanation">Targets domain extraction specifically. References the DOM-* rules. Produces testable output with a manifest of created files.</div>
+      </div>
+
+      <h3>Skills: /add-di and /generate-tests-for-migration</h3>
+
+      <div class="comparison">
+        <div>
+          <h3>/add-di</h3>
+          <ul>
+            <li>Reads a Gradle module's public API</li>
+            <li>Generates a Hilt @Module in the <code>di/</code> package</li>
+            <li>Uses @Binds for interface bindings</li>
+            <li>Matches scope to module type (Singleton for data, ViewModelScoped for features)</li>
+            <li>Validates against DI-* rules</li>
+          </ul>
+        </div>
+        <div>
+          <h3>/generate-tests-for-migration</h3>
+          <ul>
+            <li>Reads a legacy file about to be deleted</li>
+            <li>Generates tests for its replacement in the new module</li>
+            <li>Focuses on behavior verification, not implementation</li>
+            <li>Uses fakes, not mocks (per TEST-* rules)</li>
+            <li>Tests must pass before the legacy file is removed</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        Skills are just markdown files with prompt templates. You can create new ones as you discover repetitive patterns during the rewrite. If you're doing the same thing three times, make it a skill.
+      </div>
+    </section>
+
+    <section>
+      <h2>Quality Gate Hooks</h2>
+
+      <p>Skills tell AI what to do. Hooks tell AI what it <em>can't</em> do. A quality gate hook runs automatically on certain events and blocks the action if it violates a rule.</p>
+
+      <p>For a rewrite, you need three hooks:</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">1</div>
+          <div class="stat-label">No new files in legacy module</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">2</div>
+          <div class="stat-label">No forbidden patterns in new code</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">Tests required for every migration</div>
+        </div>
+      </div>
+
+      <h3>Hook 1: Block New Legacy Code</h3>
+
+      <p>This is the most critical hook. It prevents AI from adding new files to the monolith module during the rewrite.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">settings.json Hook Configuration</div>
+        <div class="prompt-text">{
+  "hooks": {
+    "PreFileWrite": [
+      {
+        "matcher": "app/src/main/java/legacy/**",
+        "command": "echo 'BLOCKED: No new files in legacy module. Migrate to the target module instead.' && exit 1"
+      }
+    ]
+  }
+}</div>
+        <div class="prompt-explanation">Any attempt to create or modify files in the legacy path gets blocked with a clear message directing AI to the target module.</div>
+      </div>
+
+      <h3>Hook 2: Forbidden Pattern Scanner</h3>
+
+      <p>Runs after file creation and scans for patterns that should never appear in new code:</p>
+
+<pre><code>#!/bin/bash
+# hooks/check-forbidden-patterns.sh
+FILE="$1"
+
+# Skip legacy files (they'll be deleted anyway)
+if [[ "$FILE" == *"/legacy/"* ]]; then exit 0; fi
+
+VIOLATIONS=""
+
+# No LiveData in new code
+if grep -q "LiveData" "$FILE" 2>/dev/null; then
+  VIOLATIONS+="FORBIDDEN: LiveData found. Use StateFlow.\n"
+fi
+
+# No SQLiteDatabase in new code
+if grep -q "SQLiteDatabase" "$FILE" 2>/dev/null; then
+  VIOLATIONS+="FORBIDDEN: Raw SQLite found. Use Room.\n"
+fi
+
+# No Fragment in new code
+if grep -q "extends Fragment\|: Fragment()" "$FILE" 2>/dev/null; then
+  VIOLATIONS+="FORBIDDEN: Fragment found. Use Compose.\n"
+fi
+
+if [ -n "$VIOLATIONS" ]; then
+  echo -e "$VIOLATIONS"
+  exit 1
+fi</code></pre>
+
+      <div class="warning-box">
+        Hooks are your automated reviewers. They catch the obvious violations before you even see the code. But they can't catch everything &mdash; architectural violations like "ViewModel calling repository directly" need human review against the checklist.
+      </div>
+
+      <h3>Hook 3: Migration Test Gate</h3>
+
+      <p>Before any legacy file is deleted, verify that replacement tests exist and pass:</p>
+
+<pre><code>#!/bin/bash
+# hooks/check-migration-tests.sh
+FILE="$1"
+
+# Only trigger on deletions in legacy module
+if [[ "$FILE" != *"/legacy/"* ]]; then exit 0; fi
+
+BASENAME=$(basename "$FILE" .kt)
+# Check if tests exist for the replacement
+TEST_COUNT=$(find . -path "*/test/*" -name "*${BASENAME}*Test.kt" | wc -l)
+
+if [ "$TEST_COUNT" -eq 0 ]; then
+  echo "BLOCKED: Cannot delete $BASENAME — no replacement tests found."
+  echo "Run /generate-tests-for-migration first."
+  exit 1
+fi</code></pre>
+    </section>
+
+    <section>
+      <h2>The Migration Tracking System</h2>
+
+      <p>You need to know, at any moment: what's been migrated, what's in progress, and what's remaining. This is the migration tracker &mdash; a markdown file that AI reads and updates during every migration operation.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">docs/migration-tracker.md Template</div>
+        <div class="prompt-text">## Migration Tracker — Recipes App Rewrite
+
+### Summary
+| Status | Count |
+|--------|-------|
+| Migrated | 0 |
+| In Progress | 0 |
+| Remaining | 47 |
+
+### Files
+
+| Legacy File | Target Module | Status | New Path | Tests |
+|-------------|---------------|--------|----------|-------|
+| RecipeActivity.kt | :feature:recipe | REMAINING | — | — |
+| RecipeDbHelper.kt | :data:local | REMAINING | — | — |
+| RecipeAdapter.kt | :feature:recipe | REMAINING | — | — |
+| NetworkUtils.kt | :core:common | REMAINING | — | — |
+| BookListActivity.kt | :feature:books | REMAINING | — | — |
+| GroceryActivity.kt | :feature:grocery | REMAINING | — | — |
+| ... | | | | |
+
+### Migration Log
+(Skills append entries here as files are migrated)
+- [date] Migrated RecipeEntity → :data:local (3 tests added)</div>
+        <div class="prompt-explanation">Machine-readable markdown table. AI updates the status column and new path as it migrates. The summary counts update automatically. The log provides an audit trail.</div>
+      </div>
+
+      <p>Every rewrite skill reads this tracker at the start and updates it at the end. You always know where the rewrite stands.</p>
+
+      <div class="rule-callout">
+        <span class="rule-id">SETUP-002</span>
+        <span class="rule-text">Every migration skill MUST update docs/migration-tracker.md when it completes. Status transitions: REMAINING → IN_PROGRESS → MIGRATED. No file is deleted until status is MIGRATED and tests pass.</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Branch Strategy for AI-Driven Rewrites</h2>
+
+      <p>A rewrite touches every part of the codebase. You can't do it in one giant branch. Here's the strategy that keeps things manageable:</p>
+
+      <div class="module-map">
+        <h3>Branch Structure</h3>
+<pre>
+main
+ └── rewrite/setup          ← Module structure + empty modules (Ch 4)
+      └── rewrite/domain     ← :core:domain extraction (Ch 5)
+           └── rewrite/data  ← :data:* implementation (Ch 6)
+                └── rewrite/presentation  ← :feature:* + ViewModels (Ch 7-8)
+                     └── rewrite/navigation  ← Navigation + errors (Ch 9)
+                          └── rewrite/tests  ← Full test suite (Ch 10)
+                               └── rewrite/integration  ← Final cleanup (Ch 11)
+</pre>
+      </div>
+
+      <p>Each branch maps to a course chapter and a layer of the architecture. The pattern:</p>
+
+      <ol>
+        <li>Create the branch from the previous rewrite branch</li>
+        <li>Run the relevant skills to migrate that layer</li>
+        <li>Run tests to verify the migration</li>
+        <li>PR review against the layer's checklist</li>
+        <li>Merge and create the next branch</li>
+      </ol>
+
+      <div class="tip-box">
+        One branch per layer, not one branch per file. AI can migrate dozens of files in a single session. The branch granularity matches the architecture layers, not individual files.
+      </div>
+
+      <div class="warning-box">
+        <strong>Never rewrite directly on main.</strong> Each branch should compile and pass tests independently. If the rewrite stalls, you can always ship from the last merged branch.
+      </div>
+    </section>
+
+    <section>
+      <h2>The Rewrite Dashboard</h2>
+
+      <p>The migration tracker gives you file-level detail. The dashboard gives you the big picture &mdash; a prompt you run at the start of each session to see where things stand.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Dashboard Prompt</div>
+        <div class="prompt-text">Read docs/migration-tracker.md and give me a rewrite status report:
+
+1. Summary: files migrated / in progress / remaining (with percentages)
+2. Per-module breakdown: how many files does each target module have?
+3. Test coverage: how many migrated files have tests vs don't?
+4. Blockers: any files marked IN_PROGRESS for more than one session?
+5. Recommended next action: what should I migrate next based on
+   dependency order and risk level?
+
+Keep the report under 30 lines.</div>
+        <div class="prompt-explanation">Structured status check that AI generates from the tracker. The "recommended next action" turns a status report into a decision tool.</div>
+      </div>
+
+      <div class="highlight-box">
+        <strong>Pro tip:</strong> Run the dashboard prompt at the start of every AI session. It takes 10 seconds and ensures you and AI are aligned on what's been done and what's next. No more "wait, didn't we already migrate that file?"
+      </div>
+    </section>
+
+    <section>
+      <h2>Putting It All Together</h2>
+
+      <p>Here's how the four systems interact during a typical migration session:</p>
+
+      <div class="workflow-steps">
+        <div class="step">Dashboard</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Pick File</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Run Skill</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Hooks Check</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Tracker Update</div>
+      </div>
+
+      <ol>
+        <li><strong>Dashboard:</strong> Run the status prompt. See 12 files remaining in <code>:core:domain</code>.</li>
+        <li><strong>Pick file:</strong> Choose <code>RecipeRepository.kt</code> from the tracker.</li>
+        <li><strong>Run skill:</strong> <code>/extract-domain RecipeRepository.kt</code> &mdash; AI creates the interface in <code>:core:domain</code>, the implementation stays in <code>:data:repository</code> for later.</li>
+        <li><strong>Hooks check:</strong> PreFileWrite hook verifies the new file isn't in the legacy path. Forbidden pattern scanner verifies no LiveData or raw SQL.</li>
+        <li><strong>Tracker update:</strong> Skill marks <code>RecipeRepository.kt</code> as MIGRATED in the tracker.</li>
+      </ol>
+
+      <p>Repeat 10-15 times per session. That's a day's worth of manual migration work done in 2 hours.</p>
+
+      <div class="checklist">
+        <label><input type="checkbox"> CLAUDE.md has rewrite status, forbidden patterns, and skills listed</label>
+        <label><input type="checkbox"> Four skills created in .claude/commands/</label>
+        <label><input type="checkbox"> Quality gate hooks configured in settings.json</label>
+        <label><input type="checkbox"> migration-tracker.md populated with all legacy files</label>
+        <label><input type="checkbox"> Branch strategy defined (one branch per layer)</label>
+        <label><input type="checkbox"> Dashboard prompt saved for session starts</label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Try It: Configure Your Rewrite Command Center</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Set Up Your Rewrite Infrastructure</h3>
+
+        <p>Using your project from Chapters 1-2:</p>
+
+        <ol>
+          <li><strong>Expand CLAUDE.md:</strong> Add a "Rewrite Status" section, a "Forbidden During Rewrite" section, and an "Available Skills" section. Reference your rules/ctx/ files.</li>
+          <li><strong>Create the skills:</strong> Write at least <code>/migrate-to-module</code> and <code>/extract-domain</code> in <code>.claude/commands/</code>. Use the templates above as starting points, customized with your module names.</li>
+          <li><strong>Configure hooks:</strong> Set up the "no new legacy code" hook in settings.json. Test it by asking AI to create a file in the legacy path &mdash; it should be blocked.</li>
+          <li><strong>Build the tracker:</strong> Create <code>docs/migration-tracker.md</code> with every file in your legacy module. Use the health check output from Chapter 1 to populate the target module column.</li>
+          <li><strong>Test the workflow:</strong> Run the dashboard prompt, pick one simple file, and migrate it using your skill. Verify the tracker updates and hooks fire.</li>
+        </ol>
+
+        <p><strong>Deliverable:</strong> A fully configured rewrite command center &mdash; CLAUDE.md, skills, hooks, and tracker &mdash; validated with one end-to-end migration.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>Your workshop is built. CLAUDE.md gives AI the context. Skills automate the repetitive work. Hooks prevent violations. The tracker keeps score. You're ready to start demolishing walls.</p>
+
+      <p>In <a href="04-monolith-to-multimodule.html">Chapter 4: From Monolith to Multi-Module</a>, you'll use AI to create the 10-module Gradle structure from scratch &mdash; the empty rooms that will receive the migrated code. This is the first time AI generates real project files, and it's where PKG-* rules get their first real test.</p>
+
+      <p>The command center is operational. Time to break ground.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="02-teaching-ai-standards.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Teaching AI Your Standards</span>
+    </a>
+    <a href="04-monolith-to-multimodule.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">From Monolith to Multi-Module</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

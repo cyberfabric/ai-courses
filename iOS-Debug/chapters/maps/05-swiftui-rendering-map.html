@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: SwiftUI Rendering Performance | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../05-swiftui-rendering.html">Chapter</a>
+      <a href="04-memory-leaks-map.html">&#8592; Prev Map</a>
+      <a href="06-network-urlsession-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>SwiftUI Rendering Performance</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- Big Idea -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>A SwiftUI view that re-evaluates its <code>body</code> 47 times during a scroll is repainting the house every time someone opens the front door. The rendering is cheap &mdash; the <strong>evaluation</strong> is where performance dies. Use <code>_printChanges()</code> to see it, <code>@Observable</code> to fix it.</p>
+    </div>
+
+    <!-- Rendering Pipeline Flow -->
+    <h2>🔄 The Rendering Pipeline</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📝 Evaluate <code>body</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔍 Diff old vs new</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🎨 Render changes</div>
+    </div>
+
+    <p style="text-align:center; margin-top: 0.5em; opacity: 0.8;"><strong>You control step 1.</strong> Steps 2 &amp; 3 are fast. Unnecessary evaluations = wasted CPU.</p>
+
+    <!-- _printChanges() Cheat Sheet -->
+    <h2>🔬 <code>_printChanges()</code> Output Decoder</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Console Output</th>
+          <th>Meaning</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>@self changed</code></td>
+          <td>View struct value differs (parent rebuilt)</td>
+          <td>Check if parent re-evaluates too often</td>
+        </tr>
+        <tr>
+          <td><code>@identity changed</code></td>
+          <td>View destroyed &amp; recreated (new identity)</td>
+          <td>🚨 Fix unstable ID — state resets, animations break</td>
+        </tr>
+        <tr>
+          <td><code>_propertyName changed</code></td>
+          <td>A specific observed property changed</td>
+          <td>Check if this view actually needs that property</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- @Observable vs ObservableObject -->
+    <h2>⚡ <code>@Observable</code> vs <code>ObservableObject</code></h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>ObservableObject (Legacy)</th>
+          <th>@Observable (Modern)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Tracking</td>
+          <td>Object-level: any <code>@Published</code> → all observers</td>
+          <td>Property-level: only views reading changed property</td>
+        </tr>
+        <tr>
+          <td>500-item list, 1 change</td>
+          <td><strong>501</strong> body evaluations</td>
+          <td><strong>1</strong> body evaluation</td>
+        </tr>
+        <tr>
+          <td>View wrappers</td>
+          <td><code>@StateObject</code>, <code>@ObservedObject</code>, <code>@EnvironmentObject</code></td>
+          <td><code>@State</code>, plain property, <code>@Environment</code></td>
+        </tr>
+        <tr>
+          <td>Min deployment</td>
+          <td>iOS 13+</td>
+          <td>iOS 17+</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- 6 Performance Traps -->
+    <h2>🎯 The 6 Performance Traps</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>🏭 Objects Created in <code>body</code></h4>
+        <p><code>DateFormatter()</code> allocated every evaluation. Fix: <code>static let</code> property.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>📡 Reading Too Many Observable Properties</h4>
+        <p>View reads 5 properties → re-evaluates when any of them change. Fix: split into focused child views.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>🪪 Unstable View Identity</h4>
+        <p><code>.id(UUID())</code> or non-stable <code>ForEach</code> IDs. State resets, animations break. Fix: persistent IDs.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>🧮 Heavy Computation in <code>body</code></h4>
+        <p>Sorting/filtering large collections every evaluation. Fix: cached computed state or <code>.task</code>.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>📌 Missing <code>@State</code> for Local State</h4>
+        <p>Plain <code>var</code> resets on parent rebuild. Fix: use <code>@State</code> for view-local mutable values.</p>
+      </li>
+      <li class="map-timeline-item" data-step="6">
+        <h4>⚖️ EquatableView Neglect</h4>
+        <p>Expensive body with complex inputs. Fix: <code>Equatable</code> conformance to skip body when inputs match.</p>
+      </li>
+    </ol>
+
+    <!-- Debugging Tools -->
+    <h2>🛠️ Performance Debugging Tools</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">🔬 _printChanges()</div>
+      <div class="map-rel-node">📊 SwiftUI Instrument</div>
+      <div class="map-rel-center">🐌 Slow<br>SwiftUI Views</div>
+      <div class="map-rel-node">🍎 Swift Assist</div>
+      <div class="map-rel-node">🤖 /analyze-rendering</div>
+    </div>
+
+    <!-- Tool Comparison Cards -->
+    <h2>🔧 When to Use Each Tool</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔬</span>
+        <div class="map-card-title">_printChanges()</div>
+        <div class="map-card-desc">First tool — always start here. Add to any view body. Shows exactly what triggered re-evaluation. Development only.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📊</span>
+        <div class="map-card-title">SwiftUI Instrument (Xcode 26)</div>
+        <div class="map-card-desc">Three lanes: Long View Body, Long Representable, Other Long Updates. Cause &amp; Effect Graph traces why updates happen.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🍎</span>
+        <div class="map-card-title">Xcode 26 Swift Assist</div>
+        <div class="map-card-desc">Quick inline fixes. Select slow view, ask "Why does this re-render?" Explains Cause &amp; Effect Graph in plain English.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">/analyze-rendering Skill</div>
+        <div class="map-card-desc">Cross-file analysis. Feed _printChanges() output + source files. Traces dependency chains across view model architecture.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔧</span>
+        <div class="map-card-title">XcodeBuildMCP</div>
+        <div class="map-card-desc">Automated profiling: build → launch simulator → capture Instruments → feed to Claude Code in one AI agent workflow.</div>
+      </div>
+    </div>
+
+    <!-- Identity Comparison -->
+    <h2>🪪 View Identity Types</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>How It Works</th>
+          <th>Performance Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Structural</strong></td>
+          <td>Position in view tree. <code>if/else</code> = different identities.</td>
+          <td>Branch switch destroys &amp; recreates view, state resets.</td>
+        </tr>
+        <tr>
+          <td><strong>Explicit</strong></td>
+          <td><code>.id()</code> modifier or <code>ForEach</code> + <code>Identifiable</code>.</td>
+          <td>Changing ID = new view. Stable IDs = smooth animations.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Key Fix Pattern -->
+    <h2>💊 The Derived State Pattern</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">❌ Child reads entire ViewModel</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Any VM change re-evaluates child</div>
+    </div>
+    <div class="map-flow" style="margin-top: 0.5em;">
+      <div class="map-flow-step">✅ Parent derives value, passes to child</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Child re-evaluates only when its value changes</div>
+    </div>
+
+    <!-- Key Terms -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>View body evaluation</dt>
+      <dd>SwiftUI calling your <code>body</code> property to get a new UI description. Expensive if body does heavy work.</dd>
+
+      <dt>_printChanges()</dt>
+      <dd>Undocumented debug method. Add to body to see what triggered re-evaluation. Remove before shipping.</dd>
+
+      <dt>@Observable</dt>
+      <dd>Observation framework macro (iOS 17+). Property-level tracking — only views reading the changed property re-evaluate.</dd>
+
+      <dt>Cause &amp; Effect Graph</dt>
+      <dd>Xcode 26 Instruments visualization showing which state change caused which view body to re-evaluate.</dd>
+
+      <dt>Structural identity</dt>
+      <dd>View identity based on position in the view tree. <code>if/else</code> branches create different identities.</dd>
+
+      <dt>Explicit identity</dt>
+      <dd>Identity set via <code>.id()</code> modifier or <code>ForEach</code> with <code>Identifiable</code>. Changing ID destroys the view.</dd>
+
+      <dt>EquatableView</dt>
+      <dd>Wraps a view with <code>Equatable</code> conformance so SwiftUI skips body evaluation when inputs haven't changed.</dd>
+
+      <dt>Derived state pattern</dt>
+      <dd>Parent computes a simple value from a complex model, passes it to child. Child decoupled from broad observation.</dd>
+    </dl>
+
+    <!-- Quick Quiz -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+      <details>
+        <summary>What does <code>@identity changed</code> mean in <code>_printChanges()</code> output?</summary>
+        <p class="quiz-answer">The view was destroyed and recreated — SwiftUI considers it a new view, not an update. All <code>@State</code> resets, animations break. Usually caused by unstable <code>.id()</code> or non-stable <code>ForEach</code> identifiers.</p>
+      </details>
+      <details>
+        <summary>Why does migrating from <code>ObservableObject</code> to <code>@Observable</code> dramatically reduce re-evaluations?</summary>
+        <p class="quiz-answer"><code>ObservableObject</code> notifies all observers when any <code>@Published</code> property changes (object-level). <code>@Observable</code> tracks at the property level — only views that read the specific changed property re-evaluate.</p>
+      </details>
+      <details>
+        <summary>Why shouldn't you create a <code>DateFormatter</code> inside <code>body</code>?</summary>
+        <p class="quiz-answer"><code>body</code> can be called many times per second. Each call allocates a new formatter. Use a <code>static let</code> property instead — allocated once, reused forever.</p>
+      </details>
+      <details>
+        <summary>What's the derived state pattern and when should you use it?</summary>
+        <p class="quiz-answer">Instead of passing a full ViewModel to a child view, the parent computes the specific value the child needs and passes it as a simple property. Use when a child only needs one piece of data from a complex observable.</p>
+      </details>
+      <details>
+        <summary>How do you verify an AI-suggested SwiftUI optimization actually worked?</summary>
+        <p class="quiz-answer">Check <code>_printChanges()</code> output before and after. If the evaluation count doesn't drop, the suggestion didn't work. Never trust the fix without measuring.</p>
+      </details>
+    </div>
+
+    <!-- Summary Strip -->
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item"><code>_printChanges()</code> is your #1 tool — always start here before Instruments.</li>
+        <li class="map-summary-item"><strong>Xcode 26 SwiftUI Instrument</strong> has a Cause &amp; Effect Graph — use Swift Assist to explain it.</li>
+        <li class="map-summary-item">Migrate <code>ObservableObject</code> → <code>@Observable</code> for property-level tracking. Single biggest performance win (501 evaluations → 1).</li>
+        <li class="map-summary-item"><strong>Keep identity stable.</strong> No <code>.id(UUID())</code>. Unstable identity = destroyed state + broken animations.</li>
+        <li class="map-summary-item">Don't create objects in <code>body</code>. Formatters, sort operations, allocations all belong outside.</li>
+        <li class="map-summary-item">Use the <strong>derived state pattern</strong> to decouple child views from broad observables.</li>
+        <li class="map-summary-item">Always verify AI suggestions with <code>_printChanges()</code> — if the count doesn't drop, the fix didn't work.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="04-memory-leaks-map.html" class="prev">
+      <span class="nav-direction">Previous Map</span>
+      <span class="nav-chapter">Memory Leak Detection with AI</span>
+    </a>
+    <a href="../05-swiftui-rendering.html" class="next">
+      <span class="nav-direction">Back to Chapter</span>
+      <span class="nav-chapter">SwiftUI Rendering Performance</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

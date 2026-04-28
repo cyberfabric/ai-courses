@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Debugging 16 KB Page Size Compatibility | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../13-16kb-page-size.html">Chapter</a>
+      <a href="12-performance-playbook-map.html">&#8592; Prev Map</a>
+      <a href="14-modern-background-restrictions-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Debugging 16 KB Page Size Compatibility</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>If your app ships native code (`.so` files), every one of them must be aligned to <strong>16 KB</strong> page boundaries to load on Android 15+ devices that opted into 16 KB mode. The crash is brutal &mdash; it&rsquo;s a launch crash with a single, pattern-matchable signature. The fix is almost always a <strong>toolchain bump</strong> (NDK r28+, AGP 8.5.1+) or a <strong>dependency version bump</strong>, not a code change.</p>
+    </div>
+
+    <!-- ====== THE CRASH SIGNATURE ====== -->
+    <h2>🚨 The Crash Signature</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📛</span>
+        <div class="map-card-title">dlopen failed</div>
+        <div class="map-card-desc"><code>UnsatisfiedLinkError: dlopen failed: "&lt;...&gt;.so" is not page-size compatible.</code></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚠️</span>
+        <div class="map-card-title">Linker warning</div>
+        <div class="map-card-desc"><code>LOAD segment alignment (0x1000) is smaller than system page size (0x4000)</code></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💥</span>
+        <div class="map-card-title">Pre-onCreate launch crash</div>
+        <div class="map-card-desc">Fires from a static initializer or <code>System.loadLibrary</code> call &mdash; no recovery.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📵</span>
+        <div class="map-card-title">100% reproducible</div>
+        <div class="map-card-desc">Pixel 9 with 16 KB toggle, or Android Studio 16 KB emulator. Always crashes &mdash; never flaky.</div>
+      </div>
+    </div>
+
+    <!-- ====== KEY DATES ====== -->
+    <h2>📅 The Deadline Timeline</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Nov 1, 2025</h4>
+        <p>Google Play starts requiring 16 KB compatibility for new submissions and updates targeting Android 15+ that include native code.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Nov 2025 – Apr 2026</h4>
+        <p>Play Console grants automatic extensions on request. Use this window to migrate &mdash; not as an excuse to delay.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>May 31, 2026</h4>
+        <p>Last automatic extension date. After this, non-compliant updates are rejected.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>2026 onward</h4>
+        <p>More 16 KB devices ship by default. Compatibility shifts from "ship-blocker" to "your existing users start crashing."</p>
+      </li>
+    </ol>
+
+    <!-- ====== THE DIAGNOSTIC LOOP ====== -->
+    <h2>🔄 The Diagnostic Loop</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">📦 Build APK</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔍 check_elf_alignment.sh</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🤖 /analyze-page-size</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔧 Fix per library</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📱 16 KB emulator smoke test</div>
+    </div>
+
+    <!-- ====== THE FIX MENU ====== -->
+    <h2>🛠️ The Fix Menu</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Source of `.so`</th>
+          <th>Fix</th>
+          <th>Effort</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>First-party (your `cpp/`)</strong></td>
+          <td>Bump NDK to r28+, rebuild</td>
+          <td>15 min</td>
+        </tr>
+        <tr>
+          <td><strong>First-party, locked NDK</strong></td>
+          <td>Add <code>-Wl,-z,max-page-size=16384</code> + <code>common-page-size=16384</code> in CMake</td>
+          <td>15 min</td>
+        </tr>
+        <tr>
+          <td><strong>Transitive AAR with fix shipped</strong></td>
+          <td>Bump dependency version (one-line change)</td>
+          <td>30 min + test</td>
+        </tr>
+        <tr>
+          <td><strong>Transitive, no upstream fix</strong></td>
+          <td>File issue, then: rebuild from source OR drop dependency OR fork-and-patch</td>
+          <td>hours – days</td>
+        </tr>
+        <tr>
+          <td><strong>Old AGP (&lt;8.5.1)</strong></td>
+          <td>Bump AGP &mdash; needed for 16 KB zip-alignment of `lib/` entries</td>
+          <td>1 hour + test</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== KEY TERMS ====== -->
+    <h2>🧠 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Page size</dt>
+      <dd>The unit at which the OS hands out memory via <code>mmap()</code>. Historically 4 KB on Android; 16 KB on newer high-RAM devices.</dd>
+
+      <dt>ELF segment alignment</dt>
+      <dd>Each LOAD segment in a `.so` declares the page boundary it needs. Encoded as <code>2**N</code> bytes &mdash; <code>2**14</code> = 16384 (good), <code>2**12</code> = 4096 (broken).</dd>
+
+      <dt>Zip alignment</dt>
+      <dd>Inside the APK, native libs must start at a 16 KB-aligned offset so the runtime can <code>mmap()</code> them directly without copying. AGP 8.5.1+ does this automatically.</dd>
+
+      <dt>NDK r28+</dt>
+      <dd>The first NDK that emits 16 KB-aligned segments by default. Earlier NDKs need explicit linker flags.</dd>
+
+      <dt>getpagesize() / sysconf(_SC_PAGESIZE)</dt>
+      <dd>The runtime-correct way to query page size in C/C++. Replaces hardcoded <code>4096</code> or the now-undefined <code>PAGE_SIZE</code> macro.</dd>
+
+      <dt>16 KB toggle</dt>
+      <dd>The Pixel 8/8a/9/9a developer setting (<em>Settings &rarr; System &rarr; Software updates</em>) that boots the device with 16 KB pages &mdash; the easiest way to test.</dd>
+    </dl>
+
+    <!-- ====== DETECTION TOOLS ====== -->
+    <h2>🔍 Detection Tools</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📊</span>
+        <div class="map-card-title">APK Analyzer</div>
+        <div class="map-card-desc">Android Studio &rarr; Build &rarr; Analyze APK. Look at the Alignment column on `lib/arm64-v8a/*.so` rows.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📜</span>
+        <div class="map-card-title">check_elf_alignment.sh</div>
+        <div class="map-card-desc">Google&rsquo;s script: scans every `.so` in an APK and prints ALIGNED / UNALIGNED.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔬</span>
+        <div class="map-card-title">llvm-objdump -p</div>
+        <div class="map-card-desc">Surgical inspection of one `.so`. Look for <code>align 2**14</code> on LOAD lines.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">zipalign -c -P 16</div>
+        <div class="map-card-desc">Verifies the APK&rsquo;s zip-level alignment. Should print "Verification successful."</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📱</span>
+        <div class="map-card-title">16 KB emulator</div>
+        <div class="map-card-desc">SDK Manager &rarr; Android 15+ &rarr; "Google APIs Experimental 16 KB Page Size" system image.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚡</span>
+        <div class="map-card-title">adb shell getconf PAGE_SIZE</div>
+        <div class="map-card-desc">Returns 16384 if you&rsquo;re actually on a 16 KB device/emulator. Sanity-check before testing.</div>
+      </div>
+    </div>
+
+    <!-- ====== TRANSITIVE OFFENDERS ====== -->
+    <h2>📚 Common Transitive Offenders</h2>
+
+    <dl class="map-terms">
+      <dt>React Native (pre-0.76)</dt>
+      <dd>Hermes &amp; multiple core `.so` files were 4 KB. RN 0.76+ ships aligned. Many third-party RN modules still need their own bump.</dd>
+
+      <dt>Flutter (pre-3.27)</dt>
+      <dd>Engine `.so` was 4 KB. Bump the Flutter SDK; plugin authors are mixed &mdash; audit each one.</dd>
+
+      <dt>OpenCV Android (pre-4.10.0)</dt>
+      <dd><code>libopencv_java*.so</code> shipped 4 KB. 4.10.0+ is aligned.</dd>
+
+      <dt>Conscrypt (2.5.3)</dt>
+      <dd>The famous Pixel 8 launch crash &mdash; <code>libconscrypt_jni.so</code> was 4 KB. Fixed in 2.5.4+.</dd>
+
+      <dt>SQLCipher / SQLite native</dt>
+      <dd>Crypto libs are common offenders. SQLCipher 4.6.0+ is aligned.</dd>
+
+      <dt>Unity / Unreal exports</dt>
+      <dd>The engine ships its own native runtime. Re-export from Unity 6.0 LTS or Unreal 5.5+.</dd>
+    </dl>
+
+    <!-- ====== CODE PITFALL ====== -->
+    <h2>⚠️ The Hardcoded-4096 Trap</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">❌ <code>#define PAGE_SIZE 4096</code></div>
+      <div class="map-rel-node">❌ <code>char buf[4096]</code></div>
+      <div class="map-rel-center">Use <code>sysconf(_SC_PAGESIZE)</code><br>or <code>getpagesize()</code></div>
+      <div class="map-rel-node">❌ <code>mmap(NULL, 4096, ...)</code></div>
+      <div class="map-rel-node">❌ Ring buffer sized to 4096</div>
+    </div>
+
+    <!-- ====== BUILT SKILLS ====== -->
+    <h2>🧰 Skills Built in This Chapter</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📋</span>
+        <div class="map-card-title">/analyze-page-size</div>
+        <div class="map-card-desc">Audits an alignment report (APK Analyzer or <code>check_elf_alignment.sh</code> output). Groups findings, classifies source, ranks by user impact, suggests fixes.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🩺</span>
+        <div class="map-card-title">/diagnose-page-size-crash</div>
+        <div class="map-card-desc">Takes a single crash log. Confirms it&rsquo;s a 16 KB issue, names the offending `.so`, classifies first-party vs transitive, suggests the fix and the verification step.</div>
+      </div>
+    </div>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+
+      <details>
+        <summary>What does <code>align 2**14</code> mean in <code>llvm-objdump</code> output?</summary>
+        <p class="quiz-answer">2^14 = 16384 = 16 KB-aligned. Good. <code>2**12</code> = 4096 = 4 KB-aligned and needs to be rebuilt.</p>
+      </details>
+
+      <details>
+        <summary>You bumped to NDK r28 and rebuilt, but the APK still fails the alignment check. What&rsquo;s the most likely cause?</summary>
+        <p class="quiz-answer">Your AGP is older than 8.5.1, so the APK isn&rsquo;t being zip-aligned with a 16 KB stride even though the `.so` files themselves are aligned. Bump AGP.</p>
+      </details>
+
+      <details>
+        <summary>The crash log names <code>libopencv_java4.so</code>. What&rsquo;s the cheapest fix?</summary>
+        <p class="quiz-answer">Bump the OpenCV Android dependency to 4.10.0 or newer. Don&rsquo;t fork or patch &mdash; the upstream fix exists.</p>
+      </details>
+
+      <details>
+        <summary>Why is <code>PAGE_SIZE 4096</code> in your C++ code dangerous on a 16 KB device, even if your `.so` files are aligned?</summary>
+        <p class="quiz-answer">Code that allocates "one page" gets 4 KB instead of the OS&rsquo;s 16 KB, so adjacent allocations may overlap, ring buffers may corrupt data, and <code>mmap()</code> calls may behave unexpectedly. Use <code>sysconf(_SC_PAGESIZE)</code> at runtime.</p>
+      </details>
+
+      <details>
+        <summary>How do you turn a Pixel 9 into a 16 KB test device?</summary>
+        <p class="quiz-answer">Settings &rarr; System &rarr; Software updates &rarr; <strong>Boot with 16 KB page size</strong>. Toggle on, reboot. Verify with <code>adb shell getconf PAGE_SIZE</code> &rarr; 16384.</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">The 16 KB page size requirement is a hard Google Play gate as of Nov 1, 2025 (extendable to May 31, 2026) for any app shipping native code targeting Android 15+.</li>
+        <li class="map-summary-item">The crash signature is unmistakable: <code>dlopen failed: "&lt;...&gt;.so" is not page-size compatible</code> &mdash; always a launch crash, always 100% reproducible on a 16 KB device.</li>
+        <li class="map-summary-item">Audit your APK with <code>check_elf_alignment.sh</code> or APK Analyzer&rsquo;s Alignment column. Anything other than 16 KiB needs to be fixed.</li>
+        <li class="map-summary-item">First-party code: bump NDK to r28+ (16 KB-aligned by default) and AGP to 8.5.1+ (16 KB zip-alignment). Or add the linker flags as a workaround.</li>
+        <li class="map-summary-item">Transitive offenders in 2026 include older React Native, Flutter, OpenCV (&lt;4.10.0), Conscrypt 2.5.3, SQLCipher, and old Unity/Unreal exports. Bump the version &mdash; almost always the fix.</li>
+        <li class="map-summary-item">In your own C/C++ code: replace hardcoded <code>4096</code> and <code>PAGE_SIZE</code> with <code>sysconf(_SC_PAGESIZE)</code> or <code>getpagesize()</code>.</li>
+        <li class="map-summary-item">Test on a real 16 KB environment: SDK Manager&rsquo;s "Google APIs Experimental 16 KB Page Size" emulator image, or the Pixel 8/9 "Boot with 16 KB page size" toggle.</li>
+        <li class="map-summary-item">Ship two skills: <code>/analyze-page-size</code> for APK audits and <code>/diagnose-page-size-crash</code> for triaging crash logs.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="12-performance-playbook-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">Performance Budgets &amp; Your Debugging Playbook</span>
+      </a>
+      <a href="14-modern-background-restrictions-map.html" class="next">
+        <span class="nav-direction">Next Map</span>
+        <span class="nav-chapter">Background-Work Restrictions on Modern Android</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

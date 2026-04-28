@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map &mdash; Chapter 6 | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../06-pre-commit-and-local-loop.html">Chapter</a>
+      <a href="05-ktlint-and-spotless-map.html">&larr; Prev Map</a>
+      <a href="07-strictmode-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Pre-commit &amp; Local Loop</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">⚡</span>
+      <h3>The Big Idea</h3>
+      <p>The same check that takes 7 minutes in CI takes 300 milliseconds locally. Move every cheap check to <code>git commit</code>; demote the rest to <code>git push</code>; let CI be the safety net, not the workhorse.</p>
+    </div>
+
+    <h2>🪜 The dev loop ladder</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">IDE inspection</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">Format on save</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">Pre-commit</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">Pre-push</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">CI gate</div>
+    </div>
+
+    <p style="text-align:center;color:var(--color-text-light);font-size:0.9rem;">Each rung catches what the rung below missed; each is faster than the rung above.</p>
+
+    <h2>⏱️ Latency budget per rung</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⌨️</span>
+        <div class="map-card-title">IDE inspection</div>
+        <div class="map-card-desc">Live red squiggles as you type. <strong>0 sec.</strong> Lint inspections, ktlint inline highlights.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title">Format on save</div>
+        <div class="map-card-desc">Reformat + optimize imports on Ctrl+S. <strong>~50 ms.</strong> Catches 95% of style issues.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Pre-commit</div>
+        <div class="map-card-desc">Spotless + detekt on <em>staged files only</em>. <strong>~300 ms.</strong> Catches the remaining 5%.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚀</span>
+        <div class="map-card-title">Pre-push</div>
+        <div class="map-card-desc">Full lint, full detekt, spotlessCheck across the repo. <strong>under 2 min.</strong> Catches what scope-limiting hid.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🛡️</span>
+        <div class="map-card-title">CI gate</div>
+        <div class="map-card-desc">Same checks again on a clean machine. <strong>~5 min.</strong> Safety net, not the front line.</div>
+      </div>
+    </div>
+
+    <h2>🥊 Native Git hooks vs hook frameworks</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>.git/hooks (native)</th><th>lefthook / husky / pre-commit</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>In source control</td><td>No (local-only)</td><td>Yes (committed config)</td></tr>
+        <tr><td>New-hire setup</td><td>Manual copy of script</td><td>One-line install</td></tr>
+        <tr><td>Parallelism</td><td>None</td><td>Built in</td></tr>
+        <tr><td>Staged-file scoping</td><td>DIY</td><td><code>{staged_files}</code> token</td></tr>
+        <tr><td>Auto-stage fixes</td><td>DIY</td><td><code>stage_fixed: true</code></td></tr>
+        <tr><td>Cross-platform</td><td>Bash gymnastics</td><td>Declarative YAML</td></tr>
+      </tbody>
+    </table>
+
+    <h2>🎯 Picking the right framework</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🥇</span>
+        <div class="map-card-title">lefthook (recommended)</div>
+        <div class="map-card-desc">Single Go binary. No language deps. Fast, parallel. <em>Best for Android-only repos.</em></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🥈</span>
+        <div class="map-card-title">husky</div>
+        <div class="map-card-desc">Node-based. Use if your repo already has a JS/TS layer (web, RN). Otherwise it drags Node in for hooks.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🥉</span>
+        <div class="map-card-title">pre-commit</div>
+        <div class="map-card-desc">Python-based. Rich plugin ecosystem; slower startup. Best for polyglot orgs that already run Python.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">Native .git/hooks</div>
+        <div class="map-card-desc">Don't. Not in source control = new hires forget = quality theater.</div>
+      </div>
+    </div>
+
+    <h2>📋 Lefthook setup &mdash; in 3 steps</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Install the binary</h4>
+        <p><code>brew install lefthook</code> (Mac) or <code>scoop install lefthook</code> (Windows). One-time, per machine.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Wire it into the repo</h4>
+        <p><code>lefthook install</code> from repo root. Writes the actual <code>.git/hooks/*</code> scripts that delegate to lefthook.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Commit lefthook.yml</h4>
+        <p>The config at the repo root. Add the install lines to README so new contributors run them on first checkout.</p>
+      </li>
+    </ol>
+
+    <h2>🔑 Magic tokens &amp; flags</h2>
+
+    <dl class="map-terms">
+      <dt><code>{staged_files}</code></dt>
+      <dd>Lefthook substitutes this with the list of files Git is about to commit. Pass it to your task to scope work to <em>just</em> what's changing.</dd>
+      <dt><code>stage_fixed: true</code></dt>
+      <dd>If the hook modified files (e.g., <code>spotlessApply</code>), auto-stage them so the cleaned version is what gets committed.</dd>
+      <dt><code>parallel: true</code></dt>
+      <dd>Run multiple commands in the same hook simultaneously. Cuts pre-push latency by 2&ndash;3&times;.</dd>
+      <dt><code>glob</code></dt>
+      <dd>Filter <code>{staged_files}</code> by pattern (<code>*.{kt,kts}</code>). Skips the hook entirely when no matching files are staged.</dd>
+      <dt><code>commit-msg</code> hook</dt>
+      <dd>Validates the commit message itself. Useful for enforcing Conventional Commits (<code>feat(auth): ...</code>) without a bot.</dd>
+      <dt><code>--no-verify</code></dt>
+      <dd>Git's escape hatch that bypasses all hooks. Don't ban it &mdash; treat its frequency as a quality signal that hooks are too slow or wrong.</dd>
+    </dl>
+
+    <h2>🌐 lefthook.yml at the center</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">spotlessApply</div>
+      <div class="map-rel-node">detekt</div>
+      <div class="map-rel-node">lint</div>
+      <div class="map-rel-center">lefthook.yml</div>
+      <div class="map-rel-node">commit-msg</div>
+      <div class="map-rel-node">unit tests</div>
+      <div class="map-rel-node">{staged_files}</div>
+    </div>
+
+    <p style="text-align:center;color:var(--color-text-light);font-size:0.9rem;">One YAML file orchestrates the whole local loop, in source control, identical for every clone.</p>
+
+    <h2>⚡ Pre-commit vs pre-push split</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Pre-commit (under 2 sec)</th><th>Pre-push (under 2 min)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>spotlessApply on <code>{staged_files}</code></td><td>spotlessCheck (full repo)</td></tr>
+        <tr><td>detekt on <code>{staged_files}</code></td><td>detekt (all modules)</td></tr>
+        <tr><td>commit-msg format check</td><td>:app:lintDebug</td></tr>
+        <tr><td>(no full lint)</td><td>:app:assembleDebug (compile sanity)</td></tr>
+        <tr><td>(no unit tests)</td><td>unit tests of changed modules</td></tr>
+      </tbody>
+    </table>
+
+    <p>If pre-push runs over 2 minutes, demote the slowest task to CI. Past 2 min, devs <code>--no-verify</code> their way around it &mdash; and the local layer becomes useless.</p>
+
+    <h2>🚀 Speeding up Gradle hooks</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔁</span>
+        <div class="map-card-title">org.gradle.daemon=true</div>
+        <div class="map-card-desc">Reuse the JVM between invocations. Cold starts cost ~3 seconds; warm starts are sub-second.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗄️</span>
+        <div class="map-card-title">configuration-cache=true</div>
+        <div class="map-card-desc">Caches the configuration phase. The single biggest hook-latency win on Gradle 8+.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧵</span>
+        <div class="map-card-title">parallel=true + caching=true</div>
+        <div class="map-card-desc">Run modules in parallel; reuse outputs of unchanged tasks. Compounds with the daemon.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🎯</span>
+        <div class="map-card-title">Scope to staged files</div>
+        <div class="map-card-desc">Pass <code>{staged_files}</code>. Don't run the whole-repo task in pre-commit; that's pre-push's job.</div>
+      </div>
+    </div>
+
+    <h2>🤖 Reusable Claude Code skills</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📜</span>
+        <div class="map-card-title">/draft-lefthook-config</div>
+        <div class="map-card-desc">Reads your <code>build.gradle.kts</code>, verifies registered tasks, and produces a <code>lefthook.yml</code> tuned to your modules &mdash; no fictional task names.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔍</span>
+        <div class="map-card-title">/explain-hook-failure</div>
+        <div class="map-card-desc">Paste the blocked-commit output. Get an English diagnosis &mdash; usually a missing IDE setting or a stale Gradle daemon.</div>
+      </div>
+    </div>
+
+    <h2>🚨 The <code>--no-verify</code> signal</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Frequency</th><th>What it means</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Once a quarter (per dev)</td><td>Genuine emergency. The escape hatch exists for a reason.</td></tr>
+        <tr><td>Once a week (same dev)</td><td>Hooks too slow <em>or</em> rules don't fit reality. Investigate which.</td></tr>
+        <tr><td>Silently across the team</td><td>Your hooks are theater. One slow check is the culprit; find and fix.</td></tr>
+      </tbody>
+    </table>
+
+    <p>The right answer is never "ban it." It's "make hooks fast and accurate enough that nobody wants to skip them."</p>
+
+    <h2>⚠️ Pitfalls to dodge</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🏚️</span>
+        <div class="map-card-title">Whole-repo task in pre-commit</div>
+        <div class="map-card-desc">Running unscoped detekt on every commit = 30 sec per commit = devs skip the hook within a week.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗑️</span>
+        <div class="map-card-title">Forgetting <code>stage_fixed</code></div>
+        <div class="map-card-desc">Spotless rewrites a file but the un-rewritten version is what commits. Five commits later CI still complains.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🐢</span>
+        <div class="map-card-title">4-minute pre-push</div>
+        <div class="map-card-desc">Devs <code>--no-verify</code> around it. Demote slow tasks to CI &mdash; pre-push is for "fast enough to wait through."</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🧪</span>
+        <div class="map-card-title">Tests in pre-commit</div>
+        <div class="map-card-desc">Unit tests are great, just not on every commit. Pre-commit is for milliseconds; tests live in pre-push at the earliest.</div>
+      </div>
+    </div>
+
+    <div class="map-quiz">
+      <h3>Quick Quiz</h3>
+      <details>
+        <summary>Why not just use <code>.git/hooks/pre-commit</code> directly?</summary>
+        <p class="quiz-answer">Because <code>.git/</code> is local-only and never checked in. Every developer has to install hooks manually; new hires forget; CI agents don't have them. A hook framework puts the config in source control and standardizes setup with one command.</p>
+      </details>
+      <details>
+        <summary>What does <code>{staged_files}</code> do?</summary>
+        <p class="quiz-answer">Lefthook substitutes it with the list of files Git is about to commit. Passing it to your task scopes the work to just the changing files &mdash; turning a 30-second whole-repo detekt run into a 300-millisecond per-file check.</p>
+      </details>
+      <details>
+        <summary>What's the right home for a 90-second full-repo lint check?</summary>
+        <p class="quiz-answer">Pre-push, not pre-commit. Pre-commit must be sub-2-second to stay invisible; anything heavier goes to pre-push, which devs only run when they explicitly invoke <code>git push</code>. CI catches what pre-push misses.</p>
+      </details>
+      <details>
+        <summary>What does <code>stage_fixed: true</code> protect against?</summary>
+        <p class="quiz-answer">A scenario where Spotless rewrites a file but the original (unformatted) version is what gets committed, because the hook ran <em>after</em> staging. <code>stage_fixed: true</code> auto-re-stages the cleaned files so the commit captures the formatted version.</p>
+      </details>
+      <details>
+        <summary>How should a team treat a teammate using <code>--no-verify</code> weekly?</summary>
+        <p class="quiz-answer">As a quality signal, not a discipline problem. Hooks that get bypassed are too slow, too noisy, or enforce rules that don't fit. Investigate the specific hook and either fast-track it or demote it to CI.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Left-shift is arithmetic: a 7-minute CI failure becomes a 300-millisecond local rejection. Same check, different layer.</li>
+        <li class="map-summary-item">Build the <strong>5-rung ladder</strong>: IDE inspection &rarr; format-on-save &rarr; pre-commit &rarr; pre-push &rarr; CI. Each catches what the previous missed.</li>
+        <li class="map-summary-item">Use <strong>lefthook</strong> for Android-only repos (single Go binary, no language deps); husky for repos with a JS layer; never raw <code>.git/hooks</code>.</li>
+        <li class="map-summary-item">Pre-commit must be <strong>under 2 seconds</strong>; pre-push under 2 minutes. Past those budgets, devs <code>--no-verify</code> around you.</li>
+        <li class="map-summary-item">Always scope pre-commit work with <code>{staged_files}</code>. <code>stage_fixed: true</code> ensures auto-fixed files end up in the commit.</li>
+        <li class="map-summary-item">Configuration cache + Gradle daemon + parallel = the difference between a snappy hook and a hated one.</li>
+        <li class="map-summary-item"><code>--no-verify</code> usage is data, not insubordination. Make hooks fast enough that nobody wants to skip them.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="05-ktlint-and-spotless-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 5</span>
+      </a>
+      <a href="07-strictmode-map.html" class="next">
+        <span class="nav-direction">Next Map &rarr;</span>
+        <span class="nav-chapter">Chapter 7</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

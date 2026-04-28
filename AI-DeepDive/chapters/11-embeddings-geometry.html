@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Embeddings — From Words to Geometry | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-context-and-kv-cache.html">&larr; Prev</a>
+      <a href="12-training-at-scale.html">Next &rarr;</a>
+      <a href="maps/11-embeddings-geometry-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Embeddings &mdash; From Words to Geometry</h1>
+    <p class="chapter-subtitle">Train a tiny embedding, compute cosine similarity step by step, and search a vector space</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/09-embeddings.html">AI-Intro Ch 9: Embeddings</a>. There you learned that embeddings place words in a space where similar things are close together. Now you&rsquo;ll compute the actual numbers, train a tiny embedding from scratch, and build a semantic search engine by hand.
+    </div>
+
+    <p>Every chapter in this course has relied on embeddings without fully explaining them. In Chapter 5, tokens got IDs. In Chapter 6, those IDs became vectors before entering the attention mechanism. In Chapter 7, positional encoding was added to them. But where did those vectors come from? And why do they capture <em>meaning</em>?</p>
+
+    <p>That&rsquo;s what this chapter is about. By the end, you&rsquo;ll understand how words become numbers, why &ldquo;king - man + woman &asymp; queen&rdquo; actually works, and how to build semantic search with nothing more than dot products.</p>
+
+    <!-- ============================================== -->
+    <h2>The Core Problem: Numbers Need Meaning</h2>
+    <!-- ============================================== -->
+
+    <p>A neural network only understands numbers. Token ID <code>4821</code> for &ldquo;cat&rdquo; and <code>4822</code> for &ldquo;dog&rdquo; look like they&rsquo;re right next to each other, but &ldquo;cat&rdquo; and &ldquo;dog&rdquo; are no more similar than &ldquo;cat&rdquo; and &ldquo;quantum.&rdquo; Token IDs are arbitrary labels &mdash; they carry no meaning.</p>
+
+    <div class="operation-box">
+      <h4>What an Embedding Does</h4>
+      <p>An embedding is a <strong>lookup table</strong> that maps each token ID to a vector of numbers. Each token gets its own unique vector, and the vectors are <em>learned during training</em> so that tokens used in similar contexts end up with similar vectors.</p>
+      <p>If the vocabulary has 50,257 tokens and the embedding dimension is 768, the embedding table is a <strong>50,257 &times; 768 matrix</strong>. That&rsquo;s 38.6 million learnable parameters, and they&rsquo;re all just for converting token IDs to meaningful vectors.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Embedding Lookup: The Simplest Operation in AI</h4>
+
+      <p>Tiny example: vocabulary of 5 tokens, embedding dimension of 3.</p>
+
+      <p><strong>The embedding table (learned during training):</strong></p>
+      <table>
+        <thead>
+          <tr><th>Token</th><th>ID</th><th>Embedding Vector</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>cat</td><td>0</td><td><code>[0.8, 0.2, -0.1]</code></td></tr>
+          <tr><td>dog</td><td>1</td><td><code>[0.7, 0.3, -0.2]</code></td></tr>
+          <tr><td>car</td><td>2</td><td><code>[-0.5, 0.9, 0.4]</code></td></tr>
+          <tr><td>truck</td><td>3</td><td><code>[-0.4, 0.8, 0.5]</code></td></tr>
+          <tr><td>happy</td><td>4</td><td><code>[0.1, -0.6, 0.9]</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>To embed the word &ldquo;dog&rdquo;:</strong> look up row 1 &rarr; <code>[0.7, 0.3, -0.2]</code>.</p>
+      <p>That&rsquo;s it. No computation. Just a table lookup.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Notice the Patterns</h4>
+      <p>Look at the vectors above. &ldquo;Cat&rdquo; <code>[0.8, 0.2, -0.1]</code> and &ldquo;dog&rdquo; <code>[0.7, 0.3, -0.2]</code> are close &mdash; similar numbers in each position. &ldquo;Car&rdquo; <code>[-0.5, 0.9, 0.4]</code> and &ldquo;truck&rdquo; <code>[-0.4, 0.8, 0.5]</code> are also close to each other, but far from the animals. The network learned this from seeing millions of sentences where &ldquo;cat&rdquo; and &ldquo;dog&rdquo; appear in similar contexts (&ldquo;The ___ sat on the mat&rdquo;) while &ldquo;car&rdquo; and &ldquo;truck&rdquo; appear in different ones (&ldquo;She drove the ___ to work&rdquo;).</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>How Embeddings Are Trained: The Skip-Gram Idea</h2>
+    <!-- ============================================== -->
+
+    <p>The most famous embedding training method is Word2Vec&rsquo;s skip-gram. The idea is almost absurdly simple:</p>
+
+    <div class="operation-box">
+      <h4>Skip-Gram Training</h4>
+      <p>Given a center word, predict which words appear nearby. The network has one task: for each word in a sentence, predict the words within a window (say, 2 positions left and right).</p>
+      <p>The &ldquo;weights&rdquo; of this prediction network <em>are</em> the embeddings. They get adjusted during training so that words with similar contexts develop similar vectors.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Skip-Gram: One Training Step</h4>
+
+      <p>Sentence: &ldquo;The cat sat on the mat&rdquo;</p>
+      <p>Window size: 2 (look 2 words left and right)</p>
+
+      <p><strong>Training pairs (center &rarr; context):</strong></p>
+      <table>
+        <thead>
+          <tr><th>Center Word</th><th>Context Words</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>The</td><td>cat, sat</td></tr>
+          <tr><td>cat</td><td>The, sat, on</td></tr>
+          <tr><td>sat</td><td>The, cat, on, the</td></tr>
+          <tr><td>on</td><td>cat, sat, the, mat</td></tr>
+          <tr><td>the</td><td>sat, on, mat</td></tr>
+          <tr><td>mat</td><td>on, the</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>What the network learns:</strong></p>
+      <ul>
+        <li>&ldquo;Cat&rdquo; predicts &ldquo;sat&rdquo; &mdash; so &ldquo;cat&rdquo; and &ldquo;sat&rdquo; embeddings shift closer</li>
+        <li>&ldquo;Dog&rdquo; (in other sentences) also predicts &ldquo;sat&rdquo; &mdash; so &ldquo;dog&rdquo; moves toward &ldquo;sat&rdquo; too</li>
+        <li>Over millions of sentences, &ldquo;cat&rdquo; and &ldquo;dog&rdquo; both move toward the same neighborhood because they predict similar context words</li>
+      </ul>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The Key Insight: You Are the Company You Keep</h4>
+      <p>The model never sees a definition of &ldquo;cat&rdquo; or &ldquo;dog.&rdquo; It only sees which words appear near them. But that&rsquo;s enough! Words that appear in similar linguistic contexts share meaning. This is called the <strong>distributional hypothesis</strong>: &ldquo;You shall know a word by the company it keeps.&rdquo;</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If &ldquo;Paris&rdquo; and &ldquo;Tokyo&rdquo; frequently appear near words like &ldquo;capital,&rdquo; &ldquo;city,&rdquo; and &ldquo;population,&rdquo; what happens to their embeddings during training?</p>
+      <p><strong>Answer:</strong> They move closer together in the embedding space, because they predict similar context words. The model has no idea these are real cities &mdash; it just sees the co-occurrence patterns.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Cosine Similarity: Measuring Closeness</h2>
+    <!-- ============================================== -->
+
+    <p>Now that we have vectors for words, we need a way to measure how &ldquo;similar&rdquo; two vectors are. The most common measure is <strong>cosine similarity</strong>.</p>
+
+    <div class="operation-box">
+      <h4>Cosine Similarity</h4>
+      <p>Cosine similarity measures the <strong>angle</strong> between two vectors, ignoring their length. The formula:</p>
+      <p><code>cos(A, B) = (A &middot; B) / (|A| &times; |B|)</code></p>
+      <p>Where <code>A &middot; B</code> is the dot product and <code>|A|</code> is the magnitude (length) of A.</p>
+      <ul>
+        <li><code>1.0</code> = identical direction (maximally similar)</li>
+        <li><code>0.0</code> = perpendicular (unrelated)</li>
+        <li><code>-1.0</code> = opposite direction (maximally different)</li>
+      </ul>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Cosine Similarity Step by Step</h4>
+
+      <p>Let&rsquo;s compute the similarity between &ldquo;cat&rdquo; and &ldquo;dog&rdquo;:</p>
+      <p>A = <code>[0.8, 0.2, -0.1]</code> (cat)</p>
+      <p>B = <code>[0.7, 0.3, -0.2]</code> (dog)</p>
+
+      <p><strong>Step 1: Dot product (multiply element-wise, then sum)</strong></p>
+      <table>
+        <thead>
+          <tr><th>Position</th><th>A</th><th>B</th><th>A &times; B</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code>0.8</code></td><td><code>0.7</code></td><td><code>0.56</code></td></tr>
+          <tr><td>2</td><td><code>0.2</code></td><td><code>0.3</code></td><td><code>0.06</code></td></tr>
+          <tr><td>3</td><td><code>-0.1</code></td><td><code>-0.2</code></td><td><code>0.02</code></td></tr>
+        </tbody>
+      </table>
+      <p>A &middot; B = <code>0.56 + 0.06 + 0.02 = 0.64</code></p>
+
+      <p><strong>Step 2: Magnitude of A</strong></p>
+      <p><code>|A| = sqrt(0.8&sup2; + 0.2&sup2; + (-0.1)&sup2;) = sqrt(0.64 + 0.04 + 0.01) = sqrt(0.69) = 0.831</code></p>
+
+      <p><strong>Step 3: Magnitude of B</strong></p>
+      <p><code>|B| = sqrt(0.7&sup2; + 0.3&sup2; + (-0.2)&sup2;) = sqrt(0.49 + 0.09 + 0.04) = sqrt(0.62) = 0.787</code></p>
+
+      <p><strong>Step 4: Divide</strong></p>
+      <p><code>cos(cat, dog) = 0.64 / (0.831 &times; 0.787) = 0.64 / 0.654 = 0.979</code></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Reading the Result</h4>
+      <p><code>0.979</code> is very close to <code>1.0</code> &mdash; these vectors point in nearly the same direction. Cat and dog are highly similar in embedding space. Now let&rsquo;s check cat vs. car:</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Cat vs. Car: A Dissimilar Pair</h4>
+
+      <p>A = <code>[0.8, 0.2, -0.1]</code> (cat), C = <code>[-0.5, 0.9, 0.4]</code> (car)</p>
+
+      <p><strong>Dot product:</strong> <code>(0.8)(-0.5) + (0.2)(0.9) + (-0.1)(0.4) = -0.40 + 0.18 - 0.04 = -0.26</code></p>
+      <p><strong>|A|</strong> = <code>0.831</code> (same as before)</p>
+      <p><strong>|C|</strong> = <code>sqrt(0.25 + 0.81 + 0.16) = sqrt(1.22) = 1.105</code></p>
+      <p><strong>cos(cat, car)</strong> = <code>-0.26 / (0.831 &times; 1.105) = -0.26 / 0.918 = -0.283</code></p>
+
+      <p><strong>Result:</strong> <code>-0.283</code> &mdash; negative! These vectors point in roughly opposite directions. Cat and car are dissimilar in embedding space.</p>
+    </div>
+
+    <p>A quick summary of all pairwise similarities from our 5-word vocabulary:</p>
+
+    <table>
+      <thead>
+        <tr><th></th><th>cat</th><th>dog</th><th>car</th><th>truck</th><th>happy</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>cat</strong></td><td>1.00</td><td>0.98</td><td>-0.28</td><td>-0.18</td><td>-0.28</td></tr>
+        <tr><td><strong>dog</strong></td><td>0.98</td><td>1.00</td><td>-0.15</td><td>-0.04</td><td>-0.38</td></tr>
+        <tr><td><strong>car</strong></td><td>-0.28</td><td>-0.15</td><td>1.00</td><td>0.99</td><td>-0.06</td></tr>
+        <tr><td><strong>truck</strong></td><td>-0.18</td><td>-0.04</td><td>0.99</td><td>1.00</td><td>-0.01</td></tr>
+        <tr><td><strong>happy</strong></td><td>-0.28</td><td>-0.38</td><td>-0.06</td><td>-0.01</td><td>1.00</td></tr>
+      </tbody>
+    </table>
+
+    <p>The clusters are clear: {cat, dog} are similar to each other (0.98), {car, truck} are similar to each other (0.99), and &ldquo;happy&rdquo; is different from everything. This is what &ldquo;meaning as geometry&rdquo; looks like.</p>
+
+    <!-- ============================================== -->
+    <h2>The King &minus; Man + Woman = Queen Trick</h2>
+    <!-- ============================================== -->
+
+    <p>The most famous embedding result is vector arithmetic on words. Here&rsquo;s the idea: if embeddings truly capture meaning, then relationships between concepts should be represented as <em>directions</em> in the vector space.</p>
+
+    <div class="math-walkthrough">
+      <h4>Vector Arithmetic with 4D Embeddings</h4>
+
+      <p>Suppose our trained embeddings (simplified to 4 dimensions) look like:</p>
+      <table>
+        <thead>
+          <tr><th>Word</th><th>Embedding</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>king</td><td><code>[0.9, 0.8, 0.3, 0.7]</code></td></tr>
+          <tr><td>queen</td><td><code>[0.8, 0.9, 0.7, 0.6]</code></td></tr>
+          <tr><td>man</td><td><code>[0.7, 0.5, 0.2, 0.6]</code></td></tr>
+          <tr><td>woman</td><td><code>[0.6, 0.6, 0.6, 0.5]</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Compute: king &minus; man + woman</strong></p>
+      <table>
+        <thead>
+          <tr><th>Position</th><th>king</th><th>&minus; man</th><th>+ woman</th><th>= Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code>0.9</code></td><td><code>-0.7</code></td><td><code>+0.6</code></td><td><code>0.8</code></td></tr>
+          <tr><td>2</td><td><code>0.8</code></td><td><code>-0.5</code></td><td><code>+0.6</code></td><td><code>0.9</code></td></tr>
+          <tr><td>3</td><td><code>0.3</code></td><td><code>-0.2</code></td><td><code>+0.6</code></td><td><code>0.7</code></td></tr>
+          <tr><td>4</td><td><code>0.7</code></td><td><code>-0.6</code></td><td><code>+0.5</code></td><td><code>0.6</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Result:</strong> <code>[0.8, 0.9, 0.7, 0.6]</code></p>
+      <p><strong>Queen:</strong> <code>[0.8, 0.9, 0.7, 0.6]</code></p>
+
+      <p>Exact match! The &ldquo;royalty&rdquo; direction + the &ldquo;female&rdquo; direction = queen.</p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What Just Happened</h4>
+      <p>The vector from &ldquo;man&rdquo; to &ldquo;king&rdquo; captures the concept of royalty. The vector from &ldquo;man&rdquo; to &ldquo;woman&rdquo; captures gender. By subtracting the male component and adding the female component to &ldquo;king,&rdquo; you arrive at &ldquo;queen.&rdquo; The embedding space has organized itself so that <strong>abstract relationships are linear directions</strong>.</p>
+      <p>In practice, the result won&rsquo;t be an exact match &mdash; you find the nearest neighbor to the result vector. But the nearest neighbor is reliably &ldquo;queen.&rdquo;</p>
+    </div>
+
+    <div class="warning-box">
+      <strong>Caveat:</strong> This works impressively for well-represented relationships in the training data. It doesn&rsquo;t work for everything. &ldquo;doctor - man + woman&rdquo; might give &ldquo;nurse&rdquo; instead of &ldquo;doctor&rdquo; &mdash; reflecting biases in the training data, not reality. Embeddings capture the patterns in text, including the biases.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Cosine vs. Euclidean Distance</h2>
+    <!-- ============================================== -->
+
+    <p>Why cosine similarity instead of regular distance? Because embeddings can vary in length (magnitude) for reasons unrelated to meaning.</p>
+
+    <div class="comparison">
+      <div class="comparison-side">
+        <h4>Cosine Similarity</h4>
+        <ul>
+          <li>Measures the <strong>angle</strong> between vectors</li>
+          <li>Ignores vector length</li>
+          <li>[1, 2, 3] and [2, 4, 6] have cosine = 1.0 (identical direction)</li>
+          <li>Best for: meaning similarity, text search</li>
+        </ul>
+      </div>
+      <div class="comparison-side">
+        <h4>Euclidean Distance</h4>
+        <ul>
+          <li>Measures the <strong>straight-line distance</strong></li>
+          <li>Affected by vector length</li>
+          <li>[1, 2, 3] and [2, 4, 6] have distance = 3.74 (not close!)</li>
+          <li>Best for: spatial reasoning, clustering</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>In practice, most embedding applications use cosine similarity. Longer documents produce longer vectors (more accumulated meaning), but the <em>direction</em> &mdash; what the text is about &mdash; is what matters.</p>
+
+    <!-- ============================================== -->
+    <h2>Embedding Dimensions: How Many Do You Need?</h2>
+    <!-- ============================================== -->
+
+    <p>Our examples use 3 or 4 dimensions to keep the math friendly. Real embeddings use hundreds or thousands:</p>
+
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Dimensions</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Word2Vec (original)</td><td>300</td><td>A good balance for word-level meaning</td></tr>
+        <tr><td>GPT-2</td><td>768</td><td>Richer representation for token-level context</td></tr>
+        <tr><td>GPT-3</td><td>12,288</td><td>175B params need wide vectors for expressiveness</td></tr>
+        <tr><td>OpenAI text-embedding-3-small</td><td>1,536</td><td>Optimized for search and retrieval</td></tr>
+        <tr><td>OpenAI text-embedding-3-large</td><td>3,072</td><td>More nuance for complex tasks</td></tr>
+      </tbody>
+    </table>
+
+    <p>More dimensions = more nuance, but also more memory and compute. 768 dimensions can distinguish &ldquo;bank (river)&rdquo; from &ldquo;bank (financial)&rdquo;. 3 dimensions can&rsquo;t.</p>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If a model uses 1,536-dimension embeddings and has a vocabulary of 100,000 tokens, how large is the embedding table?</p>
+      <p><strong>Answer:</strong> <code>100,000 &times; 1,536 = 153,600,000</code> parameters. At float16 (2 bytes each), that&rsquo;s about <strong>307 MB</strong> just for the embedding table.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>From Word Embeddings to Sentence Embeddings</h2>
+    <!-- ============================================== -->
+
+    <p>Word2Vec gives you one vector per word. But for search and comparison, you often need one vector for an entire sentence, paragraph, or document.</p>
+
+    <p>The simplest approach: <strong>average all the word vectors</strong>.</p>
+
+    <div class="math-walkthrough">
+      <h4>Averaging Word Vectors</h4>
+
+      <p>Sentence: &ldquo;The cat sat&rdquo; using our 3D embeddings:</p>
+      <table>
+        <thead>
+          <tr><th>Word</th><th>Embedding</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>The</td><td><code>[0.1, 0.0, 0.3]</code></td></tr>
+          <tr><td>cat</td><td><code>[0.8, 0.2, -0.1]</code></td></tr>
+          <tr><td>sat</td><td><code>[0.3, -0.4, 0.6]</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Average:</strong></p>
+      <p><code>[(0.1+0.8+0.3)/3, (0.0+0.2-0.4)/3, (0.3-0.1+0.6)/3]</code></p>
+      <p><code>= [0.40, -0.07, 0.27]</code></p>
+    </div>
+
+    <p>This works reasonably well but loses word order (&ldquo;dog bites man&rdquo; = &ldquo;man bites dog&rdquo;). Modern sentence embedding models (like those behind OpenAI&rsquo;s embedding API) use the full transformer to produce a single vector that captures meaning <em>including</em> word order and context.</p>
+
+    <!-- ============================================== -->
+    <h2>Semantic Search: The Killer Application</h2>
+    <!-- ============================================== -->
+
+    <p>The most practical use of embeddings is <strong>semantic search</strong>: find documents that match a query by meaning, not just keywords.</p>
+
+    <div class="operation-box">
+      <h4>How Semantic Search Works</h4>
+      <ol>
+        <li><strong>Embed all documents</strong> &mdash; convert each to a vector</li>
+        <li><strong>Embed the query</strong> &mdash; convert the search query to a vector</li>
+        <li><strong>Compute similarity</strong> &mdash; cosine similarity between query and each document</li>
+        <li><strong>Rank</strong> &mdash; return the most similar documents</li>
+      </ol>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Semantic Search by Hand</h4>
+
+      <p>Three documents, pre-embedded as 4D vectors:</p>
+      <table>
+        <thead>
+          <tr><th>Document</th><th>Embedding</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Doc 1: &ldquo;How to train a puppy&rdquo;</td><td><code>[0.8, 0.3, -0.1, 0.5]</code></td></tr>
+          <tr><td>Doc 2: &ldquo;Car maintenance guide&rdquo;</td><td><code>[-0.4, 0.7, 0.6, 0.1]</code></td></tr>
+          <tr><td>Doc 3: &ldquo;Teaching your dog tricks&rdquo;</td><td><code>[0.7, 0.4, -0.2, 0.6]</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>Query: &ldquo;How do I teach my pet new commands?&rdquo;</p>
+      <p>Query embedding: <code>[0.6, 0.5, -0.3, 0.4]</code></p>
+
+      <p><strong>Compute cosine similarity with each document:</strong></p>
+
+      <p><em>Query vs. Doc 1:</em></p>
+      <p>Dot: <code>(0.6)(0.8) + (0.5)(0.3) + (-0.3)(-0.1) + (0.4)(0.5) = 0.48 + 0.15 + 0.03 + 0.20 = 0.86</code></p>
+      <p>|Query| = <code>sqrt(0.36+0.25+0.09+0.16) = sqrt(0.86) = 0.927</code></p>
+      <p>|Doc1| = <code>sqrt(0.64+0.09+0.01+0.25) = sqrt(0.99) = 0.995</code></p>
+      <p>cos = <code>0.86 / (0.927 &times; 0.995) = 0.86 / 0.922 = 0.933</code></p>
+
+      <p><em>Query vs. Doc 2:</em></p>
+      <p>Dot: <code>(0.6)(-0.4) + (0.5)(0.7) + (-0.3)(0.6) + (0.4)(0.1) = -0.24 + 0.35 - 0.18 + 0.04 = -0.03</code></p>
+      <p>cos = <code>-0.03 / (0.927 &times; 0.990) = -0.033</code></p>
+
+      <p><em>Query vs. Doc 3:</em></p>
+      <p>Dot: <code>(0.6)(0.7) + (0.5)(0.4) + (-0.3)(-0.2) + (0.4)(0.6) = 0.42 + 0.20 + 0.06 + 0.24 = 0.92</code></p>
+      <p>cos = <code>0.92 / (0.927 &times; 0.990) = 0.92 / 0.918 = 0.999</code> (rounding effect &mdash; extremely similar!)</p>
+
+      <p><strong>Rankings:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Rank</th><th>Document</th><th>Similarity</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>Doc 3: &ldquo;Teaching your dog tricks&rdquo;</td><td><code>0.999</code></td></tr>
+          <tr><td>2</td><td>Doc 1: &ldquo;How to train a puppy&rdquo;</td><td><code>0.933</code></td></tr>
+          <tr><td>3</td><td>Doc 2: &ldquo;Car maintenance guide&rdquo;</td><td><code>-0.033</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>Why This Is Powerful</h4>
+      <p>The query was &ldquo;How do I teach my pet new commands?&rdquo; Doc 3 is about &ldquo;teaching your dog tricks&rdquo; &mdash; different words, same meaning. Keyword search would miss this because the words don&rsquo;t overlap. Semantic search finds it because the <em>embeddings</em> are close. That&rsquo;s the whole point of embeddings: meaning becomes geometry.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Vector Databases: Search at Scale</h2>
+    <!-- ============================================== -->
+
+    <p>Computing cosine similarity against every document works when you have 3 documents. When you have 10 million, you need something faster.</p>
+
+    <p><strong>Vector databases</strong> (Pinecone, Weaviate, Qdrant, pgvector) use clever data structures to find approximate nearest neighbors without checking every vector:</p>
+
+    <table>
+      <thead>
+        <tr><th>Technique</th><th>How It Works</th><th>Tradeoff</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>IVF</strong><br>(Inverted File Index)</td>
+          <td>Cluster vectors into groups. Only search the nearest clusters.</td>
+          <td>Fast, but may miss vectors in neighboring clusters</td>
+        </tr>
+        <tr>
+          <td><strong>HNSW</strong><br>(Hierarchical Navigable Small World)</td>
+          <td>Build a multi-layer graph connecting nearby vectors. Navigate the graph to find neighbors.</td>
+          <td>Very fast and accurate, but high memory usage</td>
+        </tr>
+        <tr>
+          <td><strong>PQ</strong><br>(Product Quantization)</td>
+          <td>Compress vectors into short codes. Compare codes instead of full vectors.</td>
+          <td>Huge memory savings, but approximate distances</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>This is the foundation of RAG</strong> (Retrieval-Augmented Generation). When ChatGPT or Claude searches your documents before answering: (1) your docs were embedded and stored in a vector database, (2) your query was embedded, (3) nearest neighbors were retrieved, (4) those documents were injected into the prompt as context. Everything you learned in this chapter powers step 1&ndash;3.
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Friend Groups Analogy</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <p>Training embeddings is like asking thousands of people <strong>&ldquo;who do you hang out with?&rdquo;</strong> and then placing people with similar friend groups near each other on a map.</p>
+      <ul>
+        <li>&ldquo;Cat&rdquo; hangs out with &ldquo;sat,&rdquo; &ldquo;mat,&rdquo; &ldquo;purr,&rdquo; &ldquo;kitten&rdquo;</li>
+        <li>&ldquo;Dog&rdquo; hangs out with &ldquo;sat,&rdquo; &ldquo;park,&rdquo; &ldquo;bark,&rdquo; &ldquo;puppy&rdquo;</li>
+        <li>They share many friends &rarr; placed close together on the map</li>
+        <li>&ldquo;Car&rdquo; hangs out with &ldquo;drive,&rdquo; &ldquo;road,&rdquo; &ldquo;engine&rdquo; &mdash; different crowd &rarr; placed far away</li>
+      </ul>
+      <p>The &ldquo;map&rdquo; is the embedding space. Your position on the map <em>is</em> your vector.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Exercise: Pairwise Cosine Similarity</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Your Turn: Find the Most and Least Similar Pair</h4>
+
+      <p>Four words with 3D embeddings:</p>
+      <table>
+        <thead>
+          <tr><th>Word</th><th>Embedding</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>apple</td><td><code>[0.5, 0.8, 0.2]</code></td></tr>
+          <tr><td>orange</td><td><code>[0.4, 0.9, 0.1]</code></td></tr>
+          <tr><td>laptop</td><td><code>[0.9, -0.3, 0.7]</code></td></tr>
+          <tr><td>phone</td><td><code>[0.8, -0.2, 0.6]</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Tasks:</strong></p>
+      <ol>
+        <li>Compute cosine similarity for all 6 pairs</li>
+        <li>Identify the most similar pair and the least similar pair</li>
+        <li>Do the clusters make sense?</li>
+      </ol>
+
+      <details>
+        <summary>Show Solution</summary>
+
+        <p><strong>apple vs. orange:</strong></p>
+        <p>Dot: <code>0.20 + 0.72 + 0.02 = 0.94</code></p>
+        <p>|apple| = <code>sqrt(0.25+0.64+0.04) = 0.964</code>, |orange| = <code>sqrt(0.16+0.81+0.01) = 0.990</code></p>
+        <p>cos = <code>0.94 / (0.964 &times; 0.990) = 0.94 / 0.954 = 0.985</code></p>
+
+        <p><strong>laptop vs. phone:</strong></p>
+        <p>Dot: <code>0.72 + 0.06 + 0.42 = 1.20</code></p>
+        <p>|laptop| = <code>sqrt(0.81+0.09+0.49) = 1.179</code>, |phone| = <code>sqrt(0.64+0.04+0.36) = 1.020</code></p>
+        <p>cos = <code>1.20 / (1.179 &times; 1.020) = 1.20 / 1.203 = 0.998</code></p>
+
+        <p><strong>apple vs. laptop:</strong></p>
+        <p>Dot: <code>0.45 - 0.24 + 0.14 = 0.35</code></p>
+        <p>cos = <code>0.35 / (0.964 &times; 1.179) = 0.35 / 1.137 = 0.308</code></p>
+
+        <p><strong>apple vs. phone:</strong></p>
+        <p>Dot: <code>0.40 - 0.16 + 0.12 = 0.36</code></p>
+        <p>cos = <code>0.36 / (0.964 &times; 1.020) = 0.36 / 0.983 = 0.366</code></p>
+
+        <p><strong>orange vs. laptop:</strong></p>
+        <p>Dot: <code>0.36 - 0.27 + 0.07 = 0.16</code></p>
+        <p>cos = <code>0.16 / (0.990 &times; 1.179) = 0.16 / 1.167 = 0.137</code></p>
+
+        <p><strong>orange vs. phone:</strong></p>
+        <p>Dot: <code>0.32 - 0.18 + 0.06 = 0.20</code></p>
+        <p>cos = <code>0.20 / (0.990 &times; 1.020) = 0.20 / 1.010 = 0.198</code></p>
+
+        <p><strong>Summary:</strong></p>
+        <table>
+          <thead>
+            <tr><th>Pair</th><th>Cosine</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>laptop &harr; phone</td><td><strong>0.998</strong> (most similar)</td></tr>
+            <tr><td>apple &harr; orange</td><td>0.985</td></tr>
+            <tr><td>apple &harr; phone</td><td>0.366</td></tr>
+            <tr><td>apple &harr; laptop</td><td>0.308</td></tr>
+            <tr><td>orange &harr; phone</td><td>0.198</td></tr>
+            <tr><td>orange &harr; laptop</td><td><strong>0.137</strong> (least similar)</td></tr>
+          </tbody>
+        </table>
+
+        <p>Two clear clusters: {apple, orange} (fruits) and {laptop, phone} (electronics). Cross-cluster similarities are all low. The embeddings captured semantic categories perfectly!</p>
+      </details>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>You now understand the first and last step of the AI pipeline: tokens enter as embedding vectors (this chapter) and exit as probability distributions (Chapters 8&ndash;9). Everything in between &mdash; attention, layer norm, FFN &mdash; transforms those vectors.</p>
+
+    <p>But how does a model go from a blank slate to understanding language? In <a href="12-training-at-scale.html">Chapter 12: How Models Are Actually Trained at Scale</a>, you&rsquo;ll follow the full training pipeline: pre-training on trillions of tokens, fine-tuning on instruction data, and alignment via RLHF. You&rsquo;ll see the compute costs, the scaling laws, and why training a frontier model costs hundreds of millions of dollars.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="10-context-and-kv-cache.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Context, Memory &amp; the KV Cache</span>
+    </a>
+    <a href="12-training-at-scale.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">How Models Are Actually Trained at Scale</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

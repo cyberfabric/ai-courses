@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: The Transformer | How AI Actually Works</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">How AI Actually Works</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-tokens.html">&larr; Prev</a>
+      <a href="06-text-generation.html">Next &rarr;</a>
+      <a href="maps/05-transformer-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>The Transformer</h1>
+    <p class="chapter-subtitle">The architecture that changed everything &mdash; attention explained simply</p>
+  </header>
+
+  <main>
+
+    <p>At the end of Chapter 4, we asked: how does the model know that "bank" means different things in "river bank" vs. "bank account"? How does it understand <em>context</em>?</p>
+
+    <p>The answer is the <strong>transformer</strong> &mdash; a specific neural network architecture introduced in 2017 that changed the entire field of AI. Every LLM you use today (GPT, Claude, Gemini, Llama) is built on transformers.</p>
+
+    <p>The core idea is called <strong>attention</strong>, and it's surprisingly intuitive once you see it. Let's build up to it step by step.</p>
+
+    <!-- ============================================ -->
+    <h2>Before Transformers: The Keyhole Problem</h2>
+    <!-- ============================================ -->
+
+    <p>To appreciate why transformers matter, you need to understand what came before them: <strong>Recurrent Neural Networks (RNNs)</strong>.</p>
+
+    <p>RNNs processed text one token at a time, left to right. Read the first word, update your internal state. Read the second word, update again. Third word, update again. Like reading through a mail slot &mdash; you only see one word at a time and try to remember everything that came before.</p>
+
+    <p>This had two critical problems:</p>
+
+    <ul>
+      <li><strong>Forgetting.</strong> By the time the RNN reached the 500th word, it had mostly forgotten the 1st word. The internal state could only hold so much information, and early context gradually faded. Connecting a pronoun to a noun 200 words back? Nearly impossible. Understanding that a function name on line 50 relates to a comment on line 3? Forget it.</li>
+      <li><strong>Speed.</strong> Because tokens were processed sequentially (one after another), you couldn't parallelize. Processing a 10,000-token document took 10,000 sequential steps. You couldn't throw more GPUs at it to go faster &mdash; each step depended on the previous one. Training on billions of tokens was painfully slow.</li>
+    </ul>
+
+    <div class="analogy-box">
+      <h4>Analogy: Reading Through a Keyhole</h4>
+      <p>Imagine trying to understand a novel by looking at it through a keyhole. You slide the book past the keyhole, seeing one word at a time. You try to remember everything you've read, but your memory fades. By page 50, you've forgotten what happened on page 1.</p>
+      <p>Now imagine instead that you can see the entire page at once &mdash; and draw connections between any word and any other word on the page. You can see that the "she" on line 20 refers to the character introduced on line 3. You can see that the metaphor at the end ties back to the opening sentence.</p>
+      <p>That's the difference between RNNs and transformers. RNNs read through a keyhole. Transformers see everything at once.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The 2017 Paper: "Attention Is All You Need"</h2>
+    <!-- ============================================ -->
+
+    <p>In 2017, a team at Google published a paper with one of the most iconic titles in computer science: <strong>"Attention Is All You Need."</strong></p>
+
+    <p>The paper proposed replacing RNNs entirely with a new mechanism called <strong>self-attention</strong>. Instead of reading tokens one at a time, the transformer looks at all tokens simultaneously and figures out which ones are relevant to each other.</p>
+
+    <p>The title wasn't hype. It was literally true. The transformer architecture replaced the complex recurrent connections of RNNs with a single, elegant idea: let every token talk to every other token directly. No recurrence. No sequence bottleneck. Just attention.</p>
+
+    <p>The result? Models that were faster to train, better at understanding long text, and scalable in ways no one anticipated. Within a few years, transformers had taken over not just language processing but image recognition, music generation, protein folding, and more. Almost every breakthrough in AI since 2017 builds on this one paper.</p>
+
+    <!-- ============================================ -->
+    <h2>Attention in Plain English</h2>
+    <!-- ============================================ -->
+
+    <p>Here's the core idea of attention, stripped of all jargon:</p>
+
+    <p><strong>When processing any token, look at ALL other tokens and figure out which ones matter most for understanding this one.</strong></p>
+
+    <p>That's it. That's the core of the entire architecture that powers billions of dollars of AI products.</p>
+
+    <p>For each token in the input, the model asks: "Which other tokens should I pay attention to in order to understand this token in context?" The answer is different for every token and every sentence. The model figures it out dynamically, based on what it learned during training.</p>
+
+    <p>Think about it: when you read a sentence, you don't process each word in isolation. The word "run" means something different in "run the program," "run a marathon," and "a run of bad luck." You instantly pull the right meaning from context. Attention gives AI the same ability.</p>
+
+    <p>Let's see this in action with an example:</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Attention resolving ambiguity</p>
+      <div class="prompt-text">Sentence 1: "I went to the bank to deposit money."
+→ "bank" attends strongly to "deposit" and "money"
+→ Conclusion: financial bank
+
+Sentence 2: "I sat on the bank and watched the river flow."
+→ "bank" attends strongly to "sat", "river", "flow"
+→ Conclusion: river bank</div>
+      <p class="prompt-explanation">Same word, different meanings. Attention figures out which context words matter and assigns meaning accordingly.</p>
+    </div>
+
+    <p>The model doesn't have a dictionary lookup for "bank." Instead, it dynamically determines what "bank" means <em>in this specific context</em> by looking at all the surrounding tokens and computing which ones are most relevant.</p>
+
+    <p>And this doesn't just work for ambiguous words. Attention helps the model understand pronouns ("she" &rarr; which person?), scope ("this" &rarr; which thing?), negation ("not bad" &rarr; actually good), and even complex references across long passages. Every token's meaning is shaped by the tokens around it.</p>
+
+    <p>In code, this is especially powerful. When the model sees <code>result = process(data)</code>, attention connects <code>result</code> to its later uses, <code>process</code> to its function definition, and <code>data</code> to where it was declared. All simultaneously, across potentially thousands of lines.</p>
+
+    <h3>How Attention Works (Without Math)</h3>
+
+    <p>For each token, the attention mechanism computes three things:</p>
+
+    <ul>
+      <li><strong>Query:</strong> "What am I looking for?" &mdash; what kind of context does this token need?</li>
+      <li><strong>Key:</strong> "What do I offer?" &mdash; what kind of context can this token provide to others?</li>
+      <li><strong>Value:</strong> "What information do I carry?" &mdash; the actual content to pass along if attention is high.</li>
+    </ul>
+
+    <p>For every pair of tokens, the model compares the query of one with the key of the other. If they match well &mdash; high attention score. If they don't &mdash; low attention score. Then the model combines the values of all tokens, weighted by their attention scores.</p>
+
+    <div class="analogy-box">
+      <h4>Analogy: A Search Engine Inside the Model</h4>
+      <p>Think of queries, keys, and values like a search engine.</p>
+      <p>The <strong>query</strong> is your search term &mdash; "What am I looking for?" The <strong>keys</strong> are the titles of all the web pages &mdash; "What does each page claim to be about?" The <strong>values</strong> are the actual page content.</p>
+      <p>The search engine compares your query against every key. Pages with matching keys get high relevance scores. Then it returns a weighted combination of the page contents (values), with the most relevant pages contributing the most.</p>
+      <p>Attention works exactly like this, but it happens for every token, at every layer, comparing against every other token in the input. It's like running thousands of search queries simultaneously.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>You don't need to remember the query/key/value details. The key intuition is: for each token, the model learns to "search" the surrounding context and pull in the most relevant information. The result is a token representation that's enriched with context from the entire input.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Multi-Head Attention: Looking from Multiple Angles</h2>
+    <!-- ============================================ -->
+
+    <p>A single attention mechanism looks at text from one "perspective." But language is complicated &mdash; you often need to understand multiple types of relationships at once.</p>
+
+    <p>Consider this sentence: "The developer who wrote the buggy code fixed it yesterday."</p>
+
+    <p>To fully understand "it," you need to figure out:</p>
+    <ul>
+      <li><strong>What</strong> does "it" refer to? &rarr; "the buggy code" (grammatical reference)</li>
+      <li><strong>Who</strong> did the action? &rarr; "the developer" (subject tracking)</li>
+      <li><strong>When</strong> did it happen? &rarr; "yesterday" (temporal context)</li>
+    </ul>
+
+    <p>That's three different types of context, all needed for one pronoun. <strong>Multi-head attention</strong> solves this by running multiple attention mechanisms in parallel &mdash; each one looking for a different type of relationship.</p>
+
+    <p>Each "head" learns to specialize in a different kind of attention. Some heads learn to track grammatical references. Others learn to follow subject-verb relationships. Others track positional or temporal patterns. The results from all heads are combined to give a rich, multi-perspective understanding of each token.</p>
+
+    <p>Typical transformers use 32 to 128 attention heads per layer. That's 32 to 128 different perspectives examining every pair of tokens, at every layer of the network.</p>
+
+    <p>As a developer, you can think of multi-head attention like running multiple <code>grep</code> searches on the same text simultaneously &mdash; each one looking for a different pattern. One "grep" finds grammatical relationships. Another finds semantic similarities. Another tracks code structure. The results are combined into a complete picture.</p>
+
+    <div class="aha-box">
+      <h4>Aha Moment</h4>
+      <p>This is why LLMs are so good at understanding complex, nuanced text. They're not just reading your prompt once &mdash; they're analyzing it from dozens of perspectives simultaneously, at every layer. Each attention head picks up different patterns: grammar, meaning, code structure, naming conventions, logical flow.</p>
+      <p>When Claude Code understands that your variable <code>userList</code> should be an array and not a string, it's because attention heads at various layers connected that variable name to its usage patterns, type annotations in nearby code, and similar patterns from training data &mdash; all in parallel.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Positional Encoding: How the Model Knows Word Order</h2>
+    <!-- ============================================ -->
+
+    <p>Here's a subtle but important problem. Since the transformer sees all tokens at once (not sequentially like an RNN), how does it know what order they're in?</p>
+
+    <p>The sentence "The dog bit the man" and "The man bit the dog" contain the exact same tokens. Without knowing the order, they're identical. But their meanings are very different.</p>
+
+    <p>The solution is <strong>positional encoding</strong>: before tokens enter the transformer, each one gets tagged with information about its position. Token 1 gets a "I'm in position 1" signal, token 2 gets a "I'm in position 2" signal, and so on.</p>
+
+    <p>These position signals are added directly to the token representations, so by the time the data reaches the attention mechanism, each token carries both its meaning and its position. The model can then learn patterns like "the token in position 1 is usually the subject" or "in Python, the token after 'def' is the function name."</p>
+
+    <p>Different models handle positional encoding differently. The original transformer used fixed mathematical patterns. Modern models like Llama use <strong>rotary positional embeddings (RoPE)</strong> that encode relative positions instead of absolute ones &mdash; the model learns that token A is 5 positions before token B, rather than that A is at position 12 and B is at position 17. This turns out to generalize better to different input lengths.</p>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>Positional encoding is why very long inputs can sometimes confuse models. The position information needs to generalize to positions the model hasn't seen during training. If a model was trained with max 4,096 positions, extending it to 128K requires tricks to make the position encodings work at those longer distances. This is an active area of research.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Why Transformers Are Fast</h2>
+    <!-- ============================================ -->
+
+    <p>Remember the RNN's speed problem? It had to process tokens one at a time. The transformer solves this completely.</p>
+
+    <p>Since the transformer looks at all tokens simultaneously, it can process them in <strong>parallel</strong>. Give it a 1,000-token input, and it processes all 1,000 at once (approximately). This is perfect for GPUs, which are designed for exactly this kind of parallel computation.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">RNN (sequential)</p>
+        <div class="prompt-text">Token 1 → process → done
+Token 2 → process → done
+Token 3 → process → done
+...
+Token 1000 → process → done
+
+1,000 sequential steps.
+Can't speed up with more GPUs.</div>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Transformer (parallel)</p>
+        <div class="prompt-text">Token 1 ┐
+Token 2 ├→ process all → done
+Token 3 │
+...      │
+Token 1000┘
+
+All at once. Throw more GPUs
+at it to go even faster.</div>
+      </div>
+    </div>
+
+    <p>This parallelism is exactly why transformers could scale to trillions of parameters. Training an RNN at GPT-4 scale would be practically impossible &mdash; it would take decades. Transformers made it take months.</p>
+
+    <p>It's one of those cases where an architectural change didn't just make things a little better &mdash; it made entirely new things possible. Without this parallelism, there would be no GPT-4, no Claude, no Gemini. The models simply couldn't have been trained at this scale.</p>
+
+    <div class="warning-box">
+      <h4>Important Nuance</h4>
+      <p>This parallel processing applies when the model is <em>reading</em> your input. When it's <em>generating</em> output (writing the response), it still has to produce one token at a time, because each token depends on the previous one. This is why reading a long prompt is fast, but generating a long response is relatively slow. More on this in Chapter 6.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Encoder vs. Decoder: Understanding vs. Generating</h2>
+    <!-- ============================================ -->
+
+    <p>The original transformer paper had two halves: an <strong>encoder</strong> and a <strong>decoder</strong>. Different models use different combinations:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Architecture</th>
+          <th>What It Does</th>
+          <th>Example Models</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Encoder-only</strong></td>
+          <td>Understands text. Reads all tokens and produces a rich representation.</td>
+          <td>BERT, RoBERTa</td>
+        </tr>
+        <tr>
+          <td><strong>Decoder-only</strong></td>
+          <td>Generates text. Predicts one token at a time, left to right.</td>
+          <td>GPT-4, Claude, Llama</td>
+        </tr>
+        <tr>
+          <td><strong>Encoder-decoder</strong></td>
+          <td>Reads input, then generates output. Good for translation-style tasks.</td>
+          <td>T5, the original Transformer</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Every LLM you interact with daily &mdash; GPT-4, Claude, Gemini &mdash; is a <strong>decoder-only</strong> transformer. "Decoder" means it's designed to generate tokens one at a time. The "only" means there's no separate encoder step &mdash; the same architecture both understands your input and generates the output.</p>
+
+    <p>Encoder-only models like BERT are still widely used for tasks where you need to <em>understand</em> text rather than generate it: search ranking, text classification, sentiment analysis. They're faster and cheaper for those tasks because they don't need to generate anything &mdash; just produce a representation of the input.</p>
+
+    <p>But the models that dominate the conversation (and your daily tools) are all decoders. Generation is what makes chatbots, code assistants, and creative tools possible.</p>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>When you hear "GPT" that's short for "Generative Pre-trained Transformer." Every word matters: <strong>Generative</strong> = it generates text (decoder). <strong>Pre-trained</strong> = it was trained on massive data before being fine-tuned. <strong>Transformer</strong> = it uses the architecture from this chapter.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Why Bigger Transformers Get Disproportionately Better</h2>
+    <!-- ============================================ -->
+
+    <p>One of the most surprising discoveries in AI is the <strong>scaling law</strong>: as you make transformers bigger (more layers, more attention heads, more parameters), they don't just get a little better &mdash; they get <em>disproportionately</em> better. New capabilities seem to emerge at certain scales.</p>
+
+    <p>A model with 1 billion parameters can complete sentences. Scale it to 10 billion and it can follow basic instructions. Scale it to 100 billion and it can write code, solve puzzles, and reason about abstract concepts. These abilities weren't explicitly programmed &mdash; they emerged from scale.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">1B</div>
+        <div class="stat-label">Basic text completion</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">10B</div>
+        <div class="stat-label">Instruction following</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">100B+</div>
+        <div class="stat-label">Complex reasoning, coding</div>
+      </div>
+    </div>
+
+    <p>Nobody fully understands why this happens. It's one of the most active areas of research in AI. Some researchers think attention heads act like tiny specialized programs, and adding more means the model can learn more "programs." Others think it's about information density &mdash; more parameters let the model store more patterns from the training data.</p>
+
+    <p>Whatever the reason, the practical takeaway is clear: the transformer architecture seems to have a remarkable capacity to turn scale into capability. This is why companies keep building bigger models &mdash; the returns haven't stopped yet.</p>
+
+    <div class="highlight-box">
+      <p>The transformer's attention mechanism is why scaling works so well. More layers means more chances to find relationships. More attention heads means more perspectives. More parameters means finer distinctions. The architecture has an almost unlimited ability to extract patterns &mdash; as long as you feed it enough data and compute.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>A Full Transformer Layer, Simplified</h2>
+    <!-- ============================================ -->
+
+    <p>Let's zoom out and see what happens in one transformer layer. Each layer has two main sub-steps:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>Step 1</strong><br>
+        Multi-Head Attention
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Step 2</strong><br>
+        Feed-Forward Network
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Output</strong><br>
+        Enriched tokens
+      </div>
+    </div>
+
+    <ol>
+      <li><strong>Multi-head attention:</strong> Every token looks at every other token from multiple perspectives. Each token's representation gets enriched with relevant context from the rest of the input.</li>
+      <li><strong>Feed-forward network:</strong> Each token's enriched representation goes through a small neural network that transforms it further. This is where a lot of the "thinking" happens &mdash; the model processes the context it just gathered.</li>
+    </ol>
+
+    <p>These two steps repeat for every layer in the model. GPT-3 has 96 layers, so each token goes through 96 rounds of "gather context, then process." By the final layer, each token's representation is incredibly rich &mdash; it encodes not just the token itself but its relationship to every other token in the input, from dozens of perspectives.</p>
+
+    <div class="aha-box">
+      <h4>Aha Moment</h4>
+      <p>Here's a mind-bending detail: the attention in each layer operates on the <em>output</em> of the previous layer, not the original tokens. This means early layers find simple relationships ("these two words are part of the same phrase"), and later layers find relationships <em>between relationships</em> ("this phrase contradicts that earlier paragraph").</p>
+      <p>By layer 96, the model has built up layers upon layers of relational understanding. It's relationships all the way down. And it all started with the simple question: "Which other tokens should I pay attention to?"</p>
+    </div>
+
+    <p>There are also some technical details we're skipping (layer normalization, residual connections, dropout) that help training be stable and prevent the signal from degrading across many layers. But the core of every transformer layer is always the same: attention + feed-forward, repeated over and over.</p>
+
+    <p>If you remember one thing from this chapter, let it be this: <strong>attention is the reason modern AI understands context.</strong> Every time Claude Code correctly infers what type a variable should be, or ChatGPT follows a complex chain of reasoning, or Cursor understands the conventions of your codebase &mdash; it's attention heads at work, connecting relevant tokens across the entire input.</p>
+
+    <!-- ============================================ -->
+    <h2>Putting It All Together</h2>
+    <!-- ============================================ -->
+
+    <ul class="checklist">
+      <li class="checked">Before transformers, RNNs processed text one token at a time, causing forgetting and speed problems.</li>
+      <li class="checked">The transformer's key innovation is <strong>attention</strong>: each token looks at all other tokens to determine context.</li>
+      <li class="checked">Queries, keys, and values work like a search engine: find relevant tokens, pull their information.</li>
+      <li class="checked">Multi-head attention examines text from many perspectives simultaneously (grammar, meaning, structure).</li>
+      <li class="checked">Positional encoding tells the model what order the tokens are in.</li>
+      <li class="checked">Transformers process all input tokens in parallel, making them fast and scalable.</li>
+      <li class="checked">GPT, Claude, and Llama are all decoder-only transformers &mdash; they generate text one token at a time.</li>
+      <li class="checked">Bigger transformers get disproportionately better &mdash; new capabilities emerge at scale.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <h4>Exercise: Attention in Action</h4>
+      <p>Take this sentence and think about what "it" refers to:</p>
+      <p><em>"The server crashed because it ran out of memory, so the team decided to restart it after clearing the cache."</em></p>
+      <ol>
+        <li>There are two instances of "it" in this sentence. What does each one refer to?</li>
+        <li>Which other words would the attention mechanism need to focus on to resolve each "it"? List them.</li>
+        <li>Now think: could you resolve those references by reading one word at a time (RNN-style), or do you need to see the whole sentence (transformer-style)?</li>
+      </ol>
+      <p><strong>Bonus:</strong> Try the same exercise with an ambiguous word from your own code. Pick a variable that's used in two different scopes &mdash; how would attention help the model understand which scope you mean?</p>
+      <p><strong>Extra bonus:</strong> Think about why this matters for code assistants. When you ask Claude Code to modify a function, it needs to understand which variables are in scope, what type they are, and how they relate to the rest of the file. Every one of those relationships is discovered through attention.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+    <!-- ============================================ -->
+
+    <p>Now you know the architecture. You know how attention lets the model understand context. But we haven't yet explained the most fundamental thing: <em>how does text actually come out?</em></p>
+
+    <p>When you type a prompt into Claude or ChatGPT and words start streaming back &mdash; what's happening, step by step? How does the model pick each word? Why are responses different each time? Why does AI sometimes "hallucinate" confident nonsense?</p>
+
+    <p>In <a href="06-text-generation.html">Chapter 6: How Text Generation Actually Works</a>, we'll walk through the complete generation loop. You'll finally understand the full pipeline, from the moment you hit Enter to the last token of the response. It's the chapter where everything clicks together.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="04-tokens.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Tokens: The Language AI Speaks</span>
+    </a>
+    <a href="06-text-generation.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">How Text Generation Actually Works</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

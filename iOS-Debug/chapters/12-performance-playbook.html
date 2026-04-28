@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Performance Budgets &amp; Your Debugging Playbook | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="11-production-monitoring.html">&#8592; Prev</a>
+      <a href="maps/12-performance-playbook-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Performance Budgets &amp; Your Debugging Playbook</h1>
+    <p class="subtitle">If you can&rsquo;t measure it, you can&rsquo;t improve it. If you don&rsquo;t budget it, you can&rsquo;t protect it.</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <section>
+      <h2>Why Performance Budgets Matter</h2>
+
+      <p>You&rsquo;ve learned to debug crashes, diagnose hangs, find memory leaks, optimize builds, profile energy, tame flaky tests, and monitor production. But without <em>measurable thresholds</em>, performance degrades one PR at a time. Each change adds 50ms here, 2MB there. Individually harmless. Collectively, your 1.2-second launch becomes 3.5 seconds and nobody can point to the commit that broke it.</p>
+
+      <p>A performance budget is a contract: &ldquo;Launch time must stay under 2 seconds. Memory must stay under 200MB. Frame rate must not drop below 55fps during scroll.&rdquo; When a PR violates the budget, CI fails. No exceptions, no &ldquo;we&rsquo;ll fix it later.&rdquo;</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">&lt; 2s</div>
+          <div class="stat-label">Target cold launch time (Apple recommends under 400ms for responsive feel)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">60 fps</div>
+          <div class="stat-label">Target scroll frame rate (16.67ms budget per frame)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">&lt; 200 MB</div>
+          <div class="stat-label">Target memory footprint (jetsam threshold varies: 1.2-2GB on modern devices)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Setting Budgets with AI -->
+    <section>
+      <h2>Setting Budgets with AI</h2>
+
+      <p>What&rsquo;s a &ldquo;good&rdquo; launch time? It depends on your app category. A calculator should launch in under 500ms. A social media app with a feed might need 1.5s. AI helps you set realistic targets based on your app&rsquo;s complexity.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Prompt</div>
+        <div class="prompt-text">I need to set performance budgets for our iOS app. It&rsquo;s a social commerce app with:
+- SwiftUI + UIKit hybrid UI
+- 200+ screens, NavigationStack-based
+- Core Data + CloudKit sync
+- Real-time chat via WebSockets
+- Image-heavy product feeds
+- Minimum device: iPhone 12
+
+Current metrics (MetricKit P50):
+- Cold launch: 2.8s
+- Memory peak: 310MB
+- Hang rate: 1.2%
+- App size: 85MB (thinned)
+
+What budgets should I set for each metric? Include stretch goals and absolute ceilings. Consider Apple&rsquo;s App Store review guidelines and common rejection thresholds.</div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Budget levels:</strong> Set three tiers for each metric: <strong>Target</strong> (where you want to be), <strong>Warning</strong> (acceptable but degrading), and <strong>Ceiling</strong> (CI fails, PR blocked). This gives teams room to iterate without instantly breaking the build.
+      </div>
+    </section>
+
+    <!-- XCTest Performance Metrics -->
+    <section>
+      <h2>XCTest Performance Metrics</h2>
+
+      <p>Xcode&rsquo;s performance testing APIs let you measure real metrics in CI and fail builds that regress. These aren&rsquo;t unit tests for correctness &mdash; they&rsquo;re guardrails for speed.</p>
+
+      <h3>Available XCTMetric Types</h3>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>What It Measures</th>
+            <th>Budget Example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>XCTApplicationLaunchMetric</code></td>
+            <td>Cold, warm, or hot app launch time</td>
+            <td>Cold launch &lt; 2.0s</td>
+          </tr>
+          <tr>
+            <td><code>XCTCPUMetric</code></td>
+            <td>CPU time and instructions retired</td>
+            <td>Feed load &lt; 500ms CPU</td>
+          </tr>
+          <tr>
+            <td><code>XCTMemoryMetric</code></td>
+            <td>Physical memory peak and average</td>
+            <td>Peak &lt; 200MB</td>
+          </tr>
+          <tr>
+            <td><code>XCTClockMetric</code></td>
+            <td>Wall clock time for an operation</td>
+            <td>Search &lt; 300ms</td>
+          </tr>
+          <tr>
+            <td><code>XCTOSSignpostMetric</code></td>
+            <td>Custom signpost intervals</td>
+            <td>Checkout flow &lt; 1.5s</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Writing a Performance Test</h3>
+
+<pre><code>import XCTest
+
+final class LaunchPerformanceTests: XCTestCase {
+
+    func testColdLaunchTime() throws {
+        measure(metrics: [XCTApplicationLaunchMetric()]) {
+            XCUIApplication().launch()
+        }
+        // Xcode compares against baseline automatically.
+        // Set baseline: run once, click "Set Baseline" in results.
+        // CI fails if regression exceeds stddev threshold.
+    }
+
+    func testFeedLoadMemory() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let metrics: [XCTMetric] = [
+            XCTMemoryMetric(application: app),
+            XCTCPUMetric(application: app)
+        ]
+
+        measure(metrics: metrics) {
+            app.tabBars.buttons["Feed"].tap()
+            // Scroll through 50 items
+            let feed = app.collectionViews.firstMatch
+            feed.swipeUp()
+            feed.swipeUp()
+            feed.swipeUp()
+        }
+    }
+
+    func testSearchResponseTime() throws {
+        measure(metrics: [XCTClockMetric()]) {
+            let app = XCUIApplication()
+            app.launch()
+            app.searchFields.firstMatch.tap()
+            app.searchFields.firstMatch.typeText("shoes")
+            // Wait for results
+            let firstResult = app.cells.firstMatch
+            XCTAssertTrue(firstResult.waitForExistence(timeout: 5))
+        }
+    }
+}</code></pre>
+
+      <div class="debug-trace">
+        <div class="trace-header">XCTest Performance Result &mdash; CI Run #847</div>
+<pre>
+Test Suite 'LaunchPerformanceTests'
+  testColdLaunchTime: measured (Wall Clock Time, s)
+    values: [1.82, 1.91, 1.87, 1.85, 1.89]
+    average: 1.868, baseline: 1.650, max deviation: 15%
+    ⚠️ REGRESSION: 13.2% above baseline (threshold: 10%)
+
+  testFeedLoadMemory: measured (Physical Memory, kB)
+    values: [198400, 201200, 199800, 200100, 197600]
+    average: 199420, baseline: 185000, max deviation: 10%
+    ⚠️ REGRESSION: 7.8% above baseline (threshold: 5%)
+
+  testSearchResponseTime: measured (Clock Monotonic Time, s)
+    values: [0.28, 0.31, 0.29, 0.30, 0.27]
+    average: 0.290, baseline: 0.310
+    ✅ IMPROVEMENT: 6.5% faster than baseline
+</pre>
+        <div class="trace-analysis">
+          <strong>AI Analysis:</strong> Two regressions in this PR:
+          <strong>(1)</strong> Cold launch regressed 13.2% (1.65s &rarr; 1.87s). 218ms added. Check for new module imports, eager initialization, or synchronous work added to <code>AppDelegate</code> / <code>@main</code>.
+          <strong>(2)</strong> Feed memory up 7.8% (185MB &rarr; 199MB). 14MB increase. Likely from image caching changes or new view models retained during scroll.
+          Search improved &mdash; no action needed. Recommend blocking this PR until launch and memory regressions are investigated.
+        </div>
+      </div>
+    </section>
+
+    <!-- Root Cause: Launch Regression -->
+    <section>
+      <h2>Diagnosing a Budget Violation</h2>
+
+      <div class="root-cause">
+        <h4>Root Cause: Launch Regression from Eager Analytics Initialization</h4>
+        <p><strong>Evidence:</strong> Cold launch increased 218ms after PR #412 which added a new analytics SDK. The SDK performs synchronous network validation on <code>application(_:didFinishLaunchingWithOptions:)</code>.</p>
+        <p><strong>Why:</strong> The analytics SDK checks license validity with a synchronous HTTP call during init. On slow networks, this blocks the main thread for 200-500ms before the first frame renders.</p>
+        <p><strong>Budget violated:</strong> Launch ceiling of 2.0s would be breached on slower devices (iPhone 12 cold launch ~2.2s with this change).</p>
+      </div>
+
+      <div class="fix-pattern">
+        <h4>Fix: Defer Analytics Initialization</h4>
+<pre><code>// BEFORE: Synchronous init blocks launch
+func application(_ application: UIApplication,
+                 didFinishLaunchingWithOptions launchOptions: ...) -> Bool {
+    AnalyticsSDK.initialize(key: "...")  // 200-500ms sync HTTP call
+    return true
+}
+
+// AFTER: Defer to after first frame
+func application(_ application: UIApplication,
+                 didFinishLaunchingWithOptions launchOptions: ...) -> Bool {
+    // Don't block launch — initialize after first frame
+    DispatchQueue.main.async {
+        AnalyticsSDK.initialize(key: "...")
+    }
+    return true
+}</code></pre>
+      </div>
+
+      <div class="performance-metric">
+        <div class="metric-before">
+          <h4>Before (PR #412)</h4>
+          <ul>
+            <li>Cold launch P50: 1.87s</li>
+            <li>Cold launch P95: 2.41s</li>
+            <li>Budget status: WARNING (ceiling: 2.0s)</li>
+          </ul>
+        </div>
+        <div class="metric-after">
+          <h4>After (Deferred Init)</h4>
+          <ul>
+            <li>Cold launch P50: 1.64s</li>
+            <li>Cold launch P95: 1.89s</li>
+            <li>Budget status: ON TARGET</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- App Size Management -->
+    <section>
+      <h2>App Size Budgets</h2>
+
+      <p>App size impacts download conversion (users skip apps over 200MB on cellular), update frequency, and device storage pressure. Apple enforces a 200MB cellular download limit. AI can identify your biggest size contributors.</p>
+
+      <h3>Size Optimization Checklist</h3>
+
+      <div class="checklist">
+        <ul>
+          <li><strong>Asset catalogs:</strong> Use them for all images. Xcode strips unused device variants via App Thinning (slicing).</li>
+          <li><strong>Image formats:</strong> HEIF/WebP instead of PNG for photos. SVG or PDF for icons (vector, single asset).</li>
+          <li><strong>On-demand resources / Background Assets:</strong> Move tutorial videos, alternate themes, and large datasets out of the initial download.</li>
+          <li><strong>Dead code stripping:</strong> Enable <code>DEAD_CODE_STRIPPING = YES</code> and <code>STRIP_SWIFT_SYMBOLS = YES</code> in Release.</li>
+          <li><strong>SPM audit:</strong> Run <code>swift package show-dependencies</code>. Each package adds binary size. Remove unused ones.</li>
+          <li><strong>App Thinning size report:</strong> In Xcode, archive &gt; Distribute &gt; &ldquo;App Thinning Size Report&rdquo; shows per-device thinned sizes.</li>
+        </ul>
+      </div>
+
+      <div class="tip-box">
+        <strong>AI for size analysis:</strong> Run <code>xcrun lipo -info</code> on your .app binary and feed the output + your Podfile/Package.swift to Claude Code. Ask: &ldquo;Which dependencies contribute the most binary size and which can I replace with lighter alternatives?&rdquo;
+      </div>
+    </section>
+
+    <!-- The Debugging Decision Tree -->
+    <section>
+      <h2>The Debugging Decision Tree</h2>
+
+      <p>After 11 chapters, you have a lot of tools. When something goes wrong, which do you reach for? Here&rsquo;s the flowchart:</p>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">💥</div>
+          <div class="step-content">
+            <h4>My app crashes</h4>
+            <p>Ch 2: <code>/analyze-crash</code> &rarr; symbolicate, identify exception type, find root cause</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">🧊</div>
+          <div class="step-content">
+            <h4>My app hangs / freezes</h4>
+            <p>Ch 3: <code>/analyze-hang</code> &rarr; Thread Checker, MetricKit hang diagnostics, signposts</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">💧</div>
+          <div class="step-content">
+            <h4>My app leaks memory</h4>
+            <p>Ch 4: <code>/analyze-leak</code> &rarr; Memory Graph Debugger, Allocations, retain cycle detection</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">🐌</div>
+          <div class="step-content">
+            <h4>My UI stutters</h4>
+            <p>Ch 5: <code>/analyze-rendering</code> &rarr; <code>_printChanges()</code>, SwiftUI Instrument, body evaluation</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">📡</div>
+          <div class="step-content">
+            <h4>My network calls fail</h4>
+            <p>Ch 6: <code>/analyze-network</code> &rarr; URLSessionTaskMetrics, Proxyman, SSL pinning</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">🏗️</div>
+          <div class="step-content">
+            <h4>My build is slow</h4>
+            <p>Ch 7: <code>/analyze-build</code> &rarr; build timeline, slow expressions, compilation caching</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">🔋</div>
+          <div class="step-content">
+            <h4>My app drains battery</h4>
+            <p>Ch 8: <code>/analyze-energy</code> &rarr; Power Profiler, location audit, background tasks</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">📊</div>
+          <div class="step-content">
+            <h4>I need deeper profiling</h4>
+            <p>Ch 9: <code>/profile-cpu</code> &rarr; Time Profiler, Allocations, System Trace + AI</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">🎯</div>
+          <div class="step-content">
+            <h4>My tests are flaky</h4>
+            <p>Ch 10: <code>/diagnose-flaky</code> &rarr; classify, isolate state, fix synchronization</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Production Issues?</h4>
+        <p>Ch 11: <code>/triage-crash</code> &rarr; Crashlytics clusters, MetricKit payloads, Xcode Organizer. Severity-based prioritization with user impact estimates.</p>
+      </div>
+    </section>
+
+    <!-- Building the /check-budgets Skill -->
+    <section>
+      <h2>Building a <code>/check-budgets</code> Skill</h2>
+
+      <div class="fix-pattern">
+        <h4>The /check-budgets Skill</h4>
+<pre><code># .claude/commands/check-budgets.md
+
+Compare current performance metrics against our budgets
+and flag violations.
+
+## Budgets:
+- Cold launch: Target 1.5s | Warning 2.0s | Ceiling 2.5s
+- Memory peak: Target 180MB | Warning 220MB | Ceiling 280MB
+- Scroll frame rate: Target 60fps | Warning 55fps | Ceiling 50fps
+- Hang rate: Target 0.3% | Warning 0.8% | Ceiling 1.5%
+- App size (thinned): Target 60MB | Warning 80MB | Ceiling 100MB
+
+## Input:
+I'll provide current metrics from:
+- XCTest performance test results
+- MetricKit daily payloads
+- Xcode Organizer trends
+
+## Output:
+For each metric:
+1. Current value vs budget (✅ Target / ⚠️ Warning / 🔴 Ceiling)
+2. Trend direction (improving, stable, degrading)
+3. If warning or ceiling: likely cause and fix suggestion
+4. Priority ranking of what to fix first
+
+$ARGUMENTS</code></pre>
+      </div>
+    </section>
+
+    <!-- Your Complete Skill Toolkit -->
+    <section>
+      <h2>Your Complete AI Debugging Toolkit</h2>
+
+      <p>Over 12 chapters, you&rsquo;ve built a complete system. Here&rsquo;s every skill organized by category:</p>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>🔍 Debugging Skills</h4>
+          <ul>
+            <li><code>/debug</code> &mdash; General crash/stacktrace analysis (Ch 1)</li>
+            <li><code>/analyze-crash</code> &mdash; .ips crash report triage (Ch 2)</li>
+            <li><code>/analyze-hang</code> &mdash; Hang diagnostic analysis (Ch 3)</li>
+            <li><code>/analyze-leak</code> &mdash; Retain cycle detection (Ch 4)</li>
+            <li><code>/scan-for-leaks</code> &mdash; Source code leak audit (Ch 4)</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>⚡ Performance Skills</h4>
+          <ul>
+            <li><code>/analyze-rendering</code> &mdash; SwiftUI re-evaluation diagnosis (Ch 5)</li>
+            <li><code>/analyze-network</code> &mdash; URLSession/traffic analysis (Ch 6)</li>
+            <li><code>/analyze-build</code> &mdash; Build timeline optimization (Ch 7)</li>
+            <li><code>/analyze-energy</code> &mdash; Battery drain identification (Ch 8)</li>
+            <li><code>/profile-cpu</code> &mdash; Time Profiler call tree analysis (Ch 9)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>🧪 Quality Skills</h4>
+          <ul>
+            <li><code>/diagnose-flaky</code> &mdash; Flaky test root cause (Ch 10)</li>
+            <li><code>/triage-crash</code> &mdash; Production crash prioritization (Ch 11)</li>
+            <li><code>/check-budgets</code> &mdash; Performance budget enforcement (Ch 12)</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>🤝 Team Practices</h4>
+          <ul>
+            <li>Store skills in <code>.claude/commands/</code> and commit to git</li>
+            <li>Share CLAUDE.md project context across the team</li>
+            <li>Automate with XcodeBuildMCP in CI</li>
+            <li>Build a team debugging journal of past bugs and fixes</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- CI Integration -->
+    <section>
+      <h2>Enforcing Budgets in CI</h2>
+
+<pre><code># ci-performance-gate.sh
+# Run after test suite passes
+
+echo "Running performance tests..."
+xcodebuild test \
+  -scheme MyApp \
+  -testPlan PerformanceTests \
+  -destination 'platform=iOS Simulator,name=iPhone 14' \
+  -resultBundlePath ./perf-results.xcresult
+
+# Extract metrics and feed to AI for budget check
+xcrun xcresulttool get --path ./perf-results.xcresult \
+  --format json > perf-metrics.json
+
+# Claude Code (via XcodeBuildMCP) compares against budgets
+# and posts a comment on the PR with results</code></pre>
+
+      <div class="tool-card">
+        <div class="tool-icon">🔧</div>
+        <div class="tool-name">XcodeBuildMCP: Automated Budget Enforcement</div>
+        <div class="tool-desc">XcodeBuildMCP runs performance tests, extracts metrics from .xcresult bundles, feeds them to Claude Code&rsquo;s <code>/check-budgets</code> skill, and posts a PR comment: &ldquo;Launch: ✅ 1.62s | Memory: ⚠️ 215MB (+18%) | FPS: ✅ 59.8&rdquo;. Regressions block merge automatically.</div>
+      </div>
+    </section>
+
+    <!-- The 30-Day Challenge -->
+    <section>
+      <h2>The 30-Day Debugging Challenge</h2>
+
+      <p>Knowledge without practice fades. Here&rsquo;s a month-long plan to make these skills permanent:</p>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Week 1: Crash Analysis</h4>
+          <ul>
+            <li>Day 1-2: Set up <code>/debug</code> and <code>/analyze-crash</code></li>
+            <li>Day 3-4: Feed 5 real crashes to AI</li>
+            <li>Day 5: Build your team&rsquo;s CLAUDE.md</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Week 2: Profiling</h4>
+          <ul>
+            <li>Day 8-9: Profile launch + scroll with Time Profiler</li>
+            <li>Day 10-11: Set up <code>/profile-cpu</code> and <code>/analyze-rendering</code></li>
+            <li>Day 12: Run Allocations on your heaviest screen</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Week 3: Memory &amp; Energy</h4>
+          <ul>
+            <li>Day 15-16: Memory Graph Debugger on 3 screens</li>
+            <li>Day 17-18: Power Profiler wirelessly on a key flow</li>
+            <li>Day 19: Set up <code>/analyze-energy</code> and <code>/analyze-leak</code></li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Week 4: Tests &amp; Production</h4>
+          <ul>
+            <li>Day 22-23: Fix your team&rsquo;s top 3 flaky tests</li>
+            <li>Day 24-25: Set up MetricKit + <code>/triage-crash</code></li>
+            <li>Day 26: Write XCTest performance tests with budgets</li>
+            <li>Day 28: Set up CI budget enforcement</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Set Up Your Performance Budget System</h3>
+
+        <p><strong>Goal:</strong> Create a complete performance budget with automated enforcement for your project.</p>
+
+        <ol>
+          <li><strong>Baseline your metrics:</strong> Run XCTest performance tests 5 times to establish stable baselines for launch time, memory, and a key user flow.</li>
+          <li><strong>Set budgets with AI:</strong></li>
+        </ol>
+
+<pre><code>/check-budgets
+Here are my current XCTest performance baselines:
+
+Cold launch: [1.62, 1.58, 1.65, 1.61, 1.59] avg 1.61s
+Feed scroll memory: [185, 188, 182, 186, 184] avg 185MB
+Search time: [0.28, 0.31, 0.29, 0.30, 0.27] avg 0.29s
+
+App type: social commerce, minimum device iPhone 12
+Current app size (thinned): 72MB
+
+Set Target / Warning / Ceiling for each metric.
+Include CI integration steps.</code></pre>
+
+        <ol start="3">
+          <li><strong>Create the skill:</strong> Save Claude Code&rsquo;s recommended budgets into <code>.claude/commands/check-budgets.md</code></li>
+          <li><strong>Add CI enforcement:</strong> Add a performance test lane to your CI pipeline that runs the XCTest performance tests and fails on ceiling violations</li>
+          <li><strong>Test it:</strong> Deliberately regress something (add a <code>Thread.sleep(0.5)</code> to app launch) and verify CI catches it</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- Closing -->
+    <section>
+      <h2>You&rsquo;re Ready</h2>
+
+      <p>Twelve chapters ago, you were debugging with <code>print()</code> statements. Now you have a systematic AI-assisted toolkit covering every dimension of iOS app quality. The tools will evolve &mdash; Xcode 27, smarter AI, new Instruments &mdash; but the <em>pattern</em> is permanent: capture structured data, feed it to AI, get actionable fixes, enforce budgets in CI.</p>
+
+      <div class="highlight-box">
+        <h4>The One Thing to Remember</h4>
+        <p>AI doesn&rsquo;t replace your debugging intuition &mdash; it <strong>amplifies</strong> it. You still need to know <em>which</em> tool to reach for (that&rsquo;s the decision tree). You still need to <em>validate</em> AI suggestions (they can be wrong). But the tedious parts &mdash; reading 4,000-sample call trees, correlating crash reports across iOS versions, finding the retain cycle in a 200-line closure chain &mdash; that&rsquo;s what AI does in seconds that used to take hours. Use the time you save to build better apps.</p>
+      </div>
+
+      <div class="warning-box">
+        <strong>Always validate AI suggestions.</strong> Throughout this course, we&rsquo;ve emphasized that AI is a powerful assistant, not an oracle. Test every fix. Profile every optimization. Verify every diagnosis against the actual code. The goal is <em>AI-assisted</em> debugging, not <em>AI-trusting</em> debugging.
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="11-production-monitoring.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Production Monitoring &amp; Crash Reporting</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

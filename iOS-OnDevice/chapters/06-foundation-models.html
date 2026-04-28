@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Foundation Models and Apple Intelligence — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-nlp-speech-sound.html">&larr; Prev</a>
+      <a href="07-hardware-acceleration.html">Next &rarr;</a>
+      <a href="maps/06-foundation-models-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Foundation Models and Apple Intelligence</h1>
+    <p class="subtitle">Your App's Own LLM &mdash; No Cloud, No API Key, No Bill</p>
+  </header>
+
+  <main>
+
+    <p>Every framework we've used so far &mdash; Vision, Natural Language, SoundAnalysis &mdash; does one specific thing well. But what if you want your app to <em>think</em>? Summarize a document, answer a question, rewrite text in a different tone, or decide what to do next based on free-form input?</p>
+
+    <p>That's what generative AI is for. And with iOS 26, Apple gives you direct access to the same on-device language model that powers Apple Intelligence &mdash; a ~3 billion parameter LLM running entirely on the Neural Engine. No cloud. No API key. No per-token billing. Just <code>import FoundationModels</code> and start generating.</p>
+
+    <h2>What Is the Foundation Models Framework?</h2>
+
+    <p>The Foundation Models framework is Apple's Swift API for on-device generative AI. It wraps the language model at the heart of Apple Intelligence &mdash; the same model that powers Writing Tools, Mail summaries, and Siri's intelligence features &mdash; and exposes it to your app through a clean, type-safe Swift interface.</p>
+
+    <div class="apple-framework">
+      <h3>Foundation Models at a Glance</h3>
+      <table>
+        <tr><td><strong>Framework</strong></td><td>FoundationModels (import FoundationModels)</td></tr>
+        <tr><td><strong>Minimum iOS</strong></td><td>iOS 26</td></tr>
+        <tr><td><strong>Model Size</strong></td><td>~3B parameters, on-device</td></tr>
+        <tr><td><strong>Device Requirement</strong></td><td>Apple Intelligence-capable: iPhone 15 Pro+, M1+ iPad/Mac</td></tr>
+        <tr><td><strong>Prerequisite</strong></td><td>Apple Intelligence must be enabled in Settings</td></tr>
+        <tr><td><strong>Key Classes</strong></td><td>LanguageModelSession, Prompt, @Generable, @Guide</td></tr>
+        <tr><td><strong>Output Modes</strong></td><td>Free text, guided generation (typed structs), streaming</td></tr>
+        <tr><td><strong>Privacy</strong></td><td>100% on-device by default, Private Cloud Compute for complex tasks</td></tr>
+        <tr><td><strong>Performance</strong></td><td>~30 tokens/sec on iPhone 15 Pro, ~0.6ms time-to-first-token per prompt token</td></tr>
+      </table>
+    </div>
+
+    <h2>Your First Generation: Hello, LLM</h2>
+
+    <p>The simplest possible use of Foundation Models is three lines of code:</p>
+
+    <pre><code>import FoundationModels
+
+let session = LanguageModelSession()
+let response = try await session.respond(to: "Tell me a fun fact about the iPhone.")
+print(response.content)  // "The iPhone's first prototype was..."</code></pre>
+
+    <p>That's it. No model loading, no configuration, no preprocessing. The framework handles everything. But this is just plain text output &mdash; the real power comes from <strong>guided generation</strong>.</p>
+
+    <h2>Checking Device Compatibility</h2>
+
+    <p>Not every iPhone can run Foundation Models. Before using the framework, check availability at runtime:</p>
+
+    <pre><code>import FoundationModels
+
+let availability = SystemLanguageModel.default.availability
+
+switch availability {
+case .available:
+    // Good to go — start generating
+    break
+case .unavailable(.deviceNotEligible):
+    // Hardware too old (pre-iPhone 15 Pro)
+    showFallbackUI()
+case .unavailable(.appleIntelligenceNotEnabled):
+    // User hasn't enabled Apple Intelligence in Settings
+    promptToEnableAI()
+case .unavailable(.modelNotReady):
+    // Model is still downloading or updating
+    showLoadingState()
+default:
+    showFallbackUI()
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Always check availability.</strong> Foundation Models requires both compatible hardware (iPhone 15 Pro or newer) AND Apple Intelligence enabled in Settings. If either condition isn't met, your code will throw. Design your feature with a graceful fallback for unsupported devices.
+    </div>
+
+    <h2>Guided Generation: Typed Output with @Generable</h2>
+
+    <p>Here's the killer feature. Instead of getting back raw text that you have to parse (and pray it's valid JSON), you define a Swift struct and the model <em>guarantees</em> its output matches your type. No parsing errors. No hallucinated structure. Just type-safe Swift objects.</p>
+
+    <pre><code>import FoundationModels
+
+@Generable
+struct MovieRecommendation {
+    @Guide(description: "The movie title")
+    var title: String
+
+    @Guide(description: "Release year", .range(1920...2026))
+    var year: Int
+
+    @Guide(description: "A one-sentence reason to watch it")
+    var reason: String
+
+    @Guide(description: "Rating out of 10", .range(1...10))
+    var rating: Int
+}</code></pre>
+
+    <p>Now use it in a session:</p>
+
+    <pre><code>let session = LanguageModelSession()
+let recommendation = try await session.respond(
+    to: "Recommend a sci-fi movie for someone who loved Interstellar.",
+    generating: MovieRecommendation.self
+)
+print(recommendation.title)   // "Arrival"
+print(recommendation.year)    // 2016
+print(recommendation.rating)  // 9</code></pre>
+
+    <p>The <code>@Generable</code> macro generates a schema at compile time. The model uses <strong>constrained decoding</strong> to guarantee the output matches your struct &mdash; the right types, the right ranges, the right number of items. This isn't "parse and hope" &mdash; it's structurally guaranteed.</p>
+
+    <div class="tip-box">
+      <strong>What types can @Generable handle?</strong> String, Int, Float, Double, Bool, Optional, Array, and enums with String raw values. You can also nest @Generable structs inside other @Generable structs for complex output shapes.
+    </div>
+
+    <h3>The @Guide Macro</h3>
+
+    <p><code>@Guide</code> gives the model instructions about each property. Think of it as documentation that the model actually reads:</p>
+
+    <pre><code>@Generable
+struct QuizQuestion {
+    @Guide(description: "The quiz question text")
+    var text: String
+
+    @Guide(description: "Four possible answers", .count(4))
+    var choices: [String]
+
+    @Guide(description: "The correct answer, must be one of the choices")
+    var answer: String
+
+    @Guide(description: "Why this answer is correct")
+    var explanation: String
+}</code></pre>
+
+    <p>The <code>.count(4)</code> constraint guarantees exactly 4 choices. The <code>.range(1...10)</code> from the earlier example guarantees an integer in that range. No validation code needed &mdash; the model can't produce invalid output.</p>
+
+    <div class="highlight-box">
+      <strong>The mental model:</strong> Traditional LLM output = "here's some text, good luck parsing it." Guided generation = "here's a filled-in Swift struct, guaranteed to compile." It's the difference between getting a handwritten letter and getting a filled-in form.
+    </div>
+
+    <h2>Streaming Responses</h2>
+
+    <p>For a responsive UI, you don't want to wait for the entire response. Stream partial results as they're generated:</p>
+
+    <pre><code>let session = LanguageModelSession()
+
+// Stream plain text
+for try await partial in session.streamResponse(to: "Summarize the iOS 26 keynote.") {
+    // partial.content grows with each token
+    updateUI(text: partial.content)
+}
+
+// Stream typed output — partial snapshots with Optional properties
+for try await snapshot in session.streamResponse(
+    to: "Recommend a sci-fi movie.",
+    generating: MovieRecommendation.self
+) {
+    // Properties fill in one by one as the model generates
+    if let title = snapshot.title { showTitle(title) }
+    if let reason = snapshot.reason { showReason(reason) }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Streaming sends snapshots, not deltas.</strong> Unlike ChatGPT's token-by-token streaming, Foundation Models streams <em>partially-filled structs</em>. Optional properties become non-nil as the model generates them. This is much easier to work with in SwiftUI &mdash; just bind to the snapshot.
+    </div>
+
+    <h2>Multi-Turn Sessions</h2>
+
+    <p>A <code>LanguageModelSession</code> maintains conversation context. Each call to <code>respond(to:)</code> builds on the previous exchanges:</p>
+
+    <pre><code>let session = LanguageModelSession(instructions: """
+    You are a helpful cooking assistant. Give brief, practical answers.
+    """)
+
+let first = try await session.respond(to: "How do I make pasta al dente?")
+// "Boil salted water, cook 1 minute less than package directions..."
+
+let followUp = try await session.respond(to: "What sauce goes best with it?")
+// Knows we're talking about pasta from the previous turn</code></pre>
+
+    <p>The <code>instructions</code> parameter is your system prompt &mdash; it sets the model's personality and constraints for the entire session. Keep it short and specific. This is a ~3B model, not GPT-4 &mdash; shorter, more focused instructions work better.</p>
+
+    <div class="model-pipeline">
+      <h3>Foundation Models Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>LanguageModelSession</strong>
+            <small>Instructions + context</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Prompt</strong>
+            <small>Your request + @Generable type</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>On-Device LLM</strong>
+            <small>~3B params, Neural Engine</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Constrained Decoding</strong>
+            <small>Guided by @Generable schema</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>Typed Swift Output</strong>
+            <small>Struct or streamed snapshots</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Tool Calling: Give the Model Superpowers</h2>
+
+    <p>Tool calling lets the model invoke functions in your app. The model decides <em>when</em> to call a tool and <em>what arguments</em> to pass. You define the tools; the model orchestrates them.</p>
+
+    <p>Think of it like giving an assistant access to your phone's apps: "Check the weather" calls one tool, "look up a recipe" calls another. The assistant decides which tool to use based on the conversation.</p>
+
+    <pre><code>import FoundationModels
+
+@Generable
+struct WeatherInfo {
+    var temperature: Int
+    var condition: String
+}
+
+struct WeatherTool: Tool {
+    let name = "getWeather"
+    let description = "Gets the current weather for a city"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "The city name")
+        var city: String
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        // Call your weather API or local data
+        let weather = await fetchWeather(for: arguments.city)
+        return "It's \(weather.temp)°F and \(weather.condition) in \(arguments.city)."
+    }
+}
+
+// Create session with tools
+let session = LanguageModelSession(
+    instructions: "You help users plan their day based on weather.",
+    tools: [WeatherTool()]
+)
+
+let response = try await session.respond(
+    to: "Should I bring an umbrella in San Francisco today?"
+)
+// Model calls WeatherTool, gets result, then answers:
+// "Yes! It's 55°F and rainy in San Francisco today. Definitely bring an umbrella."</code></pre>
+
+    <div class="tip-box">
+      <strong>Tool calling flow:</strong> You ask a question &rarr; the model decides it needs weather data &rarr; it calls your WeatherTool &rarr; your tool returns a result &rarr; the model incorporates that result into its answer. All of this happens in a single <code>respond(to:)</code> call.
+    </div>
+
+    <h2>Writing Tools Integration</h2>
+
+    <p>Apple's system-wide Writing Tools (Rewrite, Proofread, Summarize) work automatically with any standard text view. If you use <code>TextField</code>, <code>TextEditor</code>, or <code>UITextView</code>, your users already have access to Writing Tools &mdash; no code needed.</p>
+
+    <p>But you can customize the behavior:</p>
+
+    <pre><code>TextEditor(text: $userText)
+    .writingToolsBehavior(.complete)  // Full Writing Tools support
+    // .limited — only proofreading
+    // .disabled — opt out entirely</code></pre>
+
+    <p>For custom text views that don't use the standard components, adopt the <code>WritingToolsCoordinator</code> protocol to integrate Writing Tools into your own text rendering.</p>
+
+    <h2>Image Playground and Genmoji</h2>
+
+    <p>Foundation Models isn't just text. Apple also provides on-device image generation through <strong>Image Playground</strong>:</p>
+
+    <pre><code>import ImagePlayground
+
+// Present the Image Playground sheet
+.imagePlaygroundSheet(isPresented: $showPlayground,
+                      concept: "A cat wearing a space helmet",
+                      onCompletion: { url in
+    // url points to the generated image
+    generatedImage = url
+})</code></pre>
+
+    <p>For programmatic image generation without the UI sheet, use <code>ImageCreator</code>:</p>
+
+    <pre><code>import ImagePlayground
+
+let creator = ImageCreator()
+let image = try await creator.generateImage(
+    ImageCreator.Concept.text("A peaceful mountain landscape at sunset")
+)
+// image is a CIImage you can display or save</code></pre>
+
+    <div class="warning-box">
+      <strong>Image generation is slow.</strong> Unlike text generation (~30 tokens/sec), image generation can take 10&ndash;30 seconds depending on the device and complexity. Always show a progress indicator and run generation on a background task. Never block the UI.
+    </div>
+
+    <h2>On-Device vs Private Cloud Compute</h2>
+
+    <p>Most Foundation Models requests run entirely on-device. But for tasks that exceed the on-device model's capabilities, Apple can route requests to <strong>Private Cloud Compute</strong> &mdash; Apple's secure cloud infrastructure where your data is processed in encrypted memory, never stored, and never accessible to Apple.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>On-Device (Default)</h4>
+        <ul>
+          <li>Runs on Neural Engine</li>
+          <li>~3B parameter model</li>
+          <li>Zero latency from network</li>
+          <li>Works offline</li>
+          <li>Data never leaves iPhone</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Private Cloud Compute</h4>
+        <ul>
+          <li>Runs on Apple Silicon servers</li>
+          <li>Larger model, more capable</li>
+          <li>Requires network connection</li>
+          <li>Encrypted, never stored</li>
+          <li>Publicly auditable software</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>You don't choose which mode runs &mdash; the system decides based on the complexity of the request. Simple tasks (summaries, rewrites) stay on-device. Complex tasks (multi-step reasoning, large context) may route to the cloud. Users can opt out of cloud processing in Settings.</p>
+
+    <h2>Prompt Engineering for On-Device Models</h2>
+
+    <p>The on-device model is ~3B parameters &mdash; much smaller than GPT-4 or Claude. Prompts that work on large cloud models may need adjustment:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Good: Short, Focused Prompts</h4>
+        <pre><code>// Clear, single task
+"Summarize this email in one sentence."
+
+// Specific format via @Generable
+"Generate 3 quiz questions about Swift."
+
+// Focused instruction
+session = LanguageModelSession(
+  instructions: "You summarize text. Be concise."
+)</code></pre>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Bad: Overloaded Prompts</h4>
+        <pre><code>// Too many instructions
+"Summarize this, then analyze sentiment,
+ then suggest improvements, then translate
+ to Spanish, keeping the tone formal but
+ friendly..."
+
+// Ambiguous personality
+"Be creative but accurate, concise but
+ thorough, professional but casual..."</code></pre>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>The golden rule for on-device prompts:</strong> One task per prompt. Use guided generation (@Generable) instead of asking for structured output in the prompt text. Let the type system do the work, not the prompt.
+    </div>
+
+    <h2>Performance</h2>
+
+    <div class="device-benchmark">
+      <h3>Foundation Models Performance (On-Device)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>iPhone 15 Pro</th>
+            <th>iPhone 16 Pro</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Time-to-first-token</td>
+            <td>~0.6 ms/prompt token</td>
+            <td>~0.4 ms/prompt token</td>
+          </tr>
+          <tr>
+            <td>Generation speed</td>
+            <td>~30 tokens/sec</td>
+            <td>~40 tokens/sec</td>
+          </tr>
+          <tr>
+            <td>Model memory</td>
+            <td>~1.5 GB</td>
+            <td>~1.5 GB</td>
+          </tr>
+          <tr>
+            <td>Short summary (50 tokens)</td>
+            <td>~1.7 s</td>
+            <td>~1.3 s</td>
+          </tr>
+          <tr>
+            <td>Guided generation (struct)</td>
+            <td>~2&ndash;4 s</td>
+            <td>~1.5&ndash;3 s</td>
+          </tr>
+          <tr>
+            <td>Image generation</td>
+            <td>~15&ndash;30 s</td>
+            <td>~10&ndash;20 s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>At 30&ndash;40 tokens per second, the on-device model generates about 1&ndash;2 sentences per second. That's fast enough for real-time streaming in a chat UI, but you should always stream responses to keep the UI responsive. Never call <code>respond(to:)</code> and wait for the full result before showing anything to the user.</p>
+
+    <h2>Building a Complete Feature</h2>
+
+    <p>Let's put it all together. Here's a text transformation feature using guided generation and streaming:</p>
+
+    <pre><code>import FoundationModels
+import SwiftUI
+
+@Generable
+struct TextTransformation {
+    @Guide(description: "The transformed text")
+    var result: String
+
+    @Guide(description: "Confidence from 1-10", .range(1...10))
+    var confidence: Int
+
+    @Guide(description: "What was changed and why")
+    var explanation: String
+}
+
+@Observable
+class TextTransformer {
+    var output: TextTransformation?
+    var isGenerating = false
+
+    func transform(_ text: String, style: String) async {
+        isGenerating = true
+        defer { isGenerating = false }
+
+        let session = LanguageModelSession(
+            instructions: "You transform text as requested. Be faithful to the original meaning."
+        )
+
+        do {
+            for try await snapshot in session.streamResponse(
+                to: "Rewrite this text in a \(style) style: \(text)",
+                generating: TextTransformation.self
+            ) {
+                output = snapshot
+            }
+        } catch {
+            print("Generation failed: \(error)")
+        }
+    }
+}</code></pre>
+
+    <h2>Exercise: Build an AI Writing Assistant</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: Smart Text Transformer</h3>
+      <p>Build a SwiftUI app that uses Foundation Models with guided generation for text transformations:</p>
+      <ol>
+        <li><strong>Text input</strong> &mdash; A TextEditor where users paste or type text</li>
+        <li><strong>Transformation picker</strong> &mdash; Segmented control with 4 options: Summarize, Formalize, Simplify, Expand</li>
+        <li><strong>Guided output</strong> &mdash; Define a <code>@Generable</code> struct with <code>result</code> (transformed text), <code>confidence</code> (1&ndash;10), and <code>wordCount</code> (Int)</li>
+        <li><strong>Streaming display</strong> &mdash; Use <code>streamResponse</code> to show the result filling in progressively</li>
+        <li><strong>Availability check</strong> &mdash; Check <code>SystemLanguageModel.default.availability</code> on appear. Show a message if Foundation Models isn't available.</li>
+      </ol>
+      <h4>Architecture Tips:</h4>
+      <ul>
+        <li>Create a new <code>LanguageModelSession</code> for each transformation (don't reuse sessions across unrelated tasks)</li>
+        <li>Show the confidence score as a colored badge (green &ge; 7, yellow 4&ndash;6, red &le; 3)</li>
+        <li>Add a "Copy Result" button that copies only the transformed text</li>
+        <li>Disable the transform button while <code>isGenerating</code> is true</li>
+      </ul>
+      <h4>Stretch Goal:</h4>
+      <ul>
+        <li>Add a multi-turn "Refine" button that sends "Make it shorter" or "Make it more casual" as follow-up prompts in the same session</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now have access to Apple's full AI toolkit: Vision for seeing, Natural Language for reading, Speech for hearing, SoundAnalysis for ambient awareness, and Foundation Models for thinking and generating. That's a lot of intelligence running on one phone.</p>
+
+    <p>But how fast does it actually run? And can you make it faster? In <strong>Chapter 7: Hardware Acceleration &mdash; Neural Engine and Metal</strong>, we'll crack open Apple Silicon and learn exactly how the Neural Engine, GPU, and CPU work together for ML inference. You'll benchmark every compute unit, profile with Instruments, and understand thermal throttling. The chapter that turns "it works" into "it works <em>fast</em>."</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-nlp-speech-sound.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Natural Language, Speech, and Sound</span>
+      </a>
+      <a href="07-hardware-acceleration.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Hardware Acceleration &mdash; Neural Engine and Metal</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

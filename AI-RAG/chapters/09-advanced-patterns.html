@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Advanced RAG Patterns | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-building-the-pipeline.html">&larr; Prev</a>
+      <a href="10-evaluation.html">Next &rarr;</a>
+      <a href="maps/09-advanced-patterns-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Advanced RAG Patterns</h1>
+    <p class="subtitle">Query rewriting, HyDE, parent-child retrieval, and other techniques that turn good RAG into great RAG</p>
+  </header>
+
+  <main>
+
+    <div class="highlight-box">
+      <p><strong>The big idea:</strong> Basic RAG retrieves chunks that are similar to the user's question. Advanced RAG transforms the question, restructures the chunks, and adds feedback loops &mdash; dramatically improving answer quality without changing your underlying data.</p>
+    </div>
+
+    <p>In the last chapter, you built a production RAG pipeline. It works. It answers questions. But if you've tested it with real users, you've probably noticed something frustrating: <strong>the questions users actually ask are messy</strong>.</p>
+
+    <p>They're vague ("What's the deal with our refund thing?"), they use different words than your documents ("cancellation policy" vs "return procedure"), or they need information scattered across multiple chunks. Basic RAG &mdash; embed the question, find similar chunks, generate an answer &mdash; struggles with all of these.</p>
+
+    <p>Think of it this way: basic RAG is like handing a research assistant a question and saying "find me the most similar paragraph." Advanced RAG is like giving that assistant a whole toolkit &mdash; rephrase the question, check multiple sources, verify the answer, and go back for more if needed.</p>
+
+    <p>Let's build that toolkit.</p>
+
+    <!-- ============================================ -->
+    <h2>Why Basic RAG Falls Short</h2>
+
+    <p>Before we fix the problems, let's name them. Basic RAG has three fundamental weaknesses:</p>
+
+    <ol>
+      <li><strong>Query mismatch:</strong> The user's question uses different words than your documents. "How do I get my money back?" won't match a chunk about "refund eligibility criteria."</li>
+      <li><strong>Context fragmentation:</strong> The answer lives across multiple chunks, but basic RAG treats each chunk independently. It can't connect "the deadline is 30 days" from one chunk with "measured from the date of purchase" from another.</li>
+      <li><strong>Retrieval overconfidence:</strong> Vector similarity always returns <em>something</em>, even when nothing relevant exists. Basic RAG has no way to say "I didn't find anything useful, let me try differently."</li>
+    </ol>
+
+    <p>Every advanced pattern in this chapter attacks one or more of these problems. Let's start with the most impactful one.</p>
+
+    <!-- ============================================ -->
+    <h2>Query Rewriting: Ask a Better Question</h2>
+
+    <div class="retrieval-box">
+      <p><strong>Query rewriting</strong> uses an LLM to reformulate the user's question before searching. The insight: an LLM is better at turning a vague human question into a precise search query than most humans are. It bridges the vocabulary gap between how users ask and how documents are written.</p>
+    </div>
+
+    <p>Imagine a librarian who, when you ask "What's the deal with that thing where people leave the company?", rephrases it to "employee offboarding procedure and exit interview policy" before searching the catalog. That's query rewriting.</p>
+
+    <p>Here's a basic implementation:</p>
+
+    <pre><code>from anthropic import Anthropic
+
+client = Anthropic()
+
+def rewrite_query(original_query: str) -> list[str]:
+    """Rewrite a user query into 3 optimized search queries."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": f"""Rewrite the following user question into 3 different
+search queries optimized for finding relevant documents.
+Each query should use different words and angles.
+Return ONLY the 3 queries, one per line.
+
+User question: {original_query}"""
+        }]
+    )
+    queries = response.content[0].text.strip().split("\n")
+    return [q.strip() for q in queries if q.strip()]
+
+# Example
+original = "What's our policy when someone wants to return stuff?"
+rewritten = rewrite_query(original)
+# ["product return and refund eligibility policy",
+#  "customer merchandise return procedure and timeline",
+#  "conditions for processing product returns and exchanges"]</code></pre>
+
+    <p>Now you search with all three queries and combine the results. This is called <strong>multi-query retrieval</strong> &mdash; different phrasings catch different relevant chunks.</p>
+
+    <pre><code>def multi_query_retrieve(original_query: str, retriever, top_k: int = 5):
+    """Retrieve using multiple rewritten queries, then deduplicate."""
+    queries = rewrite_query(original_query)
+    queries.append(original_query)  # keep the original too
+
+    all_chunks = {}
+    for query in queries:
+        results = retriever.search(query, top_k=top_k)
+        for chunk in results:
+            # Deduplicate by chunk ID, keep the highest score
+            if chunk.id not in all_chunks or chunk.score > all_chunks[chunk.id].score:
+                all_chunks[chunk.id] = chunk
+
+    # Return top-k by score
+    ranked = sorted(all_chunks.values(), key=lambda c: c.score, reverse=True)
+    return ranked[:top_k]</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Cost vs quality tradeoff:</strong> Query rewriting adds one LLM call before retrieval (about 50-100ms and a few cents). For most applications, this is a bargain &mdash; the improvement in retrieval quality is dramatic, especially for vague or conversational queries.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>HyDE: The Hypothetical Document Trick</h2>
+
+    <p>HyDE (Hypothetical Document Embeddings) is one of the cleverest ideas in RAG. Instead of embedding the <em>question</em> and searching for similar chunks, you ask the LLM to <strong>generate a hypothetical answer</strong>, embed <em>that</em>, and search for chunks similar to the hypothetical answer.</p>
+
+    <p>Why does this work? Because a hypothetical answer <em>looks like a document</em> &mdash; it uses the same vocabulary, structure, and level of detail as the actual chunks in your index. The question "How do I set up SSO?" might not match a technical document, but a hypothetical answer like "To configure Single Sign-On, navigate to the Admin panel and select Identity Providers..." will be much closer in embedding space to the real documentation.</p>
+
+    <div class="embedding-box">
+      <p><strong>The embedding insight:</strong> Questions and answers live in different regions of embedding space. A question like "How does X work?" is linguistically very different from the answer "X works by doing Y." HyDE bridges this gap by converting the question into an answer-shaped document before embedding.</p>
+    </div>
+
+    <pre><code>def hyde_retrieve(question: str, retriever, top_k: int = 5):
+    """Generate a hypothetical answer, embed it, and search."""
+    # Step 1: Generate a hypothetical answer
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": f"""Write a short, detailed paragraph that would answer
+this question. Write it as if it's from a technical document.
+Don't worry about accuracy — we just need the style and vocabulary.
+
+Question: {question}"""
+        }]
+    )
+    hypothetical_doc = response.content[0].text
+
+    # Step 2: Embed the hypothetical answer (not the question!)
+    # Step 3: Search for real chunks similar to the hypothetical answer
+    results = retriever.search(hypothetical_doc, top_k=top_k)
+    return results</code></pre>
+
+    <div class="gotcha-box">
+      <p><strong>HyDE can hallucinate you in the wrong direction.</strong> If the LLM's hypothetical answer is completely off-base (e.g., it guesses the wrong technical approach), the embedding will pull you toward irrelevant chunks. HyDE works best when the LLM has at least a general idea of what the answer <em>looks like</em>, even if it doesn't know the specifics. For highly specialized or domain-specific questions, combine HyDE with the original query as a fallback.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Step-Back Prompting: Zoom Out First</h2>
+
+    <p>Sometimes the user's question is too specific to retrieve well. "Why did our Q3 revenue drop in the APAC region?" might not match any single chunk, but "Q3 financial performance summary" and "APAC regional revenue analysis" would.</p>
+
+    <p><strong>Step-back prompting</strong> asks the LLM to generate a broader, more general question first, retrieves context for that, and then answers the specific question with that broader context available.</p>
+
+    <pre><code>def step_back_retrieve(specific_question: str, retriever, top_k: int = 5):
+    """Generate a broader question, retrieve for both, combine."""
+    # Generate a step-back (broader) question
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=150,
+        messages=[{
+            "role": "user",
+            "content": f"""Given this specific question, generate a broader,
+more general question that would help provide context.
+Return ONLY the broader question.
+
+Specific question: {specific_question}"""
+        }]
+    )
+    broad_question = response.content[0].text.strip()
+
+    # Retrieve for both the specific and broad questions
+    specific_results = retriever.search(specific_question, top_k=top_k)
+    broad_results = retriever.search(broad_question, top_k=top_k)
+
+    # Combine and deduplicate
+    combined = {c.id: c for c in broad_results}
+    combined.update({c.id: c for c in specific_results})  # specific takes priority
+    return list(combined.values())[:top_k]</code></pre>
+
+    <p>Think of it like this: if someone asks you "Why is the second floor bathroom always cold?", you'd first want to understand the building's HVAC system before answering the specific question. Step-back prompting gives the LLM that broader context.</p>
+
+    <!-- ============================================ -->
+    <h2>Parent-Child Retrieval: Precision + Context</h2>
+
+    <p>Here's a fundamental tension in chunking: <strong>small chunks are precise but lose context; large chunks have context but dilute relevance.</strong> Parent-child retrieval solves this by using both.</p>
+
+    <div class="pipeline-box">
+      <p><strong>Where this fits in the pipeline:</strong> Parent-child retrieval changes both your <em>indexing</em> and <em>retrieval</em> steps. At index time, you create two levels of chunks. At query time, you search the small chunks for precision but return the parent chunks for context. This is one of the highest-impact changes you can make to a RAG pipeline.</p>
+    </div>
+
+    <p>The idea: index <strong>small child chunks</strong> (e.g., 100 tokens) for precise matching, but when a child matches, return its <strong>parent chunk</strong> (e.g., 500 tokens) to the LLM for full context.</p>
+
+    <p>Analogy: it's like using an index at the back of a textbook (precise entries) to find the right <em>page</em> (full context). You search the index, but you read the page.</p>
+
+    <pre><code>from dataclasses import dataclass
+
+@dataclass
+class Chunk:
+    id: str
+    text: str
+    parent_id: str | None = None
+    embedding: list[float] | None = None
+
+def create_parent_child_chunks(document: str, parent_size: int = 500,
+                                child_size: int = 100) -> list[Chunk]:
+    """Split a document into parent chunks, then split each parent into children."""
+    words = document.split()
+    chunks = []
+
+    # Create parent chunks
+    for i in range(0, len(words), parent_size):
+        parent_text = " ".join(words[i:i + parent_size])
+        parent_id = f"parent_{i}"
+        parent = Chunk(id=parent_id, text=parent_text)
+        chunks.append(parent)
+
+        # Create child chunks within this parent
+        parent_words = parent_text.split()
+        for j in range(0, len(parent_words), child_size):
+            child_text = " ".join(parent_words[j:j + child_size])
+            child = Chunk(
+                id=f"child_{i}_{j}",
+                text=child_text,
+                parent_id=parent_id
+            )
+            chunks.append(child)
+
+    return chunks
+
+def parent_child_retrieve(query: str, child_index, parent_store,
+                          top_k: int = 3):
+    """Search children for precision, return parents for context."""
+    # Search small child chunks (precise matching)
+    child_results = child_index.search(query, top_k=top_k * 2)
+
+    # Collect unique parent IDs
+    parent_ids = list(dict.fromkeys(c.parent_id for c in child_results))
+
+    # Return the parent chunks (full context)
+    return [parent_store[pid] for pid in parent_ids[:top_k]]</code></pre>
+
+    <!-- ============================================ -->
+    <h2>Sentence-Window Retrieval</h2>
+
+    <p>Sentence-window retrieval is a lighter version of parent-child. Instead of maintaining two separate indexes, you <strong>index individual sentences</strong> but retrieve a window of surrounding sentences when there's a match.</p>
+
+    <pre><code>import re
+
+def create_sentence_windows(text: str, window_size: int = 3):
+    """Index individual sentences, store surrounding context."""
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    windows = []
+    for i, sentence in enumerate(sentences):
+        start = max(0, i - window_size)
+        end = min(len(sentences), i + window_size + 1)
+        windows.append({
+            "search_text": sentence,           # embed this
+            "context_text": " ".join(sentences[start:end]),  # return this
+            "sentence_index": i,
+        })
+    return windows</code></pre>
+
+    <p>You embed and index just the single sentence (for precise matching), but when it's retrieved, you expand the window to include surrounding sentences. The LLM gets the full picture without the noise of a massive chunk.</p>
+
+    <div class="tip-box">
+      <p><strong>When to use which:</strong> Parent-child retrieval is better when your documents have clear hierarchical structure (sections, subsections). Sentence-window retrieval is better for flat, flowing text where boundaries are less obvious (meeting transcripts, chat logs, emails).</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Multi-Hop RAG: When One Search Isn't Enough</h2>
+
+    <p>Some questions need information from multiple places. "How does our refund policy compare to our competitor's, and what did the legal team say about the differences?" requires at least three pieces of information, likely from different documents.</p>
+
+    <p>Multi-hop RAG breaks complex questions into sub-questions, retrieves for each, and synthesizes the results:</p>
+
+    <pre><code>def multi_hop_retrieve(complex_question: str, retriever, top_k: int = 3):
+    """Decompose a complex question and retrieve for each sub-question."""
+    # Step 1: Break the question into sub-questions
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": f"""Break this complex question into 2-4 simpler
+sub-questions that can each be answered independently.
+Return one sub-question per line.
+
+Complex question: {complex_question}"""
+        }]
+    )
+    sub_questions = [q.strip() for q in response.content[0].text.strip().split("\n") if q.strip()]
+
+    # Step 2: Retrieve for each sub-question
+    all_context = []
+    for sq in sub_questions:
+        results = retriever.search(sq, top_k=top_k)
+        all_context.append({
+            "sub_question": sq,
+            "chunks": results,
+        })
+
+    return all_context</code></pre>
+
+    <div class="retrieval-box">
+      <p><strong>Iterative retrieval</strong> takes multi-hop further: after answering one sub-question, the system uses that answer to inform the <em>next</em> retrieval. For example, first find out <em>who</em> the competitor is, then search for <em>their</em> policies. Each hop builds on the previous one, like following a chain of references in a research paper.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Self-RAG: The System That Knows When It Doesn't Know</h2>
+
+    <p>Self-RAG adds <strong>reflection</strong> to the RAG pipeline. Instead of blindly generating from whatever chunks were retrieved, the LLM evaluates whether it actually <em>needs</em> to retrieve, whether the retrieved chunks are <em>relevant</em>, and whether the generated answer is <em>supported</em> by the evidence.</p>
+
+    <p>Think of it as a student who, instead of just answering a question from their notes, first asks: "Do I need to look this up? Are these notes relevant? Does my answer actually follow from what I read?"</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Decide</strong>
+        <p>Does this query need retrieval?</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Retrieve</strong>
+        <p>Get candidate chunks</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Evaluate</strong>
+        <p>Are these chunks relevant?</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Generate</strong>
+        <p>Answer from relevant chunks only</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>5. Verify</strong>
+        <p>Is the answer grounded?</p>
+      </div>
+    </div>
+
+    <pre><code>def self_rag_answer(question: str, retriever):
+    """Self-RAG: retrieve, evaluate relevance, generate, verify."""
+
+    # Step 1: Does this need retrieval?
+    needs_retrieval = check_needs_retrieval(question)  # LLM call → YES/NO
+    if not needs_retrieval:
+        return generate_answer(question, context=None)
+
+    # Step 2: Retrieve
+    chunks = retriever.search(question, top_k=5)
+
+    # Step 3: Evaluate relevance of each chunk (LLM scores each one)
+    relevant_chunks = [c for c in chunks if evaluate_relevance(question, c)]
+    if not relevant_chunks:
+        return "I couldn't find relevant information to answer this question."
+
+    # Step 4: Generate answer from relevant chunks only
+    answer = generate_answer(question, context=relevant_chunks)
+
+    # Step 5: Verify the answer is grounded in the evidence
+    is_supported = verify_grounding(answer, relevant_chunks)  # LLM call
+    if not is_supported:
+        answer += "\n\n(Note: This answer may not be fully supported.)"
+
+    return answer</code></pre>
+
+    <p>Each helper function (<code>check_needs_retrieval</code>, <code>evaluate_relevance</code>, <code>verify_grounding</code>) is a short LLM call that returns a boolean. The pattern is always the same: ask the LLM a yes/no question about the content, parse the response.</p>
+
+    <div class="warning-box">
+      <p>Self-RAG adds multiple LLM calls per query (evaluate each chunk + verify the answer). In production, this can mean 5-10 LLM calls per user question. Use it when accuracy matters more than latency &mdash; think legal, medical, or financial applications where a wrong answer is worse than a slow one.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Contextual Compression: Less Is More</h2>
+
+    <p>After retrieval, you often have chunks that are <em>mostly</em> relevant but contain a lot of noise. A 500-token chunk might have only 2 sentences that actually matter for the question. Contextual compression uses an LLM to extract just the relevant parts.</p>
+
+    <pre><code>def compress_context(question: str, chunks: list) -> list[str]:
+    """Extract only the relevant parts of each chunk."""
+    compressed = []
+    for chunk in chunks:
+        response = client.messages.create(
+            model="claude-sonnet-4-6-20250514",
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": f"""Extract ONLY the parts of this document that are
+relevant to answering the question. If nothing is relevant, reply "NONE".
+
+Question: {question}
+Document: {chunk.text}"""
+            }]
+        )
+        result = response.content[0].text.strip()
+        if result != "NONE":
+            compressed.append(result)
+    return compressed</code></pre>
+
+    <p>This is particularly valuable when you're hitting context window limits. Instead of stuffing 5 full chunks (2500 tokens) into the prompt, you might compress them down to 500 tokens of pure signal. The LLM gets less noise and produces better answers.</p>
+
+    <!-- ============================================ -->
+    <h2>Corrective RAG (CRAG): The Safety Net</h2>
+
+    <p>Corrective RAG adds a <strong>quality check after retrieval</strong>. If the retrieved documents are assessed as irrelevant or ambiguous, the system triggers a fallback &mdash; typically a web search or a different retrieval strategy.</p>
+
+    <div class="pipeline-box">
+      <p><strong>Where this fits:</strong> CRAG sits between retrieval and generation as a "quality gate." It evaluates retrieved documents as <strong>Correct</strong> (use them), <strong>Ambiguous</strong> (supplement with additional sources), or <strong>Incorrect</strong> (discard and try an alternative retrieval). This prevents the most common RAG failure: generating a confident answer from irrelevant context.</p>
+    </div>
+
+    <pre><code>def corrective_rag(question: str, retriever, web_search_fn):
+    """CRAG: evaluate retrieval quality and fall back if needed."""
+
+    # Step 1: Standard retrieval
+    chunks = retriever.search(question, top_k=5)
+
+    # Step 2: Evaluate retrieval quality
+    evaluation = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=50,
+        messages=[{
+            "role": "user",
+            "content": f"""Rate the relevance of these retrieved documents for
+answering the question. Reply with exactly one word:
+CORRECT, AMBIGUOUS, or INCORRECT.
+
+Question: {question}
+Documents: {' '.join(c.text[:200] for c in chunks)}"""
+        }]
+    ).content[0].text.strip().upper()
+
+    if "CORRECT" in evaluation:
+        # Good retrieval — proceed normally
+        return generate_answer(question, context=chunks)
+
+    elif "AMBIGUOUS" in evaluation:
+        # Supplement with web search
+        web_results = web_search_fn(question)
+        all_context = chunks + web_results
+        return generate_answer(question, context=all_context)
+
+    else:
+        # Bad retrieval — fall back entirely to web search
+        web_results = web_search_fn(question)
+        return generate_answer(question, context=web_results)</code></pre>
+
+    <div class="gotcha-box">
+      <p><strong>CRAG's evaluator is only as good as the LLM doing the evaluation.</strong> A lightweight model might misjudge relevance, letting bad chunks through or rejecting good ones. For high-stakes applications, consider using a more capable model for the evaluation step, even if you use a faster model for generation. The evaluation call is short and cheap.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Choosing the Right Pattern</h2>
+
+    <p>With all these patterns, how do you decide which ones to use? Here's a decision guide:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Pattern</th>
+          <th>Best For</th>
+          <th>Cost</th>
+          <th>Complexity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Query Rewriting</strong></td>
+          <td>Vague or conversational questions</td>
+          <td>+1 LLM call</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td><strong>HyDE</strong></td>
+          <td>Questions using different vocabulary than docs</td>
+          <td>+1 LLM call</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td><strong>Step-Back</strong></td>
+          <td>Overly specific questions needing broad context</td>
+          <td>+1 LLM call, +1 search</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td><strong>Parent-Child</strong></td>
+          <td>Documents with clear structure (sections, headings)</td>
+          <td>+indexing time</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td><strong>Sentence Window</strong></td>
+          <td>Flat text (transcripts, emails, logs)</td>
+          <td>+indexing time</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td><strong>Multi-Hop</strong></td>
+          <td>Complex questions requiring multiple sources</td>
+          <td>+1 LLM call, +N searches</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td><strong>Self-RAG</strong></td>
+          <td>High-stakes answers needing verification</td>
+          <td>+5-10 LLM calls</td>
+          <td>High</td>
+        </tr>
+        <tr>
+          <td><strong>Contextual Compression</strong></td>
+          <td>Long chunks with mixed relevance</td>
+          <td>+N LLM calls</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td><strong>CRAG</strong></td>
+          <td>When retrieval quality is unreliable</td>
+          <td>+1 LLM call + fallback</td>
+          <td>Medium</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <p><strong>Start simple, add patterns as needed.</strong> Don't implement all nine patterns at once. Start with basic RAG, measure where it fails (Chapter 10 will show you how), then add the specific pattern that addresses your most common failure mode. Query rewriting is almost always worth adding first &mdash; it's cheap, simple, and has the highest bang-for-the-buck.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Combining Patterns: A Real-World Stack</h2>
+
+    <p>In production, you typically combine 2-3 patterns. A practical combination: <strong>query rewriting</strong> (handles vague questions) &rarr; <strong>parent-child retrieval</strong> (precision + context) &rarr; <strong>CRAG quality check</strong> (safety net) &rarr; <strong>contextual compression</strong> (reduce noise) &rarr; <strong>generate</strong>.</p>
+
+    <p>This adds 3-4 LLM calls per query &mdash; a reasonable cost for significantly better answers. The key insight: each pattern addresses a different failure mode, so they compose well without redundancy.</p>
+
+    <!-- ============================================ -->
+    <h2>Performance Considerations</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">+50-100ms</div>
+        <div class="stat-label">per LLM call for query transforms</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">2-5x</div>
+        <div class="stat-label">more retrieval calls with multi-query</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">10-30%</div>
+        <div class="stat-label">typical accuracy improvement with advanced patterns</div>
+      </div>
+    </div>
+
+    <p>Advanced patterns trade <strong>latency and cost for quality</strong>. Every pattern adds at least one LLM call or extra search. The key is knowing when the tradeoff is worth it:</p>
+
+    <ul>
+      <li><strong>Internal knowledge base</strong> (employees searching docs): Query rewriting + parent-child. Users tolerate an extra second for better answers.</li>
+      <li><strong>Customer-facing chatbot</strong> (low latency needed): HyDE or query rewriting only &mdash; one extra call, minimal latency.</li>
+      <li><strong>Legal or compliance</strong> (accuracy is critical): Self-RAG + CRAG. Latency doesn't matter; correctness does.</li>
+      <li><strong>Real-time search</strong> (autocomplete, suggestions): Basic RAG only &mdash; no room for extra LLM calls.</li>
+    </ul>
+
+    <!-- ============================================ -->
+
+    <div class="exercise-box">
+      <h3>Try It: Add Query Rewriting and Parent-Child Retrieval</h3>
+      <p>Take the pipeline you built in Chapter 8 and upgrade it with two advanced patterns:</p>
+      <ol>
+        <li><strong>Add query rewriting:</strong> Before your retrieval step, use an LLM to generate 3 alternative queries. Search with all of them and combine results.</li>
+        <li><strong>Add parent-child chunking:</strong> Re-index your documents with small child chunks (100 tokens) linked to larger parent chunks (500 tokens). Search children, return parents.</li>
+        <li><strong>Measure the difference:</strong> Pick 10 questions your basic pipeline struggled with. Run them through both the basic and advanced pipelines. How many answers improved?</li>
+      </ol>
+      <p>You don't need all nine patterns. Start with these two &mdash; they're the highest-impact changes for the lowest complexity.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+
+    <p>You now have a toolkit of advanced patterns that can dramatically improve your RAG system. But here's the uncomfortable question: <strong>how do you know if they actually help?</strong></p>
+
+    <p>"It feels like the answers are better" is not a metric. In the next chapter, we'll build a systematic evaluation framework &mdash; retrieval metrics, generation quality scores, and LLM-as-judge techniques that give you real numbers to optimize against. Because you can't improve what you can't measure.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="08-building-the-pipeline.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Building a Production RAG Pipeline</span>
+    </a>
+    <a href="10-evaluation.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">Evaluating Your RAG System</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

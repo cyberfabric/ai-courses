@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Natural Language, Speech, and Sound — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-vision-framework.html">&larr; Prev</a>
+      <a href="06-foundation-models.html">Next &rarr;</a>
+      <a href="maps/05-nlp-speech-sound-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Natural Language, Speech, and Sound</h1>
+    <p class="subtitle">Give Your App Ears and a Brain for Words</p>
+  </header>
+
+  <main>
+
+    <p>In the last chapter, we taught your app to <em>see</em>. Now we teach it to <em>read</em>, <em>listen</em>, and <em>understand</em>. Apple ships three frameworks that handle language and audio entirely on-device: <strong>Natural Language</strong> (text analysis), <strong>Speech</strong> (voice transcription with the new SpeechAnalyzer), and <strong>SoundAnalysis</strong> (identifying 300+ sounds). No cloud APIs. No API keys. No per-request billing. Just frameworks that ship with iOS.</p>
+
+    <p>Think of it this way: Vision gives your app <em>eyes</em>. These three frameworks give it <em>ears and a reading brain</em>. Together, they turn your iPhone into a multi-sensory AI device.</p>
+
+    <h2>NLTagger: Your Text Intelligence Engine</h2>
+
+
+    <p>The <code>NLTagger</code> class is the workhorse of Apple's Natural Language framework. Feed it any text, and it tags every word with rich linguistic information &mdash; named entities (people, places, organizations), parts of speech, sentiment, lemmas, and more. It runs in <strong>microseconds</strong>, not milliseconds. It's essentially free.</p>
+
+    <h3>Named Entity Recognition</h3>
+
+    <p>Named entity recognition (NER) finds the "important stuff" in text &mdash; names of people, places, organizations, and dates. Think of it as a highlighter that automatically marks the actionable parts of any sentence.</p>
+
+    <pre><code>import NaturalLanguage
+
+let text = "Tim Cook announced at WWDC in San Jose that iOS 26 ships in September."
+let tagger = NLTagger(tagSchemes: [.nameType])
+tagger.string = text
+
+tagger.enumerateTags(in: text.startIndex..&lt;text.endIndex,
+                     unit: .word, scheme: .nameType,
+                     options: [.omitWhitespace, .omitPunctuation, .joinNames]) {
+    tag, range in
+    if let tag = tag, tag != .otherWord {
+        print("\(text[range]) — \(tag.rawValue)")
+        // "Tim Cook" — PersonalName
+        // "WWDC" — OrganizationName
+        // "San Jose" — PlaceName
+    }
+    return true
+}</code></pre>
+
+    <p>That's it. No model files to download. No configuration. NLTagger uses Apple's built-in language models that ship with iOS.</p>
+
+    <h3>Sentiment Analysis</h3>
+
+    <p>Sentiment analysis scores text from <strong>-1.0</strong> (very negative) to <strong>+1.0</strong> (very positive). It's perfect for scanning user reviews, chat messages, or feedback in real time.</p>
+
+    <pre><code>let sentimentTagger = NLTagger(tagSchemes: [.sentimentScore])
+sentimentTagger.string = "This app is absolutely amazing!"
+
+let (sentiment, _) = sentimentTagger.tag(at: sentimentTagger.string!.startIndex,
+                                          unit: .paragraph,
+                                          scheme: .sentimentScore)
+let score = Double(sentiment?.rawValue ?? "0") ?? 0
+// score ≈ 0.9 (very positive)</code></pre>
+
+    <div class="tip-box">
+      <strong>Tip:</strong> Sentiment works best on paragraph-sized chunks. Single words like "great" may not score as high as you'd expect because the model considers context. Feed it complete sentences for reliable results.
+    </div>
+
+    <h3>Language Detection</h3>
+
+    <p><code>NLLanguageRecognizer</code> automatically identifies the language of any text. It supports 60+ languages and works with as little as a single sentence. Useful for routing text to language-specific models or displaying the right UI.</p>
+
+    <pre><code>let recognizer = NLLanguageRecognizer()
+recognizer.processString("Bonjour, comment allez-vous?")
+let language = recognizer.dominantLanguage  // .french
+
+// Get probability distribution for mixed-language text
+let hypotheses = recognizer.languageHypotheses(withMaximum: 3)
+// [.french: 0.95, .italian: 0.03, .spanish: 0.02]</code></pre>
+
+    <h2>NLEmbedding: Semantic Similarity Without a Server</h2>
+
+
+    <p>Here's where NLP gets really powerful. <code>NLEmbedding</code> turns words and sentences into <strong>512-dimensional vectors</strong> (arrays of numbers). Words with similar meanings end up close together in this vector space. "Happy" and "joyful" are neighbors; "happy" and "refrigerator" are far apart.</p>
+
+    <p>Why should you care? Because this enables <strong>semantic search</strong> &mdash; finding things by meaning, not just exact text match. All running on-device, all private.</p>
+
+    <pre><code>if let embedding = NLEmbedding.wordEmbedding(for: .english) {
+    // Find distance between two words (0.0 = identical, 2.0 = maximally different)
+    let distance = embedding.distance(between: "happy", and: "joyful")
+    // distance ≈ 0.42 (very close)
+
+    // Find the 5 nearest neighbors to a word
+    embedding.enumerateNeighbors(for: "swift", maximumCount: 5) { neighbor, dist in
+        print("\(neighbor): \(dist)")
+        // "fast", "rapid", "quick", "speedy", "nimble"
+        return true
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Tip:</strong> Sentence embeddings (<code>NLEmbedding.sentenceEmbedding(for:)</code>) are even more useful. They let you compare the meaning of entire sentences &mdash; perfect for finding duplicate support tickets, matching FAQ questions, or building a "related items" feature.
+    </div>
+
+    <div class="model-pipeline">
+      <h3>NLP Pipeline: Text to Intelligence</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Raw Text</strong>
+            <small>User input, clipboard, message</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>NLLanguageRecognizer</strong>
+            <small>Detect language</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>NLTagger</strong>
+            <small>Entities, sentiment, POS</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>NLEmbedding</strong>
+            <small>Semantic similarity</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>Your Feature</strong>
+            <small>Smart search, routing, UI</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>SpeechAnalyzer: The New Era of Speech-to-Text (iOS 26)</h2>
+
+
+    <p>If you've ever used <code>SFSpeechRecognizer</code>, you know the pain &mdash; clunky delegate callbacks, limited offline support, and accuracy that left you wanting more. iOS 26 replaces all of that with <strong>SpeechAnalyzer</strong>, a completely redesigned speech API built on Swift concurrency.</p>
+
+    <p>SpeechAnalyzer is modular. You attach <strong>modules</strong> that each do one job:</p>
+
+    <ul>
+      <li><strong>SpeechTranscriber</strong> &mdash; converts speech to text (real-time or from files)</li>
+      <li><strong>SpeechDetector</strong> &mdash; detects when someone is speaking (voice activity detection)</li>
+    </ul>
+
+    <p>Think of SpeechAnalyzer as the <em>conductor</em> and the modules as <em>instruments</em>. The conductor manages audio input and coordinates the modules. Each module does its specialized work independently.</p>
+
+    <div class="apple-framework">
+      <h3>SpeechAnalyzer at a Glance</h3>
+      <table>
+        <tr><td><strong>Framework</strong></td><td>Speech (import Speech)</td></tr>
+        <tr><td><strong>Minimum iOS</strong></td><td>iOS 26</td></tr>
+        <tr><td><strong>Modules</strong></td><td>SpeechTranscriber, SpeechDetector</td></tr>
+        <tr><td><strong>On-Device</strong></td><td>100% &mdash; no network required</td></tr>
+        <tr><td><strong>Languages</strong></td><td>System-managed models, auto-downloaded per locale</td></tr>
+        <tr><td><strong>Concurrency</strong></td><td>Native async/await with AsyncSequence</td></tr>
+        <tr><td><strong>Privacy</strong></td><td>Requires NSMicrophoneUsageDescription + NSSpeechRecognitionUsageDescription</td></tr>
+        <tr><td><strong>Replaces</strong></td><td>SFSpeechRecognizer (still available but deprecated path)</td></tr>
+      </table>
+    </div>
+
+    <h3>Transcribing a File</h3>
+
+    <p>The simplest use case &mdash; transcribe an audio file sitting on disk:</p>
+
+    <pre><code>import Speech
+
+func transcribeFile(at url: URL) async throws -> String {
+    let transcriber = SpeechTranscriber(
+        locale: .current,
+        preset: .offlineTranscription
+    )
+    let analyzer = SpeechAnalyzer(modules: [transcriber])
+
+    var fullText = ""
+    try await analyzer.analyzeSequence(from: url)
+
+    for try await result in transcriber.results {
+        if result.isFinal {
+            fullText += result.bestTranscription.formattedString + " "
+        }
+    }
+    return fullText.trimmingCharacters(in: .whitespaces)
+}</code></pre>
+
+    <p>That's the entire file transcription pipeline. No delegates, no callbacks, no audio session gymnastics. Just async/await.</p>
+
+    <h3>Live Microphone Transcription</h3>
+
+    <p>For real-time speech-to-text, you feed live audio into SpeechAnalyzer using an <code>AsyncStream</code>:</p>
+
+    <pre><code>import Speech
+import AVFoundation
+
+let transcriber = SpeechTranscriber(
+    locale: .current,
+    reportingOptions: [.volatileResults]
+)
+let analyzer = SpeechAnalyzer(modules: [transcriber])
+
+// Get the audio format the analyzer wants
+let format = try analyzer.bestAvailableAudioFormat()
+
+// Create an AsyncStream to feed audio buffers
+let (stream, continuation) = AsyncStream&lt;AVAudioPCMBuffer&gt;.makeStream()
+
+// Start the analysis pipeline
+Task {
+    try await analyzer.analyzeSequence(stream)
+}
+
+// Read results as they arrive
+Task {
+    for try await result in transcriber.results {
+        if result.isVolatile {
+            // Partial result — update UI in real time
+            updateLiveText(result.bestTranscription.formattedString)
+        } else if result.isFinal {
+            // Final, stable result
+            appendFinalText(result.bestTranscription.formattedString)
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Tip:</strong> <code>.volatileResults</code> gives you partial transcriptions that update as the user speaks — perfect for showing a "live typing" effect. Final results arrive once the model is confident in the transcription. Use volatile for real-time UI, final for storing the transcript.
+    </div>
+
+    <div class="warning-box">
+      <strong>Language models are downloaded on demand.</strong> The first time a user runs SpeechTranscriber for a specific locale, iOS downloads the language model in the background. This is automatic and system-managed — you don't need to handle it — but be aware that first-use may require a network connection. Subsequent uses are fully offline.
+    </div>
+
+    <h2>SoundAnalysis: Identifying 300+ Sounds</h2>
+
+
+    <p>Your iPhone doesn't just hear <em>words</em> — it can identify <em>sounds</em>. Dog barking, siren, applause, music genre, coughing, glass breaking, doorbell. Apple's SoundAnalysis framework ships with a built-in classifier that recognizes <strong>300+ sound categories</strong>, all on-device.</p>
+
+    <p>The practical applications are everywhere: accessibility features for deaf users, baby monitoring, security alerts, health monitoring (persistent cough detection), smart home automation, and ambient scene detection.</p>
+
+    <h3>The Sound Classification Pipeline</h3>
+
+    <pre><code>import SoundAnalysis
+import AVFoundation
+
+class SoundClassifier {
+    private let audioEngine = AVAudioEngine()
+    private var analyzer: SNAudioStreamAnalyzer?
+
+    func startListening() throws {
+        let inputNode = audioEngine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+
+        analyzer = SNAudioStreamAnalyzer(format: format)
+
+        // Use Apple's built-in sound classifier
+        let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+        request.windowDuration = CMTime(seconds: 1.5, preferredTimescale: 600)
+        request.overlapFactor = 0.5
+
+        try analyzer?.add(request, withObserver: self)
+
+        inputNode.installTap(onBus: 0, bufferSize: 8192, format: format) {
+            [weak self] buffer, time in
+            self?.analyzer?.analyze(buffer, atAudioFramePosition: time.sampleTime)
+        }
+
+        try audioEngine.start()
+    }
+}
+
+extension SoundClassifier: SNResultsObserving {
+    func request(_ request: SNRequest, didProduce result: SNResult) {
+        guard let classificationResult = result as? SNClassificationResult,
+              let topResult = classificationResult.classifications.first,
+              topResult.confidence > 0.6 else { return }
+        print("Detected: \(topResult.identifier) (\(topResult.confidence))")
+        // "Detected: dog_bark (0.87)"
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Tip:</strong> The <code>windowDuration</code> controls how much audio the classifier analyzes at once. Shorter windows (0.5s) react faster but may be less accurate. Longer windows (3s) are more accurate but introduce delay. 1.5 seconds is a good default for most use cases.
+    </div>
+
+    <div class="model-pipeline">
+      <h3>Audio Classification Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>AVAudioEngine</strong>
+            <small>Captures microphone input</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Audio Buffer</strong>
+            <small>AVAudioPCMBuffer chunks</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>SNAudioStreamAnalyzer</strong>
+            <small>Feeds buffers to requests</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>SNClassifySoundRequest</strong>
+            <small>Apple's built-in classifier</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>SNClassificationResult</strong>
+            <small>Category + confidence</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3>Using Custom Sound Models</h3>
+
+    <p>Apple's built-in classifier covers 300+ general sounds, but you can train your own for specific use cases. In Chapter 9 (Create ML), we'll train custom sound classifiers. For now, know that the pattern is identical &mdash; just swap the classifier identifier for your Core ML model:</p>
+
+    <pre><code>// Built-in Apple classifier
+let builtIn = try SNClassifySoundRequest(classifierIdentifier: .version1)
+
+// Your custom Core ML model
+let customModel = try MLModel(contentsOf: myModelURL)
+let custom = try SNClassifySoundRequest(mlModel: customModel)</code></pre>
+
+    <h2>Combining All Three: The Voice-to-Intelligence Pipeline</h2>
+
+
+    <p>The real power comes from combining these frameworks. An app that simultaneously <strong>transcribes speech</strong> (SpeechTranscriber), <strong>extracts entities and sentiment</strong> (NLTagger), and <strong>classifies ambient sounds</strong> (SoundAnalysis) &mdash; all four streams running in parallel, all on-device, all in real time.</p>
+
+    <div class="highlight-box">
+      <strong>The pattern:</strong> SpeechTranscriber produces text &rarr; NLTagger analyzes it for entities and sentiment &rarr; SoundAnalysis adds ambient context. Three frameworks, one unified intelligence layer, zero cloud dependency. You'll build exactly this in the exercise below.
+    </div>
+
+    <h2>Multilingual Considerations</h2>
+
+
+    <p>iOS runs on devices worldwide, and Apple's NLP frameworks reflect that. But not all features are equal across all languages.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Well-Supported (50+ languages)</h4>
+        <ul>
+          <li>Language detection</li>
+          <li>Tokenization</li>
+          <li>Lemmatization</li>
+          <li>Part-of-speech tagging</li>
+          <li>Script identification</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Limited Language Support</h4>
+        <ul>
+          <li>Named entity recognition (7 languages)</li>
+          <li>Sentiment analysis (7 languages)</li>
+          <li>Word embeddings (7 languages)</li>
+          <li>Sentence embeddings (English only)</li>
+          <li>SpeechTranscriber (varies by locale)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>Best practice:</strong> Always check language support at runtime with <code>NLTagger.availableTagSchemes(for: .word, language: detectedLanguage)</code>. If your desired scheme (e.g., <code>.nameType</code>) isn't in the list, fall back to basic tokenization. This prevents silent failures where the tagger returns no results.
+    </div>
+
+    <h2>Performance: Surprisingly Fast</h2>
+
+
+    <p>One of the best things about these frameworks is their performance. NLTagger operates in <strong>microseconds</strong>. Even SpeechTranscriber delivers results faster than you can speak.</p>
+
+    <div class="device-benchmark">
+      <h3>Performance Benchmarks (iPhone 16 Pro, A18 Pro)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Latency</th>
+            <th>Memory</th>
+            <th>Battery Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>NLTagger (NER, 100 words)</td>
+            <td><strong>~0.2 ms</strong></td>
+            <td>~2 MB</td>
+            <td>Negligible</td>
+          </tr>
+          <tr>
+            <td>NLTagger (sentiment, paragraph)</td>
+            <td><strong>~0.1 ms</strong></td>
+            <td>~2 MB</td>
+            <td>Negligible</td>
+          </tr>
+          <tr>
+            <td>NLEmbedding (word lookup)</td>
+            <td><strong>~0.5 ms</strong></td>
+            <td>~80 MB model</td>
+            <td>Negligible</td>
+          </tr>
+          <tr>
+            <td>NLLanguageRecognizer</td>
+            <td><strong>~0.05 ms</strong></td>
+            <td>~1 MB</td>
+            <td>Negligible</td>
+          </tr>
+          <tr>
+            <td>SpeechTranscriber (real-time)</td>
+            <td><strong>~200 ms</strong> first result</td>
+            <td>~100 MB</td>
+            <td>Moderate</td>
+          </tr>
+          <tr>
+            <td>SpeechTranscriber (file, 1 min)</td>
+            <td><strong>~5-8 s</strong></td>
+            <td>~100 MB</td>
+            <td>Low (burst)</td>
+          </tr>
+          <tr>
+            <td>SoundAnalysis (continuous)</td>
+            <td><strong>~30 ms</strong> per window</td>
+            <td>~15 MB</td>
+            <td>Low-Moderate</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Notice the pattern: NLTagger is so fast it's essentially free &mdash; you can run it on every keystroke, every clipboard change, every message without any user-visible impact. SpeechTranscriber and SoundAnalysis are heavier but designed for sustained real-time use with acceptable battery drain.</p>
+
+    <div class="warning-box">
+      <strong>Memory matters for Speech.</strong> SpeechTranscriber loads a language model (~100 MB) into memory. If your app is already memory-heavy (e.g., running a Core ML vision model), be mindful of total memory usage. Unload the speech model when not in use.
+    </div>
+
+    <h2>Permissions and Privacy</h2>
+
+
+    <p>Audio-related frameworks require user permission. Here's your Info.plist checklist:</p>
+
+    <div class="checklist">
+      <h3>Required Info.plist Keys</h3>
+      <ul>
+        <li><strong>NSMicrophoneUsageDescription</strong> &mdash; required for SpeechAnalyzer and SoundAnalysis (any microphone access)</li>
+        <li><strong>NSSpeechRecognitionUsageDescription</strong> &mdash; required specifically for SpeechTranscriber/SpeechAnalyzer</li>
+      </ul>
+      <h3>Not Required</h3>
+      <ul>
+        <li><strong>NLTagger, NLEmbedding, NLLanguageRecognizer</strong> &mdash; no permissions needed (text analysis, no hardware access)</li>
+      </ul>
+    </div>
+
+    <div class="tip-box">
+      <strong>Privacy win:</strong> Since all three frameworks run entirely on-device, you can truthfully tell users "Your voice and text never leave your iPhone." Highlight this in your App Store description and privacy nutrition labels.
+    </div>
+
+    <h2>SpeechAnalyzer vs SFSpeechRecognizer</h2>
+
+
+    <p>If you have existing code using <code>SFSpeechRecognizer</code>, here's why and when to migrate:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>SpeechAnalyzer (iOS 26+)</h4>
+        <ul>
+          <li>Native async/await</li>
+          <li>Modular architecture (Transcriber + Detector)</li>
+          <li>Better accuracy (matches mid-tier Whisper)</li>
+          <li>Optimized for long-form audio</li>
+          <li>System-managed language models</li>
+          <li>Built for offline-first</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>SFSpeechRecognizer (iOS 10+)</h4>
+        <ul>
+          <li>Delegate-based callbacks</li>
+          <li>Monolithic API</li>
+          <li>Lower accuracy offline</li>
+          <li>60-second limit for live audio</li>
+          <li>Manual language model management</li>
+          <li>Cloud-first, offline optional</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>Migration advice:</strong> If your minimum deployment target is iOS 26, use SpeechAnalyzer for all new speech features. If you need to support older iOS versions, wrap both APIs behind a Swift protocol and select at runtime based on <code>#available(iOS 26, *)</code>.
+    </div>
+
+    <h2>Exercise: Build an AI Listener</h2>
+
+
+    <div class="exercise-box">
+      <h3>Hands-On: The AI Listener</h3>
+      <p>Build a SwiftUI app that runs three AI streams simultaneously:</p>
+      <ol>
+        <li><strong>Speech transcription</strong> &mdash; Use SpeechTranscriber to convert microphone input to live text. Display volatile (partial) results in gray and final results in black.</li>
+        <li><strong>Entity extraction</strong> &mdash; Feed each final transcript segment to NLTagger with <code>.nameType</code>. Display extracted people, places, and organizations as colored tags below the transcript.</li>
+        <li><strong>Sound classification</strong> &mdash; Run SoundAnalysis in parallel. Display the top detected ambient sound category and confidence score in a badge at the top of the screen.</li>
+      </ol>
+      <h4>Architecture Tips:</h4>
+      <ul>
+        <li>Use an <code>@Observable</code> class (<code>AIListener</code>) with @Published properties for transcript, entities, sentiment, and ambientSound</li>
+        <li>Run SpeechAnalyzer and SoundAnalysis on separate Tasks &mdash; they operate on the same microphone input but process independently</li>
+        <li>Use <code>NLLanguageRecognizer</code> to detect the transcript's language before running NER &mdash; skip entity extraction if the language isn't supported</li>
+        <li>Add a "recording" toggle that starts/stops both audio pipelines</li>
+      </ul>
+      <h4>Stretch Goals:</h4>
+      <ul>
+        <li>Color transcript text by sentiment: green (positive), red (negative), gray (neutral)</li>
+        <li>Log all results with timestamps for session review</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+
+    <p>We've now covered Apple's three main "built-in intelligence" categories: <strong>Vision</strong> (Chapter 4), <strong>Natural Language</strong>, <strong>Speech</strong>, and <strong>Sound</strong> (this chapter). These frameworks handle the most common AI tasks &mdash; recognizing images, understanding text, transcribing voice, and classifying sounds &mdash; without any model files to manage.</p>
+
+    <p>But what if you want your app to <em>generate</em> text? Write summaries, answer questions, or transform content on-device? In <strong>Chapter 6: Foundation Models and Apple Intelligence</strong>, we'll unlock Apple's on-device language model &mdash; a ~3B parameter model running entirely on the Neural Engine. You'll learn about <code>@Generable</code> for structured output, tool calling, streaming responses, and integration with Writing Tools and Image Playground. The most exciting chapter in the course.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-vision-framework.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Vision Framework &mdash; See Like an iPhone</span>
+      </a>
+      <a href="06-foundation-models.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Foundation Models and Apple Intelligence</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

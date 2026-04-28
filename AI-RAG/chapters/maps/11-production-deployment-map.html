@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: RAG in Production | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../11-production-deployment.html">Chapter</a>
+      <a href="10-evaluation-map.html">&#8592; Prev Map</a>
+      <a href="12-beyond-text-rag-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>RAG in Production</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ============================================ -->
+    <!-- BIG IDEA                                     -->
+    <!-- ============================================ -->
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Production RAG balances three forces: <strong>quality</strong> (better answers), <strong>speed</strong> (faster responses), and <strong>cost</strong> (cheaper operations). Improve one, the others suffer &mdash; unless you're clever about caching, streaming, and access control.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- PROTOTYPE vs PRODUCTION                      -->
+    <!-- ============================================ -->
+
+    <h2>🏠 Prototype vs 🏭 Production</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Dimension</th>
+          <th>Prototype</th>
+          <th>Production</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Documents</td>
+          <td>100 files, loaded once</td>
+          <td>1M+, updated continuously</td>
+        </tr>
+        <tr>
+          <td>Users</td>
+          <td>You, in a notebook</td>
+          <td>1,000+ concurrent</td>
+        </tr>
+        <tr>
+          <td>Latency</td>
+          <td>"It answered eventually"</td>
+          <td>&lt;3 seconds end-to-end</td>
+        </tr>
+        <tr>
+          <td>Cost</td>
+          <td>$5/month</td>
+          <td>$5,000+/month if not careful</td>
+        </tr>
+        <tr>
+          <td>Security</td>
+          <td>Everything accessible</td>
+          <td>Document-level access control</td>
+        </tr>
+        <tr>
+          <td>Reliability</td>
+          <td>Restart the notebook</td>
+          <td>99.9% uptime SLA</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============================================ -->
+    <!-- COST — WHERE THE MONEY GOES                  -->
+    <!-- ============================================ -->
+
+    <h2>💰 Where the Money Goes</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">$$$ LLM Generation<br><small>~97% of cost</small></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">$$ Embedding API<br><small>One-time + per-query</small></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">$ Vector DB<br><small>Storage + compute</small></div>
+    </div>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🎯</span>
+        <div class="map-card-title">Route by Complexity</div>
+        <div class="map-card-desc">Simple queries → cheap model. Complex reasoning → expensive model. Save $$$ on the 80% of easy questions.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💾</span>
+        <div class="map-card-title">Cache Aggressively</div>
+        <div class="map-card-desc">Semantic caching cuts LLM costs by up to 68%. A cache hit is effectively free.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">Batch Embeddings</div>
+        <div class="map-card-desc">Embed multiple chunks in one API call. text-embedding-3-small is 5x cheaper than -large with minor quality drop.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🗜️</span>
+        <div class="map-card-title">Compress Context</div>
+        <div class="map-card-desc">Extract only relevant sentences from chunks before sending to LLM. Less input tokens = less cost.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- LATENCY — THE 3-SECOND BUDGET                -->
+    <!-- ============================================ -->
+
+    <h2>⏱️ The 3-Second Latency Budget</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Embed Query<br><strong>50-100ms</strong></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Vector Search<br><strong>10-50ms</strong></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Re-rank<br><strong>100-200ms</strong></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">LLM Generate<br><strong>500-2000ms</strong></div>
+    </div>
+
+    <dl class="map-terms">
+      <dt>🌊 Stream responses</dt>
+      <dd>User starts reading while LLM generates. Perceived latency drops from 2s to &lt;500ms for first token.</dd>
+      <dt>⚡ Parallelize I/O</dt>
+      <dd>Run vector search + keyword search with asyncio.gather. 1.5-2.5x faster than sequential.</dd>
+      <dt>💾 Semantic cache hit</dt>
+      <dd>Sub-100ms response vs multi-second LLM call — up to 65x faster.</dd>
+    </dl>
+
+    <!-- ============================================ -->
+    <!-- CACHING — THREE LAYERS                       -->
+    <!-- ============================================ -->
+
+    <h2>🧊 Three Caching Layers</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Layer 1: Embedding Cache</h4>
+        <p>Cache query text → embedding vector. Normalize text first (lowercase, strip whitespace). Saves embedding API calls for repeated queries.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Layer 2: Retrieval Cache</h4>
+        <p>Cache query embedding → chunk IDs + scores. Skips the vector DB round-trip entirely for repeated queries.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Layer 3: Semantic Cache</h4>
+        <p>The big one. "What's the refund policy?" and "How do I get my money back?" are the same question. Embed queries, find similar cached ones (threshold ~0.92), return cached answers.</p>
+      </li>
+    </ol>
+
+    <!-- ============================================ -->
+    <!-- INDEX FRESHNESS                              -->
+    <!-- ============================================ -->
+
+    <h2>🔄 Keeping the Index Fresh</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>When to Use</th>
+          <th>Tradeoff</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Full re-index</td>
+          <td>Changing embedding model, major restructuring</td>
+          <td>Expensive but guarantees consistency</td>
+        </tr>
+        <tr>
+          <td>Incremental upsert</td>
+          <td>New/updated documents</td>
+          <td>Cheap, but needs change detection</td>
+        </tr>
+        <tr>
+          <td>Scheduled refresh</td>
+          <td>Sources without webhooks</td>
+          <td>Simple, but introduces staleness window</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🔑</span>
+      <h3>Pro Tip: Hash Your Content</h3>
+      <p>Store a content hash alongside each vector. Compare hashes to detect changes &mdash; hash comparison is free, re-embedding is an API call.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SECURITY                                     -->
+    <!-- ============================================ -->
+
+    <h2>🔐 Security &amp; Access Control</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🛡️</span>
+        <div class="map-card-title">Cardinal Rule</div>
+        <div class="map-card-desc">Enforce authorization <strong>before</strong> augmentation. If an unauthorized doc enters the LLM context, the answer is compromised. Filter at retrieval time, not generation time.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🏷️</span>
+        <div class="map-card-title">Metadata Filtering</div>
+        <div class="map-card-desc">Store permission metadata at ingestion. Filter by department, role, user ID during search. All major vector DBs support this.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📋</span>
+        <div class="map-card-title">Audit Logging</div>
+        <div class="map-card-desc">Log every access: who queried, which chunks returned, when. Essential for compliance and debugging.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">💉</span>
+        <div class="map-card-title">Prompt Injection</div>
+        <div class="map-card-desc">Malicious docs can contain "ignore previous instructions." Sanitize content, warn the LLM, and limit document access. Defense in depth.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- MULTI-TENANCY                                -->
+    <!-- ============================================ -->
+
+    <h2>🏢 Multi-Tenancy Models</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">🏠 Silo Model<br><small>Separate indexes per tenant</small><br><small>Strong isolation, higher cost</small></div>
+      <div class="map-rel-node">🏊 Pool Model<br><small>Shared index + tenant_id filter</small><br><small>Lower cost, simpler ops</small></div>
+      <div class="map-rel-center">Multi-Tenancy</div>
+      <div class="map-rel-node">🔀 Hybrid<br><small>Pool for most, silo for VIP</small><br><small>Best of both worlds</small></div>
+      <div class="map-rel-node">⚠️ Pool risk<br><small>Filter bug = data leak</small><br><small>tenant_id filter is mandatory</small></div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- MONITORING                                   -->
+    <!-- ============================================ -->
+
+    <h2>📊 Monitoring Metrics</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>What It Tells You</th>
+          <th>Alert When</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>P95 latency</td>
+          <td>Slowest 5% of queries</td>
+          <td>&gt;5s</td>
+        </tr>
+        <tr>
+          <td>Empty retrieval rate</td>
+          <td>Retrieval returns nothing relevant</td>
+          <td>&gt;10%</td>
+        </tr>
+        <tr>
+          <td>Avg similarity score</td>
+          <td>Are chunks actually relevant?</td>
+          <td>Dropping trend</td>
+        </tr>
+        <tr>
+          <td>Cache hit rate</td>
+          <td>Is caching reducing load?</td>
+          <td>&lt;20%</td>
+        </tr>
+        <tr>
+          <td>"I don't know" rate</td>
+          <td>Knowledge base gaps</td>
+          <td>&gt;25%</td>
+        </tr>
+        <tr>
+          <td>Thumbs down rate</td>
+          <td>User-reported bad answers</td>
+          <td>&gt;15%</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============================================ -->
+    <!-- SCALING VECTOR DB                            -->
+    <!-- ============================================ -->
+
+    <h2>📈 Scaling the Vector Database</h2>
+
+    <dl class="map-terms">
+      <dt>Sharding</dt>
+      <dd>Split index across multiple nodes. Managed DBs handle this automatically; self-hosted requires config.</dd>
+      <dt>Read Replicas</dt>
+      <dd>Write to one node, read from many. Serves more concurrent queries.</dd>
+      <dt>Index Tuning (HNSW)</dt>
+      <dd>Higher ef_construction &amp; M = better recall but slower indexing and more memory.</dd>
+      <dt>Quantization</dt>
+      <dd>Compress float32 vectors to int8 or binary. Cuts memory 4-8x with small accuracy loss.</dd>
+      <dt>Matryoshka Embeddings</dt>
+      <dd>Truncate vectors to fewer dimensions (e.g., 256 instead of 1536). Cuts storage 6x at 1M+ vectors.</dd>
+    </dl>
+
+    <!-- ============================================ -->
+    <!-- QUICK QUIZ                                   -->
+    <!-- ============================================ -->
+
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+      <details>
+        <summary>What's the biggest cost component in a production RAG system?</summary>
+        <p class="quiz-answer">LLM generation — it accounts for ~97% of costs. Embedding and vector DB costs are comparatively small.</p>
+      </details>
+      <details>
+        <summary>What is a semantic cache, and why is it so effective?</summary>
+        <p class="quiz-answer">A semantic cache finds similar questions (not just identical ones) by comparing query embeddings. "What's the refund policy?" matches "How do I get my money back?" — delivering sub-100ms responses vs multi-second LLM calls.</p>
+      </details>
+      <details>
+        <summary>Why must access control happen at retrieval time, not generation time?</summary>
+        <p class="quiz-answer">If an unauthorized document enters the LLM's context, the response may leak that information — even if you try to filter the output afterward. The LLM has already "seen" the document.</p>
+      </details>
+      <details>
+        <summary>What's the difference between the silo and pool multi-tenancy models?</summary>
+        <p class="quiz-answer">Silo = separate vector index per tenant (strong isolation, higher cost). Pool = shared index with mandatory tenant_id metadata filter (lower cost, but a filter bug = data leak).</p>
+      </details>
+      <details>
+        <summary>How do you monitor faithfulness in production without judging every response?</summary>
+        <p class="quiz-answer">Sample 1-5% of queries and run them through your faithfulness evaluator. Track the score over time — a drop signals data corruption, model changes, or retrieval degradation.</p>
+      </details>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SUMMARY STRIP                                -->
+    <!-- ============================================ -->
+
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Production RAG balances quality, speed, and cost — LLM generation is ~97% of your bill.</li>
+        <li class="map-summary-item">The 3-second latency budget: embed (50-100ms) + search (10-50ms) + re-rank (100-200ms) + generate (500-2000ms). Stream to cut perceived latency.</li>
+        <li class="map-summary-item">Three caching layers (embedding, retrieval, semantic) are the single most impactful production optimization — up to 65x faster on cache hits.</li>
+        <li class="map-summary-item">Hash your content to detect changes cheaply. Use incremental upserts for day-to-day freshness, full re-index only when changing embedding models.</li>
+        <li class="map-summary-item">Enforce access control at retrieval time, never at generation time. Store permissions as metadata, filter during search.</li>
+        <li class="map-summary-item">Monitor four layers: infrastructure, retrieval quality, generation quality, and user satisfaction. Sample faithfulness checks are your canary.</li>
+        <li class="map-summary-item">Analogy: prototype = dinner party for 10 friends. Production = restaurant serving 500 a night. Same recipes, everything else changes.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="10-evaluation-map.html" class="prev">
+      <span class="nav-direction">&larr; Previous Map</span>
+      <span class="nav-chapter">Evaluating Your RAG System</span>
+    </a>
+    <a href="../11-production-deployment.html" class="next">
+      <span class="nav-direction">Back to Chapter &rarr;</span>
+      <span class="nav-chapter">RAG in Production</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

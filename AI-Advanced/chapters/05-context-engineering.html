@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Context Engineering &mdash; AI-Driven Development</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Development</span>
+    <div class="nav-links">
+      <a href="04-setting-up-environment.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="06-prompt-engineering-for-code.html">Next &rarr;</a>
+      <a href="maps/05-context-engineering-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Context Engineering</h1>
+    <p class="subtitle">The single most important skill: CLAUDE.md, project memory, and feeding the right tokens</p>
+  </header>
+
+  <main>
+
+    <!-- Why Context Is King -->
+    <section>
+      <h2>Why Context Is King</h2>
+
+      <p>If you take one thing from this entire book, let it be this: <strong>the quality of AI output is determined by the quality of context you provide.</strong> Not the quality of your prompt. Not the model you choose. The context.</p>
+
+      <p>Context is everything the AI can "see" when processing your request: the system prompt, your project instructions, the files it has read, the conversation history, and the specific prompt you typed. The model reasons over this combined context to produce its output. Bad context produces bad output regardless of how well you phrase your prompt.</p>
+
+      <p>As <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank">Anthropic's engineering team defines it</a>: context engineering is <em>"curating and maintaining the optimal set of tokens during LLM inference."</em> The key word is <strong>curating</strong>. Not dumping everything in. Not hoping the model figures it out. Deliberately selecting the smallest set of high-signal tokens that give the model what it needs.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">1M</div>
+          <div class="stat-label">Maximum tokens in Claude's context window &mdash; roughly 3,000 pages of text</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~4</div>
+          <div class="stat-label">Characters per token on average &mdash; a 500-line file is roughly 2,000-4,000 tokens</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">10-50x</div>
+          <div class="stat-label">Impact of good context vs good prompting on output quality</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Context Engineering vs Prompt Engineering -->
+    <section>
+      <h2>Context Engineering vs Prompt Engineering</h2>
+
+      <p>These terms are often confused. They're related but distinct skills:</p>
+
+      <div class="comparison">
+        <div>
+          <h3>Prompt Engineering</h3>
+          <ul>
+            <li>How you <em>phrase</em> your request</li>
+            <li>"Write a function that..." vs "Implement..."</li>
+            <li>Instruction clarity, format, constraints</li>
+            <li>What you say in the current message</li>
+            <li>Important but overrated</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Context Engineering</h3>
+          <ul>
+            <li>What <em>information</em> surrounds your request</li>
+            <li>Project structure, conventions, existing code</li>
+            <li>CLAUDE.md, file references, documentation</li>
+            <li>Everything the model sees, not just your message</li>
+            <li>Underrated and far more impactful</li>
+          </ul>
+        </div>
+      </div>
+
+      <p>A perfectly phrased prompt with poor context produces generic code. A rough prompt with rich context produces code that fits your project. Context always wins.</p>
+
+      <p><span class="profession-tag">Backend</span> Compare these two scenarios for the same task &mdash; "add a caching layer to the user service":</p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <div class="prompt-label">Rich prompt, no context</div>
+          <div class="prompt-text">Please implement a Redis caching layer for the user service. Use a TTL of 5 minutes. Invalidate on updates. Handle cache misses gracefully with fallback to the database. Use the decorator pattern.</div>
+          <p class="prompt-explanation">Detailed prompt, but the AI doesn't know your existing cache utilities, Redis client setup, or how your service layer is structured. It'll generate something generic.</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="prompt-label">Simple prompt, rich context</div>
+          <div class="prompt-text">Add caching to UserService like we did in OrderService.</div>
+          <p class="prompt-explanation">Short prompt, but the AI has read your CLAUDE.md, knows your cache utilities exist in src/cache/, has seen OrderService's caching pattern, and understands your Redis setup. It produces code that matches your project exactly.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CLAUDE.md Files -->
+    <section>
+      <h2>CLAUDE.md: Your Project's Brain</h2>
+
+      <p>The CLAUDE.md file is the single most impactful thing you can create for AI-driven development. It's a markdown file that Claude Code reads automatically on every invocation. Think of it as onboarding documentation for an AI teammate that starts fresh every session.</p>
+
+      <h3>The Layered Approach</h3>
+
+      <p>CLAUDE.md files work in layers, from general to specific:</p>
+
+      <div class="workflow-steps">
+        <div class="step">~/.claude/CLAUDE.md<br><small>Global (all projects)</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">project/CLAUDE.md<br><small>Project-level</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">project/src/api/CLAUDE.md<br><small>Directory-level</small></div>
+      </div>
+
+      <p><strong>Global CLAUDE.md</strong> (~/.claude/CLAUDE.md): Your personal preferences that apply everywhere. Coding style, preferred languages, response format.</p>
+      <p><strong>Project CLAUDE.md</strong> (project root): Tech stack, build commands, architecture, conventions. This is the most important one.</p>
+      <p><strong>Directory CLAUDE.md</strong> (any subdirectory): Module-specific context. Only loaded when working in that directory.</p>
+
+      <h3>Anatomy of a Great CLAUDE.md</h3>
+
+      <pre><code># MyApp — Project Instructions for Claude
+
+## Project Overview
+E-commerce Android app built with Kotlin, Jetpack Compose, and
+a Python FastAPI backend. Monorepo with android/ and backend/ dirs.
+
+## Tech Stack
+- Android: Kotlin 2.0, Compose + Material 3, Room, Retrofit, Hilt
+- Backend: Python 3.12, FastAPI, SQLAlchemy 2.0, PostgreSQL 16
+- CI: GitHub Actions, runs on every PR
+
+## Build &amp; Test Commands
+- Android: `./gradlew :app:assembleDebug` and `./gradlew :app:testDebug`
+- Backend: `cd backend &amp;&amp; pytest` and `cd backend &amp;&amp; ruff check .`
+- Full CI: `make ci` (runs both)
+
+## Architecture
+- Android follows MVVM with UiState sealed interfaces
+- Backend follows clean architecture: routes → services → repositories
+- All API endpoints are versioned under /api/v2/
+- See docs/architecture.md for the full diagram
+
+## Conventions
+- Compose: one composable per file, named after the component
+- ViewModels: suffix with ViewModel, use StateFlow not LiveData
+- Backend: all routes return Pydantic models, never raw dicts
+- Tests: follow Arrange-Act-Assert pattern
+- Commit messages: conventional commits (feat:, fix:, refactor:)
+
+## Important Rules
+- NEVER use runBlocking in Android production code
+- NEVER expose database IDs in API responses (use UUIDs)
+- ALWAYS add migration scripts for database schema changes
+- All new endpoints need integration tests</code></pre>
+
+      <p><span class="profession-tag">Android Dev</span> Notice how the CLAUDE.md specifies Android-specific patterns (MVVM, StateFlow, one-composable-per-file). Without these, Claude Code would produce valid Kotlin that doesn't match your team's conventions.</p>
+
+      <div class="tip-box">
+        <strong>The "new developer" test:</strong> Read your CLAUDE.md as if you were a senior developer joining the team on day one. Does it contain everything they'd need to write code that passes code review? If a human would struggle with it, the AI will too. If it's clear enough for a new hire, it's clear enough for Claude.
+      </div>
+    </section>
+
+    <!-- Project Memory -->
+    <section>
+      <h2>Project Memory: The .claude/ Directory</h2>
+
+      <p>Beyond CLAUDE.md, the <code>.claude/</code> directory stores persistent project configuration that enhances Claude Code's capabilities:</p>
+
+      <pre><code>project/
+  .claude/
+    settings.json          # Project-level permissions and tool config
+    commands/
+      generate-api.md      # Custom command: /generate-api
+      review-pr.md         # Custom command: /review-pr
+      run-migration.md     # Custom command: /run-migration</code></pre>
+
+      <h3>Custom Commands (Skills)</h3>
+
+      <p>Custom commands are reusable prompts that encode your team's workflows. Create a markdown file in <code>.claude/commands/</code> and invoke it with <code>/command-name</code>:</p>
+
+      <pre><code># .claude/commands/generate-api.md
+# Invoke with: /generate-api
+
+Generate a new API endpoint following our conventions:
+1. Create route handler in backend/routes/
+2. Create Pydantic request/response models in backend/models/
+3. Create service function in backend/services/
+4. Create repository function in backend/repositories/
+5. Add integration test in backend/tests/integration/
+6. Add route to backend/routes/__init__.py
+7. Run `cd backend && pytest` to verify
+
+Follow the patterns in the existing orders endpoint as a reference.
+Use UUID for all public-facing IDs.</code></pre>
+
+      <p><span class="profession-tag">Team Lead</span> Custom commands are how you scale AI workflows across a team. Instead of every developer writing their own prompts for common tasks, you create commands once, commit them to the repo, and everyone uses the same standardized workflow. A team of ten developers all running <code>/generate-api</code> produces consistent, convention-matching code.</p>
+
+      <p><span class="profession-tag">DevOps</span> Create commands for your infrastructure workflows:</p>
+
+      <pre><code># .claude/commands/new-service.md
+# Invoke with: /new-service
+
+Scaffold a new microservice:
+1. Create directory under services/
+2. Generate Dockerfile from our template in templates/Dockerfile
+3. Create Kubernetes deployment, service, and HPA manifests
+4. Add to the CI pipeline in .github/workflows/ci.yml
+5. Create Terraform module for the service's AWS resources
+6. Add health check endpoint at /health
+7. Run `terraform validate` and `kubectl --dry-run=client` to verify</code></pre>
+    </section>
+
+    <!-- The Context Budget -->
+    <section>
+      <h2>The Context Budget</h2>
+
+      <p>Even with 1M token contexts, treating the context window as unlimited is a mistake. More tokens means more noise, more chance of contradictory information, and slower responses. Think of context like RAM &mdash; you have a lot, but you still need to be intentional about what you load.</p>
+
+      <h3>What to Include</h3>
+      <ul>
+        <li><strong>CLAUDE.md</strong> &mdash; always (loaded automatically)</li>
+        <li><strong>Files directly relevant to the task</strong> &mdash; the files being modified and their direct dependencies</li>
+        <li><strong>Example files</strong> &mdash; one or two files that demonstrate the pattern you want followed</li>
+        <li><strong>Test files</strong> &mdash; existing tests that show your testing conventions</li>
+        <li><strong>Error messages</strong> &mdash; full stack traces when debugging</li>
+      </ul>
+
+      <h3>What to Exclude</h3>
+      <ul>
+        <li><strong>Entire codebases</strong> &mdash; don't dump everything; let the agent search for what it needs</li>
+        <li><strong>Generated files</strong> &mdash; build artifacts, node_modules, compiled output</li>
+        <li><strong>Irrelevant history</strong> &mdash; long conversation threads about unrelated topics</li>
+        <li><strong>Redundant documentation</strong> &mdash; don't paste the same info that's already in CLAUDE.md</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>More context is not always better.</strong> Anthropic's research found that stuffing the context window with marginally relevant information can actually <em>decrease</em> output quality. The model has to sort through noise to find the signal. Curate aggressively: include what's necessary, exclude what's merely related.
+      </div>
+    </section>
+
+    <!-- Context Rot -->
+    <section>
+      <h2>Context Rot</h2>
+
+      <p>Context rot happens when the information in your context becomes stale, contradictory, or misleading. It's the AI equivalent of outdated documentation &mdash; except the AI trusts it implicitly.</p>
+
+      <h3>Common Causes</h3>
+      <ul>
+        <li><strong>Stale CLAUDE.md</strong> &mdash; your project evolved but the instructions didn't. The CLAUDE.md says "use LiveData" but you migrated to StateFlow six months ago.</li>
+        <li><strong>Long conversations</strong> &mdash; early messages in a long session may describe a state that no longer exists. You changed the approach on message 15, but messages 1-14 still describe the old plan.</li>
+        <li><strong>Contradictory instructions</strong> &mdash; a directory-level CLAUDE.md contradicts the project-level one. Or your prompt contradicts CLAUDE.md.</li>
+        <li><strong>Cached understanding</strong> &mdash; the AI read a file early in the session. The file changed (by you or another tool). The AI still reasons from the old version.</li>
+      </ul>
+
+      <h3>Prevention</h3>
+      <ul>
+        <li><strong>Review CLAUDE.md monthly</strong> &mdash; add it to your sprint retrospective checklist</li>
+        <li><strong>Start fresh sessions</strong> for new tasks &mdash; don't reuse long conversations</li>
+        <li><strong>Use <code>/compact</code></strong> in Claude Code to compress old context and focus on what's current</li>
+        <li><strong>Be explicit when changing direction</strong>: "Ignore what I said earlier about X. We're now doing Y instead."</li>
+      </ul>
+
+      <p><span class="profession-tag">Full-Stack</span> Context rot is especially dangerous in monorepos where frontend and backend conventions differ. A single CLAUDE.md that says "use camelCase" works for your React frontend but not your Python backend (which uses snake_case). Use directory-level CLAUDE.md files to avoid this contradiction: one for <code>frontend/</code>, one for <code>backend/</code>.</p>
+    </section>
+
+    <!-- Repo Structure as Context -->
+    <section>
+      <h2>Repo Structure as Context</h2>
+
+      <p>Your file and directory organization is itself context. A well-structured repo helps AI navigate and generate code in the right place. A messy repo confuses both humans and AI.</p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <div class="prompt-label">Poor structure (ambiguous)</div>
+          <div class="prompt-text">src/
+  utils.py          (3,000 lines)
+  helpers.py        (2,000 lines)
+  main.py           (5,000 lines)
+  models.py         (all models)
+  tests.py          (all tests)</div>
+          <p class="prompt-explanation">AI can't tell where new code should go. Everything lands in the wrong file.</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="prompt-label">Clear structure (self-documenting)</div>
+          <div class="prompt-text">src/
+  orders/
+    routes.py
+    service.py
+    repository.py
+    models.py
+    tests/
+  users/
+    routes.py
+    service.py
+    ...</div>
+          <p class="prompt-explanation">AI immediately understands where to put new order-related code. The structure IS the context.</p>
+        </div>
+      </div>
+
+      <p><span class="profession-tag">Android Dev</span> Feature-based package structure (<code>feature/settings/</code>, <code>feature/profile/</code>) gives AI clear boundaries. If you ask Claude to "add a settings screen," it knows exactly where to create the files. With a flat structure (<code>viewmodels/</code>, <code>screens/</code>, <code>repositories/</code>), the AI has to guess which existing files to reference.</p>
+    </section>
+
+    <!-- Documentation as AI Fuel -->
+    <section>
+      <h2>Documentation as AI Fuel</h2>
+
+      <p>Documentation that was "nice to have" for humans becomes critical infrastructure for AI. Every piece of documentation you write is context that makes AI output better:</p>
+
+      <ul>
+        <li><strong>README.md</strong> &mdash; Project overview, setup instructions, architecture summary</li>
+        <li><strong>Architecture Decision Records (ADRs)</strong> &mdash; Why decisions were made, not just what they are</li>
+        <li><strong>API documentation</strong> &mdash; Endpoint contracts, request/response examples</li>
+        <li><strong>Inline comments on non-obvious code</strong> &mdash; The "why", not the "what"</li>
+        <li><strong>CHANGELOG</strong> &mdash; What changed and why, helps AI understand project evolution</li>
+      </ul>
+
+      <div class="highlight-box">
+        <h3>The Documentation ROI Shift</h3>
+        <p>In the pre-AI era, documentation had a delayed, uncertain payoff &mdash; maybe a future developer would read it. In the AI era, documentation has an <strong>immediate, guaranteed payoff</strong>: the AI reads it on every single invocation. Good docs make AI produce better code today, not hypothetically tomorrow. This changes the cost-benefit analysis of writing documentation entirely.</p>
+      </div>
+    </section>
+
+    <!-- Runtime Retrieval -->
+    <section>
+      <h2>Runtime Retrieval: Just-in-Time Context</h2>
+
+      <p>Not all context needs to be pre-loaded. Claude Code and other agentic tools can retrieve context at runtime &mdash; reading files, searching codebases, and pulling in information as needed. This "just in time" approach is often better than "just in case" loading.</p>
+
+      <p><span class="profession-tag">Backend</span> Instead of pre-loading every model file into context, let the agent discover what it needs:</p>
+
+      <pre><code># Instead of manually listing files:
+$ claude "Add a new endpoint for product reviews. Here are the relevant
+  files: models/user.py, models/product.py, models/order.py..."
+
+# Let the agent find what it needs:
+$ claude "Add a new endpoint for product reviews. Follow the patterns
+  in our existing endpoints. Check the models/ and routes/ directories
+  for conventions."
+
+# The agent reads the directory, finds the relevant files, and loads
+# only what it needs. Often more effective because it discovers
+# dependencies you forgot to mention.</code></pre>
+
+      <div class="tip-box">
+        <strong>Trust the agent's search.</strong> CLI agents like Claude Code are good at finding relevant files. Rather than manually curating every file reference, give the agent a clear goal and let it navigate. You save time, and the agent often finds context you'd have missed.
+      </div>
+    </section>
+
+    <!-- Multi-File Context -->
+    <section>
+      <h2>Multi-File Context Strategies</h2>
+
+      <p>For complex tasks that span multiple files, how you reference context matters:</p>
+
+      <h3>In Claude Code</h3>
+      <pre><code># Reference specific files
+$ claude "Refactor the auth middleware. See src/middleware/auth.py
+  for the current implementation and src/middleware/rate_limit.py
+  for the pattern to follow."
+
+# Reference by pattern
+$ claude "Update all route handlers in src/routes/ to use the
+  new error response format defined in src/utils/errors.py"
+
+# Let the agent explore
+$ claude "Find all places where we handle user permissions and
+  ensure they follow the same RBAC pattern."</code></pre>
+
+      <h3>In Cursor</h3>
+      <pre><code>// Use @ mentions in the chat panel:
+// @src/services/UserService.ts @src/models/User.ts
+// "Add email verification to the user signup flow"
+
+// Reference documentation:
+// @docs/api-spec.yaml
+// "Generate the client-side types from this API spec"</code></pre>
+
+      <p><span class="profession-tag">Freelancer</span> When working on an unfamiliar client codebase, use the exploration strategy: ask Claude Code to map the architecture first (<code>"Explain the directory structure and how modules interact"</code>), then use its findings as context for subsequent tasks. This builds your understanding and the AI's context simultaneously.</p>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <div class="exercise-box">
+        <h3>Exercise: Write a CLAUDE.md for Your Project</h3>
+        <p>Create a comprehensive CLAUDE.md for a project you're actively working on. Use this template as a starting point, then customize:</p>
+        <ol>
+          <li><strong>Start with <code>claude /init</code></strong> to generate a baseline</li>
+          <li><strong>Add your project overview:</strong> What does this project do? What's the tech stack?</li>
+          <li><strong>Add build and test commands:</strong> How to build, test, lint, and deploy</li>
+          <li><strong>Document architecture:</strong> Main modules, data flow, key design patterns</li>
+          <li><strong>List conventions:</strong> Naming, file organization, code style, testing approach</li>
+          <li><strong>Add "important rules":</strong> Things the AI must never do (or always do)</li>
+          <li><strong>Reference example files:</strong> Point to specific files that exemplify your patterns</li>
+          <li><strong>Test it:</strong> Ask Claude Code to perform a task and verify it follows your CLAUDE.md</li>
+        </ol>
+        <p>Spend 20-30 minutes on this. A good CLAUDE.md pays for itself within a day of AI-assisted development. Review it with your team and commit it to version control.</p>
+      </div>
+    </section>
+
+    <!-- Further Reading -->
+    <section>
+      <h2>Further Reading</h2>
+      <div class="tip-box">
+        <strong>Recommended resources:</strong>
+        <ul>
+          <li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank">Effective Context Engineering for AI Agents</a> (Anthropic) &mdash; The definitive guide on context curation</li>
+          <li><a href="https://code.claude.com/docs/en/best-practices" target="_blank">Best Practices for Claude Code</a> (Anthropic) &mdash; Context window management and CLAUDE.md</li>
+          <li><a href="https://github.blog/ai-and-ml/github-copilot/how-to-build-reliable-ai-workflows-with-agentic-primitives-and-context-engineering/" target="_blank">How to Build Reliable AI Workflows</a> (GitHub Blog) &mdash; Agentic primitives and context engineering</li>
+          <li><a href="https://www.builder.io/blog/claude-code-tips-best-practices" target="_blank">50 Claude Code Tips and Best Practices</a> (Builder.io) &mdash; Practical context strategies</li>
+        </ul>
+      </div>
+    </section>
+
+    <p>Context engineering is the foundation. With it in place, the next chapter builds on top: <strong>prompt engineering for code</strong> &mdash; the specific techniques for generating, debugging, refactoring, and reviewing code with AI.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-setting-up-environment.html" class="prev">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Chapter 4: Setting Up Your AI Dev Environment</span>
+      </a>
+      <a href="06-prompt-engineering-for-code.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Chapter 6: Prompt Engineering for Code</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Model Optimization — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-hardware-acceleration.html">&larr; Prev</a>
+      <a href="09-create-ml.html">Next &rarr;</a>
+      <a href="maps/08-model-optimization-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Model Optimization &mdash; Making Models iPhone-Ready</h1>
+    <p class="subtitle">Smaller, Faster, Almost as Accurate</p>
+  </header>
+
+  <main>
+
+    <p>You've found the perfect model. It classifies images with 95% accuracy, detects 80 object categories, and runs beautifully &mdash; on your MacBook Pro with 36 GB of RAM. Then you try to run it on an iPhone. The 500 MB model takes 3 seconds to load, eats 1.2 GB of memory, and gets your app killed by the system within a minute.</p>
+
+    <p>This chapter fixes that. We'll take models that are too big or too slow for mobile and compress them using three techniques: <strong>quantization</strong> (reducing numerical precision), <strong>palettization</strong> (Apple's unique lookup-table compression), and <strong>pruning</strong> (removing near-zero weights). The tool is <code>coremltools</code>, Apple's Python package for Core ML model conversion and optimization.</p>
+
+    <h2>Why Optimization Matters</h2>
+
+    <p>Here are realistic constraints for shipping a model in an iOS app:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">&lt; 50 MB</div>
+        <div class="stat-label">Model Size</div>
+        <p>Ideally under 20 MB. Over 50 MB increases download time and App Store friction.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">&lt; 30 ms</div>
+        <div class="stat-label">Inference Latency</div>
+        <p>On the Neural Engine. Under 33ms = real-time at 30fps.</p>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">&lt; 200 MB</div>
+        <div class="stat-label">Runtime Memory</div>
+        <p>Total memory footprint during inference. Over 200 MB risks jetsam termination on older devices.</p>
+      </div>
+    </div>
+
+    <p>A standard float32 model stores every weight as a 32-bit floating point number. A model with 25 million parameters (typical for MobileNet-scale) takes 100 MB at float32. By reducing precision, we can shrink that dramatically while keeping almost all the accuracy.</p>
+
+    <h2>The Three Optimization Techniques</h2>
+
+    <div class="model-pipeline">
+      <h3>The Optimization Pipeline</h3>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <strong>Float32 Model</strong>
+            <small>Original, full precision</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <strong>Quantize / Palettize / Prune</strong>
+            <small>Pick one or combine</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <strong>Validate Accuracy</strong>
+            <small>Test on real data</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <strong>Benchmark on Device</strong>
+            <small>Measure speed + memory</small>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <strong>Ship .mlpackage</strong>
+            <small>Drag into Xcode</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Quantization: Reducing Numerical Precision</h2>
+
+    <p>Quantization is the most common optimization technique. The idea is simple: instead of storing every weight as a 32-bit float (4 bytes), store it as a smaller number &mdash; 16-bit float (2 bytes), 8-bit integer (1 byte), or even 4-bit integer (0.5 bytes).</p>
+
+    <p>Think of it like image compression: a RAW photo is huge and perfectly detailed. A JPEG is much smaller and looks nearly identical. You're trading a tiny bit of precision for a massive size reduction.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Precision Levels</h4>
+        <ul>
+          <li><strong>Float32</strong> &mdash; full precision, 4 bytes/weight. Baseline.</li>
+          <li><strong>Float16</strong> &mdash; half precision, 2 bytes. <strong>2x smaller, negligible accuracy loss.</strong> The easy win.</li>
+          <li><strong>Int8</strong> &mdash; 8-bit integer, 1 byte. <strong>4x smaller, &lt; 1% accuracy loss typical.</strong></li>
+          <li><strong>Int4</strong> &mdash; 4-bit integer, 0.5 bytes. <strong>8x smaller, 1&ndash;3% accuracy loss.</strong> Aggressive.</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>When Quantization Hurts</h4>
+        <ul>
+          <li>Models with very small weight ranges (sensitive to precision)</li>
+          <li>Regression tasks where small output differences matter</li>
+          <li>Very small models (&lt; 1M params) &mdash; less redundancy to exploit</li>
+          <li>Already-compressed models (double compression degrades quality)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Post-Training Quantization with coremltools</h3>
+
+    <p>The simplest approach &mdash; take an already-converted Core ML model and quantize it. No training data needed, takes seconds:</p>
+
+    <pre><code>import coremltools as ct
+import coremltools.optimize as cto
+
+# Load your Core ML model
+model = ct.models.MLModel("MyModel.mlpackage")
+
+# Int8 weight quantization (4x smaller)
+op_config = cto.coreml.OpLinearQuantizerConfig(
+    mode="linear_symmetric",
+    dtype="int8"
+)
+config = cto.coreml.OptimizationConfig(global_config=op_config)
+quantized_model = cto.coreml.linear_quantize_weights(model, config)
+quantized_model.save("MyModel_int8.mlpackage")
+
+# Int4 weight quantization (8x smaller, more aggressive)
+op_config_4bit = cto.coreml.OpLinearQuantizerConfig(
+    mode="linear_symmetric",
+    dtype="int4",
+    granularity="per_block",
+    block_size=32
+)
+config_4bit = cto.coreml.OptimizationConfig(global_config=op_config_4bit)
+quantized_4bit = cto.coreml.linear_quantize_weights(model, config_4bit)
+quantized_4bit.save("MyModel_int4.mlpackage")</code></pre>
+
+    <div class="tip-box">
+      <strong>Start with float16.</strong> If your model is currently float32, converting to float16 is essentially free accuracy-wise and halves the model size. coremltools does this automatically during <code>ct.convert()</code> &mdash; just pass <code>compute_precision=ct.precision.FLOAT16</code>.
+    </div>
+
+    <h2>Palettization: Apple's Unique Compression</h2>
+
+    <p>Palettization is Apple's secret weapon for model compression. Instead of storing every weight individually, it clusters weights into a <strong>palette</strong> (lookup table) of 2<sup>N</sup> values, then stores just the index into the palette for each weight.</p>
+
+    <p>Think of it like indexed color in GIF images. A 24-bit color photo has millions of unique colors. An indexed-color GIF uses a palette of 256 colors and stores just the palette index for each pixel. Massive compression, and it still looks recognizable.</p>
+
+    <table class="device-benchmark">
+      <caption><strong>Palettization Bit Depths</strong></caption>
+      <thead>
+        <tr>
+          <th>Bits</th>
+          <th>Palette Size</th>
+          <th>Compression vs Float16</th>
+          <th>Typical Accuracy Loss</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>8-bit</td>
+          <td>256 values</td>
+          <td>2x</td>
+          <td>&lt; 0.5%</td>
+        </tr>
+        <tr>
+          <td>6-bit</td>
+          <td>64 values</td>
+          <td>2.7x</td>
+          <td>&lt; 1%</td>
+        </tr>
+        <tr>
+          <td>4-bit</td>
+          <td>16 values</td>
+          <td>4x</td>
+          <td>1&ndash;2%</td>
+        </tr>
+        <tr>
+          <td>3-bit</td>
+          <td>8 values</td>
+          <td>5.3x</td>
+          <td>2&ndash;4%</td>
+        </tr>
+        <tr>
+          <td>2-bit</td>
+          <td>4 values</td>
+          <td>8x</td>
+          <td>3&ndash;8%</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Palettization with coremltools</h3>
+
+    <pre><code>import coremltools as ct
+import coremltools.optimize as cto
+
+model = ct.models.MLModel("MyModel.mlpackage")
+
+# 4-bit palettization with k-means clustering
+op_config = cto.coreml.OpPalettizerConfig(
+    mode="kmeans",
+    nbits=4,
+    granularity="per_grouped_channel",
+    group_size=16
+)
+config = cto.coreml.OptimizationConfig(global_config=op_config)
+palettized_model = cto.coreml.palettize_weights(model, config)
+palettized_model.save("MyModel_palette4.mlpackage")</code></pre>
+
+    <div class="highlight-box">
+      <strong>Palettization vs Quantization &mdash; which is better?</strong> For Core ML models, palettization often gives a better accuracy-size tradeoff than quantization at the same compression ratio. This is because the k-means clustering adapts to the actual weight distribution of your model, while quantization uses a fixed linear mapping. Try both and compare.
+    </div>
+
+    <h2>Pruning: Removing Unimportant Weights</h2>
+
+    <p>Pruning sets small, near-zero weights to exactly zero. A model with 50% sparsity has half its weights set to zero &mdash; which means those weights can be stored more compactly and the Neural Engine can skip them during computation.</p>
+
+    <pre><code>import coremltools as ct
+import coremltools.optimize as cto
+
+model = ct.models.MLModel("MyModel.mlpackage")
+
+# Magnitude pruning — zero out the smallest 50% of weights
+op_config = cto.coreml.OpMagnitudePrunerConfig(
+    target_sparsity=0.5
+)
+config = cto.coreml.OptimizationConfig(global_config=op_config)
+pruned_model = cto.coreml.prune_weights(model, config)
+pruned_model.save("MyModel_pruned50.mlpackage")</code></pre>
+
+    <div class="tip-box">
+      <strong>Pruning shines when combined.</strong> Pruning alone gives modest size reduction (the zeros still take space unless the format supports sparse storage). The real win is combining pruning with palettization or quantization &mdash; the zeros compress extremely well, and the Neural Engine skips zero-weight operations for faster inference.
+    </div>
+
+    <h2>Combining Techniques: Joint Compression</h2>
+
+    <p>The biggest wins come from stacking techniques. A common recipe:</p>
+
+    <ol>
+      <li><strong>Prune</strong> 50% of weights (set smallest to zero)</li>
+      <li><strong>Palettize</strong> remaining weights to 4-bit (16-value palette)</li>
+      <li>Result: much smaller model, often with &lt; 2% accuracy loss</li>
+    </ol>
+
+    <pre><code># Joint pruning + palettization
+pruner_config = cto.coreml.OpMagnitudePrunerConfig(target_sparsity=0.5)
+palette_config = cto.coreml.OpPalettizerConfig(mode="kmeans", nbits=4)
+
+config = cto.coreml.OptimizationConfig(
+    global_config=[pruner_config, palette_config]
+)
+
+# Apply both in sequence
+compressed = cto.coreml.prune_weights(model, config)
+compressed = cto.coreml.palettize_weights(compressed, config)
+compressed.save("MyModel_pruned_palette4.mlpackage")</code></pre>
+
+    <h2>The Complete Conversion Pipeline</h2>
+
+    <p>Here's the full workflow from a PyTorch model to an optimized Core ML model:</p>
+
+    <div class="apple-framework">
+      <h3>PyTorch &rarr; Core ML Optimization Pipeline</h3>
+      <table>
+        <tr><td><strong>Step 1</strong></td><td><code>torch.jit.trace(model, example)</code> &mdash; capture the computation graph</td></tr>
+        <tr><td><strong>Step 2</strong></td><td><code>ct.convert(traced, inputs=[ct.ImageType(...)])</code> &mdash; convert to Core ML with float16</td></tr>
+        <tr><td><strong>Step 3</strong></td><td><code>cto.coreml.linear_quantize_weights()</code> or <code>palettize_weights()</code> &mdash; compress</td></tr>
+        <tr><td><strong>Step 4</strong></td><td>Validate accuracy on test dataset (20&ndash;100 images)</td></tr>
+        <tr><td><strong>Step 5</strong></td><td>Benchmark on target device (p50 latency, memory)</td></tr>
+        <tr><td><strong>Step 6</strong></td><td><code>model.save("Optimized.mlpackage")</code> &mdash; drag into Xcode</td></tr>
+      </table>
+    </div>
+
+    <h2>Measuring Accuracy Impact</h2>
+
+    <p>Optimization without accuracy measurement is reckless. You need to know: how much accuracy did I lose, and is it acceptable for my use case?</p>
+
+    <pre><code>import coremltools as ct
+import numpy as np
+
+def measure_accuracy(original_model, optimized_model, test_images):
+    """Compare top-1 accuracy between original and optimized models."""
+    original_correct = 0
+    optimized_correct = 0
+
+    for image, label in test_images:
+        orig_pred = original_model.predict({"image": image})
+        opt_pred = optimized_model.predict({"image": image})
+
+        if get_top_label(orig_pred) == label:
+            original_correct += 1
+        if get_top_label(opt_pred) == label:
+            optimized_correct += 1
+
+    orig_acc = original_correct / len(test_images) * 100
+    opt_acc = optimized_correct / len(test_images) * 100
+    print(f"Original: {orig_acc:.1f}%  Optimized: {opt_acc:.1f}%")
+    print(f"Accuracy drop: {orig_acc - opt_acc:.1f}%")
+    return orig_acc, opt_acc</code></pre>
+
+    <div class="warning-box">
+      <strong>Define your accuracy budget before optimizing.</strong> How much accuracy can you lose before users notice? For image classification, 1&ndash;2% drop is usually invisible. For medical or safety-critical apps, even 0.5% might be too much. Know your threshold first, then optimize to fit it.
+    </div>
+
+    <h2>Size-Accuracy Tradeoff: Real Numbers</h2>
+
+    <p>Here's what optimization looks like on a real model (MobileNetV3-Large, ImageNet):</p>
+
+    <div class="device-benchmark">
+      <h3>MobileNetV3-Large Optimization Results</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Variant</th>
+            <th>Size</th>
+            <th>Top-1 Accuracy</th>
+            <th>Accuracy Drop</th>
+            <th>ANE Latency</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Float32 (baseline)</td>
+            <td>22 MB</td>
+            <td>75.2%</td>
+            <td>&mdash;</td>
+            <td>3.5 ms</td>
+          </tr>
+          <tr>
+            <td>Float16</td>
+            <td>11 MB</td>
+            <td>75.2%</td>
+            <td>0.0%</td>
+            <td>3.0 ms</td>
+          </tr>
+          <tr>
+            <td>Int8 quantized</td>
+            <td>5.5 MB</td>
+            <td>74.8%</td>
+            <td>-0.4%</td>
+            <td>2.5 ms</td>
+          </tr>
+          <tr>
+            <td>6-bit palettized</td>
+            <td>4.1 MB</td>
+            <td>74.9%</td>
+            <td>-0.3%</td>
+            <td>2.8 ms</td>
+          </tr>
+          <tr>
+            <td>4-bit palettized</td>
+            <td>2.8 MB</td>
+            <td>74.1%</td>
+            <td>-1.1%</td>
+            <td>2.2 ms</td>
+          </tr>
+          <tr>
+            <td>Int4 quantized</td>
+            <td>2.8 MB</td>
+            <td>73.5%</td>
+            <td>-1.7%</td>
+            <td>2.0 ms</td>
+          </tr>
+          <tr>
+            <td>4-bit + 50% pruned</td>
+            <td>1.8 MB</td>
+            <td>73.0%</td>
+            <td>-2.2%</td>
+            <td>1.8 ms</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Notice: float16 is a <strong>free</strong> 2x compression with zero accuracy loss. 4-bit palettization gives <strong>8x compression</strong> with only 1.1% accuracy drop. Joint pruning + palettization pushes to <strong>12x compression</strong> at 2.2% drop. For most apps, 4-bit palettization is the sweet spot.</p>
+
+    <h2>Hugging Face to Core ML</h2>
+
+    <p>Many models you'll want to use come from Hugging Face. The conversion workflow:</p>
+
+    <pre><code>from transformers import AutoModelForImageClassification
+import coremltools as ct
+import torch
+
+# Download from Hugging Face
+hf_model = AutoModelForImageClassification.from_pretrained(
+    "google/mobilenet_v2_1.0_224"
+)
+hf_model.eval()
+
+# Trace and convert
+example = torch.randn(1, 3, 224, 224)
+traced = torch.jit.trace(hf_model, example)
+
+mlmodel = ct.convert(
+    traced,
+    inputs=[ct.ImageType(name="image", shape=(1, 3, 224, 224),
+                         scale=1/255.0, bias=[0, 0, 0])],
+    compute_precision=ct.precision.FLOAT16
+)
+mlmodel.save("HFModel.mlpackage")</code></pre>
+
+    <div class="tip-box">
+      <strong>Check the model card.</strong> Hugging Face model cards list expected input normalization (mean, std). Get the <code>scale</code> and <code>bias</code> right during conversion or your model will produce garbage predictions. This is the #1 source of "my converted model doesn't work" bugs.
+    </div>
+
+    <h2>Model Format Considerations</h2>
+
+    <dl>
+      <dt><strong>.mlmodel</strong> (legacy)</dt>
+      <dd>Single compiled file. Older format, limited to smaller models. Still works but being phased out.</dd>
+
+      <dt><strong>.mlpackage</strong> (recommended)</dt>
+      <dd>Directory bundle format. Supports larger models, metadata, and all optimization types. Use this for all new work.</dd>
+
+      <dt><strong>.mlmodelc</strong> (compiled)</dt>
+      <dd>Pre-compiled for a specific device family. Faster to load (skips first-run compilation). Generate with <code>MLModel.compileModel(at:)</code>.</dd>
+    </dl>
+
+    <div class="tip-box">
+      <strong>Pre-compile for faster first launch.</strong> You can compile your model at build time and ship the .mlmodelc directly. This eliminates the 100&ndash;500ms compilation delay on first use. Add a Run Script build phase that calls <code>xcrun coremlcompiler compile MyModel.mlpackage OutputDir</code>.
+    </div>
+
+    <h2>Common Optimization Mistakes</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Do</h4>
+        <ul>
+          <li>Start with float16 &mdash; it's free</li>
+          <li>Measure accuracy on a real validation set</li>
+          <li>Try both quantization and palettization</li>
+          <li>Benchmark on your minimum supported device</li>
+          <li>Define your accuracy budget upfront</li>
+          <li>Test edge cases (dark images, unusual angles)</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Don't</h4>
+        <ul>
+          <li>Quantize without measuring accuracy impact</li>
+          <li>Assume int4 is always better than 4-bit palette</li>
+          <li>Optimize a model that's already fast enough</li>
+          <li>Apply double compression (quantize an already-quantized model)</li>
+          <li>Skip validation because "it worked on 3 test images"</li>
+          <li>Forget to benchmark latency, not just size</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Exercise: The Optimization Shootout</h2>
+
+    <div class="exercise-box">
+      <h3>Hands-On: Compress and Compare</h3>
+      <p>Take a standard MobileNetV3 model and apply multiple optimization techniques, then compare the results:</p>
+      <ol>
+        <li><strong>Get the baseline</strong> &mdash; Download MobileNetV3-Large from Apple's ML Gallery or Hugging Face. Convert to Core ML with float32. Measure: file size, top-1 accuracy on 20 test images, ANE inference latency.</li>
+        <li><strong>Float16</strong> &mdash; Re-convert with <code>compute_precision=ct.precision.FLOAT16</code>. Measure all three metrics.</li>
+        <li><strong>Int8 quantization</strong> &mdash; Apply <code>linear_quantize_weights</code> with int8. Measure.</li>
+        <li><strong>4-bit palettization</strong> &mdash; Apply <code>palettize_weights</code> with nbits=4. Measure.</li>
+        <li><strong>Joint compression</strong> &mdash; Apply 50% pruning + 4-bit palettization. Measure.</li>
+        <li><strong>Compare</strong> &mdash; Build a table of all five variants. Which gives the best size-accuracy tradeoff? Which is fastest on the Neural Engine?</li>
+      </ol>
+      <h4>Bonus:</h4>
+      <ul>
+        <li>Try 6-bit palettization &mdash; is it a better sweet spot than 4-bit for your use case?</li>
+        <li>Find the exact sparsity level where pruning starts to noticeably hurt accuracy</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>So far we've been using pre-trained models from Apple, Hugging Face, and the open-source community. But what if none of them recognize your specific objects? In <strong>Chapter 9: Create ML &mdash; Training Your Own Models</strong>, you'll train custom image, text, and sound classifiers entirely within the Apple ecosystem &mdash; using the Create ML app GUI (no Python required) and the Create ML Components framework in Swift. You'll build a custom classifier for objects on your desk in under 10 minutes.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-hardware-acceleration.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Hardware Acceleration &mdash; Neural Engine and Metal</span>
+      </a>
+      <a href="09-create-ml.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Create ML &mdash; Training Your Own Models</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

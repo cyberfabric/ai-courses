@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Personal Productivity Agents | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-documentation.html">&larr; Prev</a>
+      <a href="10-mcp-servers.html">Next &rarr;</a>
+      <a href="maps/09-productivity-agents-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Personal Productivity Agents</h1>
+    <p class="subtitle">Automate the meta-work &mdash; standups, digests, triage, and everything that isn&rsquo;t coding</p>
+  </header>
+
+  <main>
+
+    <h2>The Invisible Time Sink</h2>
+
+    <p>You sit down at 9 AM. You open Slack. Fourteen notifications. You check GitHub &mdash; three PRs to review, two with new comments on yours. You write your standup update. You check CI for the PR you pushed yesterday. You scan the repo for what changed overnight. You look at the sprint board.</p>
+
+    <p>It&rsquo;s 10 AM. You haven&rsquo;t written a single line of code.</p>
+
+    <p>This is <strong>meta-work</strong> &mdash; the work about the work. It&rsquo;s necessary, but it&rsquo;s also the biggest hidden tax on your day. And unlike coding tasks, most developers don&rsquo;t even think of meta-work as something that can be automated.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1.5 hrs</span>
+        <span class="stat-label">average daily meta-work for a developer</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">23 min</span>
+        <span class="stat-label">to regain focus after a context switch</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">375 hrs</span>
+        <span class="stat-label">per year spent on meta-work (1.5h &times; 250 days)</span>
+      </div>
+    </div>
+
+    <p>This chapter builds the automations that reclaim your mornings. By the end, you&rsquo;ll have a single command that gives you everything you need to start your day: what changed, what&rsquo;s waiting for you, and what your standup update should say.</p>
+
+    <h2>Automated Standup Summaries</h2>
+
+    <p>The daily standup: &ldquo;What did I do yesterday? What am I doing today? Any blockers?&rdquo; Simple questions, but they require you to remember. And at 9:15 AM, your memory of yesterday is fuzzy at best.</p>
+
+    <p>Git remembers everything. Let it write your standup.</p>
+
+    <div class="recipe-box">
+      <h3>Building the /standup Skill</h3>
+      <ol>
+        <li>Create: <code>~/.claude/commands/standup.md</code> (user-level &mdash; works across all projects)</li>
+        <li>Add this content:</li>
+      </ol>
+      <pre><code># Generate Standup Update
+
+Generate my daily standup update.
+
+## Steps
+1. Run `git log --author="$(git config user.email)" --since="yesterday" --oneline`
+   to see what I committed yesterday
+2. Run `git log --author="$(git config user.email)" --since="yesterday" --stat`
+   for details on what changed
+3. Run `git branch --show-current` to see what I'm working on now
+4. Run `git stash list` to check for any stashed work-in-progress
+5. Run `gh pr list --author=@me --state=open` to see my open PRs
+
+## Output format
+**Yesterday:**
+- [Bullet list of what I accomplished, grouped by feature/task]
+
+**Today:**
+- [What I'm likely working on based on current branch and open PRs]
+
+**Blockers:**
+- [Any PRs waiting for review, or note "None"]
+
+## Rules
+- Be specific: "Implemented user profile caching in UserRepository" not "Worked on code"
+- Group related commits into one bullet point
+- If there are open PRs awaiting review, list them as blockers
+- Keep it concise — 3-5 bullets per section max</code></pre>
+      <ol start="3">
+        <li>Test it every morning: <code>/standup</code></li>
+      </ol>
+    </div>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Writing Your Standup Manually</h4>
+        <ol>
+          <li>Try to remember what you did yesterday</li>
+          <li>Scroll through Slack and GitHub for reminders</li>
+          <li>Write vague bullets: &ldquo;Worked on user profile feature&rdquo;</li>
+          <li>Forget to mention the bug fix you spent an hour on</li>
+          <li>Copy-paste into Slack/Teams/standup tool</li>
+        </ol>
+        <p><strong>Time: 5&ndash;10 minutes. Accuracy: low.</strong></p>
+      </div>
+      <div class="after">
+        <h4>With /standup</h4>
+        <ol>
+          <li>Run <code>/standup</code></li>
+          <li>Copy the output into your standup channel</li>
+          <li>Every commit, branch, and PR is accounted for</li>
+        </ol>
+        <p><strong>Time: 30 seconds. Accuracy: complete.</strong></p>
+      </div>
+    </div>
+
+    <h2>The Daily Digest</h2>
+
+    <p>What happened in the repo overnight? Who pushed what? Are there PRs waiting for your review? Build a morning briefing:</p>
+
+    <pre><code># File: ~/.claude/commands/morning-digest.md
+
+Generate my morning development digest.
+
+## Steps
+1. Run `git log --since="16 hours ago" --oneline --all` for recent repo activity
+2. Run `gh pr list --state=open --json number,title,author,reviewRequested`
+   for open PRs
+3. Run `gh pr list --search "review-requested:@me"` for PRs needing my review
+4. Run `gh issue list --assignee=@me --state=open` for my open issues
+
+## Sections
+
+### Repo Activity (last 16 hours)
+- Summary of commits by other team members
+- Any new branches created
+- PRs merged overnight
+
+### Waiting For Me
+- PRs that need my review (with links)
+- Issues assigned to me
+- PR comments I haven't responded to
+
+### My Open Work
+- My open PRs and their status (approved? changes requested? CI status?)
+- My current branch and last commit
+
+### Today's Priorities
+Based on the above, suggest a prioritized task list for today:
+1. Reviews waiting (blocking others)
+2. Addressing PR feedback on my work
+3. Continuing feature work</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Make it a shell alias.</strong> Add <code>alias morning='cd ~/projects/myapp &amp;&amp; claude /morning-digest'</code> to your <code>.bashrc</code>. Now you type <code>morning</code> and get your entire briefing. Even faster: add it to a cron job that runs at 8:55 AM and saves the output to a file you open when you sit down.</p>
+    </div>
+
+    <h2>Code Archaeology</h2>
+
+    <p>Why does this function do <em>that?</em> Who wrote this code, and what were they thinking? When you&rsquo;re working in a legacy codebase (which is every codebase older than six months), understanding the <em>why</em> behind the code is half the battle.</p>
+
+    <pre><code># File: .claude/commands/archaeology.md
+
+Investigate the history and rationale behind: **$ARGUMENTS**
+
+## Steps
+1. Read the specified file or function
+2. Run `git log --follow -p -- "$ARGUMENTS"` for the full change history
+3. Run `git blame "$ARGUMENTS"` to see who changed each line and when
+4. For the most significant commits, read the full commit messages
+5. Check if any PRs reference this file (search commit messages for PR numbers)
+
+## Report
+### Current State
+- What the code does now
+
+### History
+- When was it first written? By whom?
+- What were the major changes and why? (from commit messages)
+- Any patterns: was this code rewritten multiple times? Recently stable?
+
+### Key Decisions
+- Why was it written this way? (infer from commit messages and PR context)
+- Are there any TODO or FIXME comments with history?
+- Any workarounds or hacks with explanations?
+
+### Recommendations
+- Is this code safe to refactor?
+- What would break if this changed?
+- Who should you talk to for context? (most recent significant contributor)</code></pre>
+
+    <p>Run <code>/archaeology src/data/sync/SyncManager.kt</code> and get the full story behind that mysterious file everyone is afraid to touch.</p>
+
+    <h2>PR Status Dashboard</h2>
+
+    <p>Instead of checking each PR individually, generate a team dashboard:</p>
+
+    <pre><code># File: .claude/commands/pr-dashboard.md
+
+Generate a PR status dashboard for the team.
+
+## Steps
+1. Run `gh pr list --state=open --json number,title,author,
+   createdAt,reviewDecision,statusCheckRollup,labels`
+2. For each PR, check: how old is it? What's the review status?
+   Are CI checks passing?
+
+## Dashboard format
+
+### Needs Attention (oldest first)
+| PR | Author | Age | Reviews | CI | Status |
+|....|....|....|....|....|....|
+
+### Ready to Merge (approved + CI green)
+- List PRs that can be merged right now
+
+### Blocked
+- PRs with failing CI or changes requested
+- Include the specific blocker for each
+
+### Stats
+- Total open PRs
+- Average PR age
+- PRs opened this week vs merged this week
+
+## Rules
+- Flag any PR older than 3 days as "aging"
+- Flag any PR older than 7 days as "stale"
+- Highlight PRs that are approved but not merged (forgotten?)</code></pre>
+
+    <h2>Tech Debt Tracking</h2>
+
+    <p>Tech debt is invisible until it bites you. Build a skill that makes it visible:</p>
+
+    <pre><code># File: .claude/commands/tech-debt-scan.md
+
+Scan the project for technical debt and catalogue it.
+
+## Steps
+1. Search for TODO, FIXME, HACK, WORKAROUND, XXX comments in source code
+2. Search for deprecated API usage
+3. Check for suppressed warnings (@Suppress, @SuppressLint)
+4. Look for hardcoded values that should be configurable
+5. Check build.gradle.kts for outdated dependency patterns
+
+## For each finding, report
+- **Location**: File and line
+- **Type**: TODO / Deprecated API / Suppressed Warning / Hardcoded Value / Other
+- **Severity**: Critical (will break) / High (should fix soon) / Medium / Low
+- **Effort**: Quick fix (< 30 min) / Medium (1-4 hours) / Large (> 1 day)
+- **Description**: What the debt is and why it matters
+
+## Output
+Group by severity. For each severity level, sort by effort (quick fixes first).
+End with a summary: total items by severity, suggested sprint allocation
+(e.g., "dedicate 2 hours per sprint to quick-fix items").</code></pre>
+
+    <div class="automation-box">
+      <p><strong>Run tech debt scans monthly and track the trend.</strong> Create a <code>docs/tech-debt.md</code> file and update it each month with the scan results. Over time, you&rsquo;ll see whether debt is growing or shrinking. This single metric can justify dedicating sprint time to debt reduction better than any argument.</p>
+    </div>
+
+    <h2>Time-Saving Shell Aliases</h2>
+
+    <p>Not everything needs to be a full skill. For quick, one-off automations, shell aliases with <code>claude -p</code> are lightning fast:</p>
+
+    <pre><code># Add to ~/.bashrc or ~/.zshrc
+
+# Explain any error message
+alias explain='claude -p "Explain this error and suggest fixes:"'
+# Usage: some-command 2>&1 | explain
+
+# Quick commit message from staged changes
+alias commitmsg='git diff --cached | claude -p "Write a conventional commit message for this diff. Output ONLY the message, nothing else."'
+
+# Summarize a file in one sentence
+alias tldr='claude -p "Summarize this file in one sentence:"'
+# Usage: cat some-file.kt | tldr
+
+# What does this command do?
+alias howto='claude -p "Explain what this command does, step by step:"'
+# Usage: echo "find . -name '*.kt' -exec grep -l 'GlobalScope' {} +" | howto
+
+# Review just my changes on this branch
+alias myreview='git diff main...HEAD | claude -p "Quick review of these changes. Flag any bugs or issues. Be brief."'</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Aliases are the gateway drug to automation.</strong> Every alias that saves you time is a candidate for becoming a full skill later. Start with aliases for your most common one-liners, then graduate them to skills when you need more structure or want to share them with the team.</p>
+    </div>
+
+    <h2>Notification Triage</h2>
+
+    <p>GitHub notifications pile up. Most are noise. A few are critical. Let AI sort them:</p>
+
+    <pre><code># File: ~/.claude/commands/triage-notifications.md
+
+Triage my GitHub notifications.
+
+## Steps
+1. Run `gh api notifications --jq '.[] | {reason, subject, updated_at, repository}'`
+2. Group and prioritize:
+
+## Priority Levels
+
+### P0 — Act Now
+- Review requests on PRs (you're blocking someone)
+- CI failures on your PRs
+- Direct mentions in issues or PRs
+
+### P1 — Today
+- Comments on your open PRs
+- Issues assigned to you
+- PR approvals (you can merge)
+
+### P2 — This Week
+- Team PR activity (stay informed)
+- Issues in your repos
+- Release notifications
+
+### P3 — Archive
+- Bot notifications (Dependabot, etc.)
+- Subscribed threads with no action needed
+- Old notifications (> 7 days)
+
+## Output
+List by priority level. For P0 and P1, include direct links.
+For P3, suggest bulk-marking as read.</code></pre>
+
+    <h2>The Morning Routine: Combining It All</h2>
+
+    <p>Individual productivity skills are good. Combined into a morning routine, they&rsquo;re transformative.</p>
+
+    <pre><code>#!/bin/bash
+# scripts/morning-routine.sh — Your complete morning briefing
+
+echo "=== Morning Routine: $(date +%A,\ %B\ %d) ==="
+echo ""
+
+# 1. Repo digest
+echo "--- REPO DIGEST ---"
+cd ~/projects/myapp
+claude -p "$(cat ~/.claude/commands/morning-digest.md)" --allowedTools "Bash,Read" 2>/dev/null
+
+echo ""
+
+# 2. Standup draft
+echo "--- STANDUP DRAFT ---"
+claude -p "$(cat ~/.claude/commands/standup.md)" --allowedTools "Bash" 2>/dev/null
+
+echo ""
+
+# 3. Notification triage
+echo "--- NOTIFICATIONS ---"
+claude -p "$(cat ~/.claude/commands/triage-notifications.md)" --allowedTools "Bash" 2>/dev/null
+
+echo ""
+echo "=== Ready to code ==="</code></pre>
+
+    <div class="highlight-box">
+      <h3>One Command, Zero Morning Fog</h3>
+      <p>Add <code>alias goodmorning='bash ~/scripts/morning-routine.sh'</code> to your shell config. Tomorrow morning, type <code>goodmorning</code> and get your digest, standup, and triaged notifications in one shot. The 30-minute morning fog? Gone. Replaced by a 2-minute briefing.</p>
+    </div>
+
+    <h2>Personal Knowledge Base</h2>
+
+    <p>Over time, you build up knowledge about your codebase &mdash; patterns, gotchas, why certain things are the way they are. Most of this lives in your head and disappears when you switch projects. Capture it:</p>
+
+    <pre><code># File: .claude/commands/note.md
+
+Add a note to the project knowledge base.
+
+## Steps
+1. Read the note content from $ARGUMENTS
+2. Read docs/knowledge-base.md (create if it doesn't exist)
+3. Add the new note with today's date and the current file context
+4. Organize notes by category (architecture, gotchas, patterns, decisions)
+
+## Format for each note
+### [Category] Title
+**Date:** YYYY-MM-DD
+**Context:** [file or area of codebase]
+[The note content]
+
+## Rules
+- Keep notes concise — 2-3 sentences max
+- Include file paths when relevant
+- Don't duplicate existing notes — update if similar exists</code></pre>
+
+    <p>Run <code>/note &quot;The SyncManager retry logic uses exponential backoff with a max of 3 attempts. Don&rsquo;t change the max without checking the server rate limits.&quot;</code> and the knowledge is preserved.</p>
+
+    <h2>Exercise: Build Your Productivity Stack</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Set Up Your Morning Routine</h3>
+      <p>This exercise builds your complete morning automation. About 15 minutes.</p>
+
+      <h4>Step 1: The standup skill</h4>
+      <ol>
+        <li>Create <code>~/.claude/commands/standup.md</code> from the template above</li>
+        <li>Run <code>/standup</code> in your project</li>
+        <li>Compare with what you would have written from memory</li>
+      </ol>
+
+      <h4>Step 2: The morning digest</h4>
+      <ol>
+        <li>Create <code>~/.claude/commands/morning-digest.md</code></li>
+        <li>Run it and see what&rsquo;s happening in your repo</li>
+      </ol>
+
+      <h4>Step 3: Shell aliases</h4>
+      <ol>
+        <li>Add at least three aliases from this chapter to your <code>.bashrc</code> or <code>.zshrc</code></li>
+        <li>Try each one. Which saves you the most time?</li>
+      </ol>
+
+      <h4>Step 4: The morning routine script</h4>
+      <ol>
+        <li>Create <code>~/scripts/morning-routine.sh</code></li>
+        <li>Combine your standup, digest, and any other skills you want</li>
+        <li>Add an alias: <code>alias goodmorning='bash ~/scripts/morning-routine.sh'</code></li>
+        <li>Tomorrow morning, type <code>goodmorning</code> instead of your usual routine</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Set up a cron job that runs the morning routine at 8:55 AM and saves the output to <code>~/morning-briefing.txt</code>. When you sit down, the briefing is already waiting.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your personal productivity is now automated &mdash; standups, digests, triage, tech debt, knowledge capture. But everything so far uses Claude Code with the tools it already has: files, git, and GitHub CLI.</p>
+
+    <p>What if Claude Code could talk to <em>your</em> internal tools? Your Jira board. Your Slack channels. Your staging database. Your deployment dashboard.</p>
+
+    <p>In <strong>Chapter 10: MCP Servers for Your Team</strong>, you&rsquo;ll build Model Context Protocol servers that give Claude Code superpowers beyond the filesystem. Connect it to anything your team uses, and watch automation possibilities explode.</p>
+
+    <p>Let&rsquo;s give Claude Code new abilities.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-documentation.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Documentation That Writes Itself</span>
+      </a>
+      <a href="10-mcp-servers.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">MCP Servers for Your Team</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

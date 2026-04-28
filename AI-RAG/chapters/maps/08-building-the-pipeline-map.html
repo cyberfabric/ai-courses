@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Building a Production RAG Pipeline | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../08-building-the-pipeline.html">Chapter</a>
+      <a href="07-retrieval-that-works-map.html">&larr; Prev Map</a>
+      <a href="09-advanced-patterns-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Building a Production RAG Pipeline</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ============================================ -->
+    <!-- BIG IDEA                                     -->
+    <!-- ============================================ -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>A production RAG system is two pipelines stitched together: an <strong>ingestion pipeline</strong> (kitchen prep — turning messy documents into searchable chunks) and a <strong>query pipeline</strong> (cooking to order — turning user questions into grounded answers). If your prep is sloppy, no amount of cooking skill saves the meal.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- TWO PIPELINES                                -->
+    <!-- ============================================ -->
+    <h2>🔧 The Two Pipelines</h2>
+
+    <h3>📥 Ingestion Pipeline (runs ahead of time)</h3>
+    <div class="map-flow">
+      <div class="map-flow-step">📄 Load docs</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🧹 Preprocess</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">✂️ Chunk</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔢 Embed (batch!)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">💾 Upsert to vector DB</div>
+    </div>
+
+    <h3>🔍 Query Pipeline (runs in real time)</h3>
+    <div class="map-flow">
+      <div class="map-flow-step">❓ Question</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔢 Embed query</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔍 Retrieve top-K</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📝 Build prompt</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🤖 Generate + stream</div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- CONCEPT CARDS                                -->
+    <!-- ============================================ -->
+    <h2>🧩 Key Production Concepts</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📄</span>
+        <div class="map-card-title">Document Loaders</div>
+        <div class="map-card-desc">PDFs (PyMuPDF/Unstructured), HTML (BeautifulSoup — strip nav, footer, ads), Markdown (easiest), enterprise sources (Confluence, Notion via API → clean → normalize).</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">🧹</span>
+        <div class="map-card-title">Preprocessing</div>
+        <div class="map-card-desc">Collapse blank lines, remove invisible chars, strip page numbers, normalize whitespace. Garbage in = garbage out. Clean <em>before</em> chunking.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">📝</span>
+        <div class="map-card-title">RAG System Prompt</div>
+        <div class="map-card-desc">Force grounding: "Answer ONLY from context. Cite sources. Say 'I don't know' if context is insufficient." Without this, the LLM fills gaps from training data.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">🎯</span>
+        <div class="map-card-title">Context Engineering</div>
+        <div class="map-card-desc">What matters most isn't how you phrase instructions — it's the <strong>quality of context</strong> in the prompt. Mediocre prompt + great context beats brilliant prompt + garbage context.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">📎</span>
+        <div class="map-card-title">Source Attribution</div>
+        <div class="map-card-desc">Turn "the AI said so" into verifiable claims. Store rich metadata during ingestion (file, page, section, date). Link citations back to original documents.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">📡</span>
+        <div class="map-card-title">Streaming Responses</div>
+        <div class="map-card-desc">Use <code>.stream()</code> instead of <code>.create()</code>. Turns a 2-second wait into a fluid experience. Append source citations after stream completes.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- CACHING                                      -->
+    <!-- ============================================ -->
+    <h2>⚡ Three Types of Caching</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>🔢 Embedding Cache</h4>
+        <p>Avoid re-embedding the same text during re-ingestion. Essential when you reprocess documents on a schedule.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>💬 Query Cache</h4>
+        <p>Exact match: hash the question, return cached answer within a TTL (e.g., 1 hour). Redis or even a Python dict.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>🧠 Semantic Cache</h4>
+        <p>Meaning match: embed the question, check if any cached question has cosine similarity &gt; 0.95. Can reduce LLM calls by 30-50% for repetitive queries (e.g., customer support).</p>
+      </li>
+    </ol>
+
+    <!-- ============================================ -->
+    <!-- ERROR HANDLING                               -->
+    <!-- ============================================ -->
+    <h2>🚨 When Things Go Wrong</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🕳️</span>
+        <div class="map-card-title">Empty Retrieval</div>
+        <div class="map-card-desc">No relevant chunks found (or all below similarity threshold). Return a fallback: "I couldn't find relevant information. Could you rephrase?" Never let the LLM guess.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">🔌</span>
+        <div class="map-card-title">API Failures</div>
+        <div class="map-card-desc">Embedding or LLM API down. Retry with exponential backoff (base × 2^attempt). Max 3 retries, then fail fast with a clear error message.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">LLM Ignores Context</div>
+        <div class="map-card-desc">Check in order: (1) System prompt enforces grounding? (2) Context before question? (3) Too many chunks burying relevant ones? (4) Reduce top-K from 10 to 3-5.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- ORCHESTRATION COMPARISON                     -->
+    <!-- ============================================ -->
+    <h2>🏗️ Pipeline Orchestration: Build vs Framework</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Approach</th>
+          <th>Best For</th>
+          <th>Trade-offs</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>🐍 Custom Python</strong></td>
+          <td>Simple pipelines, full control, small teams</td>
+          <td>Easy to debug, ~200 lines. You build everything.</td>
+        </tr>
+        <tr>
+          <td><strong>🦜 LangChain / LangGraph</strong></td>
+          <td>Complex agent workflows, multi-step reasoning</td>
+          <td>Rich ecosystem. LangGraph adds stateful orchestration.</td>
+        </tr>
+        <tr>
+          <td><strong>🦙 LlamaIndex</strong></td>
+          <td>Document-heavy RAG, complex data sources</td>
+          <td>Best-in-class data connectors and index types.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; opacity: 0.8; margin-top: 0.5em;"><strong>Start custom, adopt a framework when you're reinventing its abstractions.</strong></p>
+
+    <!-- ============================================ -->
+    <!-- KEY TERMS                                    -->
+    <!-- ============================================ -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Ingestion Pipeline</dt>
+      <dd>The offline process that loads, cleans, chunks, embeds, and stores documents in a vector database. Kitchen prep before the restaurant opens.</dd>
+
+      <dt>Query Pipeline</dt>
+      <dd>The real-time process that takes a user question, retrieves relevant chunks, builds a prompt, and generates a grounded answer.</dd>
+
+      <dt>Context Engineering</dt>
+      <dd>The practice of optimizing what context you put in front of the LLM, rather than just how you phrase instructions. Quality context &gt; clever prompts.</dd>
+
+      <dt>Grounding</dt>
+      <dd>Constraining the LLM to answer only from provided context, not from training data. Enforced via the system prompt.</dd>
+
+      <dt>Source Attribution</dt>
+      <dd>Citing which documents/chunks the answer came from, so users can verify. Requires rich metadata stored during ingestion.</dd>
+
+      <dt>Semantic Cache</dt>
+      <dd>Caching by meaning similarity (cosine &gt; 0.95) rather than exact string match. "What's the refund policy?" and "How do refunds work?" hit the same cache.</dd>
+
+      <dt>Batch Embedding</dt>
+      <dd>Embedding multiple chunks in a single API call (up to 2048 inputs). Makes ingestion 10-50x faster than one-at-a-time.</dd>
+    </dl>
+
+    <!-- ============================================ -->
+    <!-- QUICK QUIZ                                   -->
+    <!-- ============================================ -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+
+      <details>
+        <summary>What are the two pipelines in every RAG system?</summary>
+        <p class="quiz-answer"><strong>Ingestion pipeline</strong> (offline: load → preprocess → chunk → embed → store) and <strong>query pipeline</strong> (real-time: question → embed → retrieve → prompt → generate). Ingestion is kitchen prep; query is cooking to order.</p>
+      </details>
+
+      <details>
+        <summary>Why should context come before the question in the prompt?</summary>
+        <p class="quiz-answer">LLMs process text sequentially. Having context fresh in "working memory" when they encounter the question produces more grounded answers. <code>Context: [...] Question: [...]</code> outperforms the reverse.</p>
+      </details>
+
+      <details>
+        <summary>When should you adopt LangChain/LlamaIndex instead of custom Python?</summary>
+        <p class="quiz-answer">When you catch yourself reinventing their abstractions — writing your own retry logic, state management, connector library, or multi-step agent workflows. Most simple RAG systems are ~200 lines of custom Python. Don't add a framework for GitHub stars.</p>
+      </details>
+
+      <details>
+        <summary>What's the difference between a query cache and a semantic cache?</summary>
+        <p class="quiz-answer"><strong>Query cache:</strong> exact string match (hash the question). <strong>Semantic cache:</strong> meaning match (embed the question, check cosine similarity &gt; 0.95). Semantic cache catches paraphrases like "refund policy" / "how do refunds work."</p>
+      </details>
+
+      <details>
+        <summary>What should you check first when the LLM ignores retrieved context?</summary>
+        <p class="quiz-answer">In order: (1) System prompt explicitly requires grounded answers? (2) Context placed before the question? (3) Too many chunks (reduce top-K to 3-5)? (4) Question ambiguous enough that the model's prior knowledge dominates?</p>
+      </details>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- GOTCHAS                                      -->
+    <!-- ============================================ -->
+    <h2>⚠️ Watch Out</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📑</span>
+        <div class="map-card-title">PDFs Are Chaos</div>
+        <div class="map-card-desc">Tables get scrambled, columns merge, reading order breaks. Use Unstructured.io for complex PDFs. Convert tables to Markdown before chunking.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">🏗️</span>
+        <div class="map-card-title">The Framework Trap</div>
+        <div class="map-card-desc">Don't pick a framework for GitHub stars. Many production RAG systems are 200 lines of Python. Add a framework when complexity justifies it, not before.</div>
+      </div>
+
+      <div class="map-card">
+        <span class="map-card-icon">📡</span>
+        <div class="map-card-title">Streaming + Citations</div>
+        <div class="map-card-desc">You can't show source citations until the stream completes. Common pattern: stream answer text, append "Sources" section at the end.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- SUMMARY STRIP                                -->
+    <!-- ============================================ -->
+    <div class="map-summary">
+      <h3>📌 Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Every RAG system is two pipelines: <strong>ingestion</strong> (offline prep) and <strong>query</strong> (real-time answering).</li>
+        <li class="map-summary-item"><strong>Context engineering &gt; prompt engineering</strong> — quality of retrieved context matters more than clever instructions.</li>
+        <li class="map-summary-item">The system prompt must enforce <strong>grounding</strong>: answer only from context, cite sources, say "I don't know" when needed.</li>
+        <li class="map-summary-item"><strong>Batch embed</strong> during ingestion (up to 2048 inputs/call) for 10-50x speedup.</li>
+        <li class="map-summary-item">Three caching layers: <strong>embedding cache</strong> (ingestion), <strong>query cache</strong> (exact match), <strong>semantic cache</strong> (meaning match, 30-50% LLM cost reduction).</li>
+        <li class="map-summary-item"><strong>Start custom Python</strong>, adopt LangChain/LlamaIndex only when you're reinventing their abstractions.</li>
+        <li class="map-summary-item">Always handle: empty retrieval (fallback message), API failures (retry with backoff), LLM ignoring context (reduce top-K, strengthen grounding).</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="07-retrieval-that-works-map.html" class="prev">
+      <span class="nav-direction">&larr; Previous Map</span>
+      <span class="nav-chapter">Retrieval That Actually Works</span>
+    </a>
+    <a href="../08-building-the-pipeline.html" class="next">
+      <span class="nav-direction">Back to Chapter &rarr;</span>
+      <span class="nav-chapter">Building a Production RAG Pipeline</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

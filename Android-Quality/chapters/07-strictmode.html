@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7 &mdash; StrictMode | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="06-pre-commit-and-local-loop.html">&larr; Prev</a>
+      <a href="08-leakcanary.html">Next &rarr;</a>
+      <a href="maps/07-strictmode-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>StrictMode: Find Bugs Before Your Users Do</h1>
+    <p class="subtitle">The 15-year-old Android API that nobody turns on. Ten lines of code, and your app starts shouting at you about every disk read on the main thread, every leaked Activity, every SQLite query that has no business running where it's running.</p>
+  </header>
+
+  <main>
+
+    <h2>The runtime layer</h2>
+
+    <p>You've spent six chapters making the build smarter. Lint, detekt, ktlint, hooks &mdash; all running before the app starts. They catch a lot. They cannot catch what only happens when the app is <em>running</em>. Disk reads on the main thread that take 30ms on a Pixel 7 and 800ms on a budget Samsung in Brazil. Activities that leak because a static field never let go. SharedPreferences cold-loading on a UI thread because someone forgot.</p>
+
+    <p>That's where StrictMode comes in. It's not a linter; it's a runtime watchdog. You enable it in your Application's <code>onCreate</code>, gate it on <code>BuildConfig.DEBUG</code>, and from that point on Android logs (or crashes) every time your code does something it shouldn't. Disk on UI thread. Network on UI thread. Leaked <code>Cursor</code>. Closeable left open. ProgressBar registered in <code>onCreate</code> and never unregistered.</p>
+
+    <p>StrictMode shipped in API 9 (2010). It is one of the longest-standing, most-overlooked tools in Android. The only reason your app doesn't have it on is that nobody on the team flipped the switch.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">2010</span>
+        <div class="stat-label">year StrictMode shipped (API 9)</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">10</span>
+        <div class="stat-label">lines of code to enable it</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~12</span>
+        <div class="stat-label">violations a typical first-run produces in 5 minutes of usage</div>
+      </div>
+    </div>
+
+    <div class="tool-profile-box">
+      <div class="tool-name">StrictMode</div>
+      <p>Android's built-in runtime offender detector for thread and VM policy violations. Free, no dependency, no APK size impact, ships on every device since 2010.</p>
+      <dl>
+        <dt>What it catches</dt>
+        <dd>ThreadPolicy: disk reads/writes on UI thread, network on UI, custom slow calls. VmPolicy: leaked Activities, leaked closables (Cursors, FileInputStreams), unregistered receivers, file URIs exposed to other apps, cleartext HTTP.</dd>
+        <dt>Install</dt>
+        <dd>10 lines in <code>Application.onCreate()</code>, guarded by <code>if (BuildConfig.DEBUG)</code>. No Gradle dependency. No setup outside the Application class.</dd>
+        <dt>Runtime cost</dt>
+        <dd>Negligible in most modes. <code>penaltyLog</code> just writes to logcat. <code>penaltyDeath</code> crashes the process &mdash; use it in dev when you want zero tolerance. Never enable in release builds.</dd>
+        <dt>When to skip it</dt>
+        <dd>Never in dev builds. Always in release builds (the cost is fine, but the crashes from unfixed third-party SDK violations are not).</dd>
+      </dl>
+    </div>
+
+    <h2>What "violation" actually means</h2>
+
+    <p>StrictMode has two policies, and both are configured separately.</p>
+
+    <ul>
+      <li><strong>ThreadPolicy</strong> watches the <em>UI thread</em>. If anything blocking happens on it &mdash; disk read, disk write, network call, a custom call you flagged as slow &mdash; you get a violation. The bar is intentionally low: even a 5ms disk read is a violation. The point is to flush them all out so you make conscious decisions.</li>
+      <li><strong>VmPolicy</strong> watches the <em>process</em>. If an Activity is GC-eligible and its reference count is wrong, if a <code>Cursor</code> never had <code>close()</code> called, if a <code>BroadcastReceiver</code> was registered and never unregistered, that's a violation.</li>
+    </ul>
+
+    <p>Each violation has a stack trace. The line number near the top is usually <em>not</em> the offender &mdash; it's framework code. The offender is somewhere 5&ndash;10 frames deeper. Reading the trace is a skill; we'll cover that later in the chapter.</p>
+
+    <h2>The 10-line install</h2>
+
+    <p>Open your Application class. If you don't have one, make one (and register it in the manifest). The whole setup is in <code>onCreate</code>.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/src/main/java/com/example/MyApp.kt</div>
+<pre><code>class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        if (BuildConfig.DEBUG) {
+            enableStrictMode()
+        }
+    }
+
+    private fun enableStrictMode() {
+        // ThreadPolicy: catch slow operations on the UI thread.
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .detectNetwork()
+                .detectCustomSlowCalls()
+                .detectResourceMismatches()
+                .penaltyLog()         // Start with log; promote to death later.
+                .build()
+        )
+
+        // VmPolicy: catch leaks and lifecycle violations.
+        StrictMode.setVmPolicy(
+            StrictMode.VmPolicy.Builder()
+                .detectLeakedSqlLiteObjects()
+                .detectLeakedClosableObjects()
+                .detectLeakedRegistrationObjects()
+                .detectActivityLeaks()
+                .detectFileUriExposure()
+                .detectCleartextNetwork()
+                .penaltyLog()
+                .build()
+        )
+    }
+}</code></pre>
+      <div class="recipe-note">The <code>BuildConfig.DEBUG</code> guard is non-negotiable. <code>penaltyDeath</code> on a release build means a third-party SDK violation crashes your app for users. Always wrap StrictMode in a debug check.</div>
+    </div>
+
+    <p>Register the Application in the manifest if it isn't already.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/src/main/AndroidManifest.xml</div>
+<pre><code>&lt;application
+    android:name=".MyApp"
+    android:label="@string/app_name"
+    ... &gt;
+    &lt;!-- activities, services, etc. --&gt;
+&lt;/application&gt;</code></pre>
+      <div class="recipe-note">Without <code>android:name</code>, your custom Application is never instantiated, and StrictMode is never enabled. Easy to miss; classic "I added the code but it doesn't work" trap.</div>
+    </div>
+
+    <h2>The penalty knob: log, death, dropbox</h2>
+
+    <p>Detection is one half. The other half is what happens when a violation fires. StrictMode offers three.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">.penaltyLog()</div>
+        <div class="prompt-text">Writes the violation + stack trace
+to logcat. App keeps running.
+
+Use this on Day 1. You'll be
+flooded; you need to triage
+without crashing every screen.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">.penaltyDeath()</div>
+        <div class="prompt-text">Crashes the process the moment
+a violation fires. Zero tolerance.
+
+Use this in Week 2 once your
+top offenders are fixed and
+you want regressions to be
+loud and obvious.</div>
+      </div>
+    </div>
+
+    <p>There's also <code>.penaltyDropBox()</code> &mdash; sends violations to Android's DropBox manager (a system log). Useful in CI integration tests where you want a structured artifact, less useful for day-to-day. <code>.penaltyDialog()</code> exists too &mdash; pops a dialog on every violation &mdash; which is amusing for about 30 seconds before you turn it back off.</p>
+
+    <p>The natural progression is <code>penaltyLog</code> &rarr; (fix top 5 offenders) &rarr; <code>penaltyDeath</code>. Don't start at <code>penaltyDeath</code>. The first run on a real codebase will crash before the launcher activity finishes loading, and you'll think StrictMode is broken when actually your app is.</p>
+
+    <h2>Reading a violation</h2>
+
+    <p>You enable StrictMode, run the app, scroll logcat. You see something like this:</p>
+
+    <pre><code>D/StrictMode: StrictMode policy violation; ~duration=143 ms:
+android.os.strictmode.DiskReadViolation
+    at android.os.StrictMode$AndroidBlockGuardPolicy.onReadFromDisk
+    at java.io.UnixFileSystem.checkAccess
+    at java.io.File.exists
+    at android.app.SharedPreferencesImpl.&lt;init&gt;
+    at android.app.ContextImpl.getSharedPreferences
+    at com.example.auth.TokenStore.getToken(TokenStore.kt:23)
+    at com.example.auth.AuthInterceptor.intercept(AuthInterceptor.kt:14)
+    at okhttp3.internal.http.RealInterceptorChain.proceed
+    ...
+    at com.example.MainActivity.onCreate(MainActivity.kt:42)</code></pre>
+
+    <p>The <em>top</em> of the trace is framework code: <code>StrictMode$AndroidBlockGuardPolicy</code>, <code>UnixFileSystem</code>, <code>SharedPreferencesImpl</code>. That's not your bug. Scroll down past the framework frames until you hit the first one in <em>your</em> package &mdash; <code>com.example.auth.TokenStore.getToken(TokenStore.kt:23)</code>. That's the call site. Above it: <code>AuthInterceptor</code>, <code>onCreate</code>. The trace tells you a story: "MainActivity.onCreate triggered an OkHttp interceptor that called TokenStore.getToken which loaded SharedPreferences which read from disk &mdash; on the UI thread."</p>
+
+    <div class="tip-box">
+      <strong>Find the first frame in your package.</strong> That's almost always the right line to fix. Frameworks are doing what they advertise; your code is the one calling them in the wrong place. The fix is usually "move this off the main thread" &mdash; a coroutine, a <code>Dispatchers.IO</code>, a <code>WorkManager</code>.
+    </div>
+
+    <h2>The usual suspects</h2>
+
+    <p>When you turn StrictMode on for the first time, you'll see roughly the same set of violations every Android codebase has. Knowing them in advance saves you debugging time.</p>
+
+    <table>
+      <thead>
+        <tr><th>Violation</th><th>Common cause</th><th>Typical fix</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>DiskReadViolation</code></td><td><code>SharedPreferences.getString()</code> on UI thread</td><td>Pre-load on background, or use DataStore</td></tr>
+        <tr><td><code>DiskWriteViolation</code></td><td><code>prefs.edit().commit()</code> in <code>onPause</code></td><td>Use <code>apply()</code> instead of <code>commit()</code></td></tr>
+        <tr><td><code>NetworkOnMainThreadException</code></td><td>Lazy <code>Retrofit</code> init triggering DNS lookup</td><td>Initialize off-main; use <code>lazy</code> + <code>Dispatchers.IO</code></td></tr>
+        <tr><td><code>ResourceMismatch</code></td><td><code>Cursor</code> opened in one thread, closed in another</td><td>Use <code>use { }</code> blocks; close in same scope</td></tr>
+        <tr><td><code>LeakedClosableViolation</code></td><td><code>FileInputStream</code> opened, exception thrown, never closed</td><td><code>file.inputStream().use { }</code> &mdash; AutoCloseable in scope</td></tr>
+        <tr><td><code>LeakedRegistrationObjects</code></td><td><code>registerReceiver</code> in <code>onCreate</code>, no <code>unregisterReceiver</code></td><td>Pair every register with an unregister in <code>onDestroy</code></td></tr>
+        <tr><td><code>ActivityLeaks</code></td><td>Static reference holding Activity context</td><td>Use Application context where possible; weak references</td></tr>
+        <tr><td><code>FileUriExposure</code></td><td>Sharing a <code>file://</code> Uri to another app on N+</td><td>Switch to <code>FileProvider</code> + <code>content://</code> Uri</td></tr>
+        <tr><td><code>CleartextNetwork</code></td><td>An HTTP (not HTTPS) call that slipped past your config</td><td>Add to network security config or fix the URL</td></tr>
+      </tbody>
+    </table>
+
+    <h2>The legitimate suppression</h2>
+
+    <p>Sometimes you genuinely have to do disk I/O on the main thread. App-startup config that downstream code depends on. A migration that has to complete before any UI shows. For these cases, StrictMode provides a scoped suppression.</p>
+
+    <pre><code>val token = StrictMode.allowThreadDiskReads().use {
+    sharedPrefs.getString("auth_token", null)
+}</code></pre>
+
+    <p>This says: "I know I'm reading from disk on the UI thread; I've thought about it; this specific block is OK." StrictMode disables the policy for the lifetime of the block and re-enables it afterward. The <code>use</code> block ensures the restore happens even if the code throws.</p>
+
+    <div class="warning-box">
+      <strong>Don't bulk-suppress.</strong> The anti-pattern is "the team had a bad week with StrictMode crashes, so we wrapped <code>setupApp()</code> in <code>allowThreadDiskReads</code> and moved on." That kills the entire purpose. Suppress only the <em>specific call</em> you've decided is OK; never a whole function. If you find yourself suppressing more than 5 spots in your codebase, you have a real architectural problem (probably synchronous I/O in the wrong place) that suppression is hiding.
+    </div>
+
+    <h2>StrictMode in instrumented tests</h2>
+
+    <p>Logcat is a developer signal. CI is a regression signal. You can wire StrictMode into instrumented tests so any new violation fails the build. The trick is to set policy <em>per test</em> and assert it.</p>
+
+    <div class="config-recipe">
+      <div class="recipe-filename">app/src/androidTest/java/.../StrictModeRule.kt</div>
+<pre><code>class StrictModeRule : TestRule {
+    override fun apply(base: Statement, description: Description): Statement =
+        object : Statement() {
+            override fun evaluate() {
+                val originalThread = StrictMode.getThreadPolicy()
+                val originalVm = StrictMode.getVmPolicy()
+                StrictMode.setThreadPolicy(
+                    StrictMode.ThreadPolicy.Builder()
+                        .detectAll()
+                        .penaltyDeath()
+                        .build()
+                )
+                StrictMode.setVmPolicy(
+                    StrictMode.VmPolicy.Builder()
+                        .detectAll()
+                        .penaltyDeath()
+                        .build()
+                )
+                try {
+                    base.evaluate()
+                } finally {
+                    StrictMode.setThreadPolicy(originalThread)
+                    StrictMode.setVmPolicy(originalVm)
+                }
+            }
+        }
+}
+
+class LoginFlowTest {
+    @get:Rule val strictMode = StrictModeRule()
+
+    @Test fun login_doesNotBlockMainThread() {
+        // any I/O on the UI thread crashes this test
+        ActivityScenario.launch(LoginActivity::class.java).use {
+            onView(withId(R.id.email)).perform(typeText("a@b.com"))
+            onView(withId(R.id.signInButton)).perform(click())
+            // ...
+        }
+    }
+}</code></pre>
+      <div class="recipe-note">The rule saves and restores policy so tests are independent. <code>detectAll()</code> + <code>penaltyDeath()</code> in tests is the strongest possible regression guard &mdash; any new violation crashes the test instantly.</div>
+    </div>
+
+    <h2>AI-Assisted Setup &mdash; the <code>/explain-strictmode-violation</code> skill</h2>
+
+    <p>The single biggest barrier to using StrictMode is reading the trace. The framework frames at the top are noise; the real call site is buried 5&ndash;10 frames down. Claude is great at this kind of triage &mdash; paste the violation, get a plain-English diagnosis and the smallest fix.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Skill: /explain-strictmode-violation</div>
+      <div class="prompt-text">I'll paste a StrictMode violation log below. Diagnose it as follows:
+
+1. Identify the violation type (DiskReadViolation, NetworkOnMainThread,
+   LeakedClosableViolation, etc.) and what category of bug it represents.
+2. Skip the framework frames at the top. Find the first frame in MY
+   package &mdash; that's the call site.
+3. Explain in one paragraph what's actually happening: which API call
+   is offending, on which thread, and why it shouldn't be there.
+4. Propose the smallest fix &mdash; a coroutine dispatch, a use { } block,
+   a switch from commit() to apply(), etc. Show the before/after diff
+   for the offending line if you can.
+5. Flag if this is the kind of violation that suggests a structural
+   issue (e.g., synchronous startup work) rather than a one-line fix.
+
+Here's the violation: [paste]</div>
+      <div class="prompt-explanation">Save to <code>.claude/commands/explain-strictmode-violation.md</code>. Use it on the first 10 violations after enabling StrictMode &mdash; they cluster into 2&ndash;3 patterns, and after you've seen Claude diagnose them once, the rest of your codebase falls fast.</div>
+    </div>
+
+    <p>A second skill worth standing up: <code>/draft-strictmode-suppression</code>. When a violation is legitimate (a startup-only call that has to be on the main thread), have Claude wrap it in the right scoped suppression and add a one-line comment explaining why. Forces you to articulate the reason, which is the actual gate against suppression sprawl.</p>
+
+    <div class="prompt-example bad">
+      <div class="prompt-label">Skill: /explain-strictmode-violation (don't do this)</div>
+      <div class="prompt-text">My app crashes with StrictMode. What's wrong?</div>
+      <div class="prompt-explanation">No log, no trace, no context. The skill needs the actual violation output to do anything useful. Always paste the full <code>D/StrictMode</code> block including the stack trace &mdash; the call site is buried in the middle and Claude can't guess it from a one-line description.</div>
+    </div>
+
+    <h2>What you'll see on Day 1</h2>
+
+    <p>The first run after enabling StrictMode is alarming. Your launcher Activity will trigger 6&ndash;15 violations before the user even sees the home screen. SharedPreferences cold loads, lazy Retrofit init that does a DNS lookup, a Bitmap decode in a static initializer, a database migration check &mdash; all of it on the UI thread.</p>
+
+    <p>This is not a sign your app is bad. It's a sign your app is normal. <em>Every</em> Android codebase that hasn't run StrictMode looks like this. The fix is iterative: triage by frequency (which violation fires the most?), fix the top 3, repeat. After a couple weeks, the count drops to a handful that you've consciously decided to live with.</p>
+
+    <div class="adoption-ladder">
+      <div class="rung">
+        <span class="rung-label">Day 1</span>
+        Add the 10-line setup in your Application class, guarded by <code>BuildConfig.DEBUG</code>, with <code>.penaltyLog()</code> on both policies. Run the app for 5 minutes of normal use. Save the logcat output. Run <code>/explain-strictmode-violation</code> on the top 5 by frequency.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Week 1</span>
+        Fix the top 5. Move SharedPreferences off-main (DataStore is the right answer for new code). Replace <code>commit()</code> with <code>apply()</code>. Wrap legitimate exceptions in <code>allowThreadDiskReads { }</code> with a comment. Promote ThreadPolicy to <code>.penaltyDeath()</code>; keep VmPolicy on log.
+      </div>
+      <div class="rung">
+        <span class="rung-label">Month 1</span>
+        Promote VmPolicy to death too. Add a <code>StrictModeRule</code> to the instrumented test suite for your top 3 user flows (login, navigation, checkout). Document any remaining suppressions in a <code>STRICTMODE_SUPPRESSIONS.md</code> doc with reasons.
+      </div>
+    </div>
+
+    <h2>The "untrip and restore" anti-pattern</h2>
+
+    <p>This deserves its own section because it's how teams quietly kill StrictMode. Here's the pattern:</p>
+
+    <ol>
+      <li>Team enables StrictMode with <code>penaltyDeath</code>.</li>
+      <li>App crashes constantly during testing &mdash; way more than expected.</li>
+      <li>Frustrated dev wraps <code>StrictMode.allowThreadDiskReads</code> around the entire <code>onCreate</code> of every Activity to "buy time."</li>
+      <li>Six months later, every <code>onCreate</code> is wrapped, nobody remembers why, and StrictMode is effectively off.</li>
+      <li>The codebase has accumulated a year of new violations nobody noticed.</li>
+    </ol>
+
+    <p>The right answer when StrictMode is too noisy: <em>start with <code>penaltyLog</code></em>, not death. Triage. Fix. <em>Then</em> tighten. Wholesale suppression is the developer equivalent of putting tape over a smoke alarm.</p>
+
+    <div class="highlight-box">
+      <h3>Why StrictMode is leverage</h3>
+      <p>Your users will eventually see slow main-thread I/O as ANRs &mdash; the dreaded "App not responding" dialog. Without StrictMode, you find out from the Play Console's vitals report, weeks after the offending PR landed. With StrictMode, you find out the moment the dev opens the screen on their own machine. Same bug, two timelines: 6 weeks and a 1-star review, or 5 minutes and a coroutine dispatch.</p>
+    </div>
+
+    <h2>Common pitfalls</h2>
+
+    <ul>
+      <li><strong>Forgetting the manifest <code>android:name</code>.</strong> Code is in <code>onCreate</code>, but the Application class never runs because the manifest still points to the default. Verify with a logcat statement.</li>
+      <li><strong>Enabling in release builds.</strong> A third-party SDK violation crashes for real users. Always gate on <code>BuildConfig.DEBUG</code>.</li>
+      <li><strong>Confusing ThreadPolicy with VmPolicy.</strong> ThreadPolicy is per-thread (mostly UI). VmPolicy is process-wide. You set both because they catch different bugs.</li>
+      <li><strong>Reading the top of the stack trace.</strong> The top is always framework. The line to fix is the first one in <em>your</em> package, usually 5&ndash;10 frames down.</li>
+      <li><strong>penaltyDeath on Day 1.</strong> The launcher Activity won't survive. Start with log; promote when the count is manageable.</li>
+      <li><strong>Wrapping suppression around whole functions.</strong> Suppress the specific call, not the whole block. Otherwise StrictMode is theater.</li>
+    </ul>
+
+    <h2>StrictMode and Compose</h2>
+
+    <p>Compose surfaces some unique violations. <code>painterResource(R.drawable.large_image)</code> can trigger a <code>DiskReadViolation</code> because the image is loaded synchronously the first time. <code>remember { File(...).readText() }</code> in a Composable is a guaranteed violation &mdash; the read runs on the composition thread (which is usually main).</p>
+
+    <p>The general rule: if a Composable reads anything off disk or network, you're doing it wrong. Put the I/O in a <code>ViewModel</code> + a <code>StateFlow</code>, expose state to the Composable. Compose isn't different from XML in this regard; it just makes the violations more concentrated because Composables run frequently.</p>
+
+    <div class="exercise-box">
+      <strong>Your turn.</strong>
+      <ol>
+        <li>Open your Application class. If it doesn't exist, create one and register it in the manifest with <code>android:name</code>.</li>
+        <li>Add the 10-line StrictMode setup from the recipe above. Use <code>.penaltyLog()</code> on both policies. Build and install the debug APK.</li>
+        <li>Use the app for 5 minutes of normal flow: launch, sign in, navigate to two main screens, sign out. Capture <code>adb logcat | grep StrictMode</code> the whole time.</li>
+        <li>Sort the captured violations by frequency. Pick the top 3.</li>
+        <li>For each one, run the <code>/explain-strictmode-violation</code> skill. Get a diagnosis and a fix.</li>
+        <li>Apply the smallest fix you're comfortable with. Re-run the app. Confirm the violation no longer fires.</li>
+        <li>Open a PR with the StrictMode setup + the 3 fixes. Title: "Enable StrictMode in debug builds + fix 3 main-thread offenders."</li>
+      </ol>
+      <p>Stretch goal: pick one user flow (login, settings, etc.) and write a <code>StrictModeRule</code>-based instrumented test that asserts no violations occur during that flow. That's regression protection forever.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>StrictMode catches main-thread offenses and obvious leaks. But there's a category of leaks even StrictMode struggles with &mdash; the slow ones, where an Activity is held by something five references deep, garbage collection runs and runs, and the leak grows quietly until the app OOMs at hour two of usage. Chapter 8 brings in LeakCanary &mdash; Square's heap-watcher that automatically detects these, captures a snapshot, and tells you exactly which reference is the culprit. Two-line install, lifetime memory-leak insurance.</p>
+
+    <footer class="chapter-nav">
+      <a href="06-pre-commit-and-local-loop.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Pre-commit Hooks</span>
+      </a>
+      <a href="08-leakcanary.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">LeakCanary</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

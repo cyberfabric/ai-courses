@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Plugins &amp; the Marketplace | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-automation-playbook.html">&larr; Prev</a>
+      <a href="14-subagents.html">Next &rarr;</a>
+      <a href="maps/13-plugins-and-marketplace-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Plugins &amp; the Marketplace</h1>
+    <p class="subtitle">Bundle your skills, hooks, agents, and MCP servers into one shareable unit &mdash; and discover what others have built.</p>
+  </header>
+
+  <main>
+
+    <h2>The Last Mile of &ldquo;Share With Your Team&rdquo;</h2>
+
+    <p>Every chapter so far has had the same nagging undertone. You build a great <code>/pr-description</code> skill (Chapter 3). You write a sharp lint-on-save hook (Chapter 4). You stand up an MCP server for your team&rsquo;s deploy dashboard (Chapter 10). And then someone on Slack says <em>&ldquo;wait, that&rsquo;s cool, how do I get that?&rdquo;</em> &mdash; and you find yourself zipping up a <code>.claude/</code> directory, writing a setup README, and walking three teammates through copying files into the right places.</p>
+
+    <p>Plugins are the answer. A plugin packages slash commands, skills, hooks, MCP servers, subagents, and statusline scripts into one self-contained directory. A marketplace is a JSON catalog that points at a bunch of plugins. Together they&rsquo;re the package manager Claude Code didn&rsquo;t have until late 2025.</p>
+
+    <p>If Chapters 1&ndash;12 taught you to <em>build</em> automations, this chapter teaches you to <em>distribute</em> them.</p>
+
+    <h2>What a Plugin Actually Is</h2>
+
+    <p>Forget marketplaces for a minute. A plugin is just a directory with a tiny manifest file. Everything else &mdash; the skills, the hooks, the MCP servers &mdash; auto-discovers from standard subdirectories.</p>
+
+    <pre><code>my-plugin/
+├── .claude-plugin/
+│   └── plugin.json          # The only required file. Just `name`.
+├── commands/                # Slash commands (.md files)
+│   └── pr-description.md
+├── skills/                  # SKILL.md skills (model-invokable)
+│   └── scaffold-feature/
+│       └── SKILL.md
+├── agents/                  # Subagents (Chapter 14)
+│   └── code-reviewer.md
+├── hooks/                   # Hook scripts referenced from .claude/settings.json
+│   └── lint-changed.sh
+└── .mcp.json                # MCP server registrations</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The manifest path is hyphenated.</strong> It&rsquo;s <code>.claude-plugin/plugin.json</code>, not <code>.claude/plugin.json</code>. Same trick on the marketplace side: the catalog lives at <code>.claude-plugin/marketplace.json</code> in the marketplace repo. Easy to typo, easy to fix.</p>
+    </div>
+
+    <p>A minimal <code>plugin.json</code> is genuinely tiny:</p>
+
+    <pre><code>{
+  "name": "team-android-toolkit",
+  "version": "0.3.0",
+  "description": "Skills and hooks for Android dev: scaffolding, linting, PR review",
+  "author": { "name": "Mobile Platform" },
+  "license": "MIT",
+  "homepage": "https://github.com/acme/team-android-toolkit",
+  "repository": "https://github.com/acme/team-android-toolkit",
+  "keywords": ["android", "kotlin", "compose", "review"]
+}</code></pre>
+
+    <p>Only <code>name</code> is required. The other fields exist so the marketplace UI can show useful context and so <code>/plugin update</code> can detect that you&rsquo;ve published a new version.</p>
+
+    <div class="automation-box">
+      <p><strong>Your plugin is mostly stuff you&rsquo;ve already built.</strong> If you followed Chapters 3, 4, and 10, your <code>.claude/commands/</code>, <code>.claude/settings.json</code> hooks, and a couple of MCP servers are <em>already</em> 80% of a plugin. The only new artifact is the manifest. Bundling them is less &ldquo;build a thing&rdquo; and more &ldquo;wrap what you have in a directory and write five lines of JSON.&rdquo;</p>
+    </div>
+
+    <h2>Browsing &amp; Installing From the Official Marketplace</h2>
+
+    <p>The Anthropic-managed marketplace, <code>claude-plugins-official</code>, is auto-available the moment you start Claude Code &mdash; you don&rsquo;t have to add it. To browse:</p>
+
+    <pre><code># Open the interactive plugin manager
+/plugin
+
+# You'll see three tabs: Discover, Installed, and Updates.
+# Discover shows everything available across all your marketplaces.
+# Press Enter on a plugin to see options.</code></pre>
+
+    <p>If you already know what you want, you can install it directly from the command line:</p>
+
+    <pre><code># Install from the official marketplace
+/plugin install claudemd-keeper@claude-plugins-official
+
+# Format: &lt;plugin-name&gt;@&lt;marketplace-name&gt;
+# The @marketplace suffix disambiguates when the same name appears in
+# multiple marketplaces.</code></pre>
+
+    <h3>Install scopes: where the plugin lives</h3>
+
+    <p>When you install a plugin, Claude Code asks (or you specify) where to put it:</p>
+
+    <table>
+      <thead>
+        <tr><th>Scope</th><th>Where</th><th>When to use</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>user</strong> (default)</td>
+          <td>Your home directory &mdash; available across all your projects.</td>
+          <td>Personal productivity stuff: shell aliases, code-archaeology skills, your private morning-digest plugin.</td>
+        </tr>
+        <tr>
+          <td><strong>project</strong></td>
+          <td>Committed to the current repo (<code>.claude/plugins/</code> or <code>.mcp.json</code>).</td>
+          <td>Team-shared automations. Anyone who clones the repo gets them after running <code>/plugin sync</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>local</strong></td>
+          <td>This repo, your machine only &mdash; not committed.</td>
+          <td>Plugins you want to try out before deciding whether to share them with the team.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Adding Your Own Marketplaces</h2>
+
+    <p>The official marketplace is a great starting point, but the real power kicks in when you add your team&rsquo;s private marketplace, or a community-maintained one.</p>
+
+    <pre><code># GitHub repo (most common form)
+/plugin marketplace add anthropics/claude-plugins-official
+
+# Any git URL
+/plugin marketplace add https://gitlab.acme.internal/platform/plugins.git
+
+# Local directory (great for plugin development)
+/plugin marketplace add ./local-marketplaces/team-android
+
+# Remote URL pointing at a marketplace.json
+/plugin marketplace add https://plugins.acme.com/marketplace.json</code></pre>
+
+    <p>A marketplace itself is just a JSON file at <code>.claude-plugin/marketplace.json</code> in the marketplace repo. It looks roughly like this:</p>
+
+    <pre><code>{
+  "name": "acme-platform-plugins",
+  "owner": { "name": "Acme Platform Team" },
+  "plugins": [
+    {
+      "name": "android-toolkit",
+      "source": "github:acme/android-toolkit-plugin",
+      "version": "0.3.0",
+      "description": "Skills and hooks for Android dev"
+    },
+    {
+      "name": "deploy-dashboard",
+      "source": "github:acme/deploy-dashboard-plugin",
+      "version": "1.0.2",
+      "description": "MCP server + status skill for our deploy pipeline"
+    }
+  ]
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Marketplace = catalog, plugin = code.</strong> The marketplace JSON points at <em>where to fetch each plugin</em>, but doesn&rsquo;t contain the plugin code itself. This split (covered in &ldquo;Team-shared marketplaces&rdquo; below) is what lets you curate an approval list without forking every plugin.</p>
+    </div>
+
+    <h2>Building Your First Plugin (15 Minutes)</h2>
+
+    <p>Time to turn what you have into something installable. We&rsquo;ll bundle the <code>/pr-description</code> skill from Chapter 3 with the lint-on-save hook from Chapter 4 into a single plugin called <code>android-toolkit</code>.</p>
+
+    <div class="recipe-box">
+      <h3>From scattered files to one shareable plugin</h3>
+      <ol>
+        <li><strong>Create the plugin directory.</strong>
+          <pre><code>mkdir -p android-toolkit/.claude-plugin
+mkdir -p android-toolkit/commands
+mkdir -p android-toolkit/hooks
+cd android-toolkit</code></pre>
+        </li>
+        <li><strong>Write the manifest.</strong> Save as <code>.claude-plugin/plugin.json</code>:
+          <pre><code>{
+  "name": "android-toolkit",
+  "version": "0.1.0",
+  "description": "PR descriptions and lint-on-save for Android repos",
+  "author": { "name": "Your Name" },
+  "license": "MIT"
+}</code></pre>
+        </li>
+        <li><strong>Drop in your existing skill.</strong> Copy <code>.claude/commands/pr-description.md</code> from your project into <code>commands/pr-description.md</code>. No edits needed &mdash; the file is the same.</li>
+        <li><strong>Drop in your existing hook script.</strong> Copy <code>scripts/lint-changed.sh</code> into <code>hooks/lint-changed.sh</code>. Reference it from a <code>hooks/hooks.json</code> file:
+          <pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/lint-changed.sh" }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+          The <code>$CLAUDE_PLUGIN_ROOT</code> env var resolves to the plugin&rsquo;s install directory at runtime &mdash; portable across machines.
+        </li>
+        <li><strong>Test it locally.</strong> From your project (not the plugin):
+          <pre><code>/plugin marketplace add /absolute/path/to/parent-of-android-toolkit
+/plugin install android-toolkit</code></pre>
+          Now <code>/pr-description</code> appears in your slash-command palette and the lint hook fires on file edits.
+        </li>
+        <li><strong>Push to GitHub.</strong> <code>git init</code>, commit, push to <code>github.com/&lt;you&gt;/android-toolkit-plugin</code>. Anyone can now install it with <code>/plugin marketplace add &lt;you&gt;/android-toolkit-plugin</code>.</li>
+      </ol>
+    </div>
+
+    <h2>Versioning &amp; Updates</h2>
+
+    <p>The <code>version</code> field in <code>plugin.json</code> isn&rsquo;t cosmetic &mdash; it&rsquo;s how Claude Code decides whether to fetch new code on <code>/plugin update</code>. Treat it like any semver:</p>
+
+    <ul>
+      <li><strong>Patch</strong> (<code>0.3.0 &rarr; 0.3.1</code>) &mdash; bug fix in a hook script, typo in a skill prompt.</li>
+      <li><strong>Minor</strong> (<code>0.3.1 &rarr; 0.4.0</code>) &mdash; new skill, new hook, new MCP server. Backwards compatible.</li>
+      <li><strong>Major</strong> (<code>0.4.0 &rarr; 1.0.0</code>) &mdash; renamed a slash command, removed a skill, changed a hook&rsquo;s required env. Things that break callers.</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>If you change code but forget to bump <code>version</code>, your users won&rsquo;t see the change.</strong> Claude Code caches the resolved plugin contents and only re-fetches when the version changes. This bites people the first time they ship a fix and wonder why nobody&rsquo;s reporting it as fixed. Bump the patch number on every meaningful change.</p>
+    </div>
+
+    <h2>Team-Shared Marketplaces: The Two-Repo Pattern</h2>
+
+    <p>For a team marketplace, resist the urge to put your marketplace JSON and your plugin code in the same repo. The mature pattern is two repos:</p>
+
+    <ul>
+      <li><code>acme-plugins-marketplace</code> &mdash; just <code>.claude-plugin/marketplace.json</code> plus approval metadata. The platform team owns this.</li>
+      <li><code>acme-android-toolkit-plugin</code>, <code>acme-deploy-dashboard-plugin</code>, ... &mdash; one repo per plugin. Anyone can own these.</li>
+    </ul>
+
+    <p>This split is what lets the platform team revoke a problematic plugin (remove it from the marketplace JSON) without touching plugin source, and lets plugin authors ship updates without coordinating with the marketplace owner.</p>
+
+    <p>For developers on the team, the install dance is one-time:</p>
+
+    <pre><code># Once, anywhere
+/plugin marketplace add acme/acme-plugins-marketplace
+
+# Then, in any project
+/plugin install android-toolkit@acme-plugins-marketplace</code></pre>
+
+    <h2>The Colon: What Plugin Namespacing Actually Does</h2>
+
+    <p>You&rsquo;ll occasionally see Claude Code references using a colon in skill names &mdash; <code>android-toolkit:pr-description</code> or <code>plugin:skill</code>. This is <strong>plugin namespacing</strong>, and it&rsquo;s the only place a colon shows up in slash-command names today.</p>
+
+    <p>It&rsquo;s for disambiguation. If you have your own <code>/pr-description</code> in <code>.claude/commands/</code> and the <code>android-toolkit</code> plugin also exposes <code>/pr-description</code>, calling <code>/android-toolkit:pr-description</code> picks the plugin&rsquo;s version specifically. Most of the time you don&rsquo;t need to namespace &mdash; the unqualified <code>/pr-description</code> works as long as there&rsquo;s only one of them.</p>
+
+    <div class="tip-box">
+      <p><strong>The old subdirectory-namespacing rumor.</strong> If you&rsquo;ve read older Claude Code docs or blog posts, you may remember a claim that <code>.claude/commands/android/scaffold.md</code> becomes <code>/android:scaffold</code>. That was never true (or stopped being true very quickly). Subdirectories under <code>commands/</code> just organize files &mdash; they don&rsquo;t prefix the slash-command name. Plugin namespacing is the only colon-syntax that&rsquo;s real.</p>
+    </div>
+
+    <h2>Security: What Plugins Can (and Can&rsquo;t) Do</h2>
+
+    <p>Installing a plugin gives it everything Claude Code has: file access, shell execution via hooks, network calls via MCP servers, and the ability to read your project context. That&rsquo;s a non-trivial trust boundary. A few realities to keep in mind for 2026:</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>No binary signing.</strong> Plugins are not cryptographically signed. The marketplace JSON is the trust anchor &mdash; if the marketplace owner is reputable, you trust their curation; otherwise you don&rsquo;t.</li>
+      <li class="checked"><strong>Static analysis only catches obvious things.</strong> A plugin&rsquo;s hook scripts and MCP server source are visible &mdash; you can read them. But a plugin that uses an LLM to generate shell commands at runtime can do whatever the runtime LLM tells it to. Static review won&rsquo;t catch that.</li>
+      <li class="checked"><strong>Read the manifest before you install.</strong> Open the plugin&rsquo;s GitHub repo. Skim the hook scripts. Check what the MCP servers connect to. It takes 2 minutes for a small plugin and is the single best safeguard.</li>
+      <li class="checked"><strong>Prefer project scope for team plugins.</strong> When a plugin is committed to the repo, every change goes through PR review &mdash; the same gate your normal code passes. User-scope installs bypass that.</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>The plugin you trust today might be a different plugin tomorrow.</strong> A reputable repo gets compromised. A maintainer hands the project off. <code>/plugin update</code> fetches new code. Your trust decision needs to either pin to a version (<code>"version": "0.3.0"</code> exact in your marketplace entry) or trust the maintainer ongoingly. Both are valid; pick one consciously.</p>
+    </div>
+
+    <h2>Migration: From <code>.claude/commands/</code> to a Plugin</h2>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Sharing automations the old way</h4>
+        <ol>
+          <li>Zip up your <code>.claude/</code> directory and <code>scripts/</code> folder.</li>
+          <li>Write a SETUP.md explaining where each file goes.</li>
+          <li>Drop the zip in a Slack thread.</li>
+          <li>Walk three teammates through the unzip-and-copy dance.</li>
+          <li>Two months later: someone&rsquo;s on an outdated version, someone else has local edits, no one remembers who has what.</li>
+        </ol>
+        <p><strong>Friction wins. Adoption stalls.</strong></p>
+      </div>
+      <div class="after">
+        <h4>Sharing as a plugin</h4>
+        <ol>
+          <li>Move files into a plugin directory and write a 5-line <code>plugin.json</code>.</li>
+          <li>Push to a GitHub repo.</li>
+          <li>Add to your team&rsquo;s marketplace JSON.</li>
+          <li>Anyone runs <code>/plugin install android-toolkit@acme-plugins</code> &mdash; done.</li>
+          <li>Updates propagate via <code>/plugin update</code> on a single bump of <code>version</code>.</li>
+        </ol>
+        <p><strong>One install command. Versioned. Reversible.</strong></p>
+      </div>
+    </div>
+
+    <p>The migration itself is mechanical &mdash; you&rsquo;re moving files, not rewriting them. The skills, hooks, and MCP server config you&rsquo;ve already written work unchanged inside a plugin.</p>
+
+    <h2>Plugins Worth Installing Today</h2>
+
+    <p>A non-exhaustive sampler from the official and community marketplaces, all installable today:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">📋</div>
+      <div class="tool-info">
+        <div class="tool-name">claudemd-keeper</div>
+        <div class="tool-desc">Skills for auditing the quality of your CLAUDE.md files, capturing learnings from your current session, and keeping project memory current. Ships with the official marketplace. Worth installing first if you have many projects with stale CLAUDE.md files.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🌐</div>
+      <div class="tool-info">
+        <div class="tool-name">browser-control</div>
+        <div class="tool-desc">MCP-server plugin that lets Claude drive a real Chrome instance &mdash; navigate pages, capture network traces, read console errors with source-mapped stacks, automate Puppeteer flows. Indispensable when your skills need to verify a UI change actually worked.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🗜️</div>
+      <div class="tool-info">
+        <div class="tool-name">repomix</div>
+        <div class="tool-desc">A skill that flattens your repo into a single AI-friendly file with smart token-budget controls. Useful when you want a complete project snapshot for a one-off prompt without manually concatenating files.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🤖</div>
+      <div class="tool-info">
+        <div class="tool-name">awesome-claude-plugins (community list)</div>
+        <div class="tool-desc">Not a plugin itself &mdash; a curated index of plugins for code review, testing, security, infrastructure, and more. A good place to skim once a quarter so you know what&rsquo;s out there before you start building from scratch.</div>
+      </div>
+    </div>
+
+    <h2>Where Plugins Fit in the Automation Stack</h2>
+
+    <p>Stepping back: plugins don&rsquo;t replace anything you learned in Chapters 3&ndash;11. They&rsquo;re a packaging layer on top.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Skills (Ch 3)</div>
+      <span class="step-arrow">+</span>
+      <div class="step">Hooks (Ch 4)</div>
+      <span class="step-arrow">+</span>
+      <div class="step">MCP servers (Ch 10)</div>
+      <span class="step-arrow">+</span>
+      <div class="step">Subagents (Ch 14)</div>
+      <span class="step-arrow">=</span>
+      <div class="step">Plugin</div>
+    </div>
+
+    <p>The plugin is the bag they ride in. It&rsquo;s how you hand the whole bag to a teammate without explaining the contents one item at a time.</p>
+
+    <div class="exercise-box">
+      <h3>Exercise: Ship Your First Plugin</h3>
+      <p>By the end of this exercise you&rsquo;ll have a real plugin installed in your real project, sourced from your real GitHub account. Plan: 30 minutes.</p>
+      <ol>
+        <li><strong>Pick two artifacts</strong> from this course you&rsquo;ve already built: one slash command (e.g. <code>/pr-description</code>, <code>/standup</code>, or <code>/review</code>) and one hook (e.g. lint-on-save or guard-main-branch).</li>
+        <li><strong>Create a plugin directory</strong> in a new repo: <code>my-toolkit/.claude-plugin/plugin.json</code> with the minimal manifest from the recipe above. Use your real name and a real GitHub URL.</li>
+        <li><strong>Move the artifacts</strong> into <code>commands/</code> and <code>hooks/</code>. Add a <code>hooks/hooks.json</code> referencing your hook script with <code>${CLAUDE_PLUGIN_ROOT}</code>.</li>
+        <li><strong>Local test:</strong> from your project, run <code>/plugin marketplace add /absolute/path/to/my-toolkit</code> then <code>/plugin install my-toolkit</code>. Verify the slash command appears and the hook fires.</li>
+        <li><strong>Publish:</strong> <code>git init</code>, push to GitHub. Run <code>/plugin marketplace add &lt;you&gt;/my-toolkit</code> from a different machine (or have a teammate try it).</li>
+        <li><strong>Document the manifest:</strong> open the <code>plugin.json</code> in your editor. Add <code>description</code>, <code>keywords</code>, and <code>repository</code>. Bump <code>version</code> to <code>0.1.1</code>. Push. Run <code>/plugin update</code> &mdash; confirm the change is picked up.</li>
+        <li><strong>Bonus:</strong> create a private marketplace repo (<code>my-team-plugins</code>) with just a <code>marketplace.json</code> pointing at your toolkit. Add it to two teammates&rsquo; setups. Tell them about the rest of this course while they install.</li>
+      </ol>
+    </div>
+
+    <div class="highlight-box">
+      <h3>The Big Idea</h3>
+      <p>A plugin is a directory plus a manifest. A marketplace is a JSON catalog. Together they turn your personal automation collection into something a teammate can install with one command and update with another. Everything you built in Chapters 3&ndash;11 was waiting for this layer to exist; now that it does, the natural unit of sharing isn&rsquo;t a Slack thread &mdash; it&rsquo;s an installable plugin.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Plugins often bundle <strong>subagents</strong> &mdash; the specialized agents in <code>.claude/agents/&lt;name&gt;.md</code> with their own context window, tool allowlist, and model. We&rsquo;ve mentioned them in passing several times now; in the next chapter we&rsquo;ll build them properly. By the time you&rsquo;re done you&rsquo;ll have your own code-reviewer, test-runner, and security-auditor agents &mdash; each scoped to one job, each ready to be packaged into a plugin alongside the skills and hooks you already have.</p>
+
+    <p class="footnote-line"><small><em>Sources verified 2026-04-26:</em> <a href="https://code.claude.com/docs/en/plugins-reference">code.claude.com/docs/en/plugins-reference</a>, <a href="https://code.claude.com/docs/en/discover-plugins">code.claude.com/docs/en/discover-plugins</a>, <a href="https://github.com/anthropics/claude-plugins-official">github.com/anthropics/claude-plugins-official</a>.</small></p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="12-automation-playbook.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Your Automation Playbook</span>
+      </a>
+      <a href="14-subagents.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Subagents &mdash; Specialized Agents for Specialized Jobs</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

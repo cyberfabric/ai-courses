@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Context, Memory &amp; the KV Cache | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../10-context-and-kv-cache.html">Chapter</a>
+      <a href="09-sampling-strategies-map.html">&larr; Prev Map</a>
+      <a href="11-embeddings-geometry-map.html">Next Map &rarr;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Context, Memory &amp; the KV Cache</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ===== BIG IDEA ===== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">&#128161;</span>
+      <h3>The Big Idea</h3>
+      <p>The KV cache trades <strong>memory for compute</strong>: instead of recomputing K and V for every token at every step, we store them and look them up. This makes generation practical &mdash; but the cache must fit in GPU memory, which is why <strong>context windows have hard limits</strong>.</p>
+    </div>
+
+    <!-- ===== THE PROBLEM & SOLUTION ===== -->
+    <h2>&#128260; Without Cache vs. With Cache</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">&#128260; New token arrives</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128190; Compute K, V<br><small>for new token only</small></div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128229; Append to cache</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#128270; Q &times; all cached K</div>
+      <span class="map-flow-arrow">&rarr;</span>
+      <div class="map-flow-step">&#127919; Weighted V sum</div>
+    </div>
+
+    <p style="text-align: center; opacity: 0.7;">Only 1 new K/V per step instead of recomputing all N. Savings grow quadratically.</p>
+
+    <!-- ===== TWO PHASES ===== -->
+    <h2>&#9201; Two Phases of Generation</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>&#128337; Prefill</th><th>&#9889; Decode</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>What</strong></td><td>Process entire prompt</td><td>Generate tokens one by one</td></tr>
+        <tr><td><strong>Computes</strong></td><td>Q, K, V for all prompt tokens</td><td>Q, K, V for 1 new token</td></tr>
+        <tr><td><strong>Parallelism</strong></td><td>High (all at once)</td><td>Low (sequential)</td></tr>
+        <tr><td><strong>Bottleneck</strong></td><td>Compute (matrix math)</td><td>Memory bandwidth (reading cache)</td></tr>
+        <tr><td><strong>You see</strong></td><td>Pause before text starts</td><td>Text streaming in</td></tr>
+        <tr><td><strong>Metric</strong></td><td>TTFT (Time to First Token)</td><td>TPS (Tokens Per Second)</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ===== MEMORY MATH ===== -->
+    <h2>&#128200; The Memory Math</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">tokens</div>
+      <span class="map-flow-arrow">&times;</span>
+      <div class="map-flow-step">layers</div>
+      <span class="map-flow-arrow">&times;</span>
+      <div class="map-flow-step">2 (K+V)</div>
+      <span class="map-flow-arrow">&times;</span>
+      <div class="map-flow-step">heads</div>
+      <span class="map-flow-arrow">&times;</span>
+      <div class="map-flow-step">head_dim</div>
+      <span class="map-flow-arrow">&times;</span>
+      <div class="map-flow-step">bytes</div>
+    </div>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Context Length</th><th>KV Cache (GPT-3 scale)</th><th>Perspective</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>2,048 tokens</td><td><strong>9 GB</strong></td><td>Fits on most GPUs</td></tr>
+        <tr><td>8,192 tokens</td><td><strong>36 GB</strong></td><td>High-end GPU needed</td></tr>
+        <tr><td>32,768 tokens</td><td><strong>144 GB</strong></td><td>Multiple GPUs</td></tr>
+        <tr><td>128,000 tokens</td><td><strong>576 GB</strong></td><td>Server rack territory</td></tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; opacity: 0.7;">~4.5 MB per token at GPT-3 scale. Every token you add costs real GPU memory.</p>
+
+    <!-- ===== QUADRATIC SCALING ===== -->
+    <h2>&#128200; The Quadratic Attention Tax</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Sequence Length</th><th>Attention Scores</th><th>Relative Cost</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1,000</td><td>1M</td><td>1&times;</td></tr>
+        <tr><td>4,000</td><td>16M</td><td>16&times;</td></tr>
+        <tr><td>32,000</td><td>1B</td><td>1,024&times;</td></tr>
+        <tr><td>128,000</td><td>16B</td><td>16,384&times;</td></tr>
+      </tbody>
+    </table>
+
+    <p style="text-align: center; opacity: 0.7;">Double the context = 4&times; the attention compute. That&rsquo;s O(n&sup2;).</p>
+
+    <!-- ===== CONCEPT CARDS ===== -->
+    <h2>&#127890; Core Concepts</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">&#128190;</span>
+        <div class="map-card-title">KV Cache</div>
+        <div class="map-card-desc">Store K and V vectors for already-processed tokens. Only compute new ones. Trades memory for compute.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128247;</span>
+        <div class="map-card-title">Sliding Window</div>
+        <div class="map-card-desc">Only attend to the last W tokens. Memory = O(W) instead of O(n). Info propagates indirectly through layers.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#129309;</span>
+        <div class="map-card-title">GQA</div>
+        <div class="map-card-desc">Groups of Q heads share K/V. 8 KV groups for 64 Q heads = 75% cache savings with minimal quality loss.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128683;</span>
+        <div class="map-card-title">Lost in the Middle</div>
+        <div class="map-card-desc">Models attend more to the beginning and end of context. Info in the middle gets less attention. Put important stuff first or last.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#128260;</span>
+        <div class="map-card-title">RoPE</div>
+        <div class="map-card-desc">Rotary Position Embedding. Rotates Q/K vectors by position-dependent angles. Enables context extrapolation beyond training length.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">&#9889;</span>
+        <div class="map-card-title">Prompt Caching</div>
+        <div class="map-card-desc">Reuse KV cache from shared prompt prefixes across requests. Same system prompt = skip that prefill. Up to 15&times; faster TTFT.</div>
+      </div>
+    </div>
+
+    <!-- ===== ATTENTION SHARING COMPARISON ===== -->
+    <h2>&#129309; K/V Sharing Strategies</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Approach</th><th>K/V Sets</th><th>Cache Savings</th><th>Quality</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>MHA</strong> (Standard)</td><td>= Q heads (64)</td><td>None</td><td>Best</td></tr>
+        <tr><td><strong>GQA</strong> (Grouped)</td><td>= groups (8)</td><td>~75&ndash;90%</td><td>Minimal loss</td></tr>
+        <tr><td><strong>MQA</strong> (Multi-Query)</td><td>= 1</td><td>~98%</td><td>Some loss</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ===== MEETING NOTES ANALOGY ===== -->
+    <h2>&#128221; The Meeting Notes Analogy</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">&#128683; No cache<br><small>Re-listen to entire<br>recording every time</small></div>
+      <div class="map-rel-node">&#128247; Sliding window<br><small>Erase old notes<br>to make room</small></div>
+      <div class="map-rel-center">&#128221; KV Cache<br><small>= Meeting notes</small></div>
+      <div class="map-rel-node">&#128214; Context limit<br><small>Run out of<br>notebook pages</small></div>
+      <div class="map-rel-node">&#129309; GQA<br><small>Share notes<br>across team</small></div>
+    </div>
+
+    <!-- ===== CONTEXT EVOLUTION TIMELINE ===== -->
+    <h2>&#128197; Context Window Evolution</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>2020: GPT-3 &mdash; 2K tokens</h4>
+        <p>Standard attention. About 1,500 words of context.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>2022: GPT-3.5 &mdash; 4K tokens</h4>
+        <p>FlashAttention and better training.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>2023: GPT-4 &mdash; 32K tokens</h4>
+        <p>Efficient attention + GQA + scaling.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>2023&ndash;24: Claude 2&ndash;3.5 &mdash; 100K&ndash;200K</h4>
+        <p>Undisclosed optimizations push past 100K.</p>
+      </li>
+      <li class="map-timeline-item" data-step="5">
+        <h4>2024: Gemini 1.5 &mdash; 1M tokens</h4>
+        <p>MoE + efficient attention. 500&times; growth in 4 years.</p>
+      </li>
+    </ol>
+
+    <!-- ===== KEY TERMS ===== -->
+    <h2>&#128214; Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>KV Cache</dt>
+      <dd>Stored Key and Value vectors from previous tokens, reused to avoid redundant computation during generation.</dd>
+
+      <dt>Prefill</dt>
+      <dd>Phase 1: process the entire prompt in parallel, building the initial KV cache. Determines TTFT.</dd>
+
+      <dt>Decode</dt>
+      <dd>Phase 2: generate tokens one at a time, appending to cache each step. Determines TPS.</dd>
+
+      <dt>TTFT (Time to First Token)</dt>
+      <dd>Latency before the first output token. Grows with prompt length (more prefill work).</dd>
+
+      <dt>TPS (Tokens Per Second)</dt>
+      <dd>Generation speed once streaming starts. Roughly constant regardless of prompt length.</dd>
+
+      <dt>Sliding Window Attention</dt>
+      <dd>Attend only to the last W tokens. Caps memory at O(W). Info propagates indirectly through layers.</dd>
+
+      <dt>GQA (Grouped Query Attention)</dt>
+      <dd>Share K/V across groups of Q heads. Reduces KV cache size by 75&ndash;90% with minimal quality loss.</dd>
+
+      <dt>Prompt Caching</dt>
+      <dd>Server-side reuse of KV cache from shared prompt prefixes across API requests.</dd>
+    </dl>
+
+    <!-- ===== QUIZ ===== -->
+    <h2>&#10068; Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Why can K and V be cached but Q can&rsquo;t?</summary>
+        <p class="quiz-answer">In a causal (decoder-only) model, a token&rsquo;s K and V never change regardless of what comes after. But Q is only needed for the <em>current</em> token &mdash; each step has a new Q for the new token being generated.</p>
+      </details>
+      <details>
+        <summary>Why does a 10K-token prompt make you wait longer before text appears?</summary>
+        <p class="quiz-answer">The prefill phase must process all 10K tokens to build the KV cache before the first output token can be generated. More prompt tokens = longer TTFT. But once streaming starts, TPS is the same.</p>
+      </details>
+      <details>
+        <summary>How much KV cache does one token need at GPT-3 scale?</summary>
+        <p class="quiz-answer">~4.5 MB. That&rsquo;s 96 layers &times; 96 heads &times; 128 dim &times; 2 (K+V) &times; 2 bytes = 4,608 KB per token.</p>
+      </details>
+      <details>
+        <summary>Why doesn&rsquo;t &ldquo;128K context&rdquo; mean the model equally understands all 128K tokens?</summary>
+        <p class="quiz-answer">The &ldquo;lost in the middle&rdquo; problem: models attend more to the beginning and end of context. Information buried in the middle receives less attention and is more likely to be missed.</p>
+      </details>
+      <details>
+        <summary>How does GQA with 8 KV groups and 64 Q heads reduce cache by 75%?</summary>
+        <p class="quiz-answer">Standard MHA stores 64 K + 64 V = 128 vectors per layer. GQA stores 8 K + 8 V = 16 vectors. 16/128 = 12.5%, so savings = 87.5%. (The exact savings depend on the ratio.)</p>
+      </details>
+    </div>
+
+    <!-- ===== SUMMARY ===== -->
+    <div class="map-summary">
+      <h3>&#128204; Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item"><strong>KV cache = memory for compute tradeoff.</strong> Store K/V from previous tokens instead of recomputing them. Savings grow quadratically.</li>
+        <li class="map-summary-item"><strong>Two phases:</strong> Prefill (process prompt, build cache, determines TTFT) and Decode (stream tokens, append to cache, determines TPS).</li>
+        <li class="map-summary-item"><strong>~4.5 MB per token</strong> at GPT-3 scale. 128K tokens = 576 GB of KV cache alone.</li>
+        <li class="map-summary-item"><strong>Context limits are memory limits.</strong> The KV cache must fit in GPU memory. More context = more memory, period.</li>
+        <li class="map-summary-item"><strong>Attention is O(n&sup2;).</strong> Double the context = 4&times; the attention compute.</li>
+        <li class="map-summary-item"><strong>GQA</strong> shares K/V across Q head groups &mdash; 75&ndash;90% cache savings.</li>
+        <li class="map-summary-item"><strong>Lost in the middle:</strong> models attend unevenly. Put important info at the start or end.</li>
+        <li class="map-summary-item"><strong>Next:</strong> Chapter 11 explores embeddings &mdash; how tokens become vectors and how cosine similarity lets you search meaning geometrically.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="09-sampling-strategies-map.html" class="prev-chapter">
+      <span class="nav-direction">Previous Map</span>
+      <span class="nav-chapter">Sampling Strategies</span>
+    </a>
+    <a href="../10-context-and-kv-cache.html" class="next-chapter">
+      <span class="nav-direction">Back to Chapter</span>
+      <span class="nav-chapter">Context, Memory &amp; the KV Cache</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

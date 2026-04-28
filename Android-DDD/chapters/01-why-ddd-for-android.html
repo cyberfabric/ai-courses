@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 1: Why DDD for Android? — Domain-Driven Design For Android Engineers</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Domain-Driven Design For Android Engineers</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="02-ubiquitous-language.html">Next →</a>
+      <a href="maps/01-why-ddd-for-android-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 1</span>
+    <h1>Why DDD for Android?</h1>
+    <p class="subtitle">The pain you already feel — and the vocabulary to finally name it</p>
+  </header>
+
+  <main>
+
+    <p>You've shipped a few non-trivial Android apps. You know your way around Hilt graphs, Compose recompositions, and the sharp edges of Room migrations. You've also, at some point, sat in a stand-up where a PM said "user," your tech lead said "account," QA said "profile," and the database column was called <code>subscriber_id</code>. Everyone nodded. Everyone meant something slightly different. Three sprints later, a bug ticket landed in your queue: "User upgrade flow shows wrong tier for some accounts." You spent an afternoon figuring out which of the four <code>User</code> classes the ticket was actually about.</p>
+
+    <p>That's the pain Domain-Driven Design exists to address. Not the design-pattern theater of the early 2010s, not the architecture-astronaut diagrams from a conference talk you skipped — the actual, daily, blood-pressure-raising pain of nobody on the team agreeing on what a thing <em>is</em>.</p>
+
+    <p>This chapter is a sales pitch. By the end of it, you should believe two things: (1) DDD is genuinely useful on Android, and (2) you can adopt it incrementally without rewriting your app. If you don't believe both, close the tab — no hard feelings.</p>
+
+    <h2>The pain you already feel</h2>
+
+    <p>Open your current Android project. You'll find some combination of:</p>
+
+    <ul>
+      <li>A <code>data class User(val id: Long, val name: String, val email: String, val premium: Boolean, ...)</code> with twenty-three fields, no methods, and a <code>copy()</code> call in seventeen places.</li>
+      <li>A <code>UserManager</code>, a <code>UserHelper</code>, a <code>UserUtils</code>, and a <code>UserRepository</code>. None of them know about each other. Two of them call the network. One of them silently writes to SharedPreferences.</li>
+      <li>A <code>CheckoutViewModel</code> that is 1,200 lines long and contains the words "if (user.premium)" forty-one times.</li>
+      <li>A <code>:common</code> Gradle module that started as "shared utilities" and now contains your domain models, your network DTOs, your analytics events, and somehow a <code>Color.kt</code> with hex codes.</li>
+      <li>Three different ways of representing money: <code>Double</code>, <code>BigDecimal</code>, and <code>Long</code> (cents). They appear in different layers. Mappers between them have bugs. Nobody noticed until a customer in Japan was charged ¥199.99.</li>
+    </ul>
+
+    <p>None of this is your fault as an individual. It's the natural decay of a codebase where the model lives in someone's head — usually multiple someones — and the code is just "what survived the last few sprints."</p>
+
+    <div class="warning-box">
+      <strong>The anemic-model trap.</strong> A <code>data class</code> with only properties and no behavior is what Martin Fowler calls an <em>anemic domain model</em>. The data sits in dumb containers; all the rules ("a premium user can downgrade only after 30 days") leak into ViewModels, helpers, and use cases. The result: a single business rule lives in seven places, drifts in five of them, and breaks production when one of those copies forgets the leap-year edge case.
+    </div>
+
+    <h2>Why mobile teams feel this especially hard</h2>
+
+    <p>Backend services have a lot of natural pressure toward DDD: API contracts, schema migrations, database transactions, multiple consumers. Android apps don't have any of that — they just have features being shipped fast, often by feature-team owners who barely talk to each other.</p>
+
+    <p>Consider what happens on a typical mobile org:</p>
+
+    <ul>
+      <li>Each feature team owns its module. Each picks its own model shape for "the user."</li>
+      <li>Feature flags pile up. <code>if (FeatureFlag.NEW_CHECKOUT)</code> creates two parallel realities in the same ViewModel.</li>
+      <li>Networking and persistence change underneath you. You ported from <code>OkHttp</code> + Gson to Retrofit + Moshi to Ktor + kotlinx.serialization, and each migration left a sediment of DTO classes behind.</li>
+      <li>The <code>:common</code> or <code>:core</code> module becomes the dumping ground for "I need this in two places, where do I put it?" — and turns into <code>:everything</code>, which every other module depends on, which means changing it triggers a full rebuild and 90 minutes of CI.</li>
+    </ul>
+
+    <p>None of these problems are uniquely mobile, but they hit harder on mobile because nobody is sitting between you and the user with a service contract that says "no, that's not what an Order is." You ship to millions of devices and the only thing keeping the model coherent is whatever discipline the team imposes on itself.</p>
+
+    <h2>Eric Evans' core insight</h2>
+
+    <p>In 2003, Eric Evans wrote a thick book with a blue cover called <em>Domain-Driven Design: Tackling Complexity in the Heart of Software</em>. People still call it the "Blue Book." The single sentence that matters is roughly:</p>
+
+    <div class="highlight-box">
+      <h3>The Big Idea</h3>
+      <p>Software for a complex domain should mirror the <em>domain</em>, not the database, not the screen layout, and not whatever framework happens to be in fashion. The structure of your code should look like the structure of the business problem.</p>
+    </div>
+
+    <p>That's it. That's the thesis. Everything DDD says — bounded contexts, aggregates, value objects, domain events — is a tactic in service of that one idea.</p>
+
+    <p>Notice what's <em>not</em> the thesis: "use this folder layout," "always have a Repository pattern," "every entity needs an ID class." Those are tools. The point is the alignment between code and domain. If your code says "user" but your business says "subscriber" and your database says "account" and your analytics events say "profile," your code is lying to you. Lies in code compound.</p>
+
+    <h2>The Blue Book and the Red Book</h2>
+
+    <p>You'll see two books referenced constantly in DDD circles:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">📘</div>
+      <div class="tool-info">
+        <div class="tool-name">Blue Book — Eric Evans, 2003</div>
+        <div class="tool-desc">The original. Sets the vocabulary: bounded context, ubiquitous language, entity, value object, aggregate, repository. Long, philosophical, occasionally meandering. Skim it.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">📕</div>
+      <div class="tool-info">
+        <div class="tool-name">Red Book — Vaughn Vernon, 2013</div>
+        <div class="tool-desc"><em>Implementing Domain-Driven Design</em>. The practical sequel. Code examples in Java; concepts translate cleanly to Kotlin. Vernon's "Effective Aggregate Design" essays inside it are the single best resource on sizing aggregates.</div>
+      </div>
+    </div>
+
+    <p>You don't have to read either to use this course — we'll quote the parts that matter. But if a chapter sparks something, you now know where to dig deeper. The canon is small and worth knowing.</p>
+
+    <h2>Strategic DDD vs tactical DDD</h2>
+
+    <p>DDD splits cleanly in two halves, and confusing them is the source of most "DDD is too heavy" complaints.</p>
+
+    <h3>Strategic DDD: the map of the territory</h3>
+
+    <p>This is the high-altitude stuff: <strong>ubiquitous language</strong>, <strong>bounded contexts</strong>, <strong>context maps</strong>, <strong>subdomains</strong>. It's a planning and naming discipline. It costs almost nothing to start — a markdown file, a whiteboard, a one-hour meeting — and it pays off enormously because it stops the team from fighting about what words mean.</p>
+
+    <h3>Tactical DDD: the patterns you write in code</h3>
+
+    <p>This is the lower-altitude stuff: <strong>entities</strong>, <strong>value objects</strong>, <strong>aggregates</strong>, <strong>repositories</strong>, <strong>domain services</strong>, <strong>domain events</strong>. These are the in-code patterns. They're real engineering work and they're worth it when the domain is rich, but they're overkill for a settings screen.</p>
+
+    <p>This course covers both, but in the order that matches their value: strategic first (chapters 2–6), tactical second (chapters 7–9), and then how it all maps onto a real Android codebase (chapters 10–12).</p>
+
+    <div class="tip-box">
+      <strong>Adopt strategically before tactically.</strong> If you only ever do the strategic half — agree on a ubiquitous language, draw a context map, identify your subdomains — you'll get most of the value DDD has to offer. The tactical patterns are amplifiers; without strategic alignment, they're just more boilerplate.
+    </div>
+
+    <h2>When DDD is overkill</h2>
+
+    <p>Let's be honest about where DDD doesn't earn its keep. Skip it (or do only the lightest strategic pass) if your project is:</p>
+
+    <ul>
+      <li><strong>A simple CRUD app.</strong> If your screens are basically forms over a table, you don't have a "domain." A <code>data class</code> + a Room DAO is fine.</li>
+      <li><strong>A prototype.</strong> You're going to throw it away in two weeks. Don't model aggregates for the demo.</li>
+      <li><strong>Throwaway code.</strong> A migration script, a one-off scraper, an internal-tool spike. Get in, get out.</li>
+      <li><strong>A single-developer project.</strong> If you're the only person writing it and the only person reading it, you already have a ubiquitous language: yours. Save yourself the ceremony.</li>
+    </ul>
+
+    <h2>When DDD pays off</h2>
+
+    <p>DDD becomes load-bearing when the domain itself is non-trivial and stays in your life for a long time. Concretely:</p>
+
+    <ul>
+      <li><strong>Regulated domains.</strong> Fintech, health, identity, insurance. The domain has rules. The rules have audit consequences. Words have legal definitions.</li>
+      <li><strong>Long-lived apps.</strong> The codebase is going to outlast at least three engineers. You need shared vocabulary so the next person doesn't re-invent the wheel with a slightly different shape.</li>
+      <li><strong>Multi-team codebases.</strong> Two or more teams committing to the same repo. The boundaries between contexts become survival equipment.</li>
+      <li><strong>Cross-platform.</strong> Kotlin Multiplatform shared modules, or even just "iOS and Android need to agree on what a Cart is." DDD's vocabulary is platform-neutral, which makes it perfect glue.</li>
+    </ul>
+
+    <h2>A real Android scenario: the six Orders</h2>
+
+    <p>Let me tell you about a ride-sharing app a friend worked on. The core feature was, predictably, "request a ride." The team grew from four engineers to twenty-two over eighteen months. By the time my friend joined, the codebase contained these types:</p>
+
+    <div class="domain-box">
+      <div class="model-text">// In :feature-rider-home
+data class RideRequest(
+    val pickupLat: Double,
+    val pickupLng: Double,
+    val dropoffLat: Double,
+    val dropoffLng: Double,
+    val carType: String
+)
+
+// In :feature-rider-tracking
+data class Ride(
+    val id: String,
+    val driverId: String?,
+    val status: String,  // "PENDING", "MATCHED", "PICKED_UP", "COMPLETED"
+    val pickup: LatLng,
+    val dropoff: LatLng
+)
+
+// In :feature-rider-history
+data class TripRecord(
+    val tripId: String,
+    val date: Long,
+    val fareCents: Long,
+    val carType: String
+)
+
+// In :feature-driver-jobs
+data class Job(
+    val jobId: String,
+    val pickupAddress: String,
+    val passengerName: String,
+    val estimatedFareCents: Long
+)
+
+// In :data-network (the API DTO)
+data class OrderDto(
+    @SerializedName("order_id") val orderId: String,
+    @SerializedName("rider_id") val riderId: String,
+    @SerializedName("driver_id") val driverId: String?,
+    @SerializedName("state") val state: String,
+    @SerializedName("amount") val amount: Double
+)
+
+// In :data-database (the Room entity)
+@Entity(tableName = "orders")
+data class OrderEntity(
+    @PrimaryKey val id: String,
+    val rider: String,
+    val driver: String?,
+    val statusCode: Int,
+    val priceCents: Long
+)</div>
+    </div>
+
+    <p>Six classes. One concept. Each owned by a different team. None of them named the same thing. Worse: when a state machine bug shipped (drivers getting "completed" notifications for trips they hadn't finished yet), the fix required tracing the lifecycle across all six. The PR was 800 lines and touched 14 modules.</p>
+
+    <p>What happened? Nobody had named the domain. There was no canonical word for "the thing a rider books, a driver fulfills, and a back-office team reports on." So each team picked its own. Each was locally reasonable. Together they were chaos.</p>
+
+    <p>The fix wasn't a refactor. The fix was a one-page <code>UBIQUITOUS_LANGUAGE.md</code> agreed by the three teams that touched the lifecycle. The word they picked was <code>Trip</code>. Once the language existed, the refactor was mechanical — and the team caught two more state-machine bugs while doing it. We'll come back to this scenario in chapter 2.</p>
+
+    <h2>Same word, different meaning</h2>
+
+    <p>Here is the moment most engineers first "get" DDD. The concept is so simple it sounds insulting once you see it, and so under-applied that it explains a startling number of production bugs.</p>
+
+    <div class="context-box">
+      In the <span class="context-name">Rider</span> context, a <code>Trip</code> is "a request I made on my phone, possibly still in the future." It has a pickup, a dropoff, and a price estimate. It does not yet have a driver.
+      <br><br>
+      In the <span class="context-name">Driver</span> context, a <code>Trip</code> is "a job I'm currently being paid for." It always has a passenger, a route, and a meter. A trip without an active driver is a contradiction.
+      <br><br>
+      In the <span class="context-name">Billing</span> context, a <code>Trip</code> is "a row in the ledger." It's immutable, it has a final fare, taxes, tips, refunds, and a tax-jurisdiction code. The fact that a phone was involved is irrelevant.
+      <br><br>
+      All three are legitimate. None of them belong in the same <code>data class</code>. Any attempt to "unify" them produces a god-object with optional fields everywhere, and a state machine that crashes on Sundays.
+    </div>
+
+    <p>This is the central insight of <strong>bounded contexts</strong>, which gets a full chapter (chapter 3). For now, just notice: the urge to make one canonical <code>Trip</code> shared by every team is exactly the urge that built your <code>:common</code> module's <code>:everything</code> problem. DDD's answer is to embrace the multiplicity and put a translation layer at each boundary.</p>
+
+    <h2>Anemic vs rich models, side by side</h2>
+
+    <p>Here's the same concept written two ways. Both compile. Only one survives a domain-expert reading it.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Anemic — rules live elsewhere</div>
+        <div class="prompt-text">data class Trip(
+    val id: String,
+    val rider: String,
+    val driver: String?,
+    val status: String,
+    val fareCents: Long,
+    val createdAt: Long
+)
+
+// In TripViewModel, somewhere:
+fun cancel(trip: Trip) {
+  if (trip.status == "PENDING" ||
+      trip.status == "MATCHED") {
+    // ...ad-hoc cancellation logic
+  } else {
+    error("cannot cancel")
+  }
+}</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Rich — rules live with the data</div>
+        <div class="prompt-text">class Trip private constructor(
+    val id: TripId,
+    val rider: RiderId,
+    val driver: DriverId?,
+    val status: TripStatus,
+    val fare: Money,
+    val createdAt: Instant
+) {
+  fun cancel(now: Instant): Trip {
+    require(status.isCancellable()) {
+      "Trip $id is $status; cannot cancel"
+    }
+    return copy(status = TripStatus.Cancelled(now))
+  }
+}</div>
+      </div>
+    </div>
+
+    <p>The right-hand version isn't more lines because of "ceremony." It's more lines because the rule "you can only cancel a pending or matched trip" now lives <em>once</em>, with the data it constrains. Six months later when someone adds a fourth status (<code>InProgress</code>), they touch one file and one method. With the anemic version, they touch every place that ever checked status — and they will miss one.</p>
+
+    <h2>The 80/20 of DDD</h2>
+
+    <p>If you do nothing else from this course, do these two things:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">1.</span>
+        <div class="stat-label">Write a ubiquitous language doc. One page. Commit it. Reference it in PRs.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">2.</span>
+        <div class="stat-label">Draw a context map. Identify which Gradle modules belong to which bounded context. Stop sharing types across them.</div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">80%</span>
+        <div class="stat-label">Of the value, for 20% of the ceremony. Everything else is amplification.</div>
+      </div>
+    </div>
+
+    <p>The other 80% of DDD vocabulary — aggregates, value objects, repositories, services — is genuinely valuable, and we'll cover it. But it's the multiplier on top of those two foundational practices, not a substitute.</p>
+
+    <h2>What "ubiquitous" actually means</h2>
+
+    <div class="language-box">
+      <span class="term">Ubiquitous Language</span> — the same word with the same meaning everywhere it appears in the project. In conversation, in tickets, in PR descriptions, in class names, in column names, in analytics events.
+      <div class="do-not-say">Do not say "domain language" or "business glossary" — those imply something curated for non-engineers. Ubiquitous language is for everyone, including (especially) the code.</div>
+    </div>
+
+    <p>"Ubiquitous" sounds grand. In practice it just means: if a designer says "Trip" in Figma, the Compose component is called <code>TripCard</code>, the ViewModel state class is <code>TripState</code>, the Room entity is <code>TripEntity</code>, the analytics event is <code>trip_completed</code>, and nobody — not even the new contractor — would dream of calling it a "Ride," a "Job," or a "RideRequest." Same word, every layer. Boring. Powerful.</p>
+
+    <h2>How DDD lands on Android specifically</h2>
+
+    <div class="android-box">
+      <div class="android-code">// A typical multi-module DDD-ready Android layout
+
+settings.gradle.kts:
+  include(":app")
+  include(":domain:trip")          // pure Kotlin, no Android
+  include(":domain:billing")       // pure Kotlin, no Android
+  include(":data:trip")            // Room/Retrofit impls of :domain:trip
+  include(":data:billing")
+  include(":feature:rider-home")   // Compose + ViewModels
+  include(":feature:rider-history")
+  include(":feature:driver-jobs")
+  include(":core:ui")              // shared design-system, NO domain
+
+// :domain:trip never imports androidx.*
+// :feature:* never imports anything from another :feature:*
+// All cross-context talk goes through :domain interfaces or events</div>
+    </div>
+
+    <p>You don't have to start here. But this is roughly where DDD wants to take you on Android: a small number of pure-Kotlin domain modules, data modules behind them, feature modules in front of them, and explicit interfaces between contexts. We'll spend chapters 10–12 on how to actually get there from wherever your codebase is today.</p>
+
+    <h2>What you'll be able to do by chapter 12</h2>
+
+    <p>This is the roadmap. By the end of the course, you should be able to:</p>
+
+    <ul class="checklist">
+      <li>Lead a 90-minute meeting that produces a ubiquitous language for a feature.</li>
+      <li>Draw a context map of your current app on a single page, from memory.</li>
+      <li>Classify each Gradle module as part of a core, supporting, or generic subdomain — and justify why.</li>
+      <li>Run an event-storming session and turn the orange stickies into Kotlin sealed classes.</li>
+      <li>Refactor an anemic <code>data class</code> into a proper entity + value-object cluster, without breaking your tests.</li>
+      <li>Identify the aggregate root for a feature and enforce that outsiders only touch the root.</li>
+      <li>Distinguish a real repository from a renamed DAO — and rewrite one of yours into the former.</li>
+      <li>Map every DDD pattern onto your existing Android architecture (Clean, MVI, MVVM, KMP).</li>
+      <li>Build a custom <code>/ubiquitous-language</code> Claude Code slash command that emits a starter <code>UBIQUITOUS_LANGUAGE.md</code> for any module.</li>
+      <li>Drive an AI-assisted DDD refactor of a legacy module, one aggregate at a time, with safety nets.</li>
+    </ul>
+
+    <p>That's it. Twelve chapters, one capability per arrow. No magic, no architecture astronauts, no "draw the rest of the owl." Each chapter ends with something you can apply to your current codebase before lunch.</p>
+
+    <h2>Why DDD plus AI is more than the sum of the parts</h2>
+
+    <p>The last two chapters of this course are about AI specifically — the <code>/ubiquitous-language</code> skill and an end-to-end AI-driven refactor. Here's the thesis early so you know where we're heading:</p>
+
+    <p>DDD has always had an adoption problem. It's a discipline that pays off most when applied consistently, but applying it consistently is exactly what gets squeezed out under deadline pressure. The boring work — keeping the language doc up to date, renaming the eighty-third use of <code>String</code> to <code>EmailAddress</code>, propagating a context-map change across the build graph — is exactly the work AI tools like Claude Code are good at. DDD gives you the vocabulary to direct the work; AI gives you the throughput to actually do it.</p>
+
+    <div class="tip-box">
+      <strong>Don't wait for AI to do the strategic part.</strong> The decisions — what's a bounded context, what's the language, what's core — are still yours. AI cannot tell you what your business is. But once you've decided, AI can carry the weight of propagating those decisions through fifty thousand lines of code without complaining or getting bored.
+    </div>
+
+    <h2>A small mental shift</h2>
+
+    <p>Before we wrap, one mindset note. You've probably been trained — by tutorials, by frameworks, by the Android Architecture Components page itself — to think bottom-up: "I have a screen. The screen needs a ViewModel. The ViewModel needs a repository. The repository needs a DAO and an API." That is a perfectly good frontend instinct, and it's also exactly the instinct DDD is going to ask you to invert.</p>
+
+    <p>DDD says: "I have a domain. The domain has rules. The rules belong to entities. Entities cluster into aggregates. Aggregates need a way to be loaded — that's a repository. Eventually a screen shows some of this." The screen is downstream of the model, not upstream. Once you flip the direction, a lot of the painful parts of Android development get easier — because the model stops being a passive data envelope and starts holding its own rules.</p>
+
+    <h2>Exercise: name three ambiguous terms in your codebase</h2>
+
+    <div class="exercise-box">
+      <p><strong>Twenty minutes. Today. Before your next stand-up.</strong></p>
+      <p>Open your current Android project. Pick three terms that you suspect mean different things to different people. Good candidates: <code>User</code>, <code>Account</code>, <code>Order</code>, <code>Cart</code>, <code>Item</code>, <code>Profile</code>, <code>Session</code>, <code>Status</code>, <code>Type</code>.</p>
+      <p>For each term, write down:</p>
+      <ol>
+        <li>Every place the term appears as a class name (use Android Studio's "Find in Path" or <code>rg ClassName</code>).</li>
+        <li>What that class actually represents in plain English (one sentence).</li>
+        <li>Whether the meanings agree.</li>
+      </ol>
+      <p>If you find a term where the meanings <em>disagree</em>, congratulations — you've found your first bounded-context boundary, and you didn't even need a workshop. Save the list. We'll use it in chapter 2.</p>
+    </div>
+
+    <h2>What's next</h2>
+
+    <p>In chapter 2 we'll go deep on the single highest-leverage DDD practice: <strong>ubiquitous language</strong>. You'll learn how to build a one-page <code>UBIQUITOUS_LANGUAGE.md</code> for your repo, what goes in it, what doesn't, the rituals that keep it alive, and how Claude Code can read it on every task. By the end of that chapter you'll have something committable in your repo today.</p>
+
+    <p>Bring the list of ambiguous terms from the exercise. We're going to disambiguate them.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="index.html">
+        <span class="nav-direction">← Back</span>
+        <span class="nav-chapter">Contents</span>
+      </a>
+      <a href="02-ubiquitous-language.html" class="next">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-chapter">Ubiquitous Language</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

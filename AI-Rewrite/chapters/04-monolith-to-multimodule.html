@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: From Monolith to Multi-Module | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="03-ai-driven-rewrite-setup.html">&larr; Prev</a>
+      <a href="05-domain-layer.html">Next &rarr;</a>
+      <a href="maps/04-monolith-to-multimodule-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>From Monolith to Multi-Module</h1>
+    <p class="subtitle">AI creates the 10-module Gradle structure with dependency analysis</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Breaking Ground</h2>
+
+      <p>Chapters 1-3 were planning. This chapter is where you pick up the sledgehammer. You're about to go from a single <code>app</code> module to 10 Gradle modules &mdash; the empty rooms that will receive the migrated code over the next seven chapters.</p>
+
+      <p>This is the first time AI generates real project files for your rewrite. It's also the first real test of your PKG-* rules from <a href="02-teaching-ai-standards.html">Chapter 2</a>. If the module structure is wrong, everything built on top of it will be wrong too.</p>
+
+      <div class="highlight-box">
+        <strong>The Goal:</strong> By the end of this chapter, you'll have 10 Gradle modules with correct dependency wiring, convention plugins, a version catalog, and a project that compiles with zero code in the new modules. The skeleton is up. The rooms are framed. Nothing moves in yet.
+      </div>
+    </section>
+
+    <section>
+      <h2>Step 1: The Dependency Graph Prompt</h2>
+
+      <p>Before creating modules, you need to understand what depends on what in the monolith. AI can map this for you &mdash; but only if you give it the right prompt.</p>
+
+      <div class="prompt-example bad">
+        <div class="prompt-label">Weak Prompt</div>
+        <div class="prompt-text">Analyze the dependencies in my Android project.</div>
+        <div class="prompt-explanation">Too vague. AI will list Gradle dependencies, not internal code dependencies. You need the coupling map between your own classes.</div>
+      </div>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Dependency Graph Prompt</div>
+        <div class="prompt-text">Analyze the internal dependencies in app/src/main/java/. For each file:
+
+1. List every other file it imports or references
+2. Classify the relationship: UI→Logic, Logic→Data, Data→Framework, or Utility
+3. Identify circular dependencies (A uses B, B uses A)
+4. Flag "God files" that have 10+ internal dependencies
+
+Output as a dependency matrix table. Then draw a simplified graph showing
+the major clusters and their relationships.
+
+Target modules for context:
+:core:domain, :core:common, :data:local, :data:repository,
+:feature:recipe, :feature:books, :feature:grocery</div>
+        <div class="prompt-explanation">Asks for internal coupling, not library dependencies. The classification reveals which layer each dependency crosses. Circular deps must be broken before modularization.</div>
+      </div>
+
+      <p>The dependency graph reveals the surgery plan. Files that reference each other heavily must end up in the same module or communicate through an interface in <code>:core:domain</code>.</p>
+
+      <div class="warning-box">
+        <strong>Circular dependencies are the #1 blocker.</strong> If RecipeActivity imports RecipeDbHelper and RecipeDbHelper imports something from RecipeActivity, you can't just split them into different modules. The circle must be broken first &mdash; usually by extracting an interface into :core:domain.
+      </div>
+    </section>
+
+    <section>
+      <h2>Step 2: Generating the Module Structure</h2>
+
+      <p>Now AI creates the actual Gradle files. This is a two-part operation: <code>settings.gradle.kts</code> declares the modules, and each module gets its own <code>build.gradle.kts</code>.</p>
+
+      <div class="migration-step">
+        <h3>Single Module → 10 Modules</h3>
+        <div class="before-code">
+          <h4>settings.gradle.kts (Before)</h4>
+<pre><code>rootProject.name = "RecipesApp"
+include(":app")</code></pre>
+        </div>
+        <div class="after-code">
+          <h4>settings.gradle.kts (After)</h4>
+<pre><code>rootProject.name = "RecipesApp"
+
+include(":app")
+
+// Core modules
+include(":core:common")
+include(":core:design-system")
+include(":core:domain")
+include(":core:testing")
+
+// Data modules
+include(":data:local")
+include(":data:repository")
+
+// Feature modules
+include(":feature:recipe")
+include(":feature:books")
+include(":feature:grocery")</code></pre>
+        </div>
+      </div>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Module Generation Prompt</div>
+        <div class="prompt-text">Generate the Gradle module structure for the recipes app rewrite.
+
+Create these 10 modules with their build.gradle.kts files:
+:app, :core:common, :core:design-system, :core:domain, :core:testing,
+:data:local, :data:repository, :feature:recipe, :feature:books, :feature:grocery
+
+Requirements:
+- Use convention plugins (not copy-pasted plugin blocks)
+- Version catalog (libs.versions.toml) for all dependency versions
+- KSP only, no KAPT
+- Each module's dependencies follow PKG-* rules:
+  • :core:domain depends on NOTHING (pure Kotlin)
+  • :core:common depends on :core:domain
+  • :data:local depends on :core:domain (Room, no feature deps)
+  • :data:repository depends on :core:domain and :data:local
+  • :feature:* depends on :core:domain and :core:design-system
+  • :app depends on everything (wires DI + navigation)
+  • :core:testing depends on :core:domain (test utilities)
+
+Generate: settings.gradle.kts, each module's build.gradle.kts,
+and the convention plugin for shared Android configuration.
+
+Each module should compile but contain no source files yet.</div>
+        <div class="prompt-explanation">Explicit dependency graph. Convention plugins instead of duplicated config. Version catalog. KSP-only. The output is a compilable empty project.</div>
+      </div>
+
+      <div class="rule-callout">
+        <span class="rule-id">PKG-004</span>
+        <span class="rule-text">Every module's build.gradle.kts MUST declare only the dependencies listed in the approved dependency graph. AI MUST NOT add transitive shortcuts (e.g., :feature:recipe depending directly on :data:local instead of going through :core:domain interfaces).</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Step 3: Convention Plugins</h2>
+
+      <p>Without convention plugins, every <code>build.gradle.kts</code> is 40+ lines of duplicated configuration. AI loves to copy-paste. Convention plugins prevent that.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Convention Plugin Prompt</div>
+        <div class="prompt-text">Create convention plugins in build-logic/ for the recipes app:
+
+1. recipes.android.library — shared Android library config
+   (compileSdk, minSdk, Kotlin options, test runner)
+2. recipes.android.feature — extends library + adds Compose + Hilt
+   (applies org.jetbrains.kotlin.plugin.compose; Compose Compiler is a separate Kotlin plugin since Kotlin 2.0)
+3. recipes.android.application — app module config
+4. recipes.kotlin.library — pure Kotlin module (for :core:domain)
+
+Use the version catalog (libs.versions.toml) for all versions.
+No hardcoded version strings anywhere.</div>
+        <div class="prompt-explanation">Four plugins cover all module types. Pure Kotlin plugin for :core:domain ensures no Android dependency leaks. Version catalog as single source of truth.</div>
+      </div>
+
+      <p>Here's what a feature module's build file looks like with convention plugins:</p>
+
+<pre><code>// feature/recipe/build.gradle.kts
+plugins {
+    id("recipes.android.feature")
+}
+
+dependencies {
+    implementation(project(":core:domain"))
+    implementation(project(":core:design-system"))
+    testImplementation(project(":core:testing"))
+}</code></pre>
+
+      <p>Three lines of dependencies. No duplicated Android config. No version numbers. That's the power of convention plugins &mdash; and it's exactly the kind of structure AI can generate reliably when given the right constraints.</p>
+
+      <div class="tip-box">
+        If AI generates a <code>build.gradle.kts</code> with inline <code>compileSdk = 34</code> or direct plugin application like <code>id("com.android.library")</code>, that's a GRADLE-* rule violation. Convention plugins are non-negotiable for a multi-module project.
+      </div>
+    </section>
+
+    <section>
+      <h2>Step 4: The Version Catalog</h2>
+
+      <p>Every dependency version lives in one place: <code>gradle/libs.versions.toml</code>. AI generates this alongside the module structure.</p>
+
+<pre><code># gradle/libs.versions.toml
+[versions]
+kotlin = "2.3.21"
+compose-bom = "2026.04.00"
+hilt = "2.59.2"
+room = "2.8.4"
+coroutines = "1.10.2"
+ksp = "2.3.7"
+
+[libraries]
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+
+[plugins]
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }</code></pre>
+
+      <div class="rule-callout">
+        <span class="rule-id">GRADLE-001</span>
+        <span class="rule-text">All dependency versions MUST be defined in gradle/libs.versions.toml. No hardcoded version strings in build.gradle.kts files. No version ranges. Convention plugins reference the catalog, modules reference the catalog.</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Step 5: The Dependency Graph as AI Context</h2>
+
+      <p>The dependency graph isn't just a planning tool &mdash; it's a constraint document that AI should see on every session. Add it to your CLAUDE.md.</p>
+
+      <div class="module-map">
+        <h3>Dependency Graph (for CLAUDE.md)</h3>
+<pre>
+## Module Dependency Graph
+:app → [:feature:recipe, :feature:books, :feature:grocery,
+        :data:repository, :data:local, :core:domain,
+        :core:common, :core:design-system]
+
+:feature:recipe → [:core:domain, :core:design-system]
+:feature:books → [:core:domain, :core:design-system]
+:feature:grocery → [:core:domain, :core:design-system]
+
+:data:repository → [:core:domain, :data:local]
+:data:local → [:core:domain]
+
+:core:common → [:core:domain]
+:core:design-system → [:core:domain]
+:core:domain → [] (NOTHING — pure Kotlin)
+:core:testing → [:core:domain]
+
+FORBIDDEN:
+- :feature:* → :feature:* (no cross-feature deps)
+- :feature:* → :data:* (features use domain interfaces)
+- :data:* → :feature:* (data never knows about UI)
+- :core:domain → anything (must stay pure)
+</pre>
+      </div>
+
+      <p>When this is in CLAUDE.md, AI reads it at the start of every session. Every time it generates a <code>build.gradle.kts</code> or an import statement, it checks against this graph. The FORBIDDEN section is the critical part &mdash; it tells AI what connections must <em>never</em> exist.</p>
+
+      <div class="tip-box">
+        The dependency inversion principle is your friend here. Features don't depend on data implementations. They depend on repository <em>interfaces</em> in :core:domain. The implementations in :data:repository are wired by Hilt in :app. If AI tries to add <code>implementation(project(":data:repository"))</code> to a feature module, that's a PKG violation.
+      </div>
+    </section>
+
+    <section>
+      <h2>Step 6: Validating the Module Graph</h2>
+
+      <p>AI generated the structure. Now verify it's correct before writing any migration code.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Validation Prompt</div>
+        <div class="prompt-text">Review the multi-module Gradle structure I just generated. Check for:
+
+1. Circular dependencies — does any module chain lead back to itself?
+2. Forbidden dependencies — does any dependency violate the graph in CLAUDE.md?
+3. Missing dependencies — can each module compile with its declared deps?
+4. Visibility leaks — are internal classes accidentally exposed?
+5. Convention plugin consistency — does every module use the right plugin?
+
+For each issue found, state the violation, the rule it breaks, and the fix.</div>
+        <div class="prompt-explanation">Five-point verification. AI reviews its own work against the rules. Catches issues before they become entrenched in the project structure.</div>
+      </div>
+
+      <div class="ai-review-box">
+        <h3>AI Validation Output (Example)</h3>
+        <div class="review-pass">No circular dependencies detected ✓</div>
+        <div class="review-pass">All dependencies match approved graph ✓</div>
+        <div class="review-fail">:core:design-system missing dependency on :core:domain ✗ — Fix: add implementation(project(":core:domain"))</div>
+        <div class="review-pass">Convention plugins correctly assigned ✓</div>
+        <div class="review-fail">:data:local uses id("com.android.library") instead of id("recipes.android.library") ✗ — Fix: switch to convention plugin</div>
+      </div>
+
+      <p>Two issues caught before any code was written. That's the value of validation &mdash; structural problems are cheap to fix now and catastrophic to fix later.</p>
+    </section>
+
+    <section>
+      <h2>Step 7: The First Compile</h2>
+
+      <p>The moment of truth. Run <code>./gradlew assembleDebug</code> on the empty multi-module project. It should compile with zero source files in the new modules.</p>
+
+      <div class="workflow-steps">
+        <div class="step">Generate</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Validate</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Compile</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Fix Errors</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Commit</div>
+      </div>
+
+      <p>Common compile errors and their AI-assisted fixes:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Error</th>
+            <th>Cause</th>
+            <th>Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>Module not found</code></td>
+            <td>Module declared in settings.gradle.kts but directory doesn't exist</td>
+            <td>Create the directory with the correct path</td>
+          </tr>
+          <tr>
+            <td><code>Plugin not found</code></td>
+            <td>Convention plugin not registered in build-logic</td>
+            <td>Add plugin to build-logic/build.gradle.kts gradlePlugin block</td>
+          </tr>
+          <tr>
+            <td><code>Could not resolve project :core:domain</code></td>
+            <td>Colon-separated path doesn't match directory structure</td>
+            <td>Verify core/domain/ directory exists under project root</td>
+          </tr>
+          <tr>
+            <td><code>Namespace not specified</code></td>
+            <td>Android module missing namespace in build.gradle.kts</td>
+            <td>Add <code>namespace = "com.recipes.core.domain"</code> to android block</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Compile Error Fix Prompt</div>
+        <div class="prompt-text">I'm getting this Gradle error after generating the multi-module structure:
+
+[paste the error]
+
+The module dependency graph is:
+[paste from CLAUDE.md]
+
+Fix the error while maintaining compliance with PKG-* and GRADLE-* rules.
+Do NOT add dependencies that aren't in the approved graph.</div>
+        <div class="prompt-explanation">Gives AI the error AND the constraints. Without the graph, AI might "fix" the error by adding a forbidden dependency.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Common AI Mistakes in Module Generation</h2>
+
+      <p>Even with good rules, AI makes predictable mistakes when generating multi-module structures. Watch for these:</p>
+
+      <div class="comparison">
+        <div>
+          <h3>AI Gets Right</h3>
+          <ul>
+            <li>Basic module declaration in settings.gradle.kts</li>
+            <li>Simple dependency chains (feature → domain)</li>
+            <li>Version catalog structure</li>
+            <li>Standard plugin application</li>
+            <li>Package naming from conventions</li>
+          </ul>
+        </div>
+        <div>
+          <h3>AI Gets Wrong</h3>
+          <ul>
+            <li>Transitive dependency shortcuts (:feature → :data:local)</li>
+            <li>Circular deps through shared utilities</li>
+            <li>Wrong visibility (public instead of internal)</li>
+            <li>Hardcoded versions despite version catalog</li>
+            <li>KAPT instead of KSP for annotation processing</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="warning-box">
+        <strong>The sneakiest mistake:</strong> AI adds <code>implementation(project(":data:repository"))</code> to a feature module because "the feature needs to access recipes." It's technically correct but architecturally wrong. The feature should depend on the <em>interface</em> in :core:domain, not the implementation in :data:repository. Hilt wires the implementation at runtime via :app.
+      </div>
+
+      <div class="rule-callout">
+        <span class="rule-id">PKG-005</span>
+        <span class="rule-text">Feature modules MUST depend on :core:domain for repository interfaces, NEVER on :data:* modules directly. The concrete implementation is provided by Hilt at runtime through :app's DI wiring.</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>The Directory Skeleton</h2>
+
+      <p>After generation and compilation, your project should look like this:</p>
+
+      <div class="module-map">
+        <h3>Project Directory After Chapter 4</h3>
+<pre>
+RecipesApp/
+├── app/                          ← Existing monolith (untouched)
+├── build-logic/
+│   └── convention/               ← Convention plugins
+├── core/
+│   ├── common/src/main/kotlin/   ← Empty (populated in Ch 5+)
+│   ├── design-system/src/main/   ← Empty
+│   ├── domain/src/main/kotlin/   ← Empty (populated in Ch 5)
+│   └── testing/src/test/kotlin/  ← Empty
+├── data/
+│   ├── local/src/main/kotlin/    ← Empty (populated in Ch 6)
+│   └── repository/src/main/kotlin/ ← Empty (populated in Ch 6)
+├── feature/
+│   ├── recipe/src/main/kotlin/   ← Empty (populated in Ch 7)
+│   ├── books/src/main/kotlin/    ← Empty
+│   └── grocery/src/main/kotlin/  ← Empty
+├── gradle/libs.versions.toml     ← Version catalog
+└── settings.gradle.kts           ← All 10 modules declared
+</pre>
+      </div>
+
+      <p>Every directory exists. Every <code>build.gradle.kts</code> compiles. Zero source files in new modules. The monolith is completely untouched &mdash; it still runs exactly as before. This is the non-destructive foundation that the next eight chapters build upon.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">10</div>
+          <div class="stat-label">Gradle modules created</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">4</div>
+          <div class="stat-label">Convention plugins</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Source files in new modules</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Try It: Generate Your Multi-Module Structure</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: From 1 Module to N Modules</h3>
+
+        <p>Using your project and the module plan from Chapter 1:</p>
+
+        <ol>
+          <li><strong>Run the dependency graph prompt:</strong> Map internal dependencies in your monolith. Identify circular dependencies that must be broken.</li>
+          <li><strong>Generate the module structure:</strong> Use the module generation prompt with your specific module names and dependency graph.</li>
+          <li><strong>Create convention plugins:</strong> Generate build-logic/ with plugins matching your module types.</li>
+          <li><strong>Generate the version catalog:</strong> Move all dependency versions to libs.versions.toml.</li>
+          <li><strong>Validate:</strong> Run the 5-point validation prompt. Fix any issues found.</li>
+          <li><strong>Compile:</strong> Run <code>./gradlew assembleDebug</code>. Fix errors using the compile error fix prompt.</li>
+          <li><strong>Add the dependency graph to CLAUDE.md:</strong> Include the FORBIDDEN section.</li>
+          <li><strong>Commit:</strong> This is your <code>rewrite/setup</code> branch.</li>
+        </ol>
+
+        <p><strong>Deliverable:</strong> A compiling multi-module project with empty modules, convention plugins, version catalog, and the dependency graph in CLAUDE.md.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The rooms are framed. The plumbing paths are marked. The electrical plan is drawn. But every room is empty. Time to start moving furniture.</p>
+
+      <p>In <a href="05-domain-layer.html">Chapter 5: Extracting the Domain Layer</a>, you'll use AI to extract pure Kotlin domain models, repository interfaces, and use cases from the monolith into <code>:core:domain</code>. This is the lowest-risk, highest-value migration &mdash; everything else depends on it, and it's almost entirely mechanical.</p>
+
+      <p>The skeleton is up. Let's fill in the heart of the architecture.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="03-ai-driven-rewrite-setup.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">Setting Up the AI-Driven Rewrite</span>
+    </a>
+    <a href="05-domain-layer.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Extracting the Domain Layer</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

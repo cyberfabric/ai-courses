@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Image Generation & Editing with AI | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-document-understanding.html">&larr; Prev</a>
+      <a href="07-speech-to-text.html">Next &rarr;</a>
+      <a href="maps/06-image-generation-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 6</div>
+    <h1>Image Generation &amp; Editing with AI</h1>
+    <p class="subtitle">From noise to masterpiece &mdash; how diffusion models create images from words</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>From Understanding to Creating</h2>
+
+      <p>For the last two chapters, we've been teaching AI to <em>look at</em> images &mdash; describing them, extracting data, reading documents. Now we flip the script entirely. Instead of AI understanding images, we're going to make AI <strong>create</strong> them.</p>
+
+      <p>Type a sentence, get a picture. That's the promise of modern image generation, and it works astonishingly well. You've probably seen it in action &mdash; DALL-E, Midjourney, Stable Diffusion &mdash; but how does it actually work? And more importantly, how do you use it in real software?</p>
+
+      <div class="highlight-box">
+        <h3>The Big Idea</h3>
+        <p>Image generation models don't "draw" pictures the way an artist does. They start with pure random noise &mdash; TV static &mdash; and gradually <strong>remove the noise</strong> until a coherent image emerges. Your text prompt guides which noise gets removed and which patterns get kept. It's sculpting, not painting.</p>
+      </div>
+
+      <p>If that sounds wild, stay with me. By the end of this chapter, you'll understand the core mechanism, know how to use the major APIs, and have a clear picture of what image generation can and can't do for your projects.</p>
+    </section>
+
+    <!-- How Diffusion Works -->
+    <section>
+      <h2>How Diffusion Models Work (No Math, Promise)</h2>
+
+      <p>The technique behind DALL-E, Stable Diffusion, and most modern image generators is called <strong>diffusion</strong>. Here's the intuition:</p>
+
+      <h3>Training: Learning to Un-Noise</h3>
+
+      <p>During training, the model sees millions of real images. For each image, the training process adds noise &mdash; a little at first, then more and more, until the image is completely destroyed into random static. The model's job is to learn the reverse: given a noisy image, predict what the noise looks like so it can be subtracted.</p>
+
+      <p>Think of it like this: you show someone a clear photo of a dog, then progressively smear Vaseline on the lens. At each step, you ask them, "What got blurry? What was there before?" After seeing millions of photos get progressively blurred, they get extremely good at un-blurring.</p>
+
+      <div class="pipeline-box">
+        <h3>The Diffusion Process</h3>
+        <div class="workflow-steps">
+          <span class="step">Pure Noise</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Predict Noise</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Subtract It</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Less Noisy Image</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Repeat 20-50x</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Final Image</span>
+        </div>
+      </div>
+
+      <h3>Generation: Sculpting from Static</h3>
+
+      <p>When you ask the model to generate an image, it starts with a grid of pure random noise. Then it runs the denoising process step by step &mdash; typically 20 to 50 steps. At each step, the model looks at the current noisy image and predicts what noise to remove. After enough steps, a clean image emerges.</p>
+
+      <p>But how does the model know to make a <em>dog</em> instead of a <em>car</em>? That's where your text prompt comes in.</p>
+
+      <h3>Text Guidance: CLIP Steers the Ship</h3>
+
+      <p>Remember CLIP from Chapter 3? The model that puts images and text in the same embedding space? It's back, and it's the secret sauce of text-to-image generation.</p>
+
+      <p>Your text prompt gets converted into a CLIP embedding. At each denoising step, the model doesn't just remove noise randomly &mdash; it removes noise in a direction that makes the emerging image <strong>more similar to your text embedding</strong>. The text acts like a compass: "This way lies 'a golden retriever playing in autumn leaves,' so remove noise in that direction."</p>
+
+      <div class="modality-box">
+        <h3>The Vision Modality in Reverse</h3>
+        <p>In Chapters 4 and 5, vision encoders converted images into embeddings so language models could understand them. Image generation does the exact opposite: it starts with a text embedding and uses it to <em>construct</em> an image. Same embedding space, reverse direction. The encoder goes Image &rarr; Numbers. The generator goes Numbers &rarr; Image. This is why multimodal AI is so powerful &mdash; once everything lives in the same numerical space, you can translate freely between modalities.</p>
+      </div>
+
+      <p>The analogy from the chapter outline nails it: diffusion is like a sculptor starting with a block of marble (noise) and gradually chipping away everything that doesn't look like the description. The text prompt is the blueprint.</p>
+    </section>
+
+    <!-- Key Models -->
+    <section>
+      <h2>The Players: Who Makes What</h2>
+
+      <p>The image generation landscape moves fast, but here are the models and services you should know about right now:</p>
+
+      <div class="model-card">
+        <div class="model-icon">D</div>
+        <div class="model-info">
+          <div class="model-name">DALL-E 3 (OpenAI)</div>
+          <div class="model-desc">Integrated into ChatGPT and available via API. Excellent at following complex prompts, handles text in images better than most, and has built-in safety filters. The go-to for most developers because of the familiar OpenAI API. Generates 1024x1024 or 1792x1024 images.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">M</div>
+        <div class="model-info">
+          <div class="model-name">Midjourney</div>
+          <div class="model-desc">Known for stunning aesthetic quality, especially in artistic and photorealistic styles. Operates primarily through Discord (and now a web interface). No public API &mdash; so it's great for design work but harder to integrate into software pipelines.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">S</div>
+        <div class="model-info">
+          <div class="model-name">Stable Diffusion (Stability AI)</div>
+          <div class="model-desc">Open-source and self-hostable. The most flexible option &mdash; you can run it locally, fine-tune it on your own data, and customize it endlessly. SDXL and SD3 are the latest versions. The choice when you need control, privacy, or cost optimization at scale.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">F</div>
+        <div class="model-info">
+          <div class="model-name">Flux (Black Forest Labs)</div>
+          <div class="model-desc">The new contender from ex-Stability AI researchers. Flux Pro and Flux Dev offer strong prompt adherence and quality. Available via API and as open-weight models. Rapidly gaining traction for its balance of quality and speed.</div>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">~$0.04</span>
+          <span class="stat-label">DALL-E 3 per image (standard)</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~$0.03</span>
+          <span class="stat-label">Stability AI per image</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">$0</span>
+          <span class="stat-label">Stable Diffusion local (after GPU cost)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- API Usage -->
+    <section>
+      <h2>Generating Images via API</h2>
+
+      <p>Let's get practical. Here's how to generate images with the two most developer-friendly APIs:</p>
+
+      <h3>OpenAI (DALL-E 3)</h3>
+
+<pre><code>from openai import OpenAI
+
+client = OpenAI()
+response = client.images.generate(
+    model="dall-e-3",
+    prompt="A cozy coffee shop interior with warm "
+           "lighting, plants on shelves, and a cat "
+           "sleeping on a windowsill. Watercolor style.",
+    size="1024x1024",
+    quality="standard",
+    n=1
+)
+image_url = response.data[0].url
+print(image_url)
+</code></pre>
+
+      <p>That's it. One API call, one image URL. The <code>quality</code> parameter can be <code>"standard"</code> or <code>"hd"</code> (more detail, higher cost). The <code>size</code> can be <code>"1024x1024"</code>, <code>"1792x1024"</code>, or <code>"1024x1792"</code>.</p>
+
+      <h3>Stability AI (Stable Diffusion)</h3>
+
+<pre><code>import requests, base64
+
+resp = requests.post(
+    "https://api.stability.ai/v2beta/stable-image"
+    "/generate/core",
+    headers={"Authorization": f"Bearer {API_KEY}",
+             "Accept": "application/json"},
+    files={"none": ""},
+    data={"prompt": "A cozy coffee shop, watercolor",
+          "output_format": "png"}
+)
+img_data = base64.b64decode(resp.json()["image"])
+with open("coffee_shop.png", "wb") as f:
+    f.write(img_data)
+</code></pre>
+
+      <div class="tip-box">
+        <strong>DALL-E 3 rewrites your prompts.</strong> When you send a prompt to DALL-E 3, it actually uses GPT-4 to expand and improve your prompt before generating the image. You can see the revised prompt in the API response (<code>response.data[0].revised_prompt</code>). This usually helps, but if you need exact control, it can be surprising. Stable Diffusion and Flux use your prompt verbatim.
+      </div>
+    </section>
+
+    <!-- Prompt Engineering for Images -->
+    <section>
+      <h2>Prompt Engineering for Image Generation</h2>
+
+      <p>Writing prompts for image generation is a different skill than writing prompts for text LLMs. With text, you're having a conversation. With images, you're writing a <strong>scene description</strong>. Here's what works:</p>
+
+      <h3>The Anatomy of a Good Image Prompt</h3>
+
+      <p>Think in layers: <strong>subject</strong>, <strong>setting</strong>, <strong>style</strong>, <strong>lighting</strong>, <strong>composition</strong>.</p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <div class="prompt-label">Vague prompt</div>
+          <div class="prompt-text">A dog</div>
+          <p class="prompt-explanation">You'll get a generic dog. The model fills in every missing detail with its own "average" choices. No personality, no context.</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="prompt-label">Detailed prompt</div>
+          <div class="prompt-text">A golden retriever puppy sitting in a field of wildflowers at golden hour. Soft bokeh background, eye-level perspective. Photography style, warm tones, natural lighting.</div>
+          <p class="prompt-explanation">Subject (golden retriever puppy), setting (wildflower field), timing (golden hour), composition (eye-level), style (photography), mood (warm).</p>
+        </div>
+      </div>
+
+      <h3>Style Keywords That Actually Work</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Keywords</th>
+            <th>Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Medium</strong></td>
+            <td>watercolor, oil painting, pencil sketch, digital art, 3D render</td>
+            <td>Changes the overall art style</td>
+          </tr>
+          <tr>
+            <td><strong>Photography</strong></td>
+            <td>DSLR, macro, portrait, wide-angle, aerial, drone shot</td>
+            <td>Realistic photographic look</td>
+          </tr>
+          <tr>
+            <td><strong>Lighting</strong></td>
+            <td>golden hour, dramatic lighting, neon, backlit, studio lighting</td>
+            <td>Sets mood and atmosphere</td>
+          </tr>
+          <tr>
+            <td><strong>Detail</strong></td>
+            <td>highly detailed, minimalist, intricate, simple, abstract</td>
+            <td>Controls level of complexity</td>
+          </tr>
+          <tr>
+            <td><strong>Mood</strong></td>
+            <td>serene, dramatic, whimsical, dark, vibrant, pastel</td>
+            <td>Emotional tone of the image</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="tip-box">
+        <strong>Negative prompts matter (for Stable Diffusion and Flux).</strong> You can tell the model what to <em>avoid</em>: "blurry, low quality, distorted hands, extra fingers." DALL-E 3 doesn't support negative prompts directly, but Stable Diffusion and Flux do, and they make a significant difference in output quality.
+      </div>
+    </section>
+
+    <!-- Image Editing -->
+    <section>
+      <h2>Beyond Generation: Editing Existing Images</h2>
+
+      <p>Generating images from scratch is flashy, but editing existing images is often more useful in practice. There are three core editing techniques you should know:</p>
+
+      <h3>Inpainting: Fill in the Blanks</h3>
+
+      <p>Inpainting lets you mask out part of an image and have the model fill it in. Imagine you have a product photo but the background is ugly &mdash; mask the background, describe what you want instead, and the model generates a new background that blends seamlessly with the product.</p>
+
+      <div class="pipeline-box">
+        <h3>Inpainting Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Original Image</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Create Mask</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Describe Replacement</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Model Fills Masked Area</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Blended Result</span>
+        </div>
+      </div>
+
+      <p>Use cases that ship today: removing unwanted objects from photos (Google's Magic Eraser), replacing product backgrounds for e-commerce, fixing damaged or corrupted image regions.</p>
+
+      <h3>Outpainting: Extend Beyond the Frame</h3>
+
+      <p>Outpainting is inpainting's bigger sibling. Instead of filling in a masked region <em>inside</em> the image, you extend the canvas and have the model generate what's <em>beyond</em> the original borders. Got a square headshot but need a landscape banner? Outpaint the sides.</p>
+
+      <h3>Image-to-Image (img2img): Transform What Exists</h3>
+
+      <p>Image-to-image takes an existing image as a starting point and transforms it according to your prompt. Instead of starting from pure noise, the diffusion process starts from a noisy version of your input image. The result preserves the overall composition and structure while changing the style or content.</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="prompt-label">Great for img2img</div>
+          <p><strong>Sketch to render:</strong> Hand-drawn wireframe &rarr; polished UI mockup</p>
+          <p><strong>Style transfer:</strong> Photo &rarr; watercolor, pencil sketch, anime</p>
+          <p><strong>Season change:</strong> Summer photo &rarr; same scene in winter</p>
+          <p><strong>Quick concepts:</strong> Rough 3D model &rarr; photorealistic preview</p>
+        </div>
+        <div class="prompt-example bad">
+          <div class="prompt-label">Not ideal for img2img</div>
+          <p><strong>Precise edits:</strong> "Move this object 3 inches left" &mdash; too spatial</p>
+          <p><strong>Text changes:</strong> "Change the sign to say X" &mdash; text is hard</p>
+          <p><strong>Identity preservation:</strong> "Same person, different pose" &mdash; inconsistent</p>
+          <p><strong>Exact replication:</strong> "Exactly this, but blue" &mdash; too imprecise</p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The "strength" parameter controls how much changes.</strong> In img2img, a strength of 0.3 means "keep most of the original, just adjust the style." A strength of 0.8 means "use the original as loose inspiration and mostly regenerate." Start at 0.4-0.5 and adjust from there.
+      </div>
+    </section>
+
+    <!-- ControlNet -->
+    <section>
+      <h2>ControlNet: Precision Guidance</h2>
+
+      <p>Regular img2img preserves the <em>general</em> structure of your input. ControlNet preserves the <em>exact</em> structure. It's the difference between "roughly this layout" and "exactly these edges and poses."</p>
+
+      <p>ControlNet works by extracting a structural map from your input image &mdash; edges, depth, human poses, or other structural features &mdash; and using that map to constrain the generation process. The model can change colors, textures, and styles freely, but the structure stays locked.</p>
+
+      <h3>Types of ControlNet Guidance</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Control Type</th>
+            <th>What It Extracts</th>
+            <th>Best For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Canny Edge</strong></td>
+            <td>Edge outlines of objects</td>
+            <td>Maintaining shapes while changing style</td>
+          </tr>
+          <tr>
+            <td><strong>Depth Map</strong></td>
+            <td>Near/far distance information</td>
+            <td>Preserving 3D spatial relationships</td>
+          </tr>
+          <tr>
+            <td><strong>OpenPose</strong></td>
+            <td>Human body joint positions</td>
+            <td>Generating characters in specific poses</td>
+          </tr>
+          <tr>
+            <td><strong>Scribble</strong></td>
+            <td>Rough hand-drawn outlines</td>
+            <td>Turning sketches into polished images</td>
+          </tr>
+          <tr>
+            <td><strong>Segmentation</strong></td>
+            <td>Region labels (sky, ground, building)</td>
+            <td>Controlling what goes where in the scene</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>ControlNet is currently a Stable Diffusion ecosystem feature. DALL-E 3 and Midjourney don't offer this level of structural control (yet). If you need precision guidance in your pipeline, Stable Diffusion + ControlNet is the stack.</p>
+
+      <div class="warning-box">
+        <strong>ControlNet requires local setup or specialized hosting.</strong> Unlike the simple API calls for DALL-E, running ControlNet means self-hosting Stable Diffusion with the ControlNet extension, or using a service like Replicate or Fal.ai that offers ControlNet endpoints. It adds complexity but the control is unmatched.
+      </div>
+    </section>
+
+    <!-- Practical Use Cases -->
+    <section>
+      <h2>Practical Use Cases (That Aren't Art)</h2>
+
+      <p>Image generation isn't just for creating pretty pictures. Here are use cases that actually ship in production software:</p>
+
+      <h3>Placeholder and Prototype Images</h3>
+      <p>Need realistic images for a UI prototype before the photo shoot? Generate them. Product mockups, user avatars, background images, hero banners &mdash; all can be generated for design reviews and demos. Way better than gray rectangles or Lorem Ipsum for images.</p>
+
+      <h3>E-commerce Product Photos</h3>
+      <p>Take a product photo on a white background, use inpainting to place it in lifestyle contexts. A backpack on a white background becomes a backpack on a hiking trail, at a coffee shop, or in a dorm room &mdash; without a photographer, studio, or location shoot.</p>
+
+      <h3>Documentation Illustrations</h3>
+      <p>Technical docs with custom illustrations are more engaging. Generate diagrams, conceptual illustrations, or icons that match your brand style. Some teams generate all their blog post header images this way.</p>
+
+      <h3>Data Augmentation for ML</h3>
+      <p>Training a computer vision model but don't have enough training images? Generate synthetic variations. A model trained on both real and generated images often performs better than one trained on limited real data alone.</p>
+
+      <div class="try-it-box">
+        <h3>Try It Now: Generate UI Mockup Assets</h3>
+        <p>Open ChatGPT (with DALL-E) or use the OpenAI API and try generating assets for a hypothetical app:</p>
+        <ol>
+          <li>Generate an app icon: <em>"A flat design app icon for a meditation app. Calm blue gradient background, minimalist white lotus symbol, rounded corners. iOS app icon style."</em></li>
+          <li>Generate a hero image: <em>"A serene mountain lake at sunrise, soft pastel colors, gentle mist. Wide aspect ratio, suitable as a mobile app header. Photography style."</em></li>
+          <li>Generate a set of category icons: <em>"A set of 4 minimalist line icons on white background: sleep, focus, relax, breathe. Consistent thin line style, blue color, simple shapes."</em></li>
+        </ol>
+        <p>Compare the results. Which prompts produced usable output? Which needed iteration? This is the reality of working with image generation &mdash; it's a conversation, not a one-shot command.</p>
+      </div>
+    </section>
+
+    <!-- Limitations -->
+    <section>
+      <h2>What Image Generation Still Can't Do</h2>
+
+      <p>For all its power, current image generation has clear, consistent failure modes. Knowing them saves you hours of frustration:</p>
+
+      <h3>Hands and Fingers</h3>
+      <p>The meme is real. Models routinely generate six fingers, merged fingers, impossible hand positions, and other anatomical horrors. It's gotten much better (DALL-E 3 and Flux handle hands reasonably well), but it's still the most common artifact. Always inspect hands in generated images.</p>
+
+      <h3>Text in Images</h3>
+      <p>Generating readable, correctly spelled text inside images is surprisingly hard. Models improve every generation &mdash; DALL-E 3 can handle short words fairly well &mdash; but longer text, unusual fonts, or specific formatting still fail frequently. If you need text in images, consider generating the image without text and compositing the text on top programmatically.</p>
+
+      <h3>Consistent Characters</h3>
+      <p>Generating the same character across multiple images (same face, same outfit, same style) is one of the hardest unsolved problems. Each generation is independent, so "the same person" in two images will look different. Solutions exist (fine-tuning, IP-Adapter, reference images) but none are turnkey.</p>
+
+      <h3>Exact Spatial Relationships</h3>
+      <p>"A red ball on top of a blue cube, with a green pyramid to the left" sounds simple, but models frequently get spatial relationships wrong. They're great at mood and style, weaker at precise layout.</p>
+
+      <h3>Exact Specifications</h3>
+      <p>"Make the logo exactly 200x50 pixels, with the text 'Acme Corp' in Helvetica Bold" &mdash; this is not what generative models are for. They're creative tools, not precision layout engines. Use Figma or Photoshop for pixel-perfect work.</p>
+
+      <div class="warning-box">
+        <strong>Check generated images before using them.</strong> Models can generate offensive content, copyrighted characters, or recognizable real faces even when not intended. Most APIs have safety filters, but they're not perfect. Always review generated images before publishing, especially in production.
+      </div>
+    </section>
+
+    <!-- Ethics and Copyright -->
+    <section>
+      <h2>Ethics and Copyright: The Elephant in the Room</h2>
+
+      <p>Image generation raises genuine ethical and legal questions that you should understand as a developer building with these tools:</p>
+
+      <h3>Training Data</h3>
+      <p>These models were trained on billions of images scraped from the internet, including copyrighted artwork. Artists have raised legitimate concerns, and lawsuits are ongoing. The legal landscape is still being defined. Some models (like Adobe Firefly) are trained exclusively on licensed or public domain images to avoid this issue.</p>
+
+      <h3>Deepfakes and Misuse</h3>
+      <p>The same technology that generates beautiful landscapes can generate fake photos of real people. All major APIs have safeguards against generating images of public figures or explicit content, but the open-source models can be used without these restrictions. If you're building a product that lets users generate images, you need content moderation.</p>
+
+      <h3>Watermarking and Provenance</h3>
+      <p>The industry is moving toward invisible watermarks and metadata standards (like C2PA) that mark AI-generated images. DALL-E adds metadata to generated images. This helps with transparency &mdash; people should know when they're looking at AI-generated content.</p>
+
+      <div class="tip-box">
+        <strong>Practical policy for your team:</strong> If you're using generated images in a product, establish clear guidelines. Can generated images be used in marketing? In user-facing UI? Do they need to be labeled as AI-generated? Check your company's legal and brand policies before shipping generated content.
+      </div>
+    </section>
+
+    <!-- Generation Pipeline -->
+    <section>
+      <h2>Building a Generation Pipeline</h2>
+
+      <p>In a real application, you rarely just call the API and display the result. Here's a practical pipeline pattern:</p>
+
+<pre><code>from openai import OpenAI
+import requests
+
+def generate_product_image(description, style="photo"):
+    client = OpenAI()
+    prompt = (f"Product photo: {description}. "
+              f"Clean white background, professional "
+              f"{style} style, soft studio lighting. "
+              f"No text or watermarks.")
+    resp = client.images.generate(
+        model="dall-e-3", prompt=prompt,
+        size="1024x1024", quality="hd", n=1)
+    # Download and save
+    img_resp = requests.get(resp.data[0].url)
+    return img_resp.content  # raw PNG bytes
+</code></pre>
+
+      <div class="pipeline-box">
+        <h3>Production Image Generation Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">User Request</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Build Prompt</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Generate Image</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Safety Check</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Post-Process</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Cache &amp; Serve</span>
+        </div>
+      </div>
+
+      <p>Key things to add in production:</p>
+      <ul>
+        <li><strong>Prompt templates:</strong> Don't let users write raw prompts. Build templates with slots they can fill ("Generate a [product type] in [scene]"). This controls quality and prevents misuse.</li>
+        <li><strong>Safety filtering:</strong> Even with API-level filters, add your own content checks on both the input prompt and the output image.</li>
+        <li><strong>Caching:</strong> If the same prompt is requested multiple times, serve the cached image instead of regenerating. Hash the prompt for cache keys.</li>
+        <li><strong>Async processing:</strong> Image generation takes 5-15 seconds. Never block the UI. Use a job queue and notify the user when the image is ready.</li>
+        <li><strong>Cost controls:</strong> Set per-user rate limits. At $0.04-0.08 per image, a user generating 100 images costs $4-8. Multiply by your user base.</li>
+      </ul>
+    </section>
+
+    <!-- Choosing the Right Tool -->
+    <section>
+      <h2>Which Tool for Which Job?</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Best Choice</th>
+            <th>Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Quick prototyping</td>
+            <td>DALL-E 3 (via ChatGPT)</td>
+            <td>Fastest from idea to image, prompt rewriting helps</td>
+          </tr>
+          <tr>
+            <td>API integration</td>
+            <td>DALL-E 3 or Flux</td>
+            <td>Clean APIs, reliable, good documentation</td>
+          </tr>
+          <tr>
+            <td>Highest aesthetic quality</td>
+            <td>Midjourney</td>
+            <td>Unmatched artistic style, especially for illustrations</td>
+          </tr>
+          <tr>
+            <td>Full control / self-hosted</td>
+            <td>Stable Diffusion</td>
+            <td>Open source, customizable, no API costs</td>
+          </tr>
+          <tr>
+            <td>Fine-tuning on your data</td>
+            <td>Stable Diffusion + LoRA</td>
+            <td>Only option that allows custom training affordably</td>
+          </tr>
+          <tr>
+            <td>Structural control (poses, edges)</td>
+            <td>Stable Diffusion + ControlNet</td>
+            <td>Only option with precise structural guidance</td>
+          </tr>
+          <tr>
+            <td>Copyright-safe content</td>
+            <td>Adobe Firefly</td>
+            <td>Trained on licensed/stock images only</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Image Generation for a Hypothetical App</h3>
+        <p>You're building a travel app. Generate the following assets using DALL-E (via ChatGPT or API) or any other image generation tool:</p>
+        <ol>
+          <li><strong>App icon:</strong> Generate a travel app icon. Try at least 3 different prompt styles (flat design, 3D, photorealistic) and pick the best.</li>
+          <li><strong>Hero images:</strong> Generate hero images for 3 destination pages: Tokyo, Paris, and Iceland. Each should have a distinct mood but consistent style.</li>
+          <li><strong>Category icons:</strong> Generate a consistent set of icons for: flights, hotels, restaurants, and activities.</li>
+          <li><strong>Before/after comparison:</strong> Take any photo and try img2img to transform it into a different style (sketch, painting, different season).</li>
+        </ol>
+        <p><strong>Reflection questions:</strong></p>
+        <ul>
+          <li>How many attempts did each image take to get a usable result?</li>
+          <li>What prompt changes had the biggest impact on output quality?</li>
+          <li>Which generated assets would you actually use vs. which need a designer's touch?</li>
+          <li>What's the total cost if you generated all of these via API?</li>
+        </ul>
+        <p><strong>Stretch goal:</strong> Write a Python script that takes a destination name and generates a hero image and a travel description card using the OpenAI API. Automate the prompt template so you can generate assets for any destination.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>We've now covered both directions of the vision modality &mdash; understanding images (Chapters 4-5) and generating them (this chapter). Time to switch senses entirely.</p>
+
+      <p>In Chapter 7, we move from eyes to ears. <strong>Speech-to-Text and Audio Understanding</strong> will cover how AI processes sound &mdash; transcription with Whisper, speaker identification, audio classification, and building pipelines that turn spoken words into structured data. If you've ever wondered how voice assistants actually work under the hood, that's where we're headed next.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="05-document-understanding.html" class="prev">
+      <span class="nav-direction">&larr; Previous</span>
+      <span class="nav-chapter">Document Understanding &amp; OCR 2.0</span>
+    </a>
+    <a href="07-speech-to-text.html" class="next">
+      <span class="nav-direction">Next &rarr;</span>
+      <span class="nav-chapter">Speech-to-Text &amp; Audio Understanding</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

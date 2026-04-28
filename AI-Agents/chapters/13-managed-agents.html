@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Managed Agents | Building AI Agents For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI Agents</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-capstone.html">&larr; Prev</a>
+      <a href="maps/13-managed-agents-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Managed Agents: Deploy on Anthropic&rsquo;s Infrastructure</h1>
+    <p class="subtitle">Zero-infrastructure agent deployment &mdash; Anthropic hosts the harness, you define the agent</p>
+  </header>
+
+  <main>
+
+    <h2>From &ldquo;Go Build Something Amazing&rdquo; to &ldquo;Go Ship It&rdquo;</h2>
+
+    <p>In Chapter 12, you built a multi-agent code review system. In Chapter 11, you learned what it takes to deploy agents to production yourself &mdash; containers, scaling, monitoring, security, the works. It was a lot.</p>
+
+    <p>What if you could skip most of that?</p>
+
+    <p>Anthropic&rsquo;s <strong>Managed Agents</strong> launched in public beta in April 2026 with a simple proposition: you define what your agent does (model, tools, system prompt), and Anthropic runs it in their cloud. No containers to manage. No scaling to configure. No sandbox to secure. You get a production-ready agent harness with a single API call.</p>
+
+    <p>Think of it this way: Chapter 11 was AWS EC2 &mdash; full control, full responsibility. This chapter is Heroku &mdash; push your config and go.</p>
+
+    <div class="tip-box">
+      <strong>Why this chapter exists:</strong> The course was planned with 12 chapters, but Managed Agents changed the deployment story so fundamentally that it deserved its own chapter. If you&rsquo;re building agents in 2026, this is likely how you&rsquo;ll deploy your first production system.
+    </div>
+
+    <h2>The Deployment Problem, Revisited</h2>
+
+    <p>Remember Chapter 11? Sandboxing, container orchestration, the tool-use loop, credential management, session persistence, scaling, observability &mdash; that&rsquo;s a lot of infrastructure for &ldquo;I just want my agent to run a task.&rdquo; Managed Agents handles all of it. The trade-off? Less customization of the runtime. But for the vast majority of use cases, the built-in capabilities are more than enough.</p>
+
+    <h2>The Four Core Concepts</h2>
+
+    <div class="architecture-box">
+      <h3>Managed Agents Architecture</h3>
+      <p>Everything in Managed Agents revolves around four concepts:</p>
+      <p><strong>Agent</strong> &mdash; The configuration. Your model choice, system prompt, tool definitions, and MCP server attachments. Created once, referenced by ID. Think of it as a deployment manifest.</p>
+      <p><strong>Environment</strong> &mdash; The container template. Which packages to pre-install, networking rules, file mounts. This defines what the agent&rsquo;s sandbox looks like when it boots up.</p>
+      <p><strong>Session</strong> &mdash; A running instance. When you start a session, Anthropic spins up the environment, loads the agent config, and begins executing. Each session is isolated &mdash; its own filesystem, its own state.</p>
+      <p><strong>Events</strong> &mdash; The communication channel. Your application and the agent exchange messages via server-sent events (SSE). You send tasks in; the agent streams responses, tool calls, and status updates out.</p>
+      <p>The relationship: an <strong>Agent</strong> runs inside an <strong>Environment</strong>, creating a <strong>Session</strong>, which communicates through <strong>Events</strong>.</p>
+    </div>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Define Agent</strong>
+        <p>Model + prompt + tools</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Create Environment</strong>
+        <p>Packages + networking</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Start Session</strong>
+        <p>Agent + Environment = running instance</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Stream Events</strong>
+        <p>Send tasks, receive results via SSE</p>
+      </div>
+    </div>
+
+    <h2>Under the Hood: Brain, Harness, Sandbox</h2>
+
+    <p>Anthropic&rsquo;s engineering blog describes the internal architecture as three decoupled components:</p>
+
+    <ul>
+      <li><strong>Session (the Brain)</strong> &mdash; An append-only event log that stores every message, tool call, and result. This is the source of truth. If the container crashes, the session survives.</li>
+      <li><strong>Harness (the Logic)</strong> &mdash; The stateless loop that calls Claude, parses tool calls, routes them to the sandbox, and feeds results back. This is the <code>while True</code> loop you built in Chapter 4 &mdash; but managed.</li>
+      <li><strong>Sandbox (the Hands)</strong> &mdash; The isolated container where code actually runs. File operations, bash commands, web fetches &mdash; all happen here. Containers are replaceable; if one fails, another spins up with the same session state.</li>
+    </ul>
+
+    <p>This separation is why Managed Agents can offer reliability guarantees that are hard to replicate yourself. The session (your data) is decoupled from the container (the execution), so infrastructure failures don&rsquo;t lose your work.</p>
+
+    <h2>Creating Your First Managed Agent</h2>
+
+    <p>Let&rsquo;s get to code. First, install the Anthropic SDK:</p>
+
+    <pre><code>pip install anthropic</code></pre>
+
+    <p>Now create an agent. This is just a configuration &mdash; nothing is running yet:</p>
+
+    <pre><code>from anthropic import Anthropic
+
+client = Anthropic()  # Uses ANTHROPIC_API_KEY env var
+
+# Step 1: Create the agent configuration
+agent = client.beta.agents.create(
+    name="Research Assistant",
+    model="claude-sonnet-4-6",
+    system="""You are a research assistant. When given a topic:
+1. Search the web for current information
+2. Read relevant pages
+3. Synthesize findings into a clear summary
+4. Save results to a file
+
+Be thorough but concise. Cite your sources.""",
+    tools=[
+        {"type": "agent_toolset_20260401"},  # All built-in tools
+    ],
+)
+
+print(f"Agent created: {agent.id}")</code></pre>
+
+    <div class="tip-box">
+      <strong>The beta header:</strong> Managed Agents requires the header <code>anthropic-beta: managed-agents-2026-04-01</code>. The Python and TypeScript SDKs set this automatically when you use <code>client.beta.agents</code>. If you&rsquo;re using raw HTTP, add it yourself.
+    </div>
+
+    <h2>Configuring the Environment</h2>
+
+    <p>The environment defines what the agent&rsquo;s container looks like. Need pandas for data analysis? Numpy for computations? Specify them here:</p>
+
+    <pre><code># Step 2: Create the environment
+environment = client.beta.environments.create(
+    name="research-env",
+    config={
+        "type": "cloud",
+        "packages": {
+            "pip": ["requests", "beautifulsoup4", "pandas"],
+            "npm": ["marked"],       # Node.js packages too
+            "apt": ["jq", "curl"],   # System packages
+        },
+        "networking": {
+            "type": "unrestricted",  # Full outbound access
+        },
+    },
+)
+
+print(f"Environment created: {environment.id}")</code></pre>
+
+    <p>Networking has two modes: <strong>unrestricted</strong> (default &mdash; full outbound access minus a safety blocklist) and <strong>limited</strong> (restricted to a specific <code>allowed_hosts</code> list). Use <code>limited</code> when you want to lock down exactly which external services the agent can reach:</p>
+
+    <pre><code># Locked-down environment for sensitive tasks
+secure_env = client.beta.environments.create(
+    name="secure-env",
+    config={
+        "type": "cloud",
+        "packages": {"pip": ["anthropic"]},
+        "networking": {
+            "type": "limited",
+            "allowed_hosts": ["api.github.com", "pypi.org"],
+            "allow_mcp_servers": True,
+            "allow_package_managers": True,
+        },
+    },
+)</code></pre>
+
+    <h2>Starting a Session and Streaming Events</h2>
+
+    <p>Now the fun part &mdash; running the agent. You create a session, open an SSE stream, send a message, and watch the agent work:</p>
+
+    <pre><code># Step 3: Start a session
+session = client.beta.sessions.create(
+    agent=agent.id,
+    environment_id=environment.id,
+    title="Research: AI agent frameworks 2026",
+)
+
+print(f"Session started: {session.id}")
+
+# Step 4: Stream events
+with client.beta.sessions.events.stream(session.id) as stream:
+    # Send the task
+    client.beta.sessions.events.send(
+        session.id,
+        events=[{
+            "type": "user.message",
+            "content": [{
+                "type": "text",
+                "text": "Research the top 5 AI agent frameworks "
+                       "in 2026. Compare their features, maturity, "
+                       "and best use cases. Save a report to report.md",
+            }],
+        }],
+    )
+
+    # Process the stream
+    for event in stream:
+        match event.type:
+            case "agent.message":
+                for block in event.content:
+                    if hasattr(block, "text"):
+                        print(block.text, end="")
+            case "agent.tool_use":
+                print(f"\n🔧 Using tool: {event.name}")
+            case "session.status_idle":
+                print("\n\n✅ Agent finished.")
+                break</code></pre>
+
+    <p>That&rsquo;s it. About 40 lines of Python to go from &ldquo;I want an agent&rdquo; to &ldquo;I have an agent running in production infrastructure.&rdquo; Compare that to the hundreds of lines of container orchestration, sandbox setup, and harness code from Chapter 11.</p>
+
+    <div class="agent-trace">
+      <h3>Session Lifecycle Trace</h3>
+      <div class="trace-step">
+        <span class="trace-label">start</span>
+        <p><strong>Session created</strong> &mdash; Anthropic provisions a container from the environment template, installs packages, loads the agent config</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">user.message</span>
+        <p>Your app sends: &ldquo;Research the top 5 AI agent frameworks in 2026&hellip;&rdquo;</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label think">think</span>
+        <p>Claude reads the system prompt and task, plans the research approach</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">agent.tool_use: web_search</span>
+        <p>Agent searches for &ldquo;best AI agent frameworks 2026 comparison&rdquo;</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label result">tool result</span>
+        <p>Search returns URLs and snippets for LangGraph, CrewAI, Claude Agent SDK, AutoGen, Pydantic AI</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">agent.tool_use: web_fetch</span>
+        <p>Agent reads the top 3 result pages for detailed information</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label tool">agent.tool_use: write</span>
+        <p>Agent writes the synthesized report to <code>report.md</code> in the sandbox filesystem</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label respond">agent.message</span>
+        <p>&ldquo;I&rsquo;ve completed the research and saved a detailed comparison to report.md. Here&rsquo;s a summary&hellip;&rdquo;</p>
+      </div>
+      <div class="trace-step">
+        <span class="trace-label">session.status_idle</span>
+        <p>Agent is done &mdash; session returns to idle, ready for follow-up messages or termination</p>
+      </div>
+    </div>
+
+    <h2>Built-in Tools: What Your Agent Gets for Free</h2>
+
+    <p>When you specify <code>agent_toolset_20260401</code>, your agent gets a full development toolkit:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">bash</div>
+        <div class="stat-label">Execute shell commands in the container</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">read</div>
+        <div class="stat-label">Read files from the sandbox filesystem</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">write</div>
+        <div class="stat-label">Create and overwrite files</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">edit</div>
+        <div class="stat-label">String replacements in existing files</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">glob</div>
+        <div class="stat-label">Find files by pattern matching</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">grep</div>
+        <div class="stat-label">Search file contents with regex</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">web_fetch</div>
+        <div class="stat-label">Fetch content from any URL</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">web_search</div>
+        <div class="stat-label">Search the web ($10/1K searches)</div>
+      </div>
+    </div>
+
+    <p>You can enable or disable individual tools. Need a code-only agent that can&rsquo;t browse the web? Disable <code>web_fetch</code> and <code>web_search</code>:</p>
+
+    <pre><code>agent = client.beta.agents.create(
+    name="Code-Only Agent",
+    model="claude-sonnet-4-6",
+    system="You write and test Python code. No web access.",
+    tools=[{
+        "type": "agent_toolset_20260401",
+        "configs": [
+            {"name": "web_fetch", "enabled": False},
+            {"name": "web_search", "enabled": False},
+        ],
+    }],
+)</code></pre>
+
+    <p>Or flip the default &mdash; disable everything, then allowlist only what you need by setting <code>"default_config": {"enabled": False}</code> and explicitly enabling individual tools.</p>
+
+    <h2>Custom Tools: Your Code, Their Infrastructure</h2>
+
+    <p>Built-in tools cover a lot, but what about your own APIs? Custom tools let you define tools that <em>your application</em> executes when the agent calls them. The agent sees the tool definition; when it makes a call, you receive an event, run your logic, and send the result back.</p>
+
+    <div class="pattern-box">
+      <h3>Pattern: The Custom Tool Loop</h3>
+      <p><strong>Problem:</strong> Your agent needs to interact with external systems (databases, internal APIs, third-party services) that can&rsquo;t run inside the sandbox.</p>
+      <p><strong>Solution:</strong> Define custom tools with JSON schemas. When the agent invokes one, your application receives an <code>agent.tool_use</code> event, executes the logic locally, and sends back a <code>user.custom_tool_result</code> event.</p>
+      <p><strong>Why it works:</strong> The agent thinks it&rsquo;s calling a tool like any other. Your app acts as the bridge between the managed sandbox and your own infrastructure. Credentials never touch the agent&rsquo;s environment.</p>
+      <p><strong>When to use:</strong> Any time the agent needs to reach systems outside its sandbox &mdash; databases, payment APIs, internal microservices, proprietary tools.</p>
+    </div>
+
+    <pre><code># Define an agent with a custom tool
+agent = client.beta.agents.create(
+    name="DB Query Agent",
+    model="claude-sonnet-4-6",
+    system="You help users query the product database.",
+    tools=[
+        {"type": "agent_toolset_20260401"},
+        {
+            "type": "custom",
+            "name": "query_database",
+            "description": (
+                "Execute a read-only SQL query against the product "
+                "database. Returns rows as JSON. Only SELECT "
+                "statements are allowed. Use this to answer "
+                "questions about products, inventory, and pricing."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "The SQL SELECT query",
+                    },
+                },
+                "required": ["sql"],
+            },
+        },
+    ],
+)
+
+# Handle custom tool calls in the event stream
+with client.beta.sessions.events.stream(session.id) as stream:
+    client.beta.sessions.events.send(session.id, events=[{
+        "type": "user.message",
+        "content": [{"type": "text",
+                      "text": "How many products are priced over $100?"}],
+    }])
+
+    for event in stream:
+        if event.type == "agent.tool_use" and event.name == "query_database":
+            # YOUR code runs the query (not the agent's sandbox)
+            result = run_query(event.input["sql"])
+
+            # Send the result back to the agent
+            client.beta.sessions.events.send(session.id, events=[{
+                "type": "user.custom_tool_result",
+                "tool_use_id": event.id,
+                "content": json.dumps(result),
+            }])
+
+        elif event.type == "agent.message":
+            for block in event.content:
+                if hasattr(block, "text"):
+                    print(block.text, end="")
+
+        elif event.type == "session.status_idle":
+            break</code></pre>
+
+    <div class="warning-box">
+      <strong>Security note:</strong> Custom tools execute in YOUR application, not the sandbox. This means the agent&rsquo;s SQL query runs against your real database. Always validate inputs &mdash; enforce read-only queries, parameterize inputs, and apply the same security practices you would for any user-facing API.
+    </div>
+
+    <h2>Connecting MCP Servers</h2>
+
+    <p>Managed Agents supports MCP (Model Context Protocol) natively. Set <code>"allow_mcp_servers": true</code> in your environment&rsquo;s networking config, add the MCP server host to <code>allowed_hosts</code>, and your agent discovers its tools at session startup. MCP servers let you add GitHub integration, Slack messaging, database access, or any custom capability through a standardized protocol &mdash; no custom tool boilerplate needed.</p>
+
+    <h2>Multi-Agent on Managed Infrastructure</h2>
+
+    <p>Remember the supervisor pattern from Chapter 7? Managed Agents supports it natively through <code>callable_agents</code>. Define specialist agents, then create an orchestrator that can delegate to them:</p>
+
+    <pre><code># Specialist agents
+reviewer = client.beta.agents.create(
+    name="Code Reviewer",
+    model="claude-sonnet-4-6",
+    system="You review code for quality, security, and best "
+           "practices. Be specific and cite line numbers.",
+    tools=[{"type": "agent_toolset_20260401",
+            "configs": [{"name": "bash", "enabled": False}]}],
+)
+
+test_writer = client.beta.agents.create(
+    name="Test Writer",
+    model="claude-sonnet-4-6",
+    system="You write comprehensive unit tests in pytest. "
+           "Cover edge cases and error paths.",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+
+# Orchestrator that delegates to specialists
+lead = client.beta.agents.create(
+    name="Engineering Lead",
+    model="claude-sonnet-4-6",
+    system="You coordinate engineering tasks. Delegate code "
+           "review to Code Reviewer and test writing to "
+           "Test Writer. Synthesize their results into a "
+           "final report.",
+    tools=[{"type": "agent_toolset_20260401"}],
+    callable_agents=[
+        {"type": "agent", "id": reviewer.id,
+         "version": reviewer.version},
+        {"type": "agent", "id": test_writer.id,
+         "version": test_writer.version},
+    ],
+)</code></pre>
+
+    <p>When the orchestrator delegates, each specialist runs in its own <strong>thread</strong> within the session &mdash; isolated conversation history, separate execution context. You can monitor delegation via SSE events: <code>session.thread_created</code> fires when a specialist is spawned, and <code>session.thread_idle</code> fires when it finishes.</p>
+
+    <div class="tip-box">
+      <strong>Delegation is one level deep:</strong> The orchestrator can delegate to specialists, but specialists cannot delegate further. This keeps execution predictable and costs bounded. If you need deeper hierarchies, create multiple orchestrator layers.
+    </div>
+
+    <h2>Managed vs Self-Hosted: The Decision Framework</h2>
+
+    <p>When should you use Managed Agents vs the self-hosted approach from Chapter 11? Here&rsquo;s the honest comparison:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr><th>Factor</th><th>Managed Agents</th><th>Self-Hosted (Ch 11)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Setup time</strong></td><td>Hours</td><td>Days to weeks</td></tr>
+          <tr><td><strong>Infrastructure</strong></td><td>Zero</td><td>You manage it all</td></tr>
+          <tr><td><strong>Runtime cost</strong></td><td>$0.08/agent-hour + tokens</td><td>Your hosting + tokens</td></tr>
+          <tr><td><strong>Customization</strong></td><td>Limited to API surface</td><td>Full control</td></tr>
+          <tr><td><strong>Model choice</strong></td><td>Claude only</td><td>Any model, any provider</td></tr>
+          <tr><td><strong>Scaling</strong></td><td>Automatic</td><td>You configure it</td></tr>
+          <tr><td><strong>Data residency</strong></td><td>Anthropic&rsquo;s infra</td><td>Your infra, your rules</td></tr>
+          <tr><td><strong>Vendor lock-in</strong></td><td>High</td><td>Low &mdash; portable code</td></tr>
+          <tr><td><strong>Best for</strong></td><td>Fast iteration, standard workloads</td><td>Custom requirements, compliance</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="highlight-box">
+      <strong>The rule of thumb:</strong> Start with Managed Agents. Move to self-hosted when you hit a limitation that matters &mdash; not before. Most teams never hit that point. The ones that do usually need multi-provider support or strict data residency requirements.
+    </div>
+
+    <h2>What It Costs</h2>
+
+    <p>Managed Agents billing has three components: <strong>$0.08 per agent-hour</strong> (millisecond precision, only while session status is <code>running</code>), standard <strong>Claude API token pricing</strong>, and <strong>$10 per 1,000 web searches</strong> if enabled. No monthly base fee &mdash; you pay for what you use. Idle time and terminated sessions don&rsquo;t accrue runtime costs.</p>
+
+    <h2>Common Pitfalls</h2>
+
+    <div class="pitfall-box">
+      <h3>Pitfall: Leaving sessions running</h3>
+      <p>Sessions accrue runtime costs while active. If your code crashes before closing the session, the agent keeps running (and billing). Always use try/finally or context managers to ensure cleanup.</p>
+    </div>
+
+    <div class="pitfall-box">
+      <h3>Pitfall: Not validating custom tool inputs</h3>
+      <p>Custom tool calls are effectively untrusted input. An agent might craft a SQL query that deletes data, or call an API with unexpected parameters. Validate custom tool inputs as strictly as you would user input from a web form.</p>
+    </div>
+
+    <h2>Putting It All Together: The Research Agent, Managed</h2>
+
+    <p>Remember the research agent from Chapter 4? You built it from scratch &mdash; the tool-use loop, the tool definitions, the error handling. Here&rsquo;s the same agent, deployed on Managed Agents:</p>
+
+    <pre><code>from anthropic import Anthropic
+
+client = Anthropic()
+
+agent = client.beta.agents.create(
+    name="Research Agent v2",
+    model="claude-sonnet-4-6",
+    system="""You are a research agent. Given a topic:
+1. Search the web for authoritative sources
+2. Read the most relevant pages
+3. Synthesize findings into a structured summary
+4. Save the summary to research_output.md
+Always cite sources with URLs. Be thorough but concise.""",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+
+environment = client.beta.environments.create(
+    name="research-env",
+    config={"type": "cloud",
+            "networking": {"type": "unrestricted"}},
+)
+
+def run_research(topic: str) -> str:
+    session = client.beta.sessions.create(
+        agent=agent.id, environment_id=environment.id,
+        title=f"Research: {topic}",
+    )
+    result_text = []
+    with client.beta.sessions.events.stream(session.id) as stream:
+        client.beta.sessions.events.send(session.id, events=[{
+            "type": "user.message",
+            "content": [{"type": "text",
+                         "text": f"Research: {topic}"}],
+        }])
+        for event in stream:
+            if event.type == "agent.message":
+                for block in event.content:
+                    if hasattr(block, "text"):
+                        result_text.append(block.text)
+            elif event.type == "session.status_idle":
+                break
+    return "".join(result_text)
+
+summary = run_research("quantum computing breakthroughs 2026")
+print(summary)</code></pre>
+
+    <p>Compare this to Chapter 4&rsquo;s implementation: no manual tool-use loop, no tool function definitions, no JSON schema writing, no error-handling boilerplate. The managed harness handles all of that. Your code focuses entirely on <em>what</em> the agent should do, not <em>how</em> the loop works.</p>
+
+    <div class="exercise-box">
+      <h3>Build It: Deploy Your Research Agent</h3>
+      <p>Take the research agent above and extend it into a production-ready deployment:</p>
+      <ol>
+        <li><strong>Create the agent and environment</strong> using the code above. Run a test query and verify results.</li>
+        <li><strong>Add a custom tool</strong> &mdash; define <code>save_to_notion</code> (or any service) as a custom tool. Handle the <code>agent.tool_use</code> event and return results via <code>user.custom_tool_result</code>.</li>
+        <li><strong>Build a multi-agent version</strong> &mdash; create a &ldquo;Fact Checker&rdquo; specialist and wire it via <code>callable_agents</code>. The researcher delegates fact-checking before finalizing.</li>
+        <li><strong>Measure costs</strong> &mdash; run 5 queries and track token usage plus runtime hours. Compare to Chapter 4 self-hosted costs.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next: The Agent Builder&rsquo;s Journey</h2>
+
+    <p>This is the final chapter of <em>Building AI Agents For Dummies</em>. Let&rsquo;s take a moment to look at where you&rsquo;ve been:</p>
+
+    <div class="checklist">
+      <ul>
+        <li>You learned what agents actually are &mdash; not hype, but observe-think-act loops (Chapter 1)</li>
+        <li>You explored architectures &mdash; ReAct, plan-and-execute, reflexion, routers (Chapter 2)</li>
+        <li>You mastered tool design &mdash; the most underestimated skill in agent building (Chapter 3)</li>
+        <li>You built an agent from scratch &mdash; no frameworks, just code (Chapter 4)</li>
+        <li>You added memory &mdash; working, short-term, and long-term (Chapter 5)</li>
+        <li>You kept humans in control &mdash; approval gates, budgets, escalation (Chapter 6)</li>
+        <li>You orchestrated multiple agents &mdash; supervisors, pipelines, swarms (Chapter 7)</li>
+        <li>You made agents robust &mdash; retries, circuit breakers, self-correction (Chapter 8)</li>
+        <li>You learned to evaluate agents &mdash; the hardest problem in agent development (Chapter 9)</li>
+        <li>You surveyed the framework landscape &mdash; and learned when NOT to use one (Chapter 10)</li>
+        <li>You tackled production deployment &mdash; scaling, security, observability (Chapter 11)</li>
+        <li>You built a real multi-agent system &mdash; the capstone code review agent (Chapter 12)</li>
+        <li>You deployed on managed infrastructure &mdash; production agents without the ops burden (Chapter 13)</li>
+      </ul>
+    </div>
+
+    <p>You started this course as someone who <em>used</em> AI. You&rsquo;re ending it as someone who <em>builds</em> AI agents. The fundamentals won&rsquo;t change: good tools, human oversight, robust error handling, and the humble <code>while True</code> loop that powers it all.</p>
+
+    <p>The agent ecosystem will keep evolving. New models will make agents smarter. New frameworks will make them easier to build. New infrastructure (like Managed Agents) will make them easier to deploy. But every advance is built on the patterns you now understand.</p>
+
+    <p>Go build something amazing &mdash; and this time, ship it.</p>
+
+    <nav class="chapter-nav">
+      <a href="12-capstone.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Building a Real Agent System</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to &rarr;</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

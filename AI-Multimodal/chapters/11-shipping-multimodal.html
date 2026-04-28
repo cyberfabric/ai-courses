@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Building Multimodal Features That Ship | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-realtime-pipelines.html">&larr; Prev</a>
+      <a href="12-multimodal-toolkit.html">Next &rarr;</a>
+      <a href="maps/11-shipping-multimodal-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 11</div>
+    <h1>Building Multimodal Features That Ship</h1>
+    <p class="subtitle">Architecture, cost, reliability, and UX &mdash; the production engineering nobody talks about</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>The Demo Is the Easy Part</h2>
+
+      <p>You've built a prototype. It takes a photo, sends it to Claude's vision API, and returns a structured JSON response. It works beautifully on your laptop. Your product manager is excited. Your demo at the team meeting gets applause.</p>
+
+      <p>Then someone asks: "What happens when 5,000 users upload photos at the same time?"</p>
+
+      <p>And someone else: "How much will this cost per month?"</p>
+
+      <p>And the QA engineer: "What happens when the user uploads a blurry screenshot taken in a dark room?"</p>
+
+      <p>Welcome to <strong>production multimodal engineering</strong> &mdash; the part where your cool demo becomes a feature that works reliably for real users, at scale, without bankrupting your company.</p>
+
+      <div class="highlight-box">
+        <h3>The Restaurant Analogy</h3>
+        <p>Shipping a multimodal feature is like running a restaurant with a <strong>video menu</strong>, <strong>live music</strong>, and a <strong>chef who cooks on camera</strong>. Each "modality" adds complexity, cost, and potential failure points. The food (text responses) is table stakes &mdash; but the video stream might buffer, the microphone might pick up kitchen noise, and the live camera adds a 3-second delay. Every extra channel you add multiplies the things that can go wrong. But when it all works? The experience is unforgettable.</p>
+      </div>
+
+      <p>This chapter is your production playbook. We'll cover architecture patterns, cost management, fallback strategies, input/output validation, UX patterns, and the monitoring you need to keep multimodal features running smoothly.</p>
+    </section>
+
+    <!-- Architecture Patterns -->
+    <section>
+      <h2>Architecture Patterns for Multimodal Features</h2>
+
+      <p>Every multimodal feature follows the same basic flow, regardless of which modalities are involved:</p>
+
+      <div class="workflow-steps">
+        <div class="step">Client Input</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Preprocessing</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Model Inference</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Postprocessing</div>
+        <span class="step-arrow">&rarr;</span>
+        <div class="step">Response</div>
+      </div>
+
+      <p>That looks simple. But the devil is in each step &mdash; and in how you handle things when any step fails.</p>
+
+      <h3>The Preprocessing Layer</h3>
+
+      <p>Raw user input is messy. Photos are 4000&times;3000 pixels when the model only needs 1024&times;1024. Audio files are WAV at 48kHz when the API expects 16kHz. Videos are 4K when you only need keyframes.</p>
+
+      <p><strong>Preprocessing exists to normalize chaos.</strong> It's the bouncer at the club door &mdash; checking IDs, enforcing dress codes, and making sure nobody brings in a fire hazard.</p>
+
+      <div class="pipeline-box">
+        <h4>Image Preprocessing Pipeline</h4>
+        <ol>
+          <li><strong>Validate format:</strong> Accept JPEG, PNG, WebP. Reject everything else.</li>
+          <li><strong>Check file size:</strong> Reject files over 20MB (or your API's limit).</li>
+          <li><strong>Resize:</strong> Scale down to the model's optimal resolution (e.g., 1024&times;1024 for Claude vision).</li>
+          <li><strong>Strip metadata:</strong> Remove EXIF data (GPS coordinates, device info) for privacy.</li>
+          <li><strong>Quality check:</strong> Detect extremely blurry or completely dark images.</li>
+          <li><strong>Encode:</strong> Convert to base64 or upload to a temporary URL.</li>
+        </ol>
+      </div>
+
+      <p>Why resize? Because image tokens are expensive. A 4000&times;3000 image might use 1,600 tokens in Claude's vision API. Resize it to 1024&times;768 and you're down to ~400 tokens. Same quality for most use cases, 75% cheaper.</p>
+
+<pre><code># Image preprocessing example
+from PIL import Image
+import io, base64
+
+def preprocess_image(image_bytes, max_size=1024):
+    img = Image.open(io.BytesIO(image_bytes))
+    img = img.convert("RGB")  # Handle PNG alpha
+
+    # Resize maintaining aspect ratio
+    img.thumbnail((max_size, max_size))
+
+    # Strip EXIF metadata by re-encoding
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=85)
+    return base64.b64encode(buffer.getvalue()).decode()
+</code></pre>
+
+      <h3>The Postprocessing Layer</h3>
+
+      <p>The model gave you a response. Great. But is that response <em>usable</em>?</p>
+
+      <p>If you asked for JSON, did you get valid JSON? If you asked for a bounding box, are the coordinates within the image dimensions? If you asked for a summary, is it actually shorter than the original?</p>
+
+      <p><strong>Postprocessing validates and transforms model output into something your application can safely use.</strong> Never trust model output blindly &mdash; treat it like user input that needs validation.</p>
+
+      <div class="tip-box">
+        Always parse model output with error handling. If you asked the model for JSON, wrap the parsing in a try/except. Models sometimes add markdown formatting (<code>```json</code>) around their JSON output, or include explanatory text before the JSON. Strip that first, then parse.
+      </div>
+
+      <h3>Sync vs Async Processing</h3>
+
+      <p>Not every multimodal task needs to return instantly. The key question is: <strong>does the user need to wait?</strong></p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <p class="prompt-label">Synchronous (User Waits)</p>
+          <div class="prompt-text">Use for:
+- Image description (< 3 seconds)
+- Receipt scanning (< 5 seconds)
+- Voice commands (< 1 second)
+- Real-time camera analysis
+
+Pattern: Request &rarr; Process &rarr; Response</div>
+        </div>
+        <div class="prompt-example good">
+          <p class="prompt-label">Asynchronous (Background)</p>
+          <div class="prompt-text">Use for:
+- Video summarization (minutes)
+- Batch document processing
+- Audio transcription of long files
+- Image generation (10-30 seconds)
+
+Pattern: Request &rarr; Job ID &rarr; Poll/Webhook</div>
+        </div>
+      </div>
+
+      <p>For anything that takes more than about 5 seconds, use async processing. Give the user a job ID and let them check back (or send a push notification). Nobody wants to stare at a spinner for 30 seconds.</p>
+    </section>
+
+    <!-- Cost Management -->
+    <section>
+      <h2>Cost Management: Multimodal Is Expensive</h2>
+
+      <p>Here's the uncomfortable truth: <strong>multimodal inputs cost significantly more than text.</strong> An image in Claude's vision API can cost 10&ndash;50x more tokens than the text prompt that accompanies it. Audio transcription is billed per minute. Image generation costs per image.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">~$0.01</span>
+          <span class="stat-label">Typical text query (500 tokens in/out)</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~$0.05</span>
+          <span class="stat-label">Image + text query (1 image + prompt)</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~$0.10</span>
+          <span class="stat-label">Multi-image analysis (4 images + prompt)</span>
+        </div>
+      </div>
+
+      <p>Those numbers look small individually. But multiply by 100,000 daily active users, each making 5 requests, and you're looking at $25,000&ndash;$50,000 per month just for the vision feature.</p>
+
+      <h3>Seven Strategies to Control Costs</h3>
+
+      <div class="modality-box">
+        <h4>Image Cost Optimization</h4>
+        <p>Images are the most common multimodal input, and the easiest to over-spend on. Each pixel costs tokens, and most use cases don't need full resolution. Here's what matters:</p>
+        <ul>
+          <li><strong>Resolution:</strong> A 4K image can use 4x the tokens of a 1024px image. Always resize.</li>
+          <li><strong>Detail level:</strong> Some APIs offer "low" vs "high" detail. Use "low" when you only need general understanding (e.g., "is this a cat or a dog?") and "high" when you need fine details (e.g., reading small text in a document).</li>
+          <li><strong>Number of images:</strong> Sending 10 screenshots when 3 would suffice wastes tokens. Be selective.</li>
+        </ul>
+      </div>
+
+      <ol>
+        <li><strong>Resize images aggressively.</strong> For most classification and description tasks, 512&times;512 is plenty. Only use high resolution for document reading and fine-detail extraction.</li>
+        <li><strong>Cache identical requests.</strong> Hash the image + prompt combination. If you've seen this exact input before, return the cached response. This is surprisingly effective for features like product photo analysis where users upload the same catalog images.</li>
+        <li><strong>Use the cheapest model that works.</strong> Don't send every image to GPT-4o when GPT-4o-mini handles 80% of your use cases. Route by complexity.</li>
+        <li><strong>Batch where possible.</strong> If you're processing 50 product photos, use batch APIs (OpenAI's batch endpoint is 50% cheaper) instead of 50 individual requests.</li>
+        <li><strong>Sample video frames intelligently.</strong> Don't extract one frame per second from a 10-minute video (600 frames). Use scene detection to grab only frames where something changes (typically 20&ndash;40 frames for the same video).</li>
+        <li><strong>Set per-user limits.</strong> Generous enough to be useful, strict enough to prevent abuse. "5 free image analyses per day" is a common pattern.</li>
+        <li><strong>Monitor daily.</strong> Set up cost alerts. One rogue user uploading 1,000 images via your API can spike your bill by hundreds of dollars in a single day.</li>
+      </ol>
+
+<pre><code># Smart model routing by task complexity
+def choose_model(task, image_count):
+    if task == "classification":
+        return "gpt-4o-mini"  # cheap, fast, good enough
+    elif task == "document_ocr":
+        return "claude-sonnet-4-6"  # great at reading text
+    elif task == "complex_reasoning" or image_count > 3:
+        return "claude-opus-4-6"  # heavy lifting
+    return "gpt-4o-mini"  # default to cheap
+</code></pre>
+
+      <div class="warning-box">
+        <strong>Cost estimation tip:</strong> Before launching a multimodal feature, run the math. Take your expected daily active users, multiply by expected requests per user, multiply by cost per request. If the number makes your finance team faint, you need to optimize <em>before</em> launch, not after. The "we'll optimize later" approach with multimodal costs can be a career-limiting move.
+      </div>
+    </section>
+
+    <!-- Latency Optimization -->
+    <section>
+      <h2>Latency Optimization</h2>
+
+      <p>Users have different patience thresholds for different tasks. A voice response needs to be under 500ms. A photo analysis can take 2&ndash;3 seconds. A video summary can take 30 seconds if you show progress.</p>
+
+      <p>The key insight: <strong>perceived latency matters more than actual latency.</strong> A 3-second response that shows immediate feedback ("Analyzing your image...") feels faster than a 2-second response with no feedback.</p>
+
+      <h3>Latency Reduction Techniques</h3>
+
+      <ul>
+        <li><strong>Stream responses:</strong> Don't wait for the complete model response. Stream tokens as they arrive. The user starts reading immediately, and the "time to first byte" drops from 3 seconds to ~200ms.</li>
+        <li><strong>Precompute when possible:</strong> If users commonly analyze their profile photos, process the photo when they upload it &mdash; not when they click "Analyze." Run inference proactively for predictable inputs.</li>
+        <li><strong>Progressive rendering:</strong> Show results as they become available. If you're analyzing 5 images, show each result as it completes instead of waiting for all 5.</li>
+        <li><strong>Use regional endpoints:</strong> API calls to a server on the same continent are 50&ndash;150ms faster. Use the closest region.</li>
+        <li><strong>Parallelize independent calls:</strong> If you need to transcribe audio AND analyze an image from the same video, do both at the same time, not sequentially.</li>
+      </ul>
+
+<pre><code># Parallel processing with asyncio
+import asyncio
+
+async def analyze_video_segment(frame, audio_chunk):
+    # Run vision and audio analysis in parallel
+    vision_task = asyncio.create_task(
+        analyze_image(frame)
+    )
+    audio_task = asyncio.create_task(
+        transcribe_audio(audio_chunk)
+    )
+    vision_result, audio_result = await asyncio.gather(
+        vision_task, audio_task
+    )
+    return combine_results(vision_result, audio_result)
+</code></pre>
+
+      <div class="tip-box">
+        <strong>Measure latency at every stage.</strong> Add timestamps at each pipeline step. If your total latency is 4 seconds, you need to know: Is image resizing taking 500ms? Is the API call taking 3 seconds? Is JSON parsing taking 200ms? You can only optimize what you measure. Log p50, p90, and p99 latencies &mdash; the average hides your worst cases.
+      </div>
+    </section>
+
+    <!-- Fallback Strategies -->
+    <section>
+      <h2>Fallback Strategies: When Things Go Wrong</h2>
+
+      <p>In text-only AI, there's basically one thing that can fail: the API call. With multimodal AI, you've got a whole menu of failure modes:</p>
+
+      <ul>
+        <li>The image is too blurry to read</li>
+        <li>The audio has too much background noise</li>
+        <li>The API times out because the image is too large</li>
+        <li>The model hallucinates text that isn't in the image</li>
+        <li>The model refuses to process the image (content policy)</li>
+        <li>The user's camera is covered or pointing at a ceiling</li>
+        <li>Rate limits are hit during peak usage</li>
+      </ul>
+
+      <p><strong>Graceful degradation</strong> means your feature still provides value even when the ideal path fails.</p>
+
+      <div class="pipeline-box">
+        <h4>Fallback Chain for Image Analysis</h4>
+        <ol>
+          <li><strong>Primary:</strong> Send to Claude vision API &rarr; structured JSON response</li>
+          <li><strong>If API fails (timeout/error):</strong> Retry once with a smaller image resolution</li>
+          <li><strong>If retry fails:</strong> Try a fallback model (e.g., GPT-4o-mini)</li>
+          <li><strong>If all models fail:</strong> Fall back to OCR-only extraction (Tesseract)</li>
+          <li><strong>If OCR fails:</strong> Ask the user to re-upload with better quality</li>
+          <li><strong>Always:</strong> Log the failure reason for debugging</li>
+        </ol>
+      </div>
+
+<pre><code># Fallback chain example
+async def analyze_with_fallbacks(image_b64, prompt):
+    try:
+        return await call_claude_vision(image_b64, prompt)
+    except (TimeoutError, APIError):
+        try:
+            smaller = resize_image(image_b64, max_size=512)
+            return await call_gpt4_mini(smaller, prompt)
+        except Exception:
+            return {
+                "status": "partial",
+                "message": "Could not fully analyze. "
+                           "Please try a clearer image.",
+                "ocr_text": run_tesseract(image_b64)
+            }
+</code></pre>
+
+      <div class="warning-box">
+        <strong>Never fail silently.</strong> If the image analysis returns garbage or the audio transcription is clearly wrong, tell the user. "We couldn't read the text in this image clearly &mdash; try taking a photo with better lighting" is infinitely better than silently returning wrong data that the user acts on.
+      </div>
+    </section>
+
+    <!-- Input and Output Validation -->
+    <section>
+      <h2>Input and Output Validation</h2>
+
+      <h3>Validating Inputs</h3>
+
+      <p>Users will send you things you never imagined. A 200MB raw camera file. A screenshot that's 90% black. An audio recording of pure silence. A "photo of a receipt" that's actually a photo of a cat.</p>
+
+      <ul class="checklist">
+        <li class="checked"><strong>File format:</strong> Only accept formats your pipeline supports</li>
+        <li class="checked"><strong>File size:</strong> Enforce maximum sizes before processing</li>
+        <li class="checked"><strong>Image quality:</strong> Check resolution, blur detection, brightness</li>
+        <li class="checked"><strong>Audio quality:</strong> Check sample rate, duration, silence ratio</li>
+        <li class="checked"><strong>Content safety:</strong> Screen for prohibited content before model inference</li>
+        <li class="checked"><strong>Dimensions:</strong> Reject zero-dimension or corrupted files</li>
+      </ul>
+
+      <h3>Validating Outputs</h3>
+
+      <p>The model's response is not gospel. Validate it before passing it to your application:</p>
+
+      <ul>
+        <li><strong>JSON structure:</strong> Does the response match your expected schema? Use Pydantic or JSON Schema.</li>
+        <li><strong>Confidence signals:</strong> If the model says "I'm not sure" or "It's hard to tell," flag the response as low-confidence.</li>
+        <li><strong>Sanity checks:</strong> A receipt total of $999,999.99? A bounding box with negative coordinates? A transcription that's 10x longer than the audio? These are red flags.</li>
+        <li><strong>Consistency:</strong> If the model says there are 3 items in the receipt but lists 5, something's wrong.</li>
+      </ul>
+
+      <div class="try-it-box">
+        <h4>Try It: Test Your Input Validation</h4>
+        <p>Take any multimodal feature you've built (or a demo from earlier chapters) and try these adversarial inputs:</p>
+        <ol>
+          <li>Upload a completely blank white image</li>
+          <li>Upload a very dark, nearly black photo</li>
+          <li>Upload an extremely high-resolution image (8K or larger)</li>
+          <li>Upload a 1&times;1 pixel image</li>
+          <li>Send an audio file that's pure silence</li>
+          <li>Send a text file renamed with a .jpg extension</li>
+        </ol>
+        <p>How does your feature handle each case? Does it crash, return garbage, or gracefully inform the user?</p>
+      </div>
+    </section>
+
+    <!-- UX Patterns -->
+    <section>
+      <h2>UX Patterns for Multimodal Features</h2>
+
+      <p>Multimodal features need different UX than text chat. Users are sending richer input and expecting richer output &mdash; and things take longer to process.</p>
+
+      <h3>Show What the AI "Sees"</h3>
+
+      <p>When a user uploads an image, show a preview with a subtle overlay: "Analyzing..." When the analysis is done, highlight the regions the AI focused on. This builds trust and helps users understand failures. If the AI couldn't read the receipt, the user can see that half the image was in shadow.</p>
+
+      <h3>Progress Indicators That Inform</h3>
+
+      <p>Don't just show a spinner. Show what's happening:</p>
+
+      <div class="prompt-example good">
+        <p class="prompt-label">Good Progress UX</p>
+        <div class="prompt-text">Step 1/3: Processing image... ✓
+Step 2/3: Extracting text...  ✓
+Step 3/3: Structuring data... ⏳
+
+Found 8 line items on receipt.</div>
+      </div>
+
+      <div class="prompt-example bad">
+        <p class="prompt-label">Bad Progress UX</p>
+        <div class="prompt-text">Loading...
+
+[spinner for 6 seconds]
+
+Done.</div>
+      </div>
+
+      <h3>Confidence Display</h3>
+
+      <p>When the AI isn't sure, show it. "Extracted total: <strong>$42.50</strong> (high confidence)" vs "Extracted date: <strong>Mar 15?</strong> (low confidence &mdash; please verify)." Users can quickly confirm or correct uncertain fields instead of reviewing everything.</p>
+
+      <h3>Graceful Error Messages</h3>
+
+      <p>Multimodal errors need specific guidance, not generic "Something went wrong":</p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <p class="prompt-label">Generic Error</p>
+          <div class="prompt-text">"Error processing your request. Please try again."</div>
+          <p class="prompt-explanation">User has no idea what to change.</p>
+        </div>
+        <div class="prompt-example good">
+          <p class="prompt-label">Actionable Error</p>
+          <div class="prompt-text">"The text in this image is too small to read. Try cropping to just the receipt, or take a closer photo."</div>
+          <p class="prompt-explanation">User knows exactly what to fix.</p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The "preview before send" pattern:</strong> Before processing an expensive multimodal request, show the user what you're about to send. "We'll analyze this image at 1024&times;768 resolution. This will use 1 of your 10 daily analyses." This prevents wasted credits on accidental uploads and sets expectations for processing time.
+      </div>
+    </section>
+
+    <!-- Caching Strategies -->
+    <section>
+      <h2>Caching Strategies</h2>
+
+      <p>Caching multimodal responses is trickier than caching text responses, but the savings can be enormous.</p>
+
+      <h3>Hash-Based Caching</h3>
+
+      <p>The simplest approach: hash the input (image bytes + prompt text) and use it as a cache key. If you've seen this exact combination before, return the cached response. This works great for:</p>
+
+      <ul>
+        <li>Product catalog images (same photo analyzed repeatedly)</li>
+        <li>Standard documents (company templates, common forms)</li>
+        <li>Repeated screenshots (same UI screen, same question)</li>
+      </ul>
+
+<pre><code>import hashlib
+
+def get_cache_key(image_b64, prompt):
+    content = f"{image_b64}:{prompt}"
+    return hashlib.sha256(content.encode()).hexdigest()
+
+def analyze_with_cache(image_b64, prompt, cache):
+    key = get_cache_key(image_b64, prompt)
+    if key in cache:
+        return cache[key]
+    result = call_vision_api(image_b64, prompt)
+    cache[key] = result
+    return result
+</code></pre>
+
+      <h3>Semantic Caching</h3>
+
+      <p>More advanced: cache based on <em>similarity</em> rather than exact match. Two photos of the same receipt taken from slightly different angles should return the same response. This uses embeddings to find "close enough" matches in your cache.</p>
+
+      <p>Semantic caching is harder to implement but can dramatically improve cache hit rates for features where users take multiple photos of the same thing.</p>
+
+      <div class="tip-box">
+        <strong>Set reasonable TTLs.</strong> Multimodal caches should expire. A receipt scan from last month doesn't need to be cached forever. 24&ndash;48 hours is a good default for most use cases. For static content like product photos, you can cache longer.
+      </div>
+    </section>
+
+    <!-- Monitoring and Observability -->
+    <section>
+      <h2>Monitoring and Observability</h2>
+
+      <p>Multimodal features need more monitoring than text features because there are more things that can go wrong &mdash; and they fail in more subtle ways.</p>
+
+      <h3>What to Monitor</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>What It Tells You</th>
+            <th>Alert Threshold</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>API latency (p50/p90/p99)</td>
+            <td>How fast your model calls are</td>
+            <td>p99 > 10 seconds</td>
+          </tr>
+          <tr>
+            <td>Error rate by modality</td>
+            <td>Which input type fails most</td>
+            <td>> 5% error rate</td>
+          </tr>
+          <tr>
+            <td>Cost per request</td>
+            <td>Whether costs are trending up</td>
+            <td>Daily cost > 2x average</td>
+          </tr>
+          <tr>
+            <td>Cache hit rate</td>
+            <td>How effective your caching is</td>
+            <td>< 10% (caching not helping)</td>
+          </tr>
+          <tr>
+            <td>Input rejection rate</td>
+            <td>Whether users struggle with input quality</td>
+            <td>> 30% (UX problem)</td>
+          </tr>
+          <tr>
+            <td>Output validation failures</td>
+            <td>Whether model responses are degrading</td>
+            <td>> 10% (model or prompt issue)</td>
+          </tr>
+          <tr>
+            <td>Token usage per request</td>
+            <td>Whether image sizes are controlled</td>
+            <td>Avg > expected by 50%</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="warning-box">
+        <strong>Watch for silent quality degradation.</strong> Unlike crashes, quality drops don't trigger alerts. A model update might subtly change how it reads receipts &mdash; totals are off by a penny, dates are parsed in the wrong format. Run automated quality checks on a sample of real responses. Compare model output against known-good answers for a test set you maintain.
+      </div>
+    </section>
+
+    <!-- Privacy Considerations -->
+    <section>
+      <h2>Privacy: Images and Audio Are PII Magnets</h2>
+
+      <p>Text prompts rarely contain a user's face, voice, or home address. Images and audio almost always do. This changes your privacy obligations fundamentally.</p>
+
+      <ul>
+        <li><strong>Images contain faces, locations, documents, screens.</strong> A "harmless" photo of a receipt might include the restaurant's address, the last four digits of a credit card, and a timestamp that reveals the user's location.</li>
+        <li><strong>Audio contains voice biometrics.</strong> A person's voice is a biometric identifier. Storing voice recordings is storing biometric data, which is regulated in many jurisdictions (GDPR, BIPA, etc.).</li>
+        <li><strong>EXIF data contains GPS coordinates.</strong> A photo taken on a smartphone typically embeds the exact latitude and longitude where it was taken. Always strip EXIF before processing or storing.</li>
+      </ul>
+
+      <div class="modality-box">
+        <h4>Privacy Pipeline for Multimodal Inputs</h4>
+        <p>Before sending any image or audio to an external API, run it through a privacy pipeline:</p>
+        <ol>
+          <li><strong>Strip metadata:</strong> Remove EXIF, XMP, and IPTC data from images. Remove ID3 tags from audio.</li>
+          <li><strong>Evaluate necessity:</strong> Do you actually need to send the full image? Can you crop to just the relevant region?</li>
+          <li><strong>Minimize retention:</strong> Delete the raw input after processing. Store only the extracted structured data.</li>
+          <li><strong>Inform the user:</strong> "Your image will be sent to [provider] for analysis and deleted within 24 hours."</li>
+          <li><strong>Respect data residency:</strong> Some users' data must stay in specific regions. Use regional API endpoints.</li>
+        </ol>
+      </div>
+
+      <div class="tip-box">
+        <strong>Ask your legal team early.</strong> Don't build a feature that captures and processes user photos, then ask legal if it's OK. Involve them in the design phase. The technical cost of adding privacy controls after launch is 10x higher than building them in from the start.
+      </div>
+    </section>
+
+    <!-- Putting It All Together -->
+    <section>
+      <h2>Putting It All Together: Receipt Scanner Architecture</h2>
+
+      <p>Let's design a complete production architecture for a real feature: a <strong>photo receipt scanner</strong> that extracts structured data (merchant, date, items, total) from a photo of a receipt.</p>
+
+      <div class="pipeline-box">
+        <h4>Complete Receipt Scanner Pipeline</h4>
+        <ol>
+          <li><strong>Client:</strong> User takes photo or selects from gallery. Show preview. Confirm upload.</li>
+          <li><strong>Upload:</strong> Compress to JPEG 85%, resize to max 1500px, strip EXIF. Upload to temporary storage.</li>
+          <li><strong>Validate:</strong> Check format, size, dimensions. Run blur detection. If too blurry &rarr; tell user.</li>
+          <li><strong>Cache check:</strong> Hash image + prompt. Check cache. If hit &rarr; return cached result.</li>
+          <li><strong>Model call:</strong> Send to Claude vision with structured prompt asking for JSON. Timeout: 15s.</li>
+          <li><strong>Fallback:</strong> If Claude fails &rarr; try GPT-4o-mini. If that fails &rarr; OCR with Tesseract.</li>
+          <li><strong>Validate output:</strong> Parse JSON. Check schema. Sanity-check amounts. Flag low-confidence fields.</li>
+          <li><strong>Cache result:</strong> Store in cache with 48-hour TTL.</li>
+          <li><strong>Return:</strong> Structured data + confidence scores + highlighted image regions.</li>
+          <li><strong>Cleanup:</strong> Delete the uploaded image from temporary storage within 1 hour.</li>
+        </ol>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">~2s</span>
+          <span class="stat-label">Average response time</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~$0.03</span>
+          <span class="stat-label">Average cost per scan</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">~95%</span>
+          <span class="stat-label">Accuracy on clear photos</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Production Checklist -->
+    <section>
+      <h2>Your Pre-Launch Checklist</h2>
+
+      <p>Before shipping any multimodal feature, walk through this checklist:</p>
+
+      <ul class="checklist">
+        <li class="checked"><strong>Cost projection:</strong> You've calculated expected monthly cost at projected usage</li>
+        <li class="checked"><strong>Rate limits:</strong> Per-user and global rate limits are in place</li>
+        <li class="checked"><strong>Input validation:</strong> Bad inputs are rejected with helpful error messages</li>
+        <li class="checked"><strong>Output validation:</strong> Model responses are parsed and sanity-checked</li>
+        <li class="checked"><strong>Fallbacks:</strong> There's a degradation path when the primary model fails</li>
+        <li class="checked"><strong>Caching:</strong> Identical requests return cached responses</li>
+        <li class="checked"><strong>Privacy:</strong> Metadata is stripped, data retention policies are enforced</li>
+        <li class="checked"><strong>Monitoring:</strong> Latency, error rate, cost, and quality metrics are tracked</li>
+        <li class="checked"><strong>UX feedback:</strong> Users see progress, confidence levels, and actionable errors</li>
+        <li class="checked"><strong>Cost alerts:</strong> You'll be notified if daily spend exceeds 2x the expected amount</li>
+      </ul>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Design a Production Multimodal Architecture</h3>
+        <p>Pick one of these features and design the complete production pipeline:</p>
+        <ol>
+          <li><strong>Photo-to-listing:</strong> A user takes a photo of an item they want to sell. The AI generates a title, description, category, and suggested price for a marketplace listing.</li>
+          <li><strong>Meeting summarizer:</strong> A user uploads a meeting recording (audio). The AI transcribes it, identifies speakers, extracts action items, and generates a summary.</li>
+          <li><strong>Visual code reviewer:</strong> A user takes a screenshot of their IDE. The AI identifies the language, finds potential bugs, suggests improvements, and explains the code.</li>
+        </ol>
+        <p>For your chosen feature, document:</p>
+        <ul>
+          <li>The preprocessing pipeline (what do you do to the input before sending to a model?)</li>
+          <li>Which model(s) you'd use and why</li>
+          <li>The fallback chain (what happens when the primary model fails?)</li>
+          <li>Cost estimate per request and projected monthly cost for 10,000 DAU</li>
+          <li>What you'd cache and how</li>
+          <li>Three adversarial inputs that could break your pipeline and how you'd handle them</li>
+        </ul>
+        <p>This exercise simulates the architecture review that happens before any real multimodal feature gets the green light to ship.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>You now know how to take a multimodal prototype and turn it into a feature that survives contact with real users. You've got architecture patterns, cost strategies, fallback chains, UX patterns, and a pre-launch checklist.</p>
+
+      <p>But there's one question we haven't answered yet: <strong>with all these models, APIs, and approaches, how do you choose?</strong> When should you use Claude vision vs GPT-4o vs Gemini? When should you use Whisper vs Deepgram? When does open source beat proprietary? When should you process on-device vs in the cloud?</p>
+
+      <p>In Chapter 12 &mdash; <strong>The Multimodal Toolkit: What to Use When</strong> &mdash; we'll build a decision framework that helps you choose the right tool for any multimodal task. It's the cheat sheet you'll keep bookmarked long after you finish this course.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="10-realtime-pipelines.html" class="prev">
+      <span class="nav-direction">&larr; Previous</span>
+      <span class="nav-chapter">Real-Time Multimodal Pipelines</span>
+    </a>
+    <a href="12-multimodal-toolkit.html" class="next">
+      <span class="nav-direction">Next &rarr;</span>
+      <span class="nav-chapter">The Multimodal Toolkit: What to Use When</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

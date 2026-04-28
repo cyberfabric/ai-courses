@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Summarization &amp; Content Generation | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-smart-search.html">&larr; Prev</a>
+      <a href="06-chat-conversational.html">Next &rarr;</a>
+      <a href="maps/05-summarization-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Summarization &amp; Content Generation</h1>
+    <p class="subtitle">TL;DR buttons, smart drafts, streaming text, and prompts that actually work</p>
+  </header>
+
+  <main>
+
+    <h2>From Finding to Creating</h2>
+
+    <p>In Chapter 4, you built search that <em>finds</em> content. Now you're going to build features that <em>create</em> it. Summarization and content generation are the most common generative AI features in apps today &mdash; and the most likely to impress users or embarrass you, depending on how you implement them.</p>
+
+    <p>Think of it as the difference between a librarian and a writer. Search is the librarian: "Here's the book you wanted." Generation is the writer: "Here's a summary of that book in three bullet points." Both are useful, but the writer has a much harder job &mdash; and much more room for error.</p>
+
+    <h2>Summarization Use Cases</h2>
+
+    <p>Summarization is everywhere in great apps. Here are the patterns you'll see (and build):</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Use Case</th>
+          <th>Input</th>
+          <th>Output</th>
+          <th>Example App</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Article TL;DR</td>
+          <td>Long article (1,000+ words)</td>
+          <td>3 bullet points</td>
+          <td>News reader, RSS app</td>
+        </tr>
+        <tr>
+          <td>Email thread summary</td>
+          <td>10-message email chain</td>
+          <td>Key decisions + action items</td>
+          <td>Email client</td>
+        </tr>
+        <tr>
+          <td>Meeting notes</td>
+          <td>Transcript or raw notes</td>
+          <td>Structured agenda + takeaways</td>
+          <td>Productivity app</td>
+        </tr>
+        <tr>
+          <td>Review highlights</td>
+          <td>50 user reviews</td>
+          <td>"Users love X, complain about Y"</td>
+          <td>Shopping, restaurant app</td>
+        </tr>
+        <tr>
+          <td>Notification batching</td>
+          <td>12 unread messages</td>
+          <td>"5 from Anna about the deadline"</td>
+          <td>Messaging app</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Karim opens his note-taking app after a long meeting. He has three pages of messy, stream-of-consciousness notes. He taps the sparkle icon and selects "Summarize." Two seconds later, a clean card appears with five bullet points: three key decisions, two action items with owners. Karim copies the action items to his task manager and moves on with his day.</p>
+      <p>Without AI, Karim would spend 10 minutes re-reading and reformatting. With AI, it took 2 seconds plus a quick review.</p>
+    </div>
+
+    <h2>The Summarization Stack</h2>
+
+    <p>You have three options, and they map directly to the decision framework from Chapter 2:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">Nano</span>
+        <span class="stat-label">Gemini Nano (on-device) &mdash; fast, free, limited quality, flagship devices only</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Flash</span>
+        <span class="stat-label">Gemini Flash (cloud) &mdash; fast, cheap, good quality for most tasks</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Pro</span>
+        <span class="stat-label">Gemini Pro / GPT-4o (cloud) &mdash; slower, expensive, highest quality</span>
+      </div>
+    </div>
+
+    <p>For most summarization features, <strong>Gemini Flash</strong> hits the sweet spot: fast enough for interactive use (1-2 seconds), cheap enough for scale, and good enough quality for bullet-point summaries. Use Pro/GPT-4o only for complex summarization (multi-document, nuanced analysis).</p>
+
+    <h2>Building a "TL;DR" Button</h2>
+
+    <p>Let's build the most common summarization feature: a button that condenses long text into a digestible summary.</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: The Complete TL;DR Feature</h3>
+      <p><strong>Goal:</strong> User taps "Summarize," sees a streaming 3-bullet summary with an "AI Summary" badge.</p>
+      <p><strong>Step 1:</strong> Create the summarization ViewModel:</p>
+<pre><code>class SummarizeViewModel(
+    private val model: GenerativeModel
+) : ViewModel() {
+    private val _uiState = MutableStateFlow&lt;SummaryState&gt;(SummaryState.Idle)
+    val uiState: StateFlow&lt;SummaryState&gt; = _uiState
+
+    fun summarize(text: String) {
+        viewModelScope.launch {
+            _uiState.value = SummaryState.Loading("Reading the content...")
+            try {
+                val prompt = buildSummaryPrompt(text)
+                var result = ""
+                model.generateContentStream(prompt).collect { chunk -&gt;
+                    result += chunk.text.orEmpty()
+                    _uiState.value = SummaryState.Streaming(result)
+                }
+                _uiState.value = SummaryState.Complete(result)
+            } catch (e: Exception) {
+                _uiState.value = SummaryState.Error("Couldn't summarize. Tap to retry.")
+            }
+        }
+    }
+}</code></pre>
+      <p><strong>Step 2:</strong> Craft the prompt (this matters more than you think):</p>
+<pre><code>fun buildSummaryPrompt(text: String): String = """
+    Summarize the following text in exactly 3 bullet points.
+    Each bullet should be one concise sentence.
+    Focus on key decisions and action items.
+    If there are no action items, focus on the main ideas.
+
+    Text to summarize:
+    $text
+""".trimIndent()</code></pre>
+      <p><strong>Step 3:</strong> Build the Compose UI with all states:</p>
+<pre><code>@Composable
+fun SummaryCard(state: SummaryState, onRetry: () -&gt; Unit) {
+    AnimatedVisibility(visible = state != SummaryState.Idle) {
+        Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                // AI badge
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.AutoAwesome, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("AI Summary", style = MaterialTheme.typography.labelSmall)
+                }
+                Spacer(Modifier.height(8.dp))
+                when (state) {
+                    is SummaryState.Loading -&gt;
+                        Text(state.message, color = MaterialTheme.colorScheme.outline)
+                    is SummaryState.Streaming -&gt;
+                        Text(state.text, style = MaterialTheme.typography.bodyMedium)
+                    is SummaryState.Complete -&gt;
+                        Text(state.text, style = MaterialTheme.typography.bodyMedium)
+                    is SummaryState.Error -&gt;
+                        TextButton(onClick = onRetry) { Text(state.message) }
+                    else -&gt; {}
+                }
+            }
+        }
+    }
+}</code></pre>
+      <p>The result: a smooth card that slides in, streams text as it arrives, shows the "AI Summary" badge, and handles errors gracefully.</p>
+    </div>
+
+    <h2>Prompt Engineering for Summarization</h2>
+
+    <p>The prompt is the most underrated part of any generative AI feature. The difference between a good prompt and a bad one is the difference between "useful summary" and "useless wall of text."</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Vague Prompt</p>
+        <p class="prompt-text">Summarize this.</p>
+        <p class="prompt-explanation">No format guidance, no length constraint, no focus. You'll get a different style every time &mdash; sometimes a paragraph, sometimes 10 bullets, sometimes a rewrite of the original.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Structured Prompt</p>
+        <p class="prompt-text">Summarize the following text in exactly 3 bullet points.
+Each bullet should be one concise sentence (max 20 words).
+Focus on action items and decisions.
+If there are no action items, highlight the main conclusions.</p>
+        <p class="prompt-explanation">Clear format (3 bullets), length constraint (one sentence each), focus area (action items), and a fallback instruction. Consistent output every time.</p>
+      </div>
+    </div>
+
+    <h3>The Prompt Engineering Checklist</h3>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Format:</strong> Specify the output structure (bullets, paragraph, numbered list, JSON)</li>
+      <li class="checked"><strong>Length:</strong> Set explicit constraints (3 bullets, 2 sentences, max 50 words)</li>
+      <li class="checked"><strong>Focus:</strong> Tell the model what to prioritize (decisions, facts, opinions, action items)</li>
+      <li class="checked"><strong>Tone:</strong> Match your app's voice (professional, casual, technical)</li>
+      <li class="checked"><strong>Edge cases:</strong> What should the model do when input is too short, off-topic, or empty?</li>
+    </ul>
+
+    <div class="tip-box">
+      <p><strong>Test prompts with real data, not samples.</strong> Your prompt might work perfectly on a clean Wikipedia article but fall apart on a user's messy notes with abbreviations, typos, and half-sentences. Test with the ugliest real input you can find.</p>
+    </div>
+
+    <h2>Content Generation: The "AI Draft" Pattern</h2>
+
+    <p>Summarization takes long content and makes it short. Content generation does the opposite: takes a small input and creates something bigger.</p>
+
+    <div class="product-pattern">
+      <h3>The AI Draft Pattern</h3>
+      <p>The safest and most useful content generation pattern: <strong>AI creates a starting point, the user finishes it.</strong></p>
+      <ol>
+        <li><strong>User provides context:</strong> "Reply to this email" / "Write a product description for this" / "Draft meeting notes"</li>
+        <li><strong>AI generates a draft:</strong> A full text that's 70-80% of the way there</li>
+        <li><strong>User edits:</strong> Tweaks wording, adds personal touches, removes anything off-base</li>
+        <li><strong>User sends/saves:</strong> The final version is the user's, not the AI's</li>
+      </ol>
+      <p><strong>Why this works:</strong> Editing is easier than writing from scratch. Users feel ownership of the final result. And if the AI gets something wrong, the user catches it during the editing step.</p>
+      <p><strong>Real-world example:</strong> Gmail's "Help me write" feature generates a full email draft based on a short prompt. It always drops the user into the editor, never sends automatically. The AI is a writing assistant, not a ghost writer.</p>
+    </div>
+
+    <h2>Template-Based Generation</h2>
+
+    <p>For structured content (product descriptions, event listings, form letters), combine AI generation with templates. This constrains the AI's output for consistency:</p>
+
+<pre><code>fun buildProductDescriptionPrompt(
+    name: String, category: String, features: List&lt;String&gt;
+): String = """
+    Write a product description for an e-commerce app.
+
+    Product: $name
+    Category: $category
+    Key features: ${features.joinToString(", ")}
+
+    Format:
+    - Opening hook (1 sentence, under 15 words)
+    - 3 feature highlights (1 sentence each)
+    - Call to action (1 sentence)
+
+    Tone: friendly, enthusiastic, not salesy.
+    Total length: under 80 words.
+""".trimIndent()</code></pre>
+
+    <p>The template constrains the structure (hook, features, CTA) while the AI fills in the creative content. Every product description will follow the same format, making the feature predictable and consistent.</p>
+
+    <h2>Token Limits and Chunking</h2>
+
+    <p>Every AI model has a context window &mdash; a maximum amount of text it can process at once. When your user's document exceeds that limit, you need a chunking strategy.</p>
+
+    <div class="warning-box">
+      <p><strong>Gemini Flash:</strong> 1M token context window (roughly 750K words &mdash; rarely a problem). <strong>GPT-4o-mini:</strong> 128K tokens. <strong>On-device models:</strong> Often just 4K-8K tokens. Know your model's limit before you build.</p>
+    </div>
+
+    <p>For documents that exceed the context window, use the <strong>map-reduce</strong> pattern:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Split into chunks</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Summarize each chunk</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Summarize the summaries</div>
+    </div>
+
+<pre><code>suspend fun summarizeLongDocument(text: String, model: GenerativeModel): String {
+    val chunks = text.chunked(maxChunkSize) // split by paragraphs or sentences
+
+    // Map: summarize each chunk independently
+    val chunkSummaries = chunks.map { chunk -&gt;
+        val response = model.generateContent(
+            "Summarize this section in 2 sentences:\n$chunk"
+        )
+        response.text.orEmpty()
+    }
+
+    // Reduce: summarize the summaries
+    val combined = chunkSummaries.joinToString("\n")
+    val finalResponse = model.generateContent(
+        "Combine these section summaries into 3 key bullet points:\n$combined"
+    )
+    return finalResponse.text.orEmpty()
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Smart chunking matters.</strong> Don't split mid-sentence or mid-paragraph. Split at natural boundaries: paragraph breaks, section headers, or sentence endings. A chunk that starts with "...continued from above" will confuse the model.</p>
+    </div>
+
+    <h2>Content Quality Control</h2>
+
+    <p>Generated content can be wrong, awkward, or off-brand. You need quality gates:</p>
+
+    <h3>1. Hallucination Detection</h3>
+    <p>If your summary mentions facts not in the original text, that's a hallucination. For critical features (medical, financial, legal), add a verification step:</p>
+
+<pre><code>suspend fun verifySummary(original: String, summary: String): Boolean {
+    val response = model.generateContent("""
+        Does this summary contain any claims not supported by the original text?
+        Original: $original
+        Summary: $summary
+        Answer only YES or NO.
+    """.trimIndent())
+    return response.text?.trim()?.uppercase() == "NO"
+}</code></pre>
+
+    <h3>2. The "Regenerate" Button</h3>
+    <p>Sometimes the output just isn't great. Always offer a "Regenerate" option &mdash; it's cheap (one more API call) and gives the user control. Each regeneration should produce a different result, thanks to temperature settings.</p>
+
+    <h3>3. Source Attribution</h3>
+    <p>If the summary is based on a specific document, link back to the source. "Based on your meeting notes from March 28." This helps users verify and builds trust.</p>
+
+    <h2>Caching Generated Content</h2>
+
+    <p>Don't regenerate the same summary every time the user views it. Cache aggressively:</p>
+
+<pre><code>@Entity
+data class CachedSummary(
+    @PrimaryKey val sourceId: String,     // ID of the original content
+    val summary: String,                   // the generated summary
+    val sourceHash: String,                // hash of original content
+    val generatedAt: Long                  // timestamp
+)
+
+// Check cache before generating
+suspend fun getSummary(sourceId: String, content: String): String {
+    val hash = content.hashCode().toString()
+    val cached = dao.getSummary(sourceId)
+    if (cached != null &amp;&amp; cached.sourceHash == hash) {
+        return cached.summary // content hasn't changed, use cache
+    }
+    // Content changed or no cache — generate fresh
+    val summary = generateSummary(content)
+    dao.upsert(CachedSummary(sourceId, summary, hash, System.currentTimeMillis()))
+    return summary
+}</code></pre>
+
+    <p>The <code>sourceHash</code> is key: if the original content changes, invalidate the cache and regenerate. If it hasn't changed, serve the cached summary instantly.</p>
+
+    <h2>Cost Management at Scale</h2>
+
+    <p>Generative AI features can get expensive fast. Here's how to keep costs under control:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Savings</th>
+          <th>Tradeoff</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Cache summaries</strong></td>
+          <td>60-80% fewer API calls</td>
+          <td>Stale results if source changes</td>
+        </tr>
+        <tr>
+          <td><strong>Use smaller models for simple tasks</strong></td>
+          <td>5-10x cheaper per request</td>
+          <td>Lower quality for complex content</td>
+        </tr>
+        <tr>
+          <td><strong>Batch requests</strong></td>
+          <td>Lower overhead per request</td>
+          <td>Slightly delayed results</td>
+        </tr>
+        <tr>
+          <td><strong>Set per-user daily limits</strong></td>
+          <td>Predictable monthly costs</td>
+          <td>Power users hit limits</td>
+        </tr>
+        <tr>
+          <td><strong>Shorter prompts</strong></td>
+          <td>Fewer input tokens = lower cost</td>
+          <td>Less context for the model</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The Cost Formula You Need to Memorize</h3>
+      <p><code>Monthly cost = DAU &times; summaries_per_user_per_day &times; (input_tokens + output_tokens) &times; price_per_token &times; 30</code></p>
+      <p>Run this before you ship. Then run it again for 10x your current DAU. If it's scary, add caching and limits before launch, not after you get the bill.</p>
+    </div>
+
+    <h2>Gemini Nano vs. Cloud: A Practical Comparison</h2>
+
+    <p>For summarization specifically, here's how on-device and cloud compare:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Gemini Nano (On-Device)</p>
+        <p class="prompt-text">Speed: ~500ms for a short summary
+Cost: $0
+Quality: Good for short text (under 500 words)
+Availability: Pixel 8+, Samsung S24+ only
+Offline: Yes</p>
+        <p class="prompt-explanation">Great for quick summaries, notification previews, and short notes. Falls short on long or complex documents.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Gemini Flash (Cloud)</p>
+        <p class="prompt-text">Speed: 1-2 seconds
+Cost: ~$0.0001 per summary
+Quality: Excellent for most content
+Availability: Any device with internet
+Offline: No</p>
+        <p class="prompt-explanation">The workhorse for summarization. High quality, fast enough for interactive use, cheap enough for scale.</p>
+      </div>
+    </div>
+
+    <p>The smart approach: try Gemini Nano first (instant, free). If the device doesn't support it or the text is too long, fall back to Gemini Flash.</p>
+
+<pre><code>suspend fun smartSummarize(text: String): String {
+    // Try on-device first (free, instant)
+    if (isGeminiNanoAvailable &amp;&amp; text.length &lt; 2000) {
+        return geminiNano.summarize(text)
+    }
+    // Fall back to cloud (better quality, costs money)
+    return geminiFlash.summarize(text)
+}</code></pre>
+
+    <h2>Your Turn: Build AI Notes</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: The AI Notes Feature</h3>
+      <p>Build an "AI Notes" feature with a summarize button. Here's your plan:</p>
+      <ol>
+        <li><strong>Create a note screen:</strong> A <code>TextField</code> where the user writes or pastes long text, with a "Summarize" button (sparkle icon)</li>
+        <li><strong>Implement summarization:</strong> Use Gemini Flash (or the free tier of any cloud API) with a well-crafted prompt that produces exactly 3 bullet points</li>
+        <li><strong>Stream the response:</strong> Show the summary appearing word by word using <code>generateContentStream()</code></li>
+        <li><strong>Add the "AI Summary" badge:</strong> Use <code>Icons.Outlined.AutoAwesome</code> with a label</li>
+        <li><strong>Handle all states:</strong> Idle, loading ("Reading your note..."), streaming, complete, and error with retry</li>
+        <li><strong>Cache the result:</strong> Store the summary alongside the note; only regenerate if the note content changes</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add a "Summarize as..." dropdown with three options: "Bullet Points," "One Paragraph," and "Action Items." Each uses a different prompt template but shares the same streaming UI.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've mastered the two foundational generative AI features: summarization (making content shorter) and drafting (making content longer). You know how to craft prompts, stream responses, cache results, and manage costs.</p>
+
+    <p>But summarization and drafting are one-shot interactions &mdash; the user asks once, the AI responds once. What if the user wants to have a <em>conversation</em>? <strong>Chapter 6: In-App Chat &amp; Conversational UI</strong> takes you into multi-turn interactions &mdash; building a chat UI in Compose, managing conversation memory, streaming responses, and making your chatbot actually useful.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="04-smart-search.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Smart Search &amp; Autocomplete</span>
+        </a>
+        <a href="06-chat-conversational.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">In-App Chat &amp; Conversational UI</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

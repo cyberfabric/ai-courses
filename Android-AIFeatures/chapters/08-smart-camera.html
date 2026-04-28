@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8: Smart Camera &amp; Real-Time Processing | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="07-image-understanding.html">&larr; Prev</a>
+      <a href="09-notifications-recommendations.html">Next &rarr;</a>
+      <a href="maps/08-smart-camera-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Smart Camera &amp; Real-Time Processing</h1>
+    <p class="subtitle">Live object detection, document scanning, barcode reading, and AR overlays &mdash; AI meets the camera feed</p>
+  </header>
+
+  <main>
+
+    <h2>From Photos to Live Video</h2>
+
+    <p>In Chapter 7, you built features that analyze photos &mdash; images the user already has. This chapter is about analyzing what the camera sees <em>right now</em>. Live object detection overlays, real-time document scanning, barcode reading, and AR-style annotations.</p>
+
+    <p>This is fundamentally different from photo analysis. With a photo, you have all the time in the world. With a live camera, you have roughly <strong>50 milliseconds per frame</strong> to analyze, process, and draw results before the next frame arrives. Cloud APIs are too slow. This is on-device AI territory.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">20fps</span>
+        <span class="stat-label">Minimum frame rate for smooth camera AI overlays</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt;50ms</span>
+        <span class="stat-label">Max processing time per frame to maintain 20fps</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">0</span>
+        <span class="stat-label">Network calls allowed &mdash; everything must run on-device</span>
+      </div>
+    </div>
+
+    <h2>The CameraX + AI Pipeline</h2>
+
+    <p>Every real-time camera feature follows the same architecture: CameraX captures frames, you analyze them on a background thread, and you draw results as an overlay on the preview.</p>
+
+    <div class="workflow-steps">
+      <div class="step">CameraX Preview</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">ImageAnalysis</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">ML Inference</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Draw Overlay</div>
+    </div>
+
+    <div class="api-recipe">
+      <h3>Recipe: CameraX + ML Kit Object Detection Pipeline</h3>
+      <p><strong>Goal:</strong> Show real-time bounding boxes around detected objects in the camera feed.</p>
+      <p><strong>Step 1:</strong> Add dependencies:</p>
+<pre><code>implementation("androidx.camera:camera-camera2:1.4.1")
+implementation("androidx.camera:camera-lifecycle:1.4.1")
+implementation("androidx.camera:camera-view:1.4.1")
+implementation("com.google.mlkit:object-detection:17.0.2")</code></pre>
+      <p><strong>Step 2:</strong> Set up CameraX with ImageAnalysis:</p>
+<pre><code>fun startCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
+    val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+    cameraProviderFuture.addListener({
+        val provider = cameraProviderFuture.get()
+
+        val preview = Preview.Builder().build().also {
+            it.surfaceProvider = previewView.surfaceProvider
+        }
+
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+            .also { it.setAnalyzer(analysisExecutor, objectAnalyzer) }
+
+        provider.unbindAll()
+        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA,
+            preview, analysis)
+    }, ContextCompat.getMainExecutor(context))
+}</code></pre>
+      <p><strong>Step 3:</strong> Create the analyzer that processes each frame:</p>
+<pre><code>class ObjectAnalyzer(
+    private val onResults: (List&lt;DetectedObject&gt;) -&gt; Unit
+) : ImageAnalysis.Analyzer {
+    private val detector = ObjectDetection.getClient(
+        ObjectDetectorOptions.Builder()
+            .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
+            .enableMultipleObjects()
+            .enableClassification()
+            .build()
+    )
+
+    @OptIn(ExperimentalGetImage::class)
+    override fun analyze(imageProxy: ImageProxy) {
+        val mediaImage = imageProxy.image ?: return imageProxy.close()
+        val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        detector.process(input)
+            .addOnSuccessListener { objects -&gt; onResults(objects) }
+            .addOnCompleteListener { imageProxy.close() } // always close!
+    }
+}</code></pre>
+      <p><strong>Step 4:</strong> Draw bounding boxes on a Compose Canvas overlay:</p>
+<pre><code>@Composable
+fun DetectionOverlay(objects: List&lt;DetectedObject&gt;, imageSize: Size, viewSize: Size) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val scaleX = viewSize.width / imageSize.width
+        val scaleY = viewSize.height / imageSize.height
+        objects.forEach { obj -&gt;
+            val rect = obj.boundingBox
+            drawRect(
+                color = Color.Green,
+                topLeft = Offset(rect.left * scaleX, rect.top * scaleY),
+                size = Size(rect.width() * scaleX, rect.height() * scaleY),
+                style = Stroke(width = 3.dp.toPx())
+            )
+        }
+    }
+}</code></pre>
+      <p>Stack the <code>DetectionOverlay</code> on top of the <code>PreviewView</code> in a <code>Box</code>, and you have real-time bounding boxes tracking objects as the user moves the camera.</p>
+    </div>
+
+    <div class="warning-box">
+      <p><strong>Always close the ImageProxy.</strong> If you forget <code>imageProxy.close()</code>, the camera pipeline stalls and no more frames arrive. This is the #1 bug in CameraX + ML pipelines. Close it in <code>addOnCompleteListener</code>, not <code>addOnSuccessListener</code>, so it's closed even on failure.</p>
+    </div>
+
+    <h2>Live Object Detection with MediaPipe</h2>
+
+    <p>ML Kit Object Detection is great for general objects. For more specialized detection (specific product types, custom objects), MediaPipe gives you more control and supports custom models.</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">MP</div>
+      <div class="tool-info">
+        <div class="tool-name">MediaPipe Object Detector</div>
+        <div class="tool-desc">Pre-built models for 80+ object categories (COCO dataset), or bring your own TFLite model. Optimized for real-time mobile inference with GPU acceleration.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">MP</div>
+      <div class="tool-info">
+        <div class="tool-name">MediaPipe Hand/Pose/Face</div>
+        <div class="tool-desc">Specialized models for body tracking: hand landmarks (21 points), body pose (33 points), face mesh (468 points). Perfect for gesture recognition and AR features.</div>
+      </div>
+    </div>
+
+    <p>MediaPipe models are typically faster than ML Kit for specialized tasks because they're optimized for a specific detection type rather than being general-purpose.</p>
+
+    <h2>Document Scanning with AI</h2>
+
+    <p>Document scanning is one of the most practical camera AI features. The user points the camera at a document, the app detects the edges in real time, and on tap it crops, dewarps, and extracts text.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Sofia is an accountant who photographs receipts for expense reports. She opens the app, points her camera at a crumpled receipt on a café table. The camera feed shows a green outline snapping to the receipt's edges in real time. She taps the capture button. The app instantly crops, straightens, and enhances the image. Then ML Kit extracts the text, and a Gemini API call parses it into structured data: "Café Rosetta, March 28, 2026, Total: &euro;14.50."</p>
+      <p>From photo to structured expense entry in under 3 seconds.</p>
+    </div>
+
+    <div class="product-pattern">
+      <h3>The Smart Scanner Pattern</h3>
+      <p>A great document scanner has four stages, each providing visual feedback:</p>
+      <ol>
+        <li><strong>Edge detection (live):</strong> As the user moves the camera, show a colored outline around the detected document edges. Green = good alignment, yellow = partial detection, no outline = no document found.</li>
+        <li><strong>Auto-capture or manual tap:</strong> Either capture automatically when edges are stable for 1 second, or let the user tap. Auto-capture feels more magical; manual tap gives more control.</li>
+        <li><strong>Perspective correction:</strong> Dewarp the image so a photo taken at an angle becomes a flat, rectangular document.</li>
+        <li><strong>Enhancement + OCR:</strong> Increase contrast, sharpen text, then extract and structure the content.</li>
+      </ol>
+      <p><strong>Real-world example:</strong> Google Drive's document scanner shows real-time edge detection with a blue overlay, auto-captures when stable, and produces a clean PDF. Adobe Scan adds AI-powered text cleanup.</p>
+    </div>
+
+    <h3>Edge Detection with ML Kit</h3>
+
+<pre><code>// Google's Document Scanner API handles the entire flow
+val scanner = GmsDocumentScanning.getClient(
+    GmsDocumentScannerOptions.Builder()
+        .setGalleryImportAllowed(true)
+        .setPageLimit(5)
+        .setResultFormats(RESULT_FORMAT_JPEG, RESULT_FORMAT_PDF)
+        .setScannerMode(SCANNER_MODE_FULL) // includes edge detection UI
+        .build()
+)
+
+// Launch the scanner
+val scannerLauncher = rememberLauncherForActivityResult(
+    ActivityResultContracts.StartIntentSenderForResult()
+) { result -&gt;
+    if (result.resultCode == RESULT_OK) {
+        val scanResult = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
+        scanResult?.pages?.forEach { page -&gt;
+            val imageUri = page.imageUri
+            // Now extract text with ML Kit or analyze with Gemini
+            processScannedDocument(imageUri)
+        }
+    }
+}
+
+// Trigger scanning
+scanner.getStartScanIntent(activity).addOnSuccessListener { intent -&gt;
+    scannerLauncher.launch(IntentSenderRequest.Builder(intent).build())
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Don't reinvent the scanner.</strong> Google's Document Scanner API (via Play Services) provides the complete scanning experience: edge detection, perspective correction, image enhancement, and multi-page support. It's free and works on devices with Google Play Services. Build your own only if you need deep customization.</p>
+    </div>
+
+    <h2>Barcode and QR Scanning</h2>
+
+    <p>Barcode scanning is the most mature camera AI feature on Android. ML Kit handles it flawlessly, and the interesting part is what you <em>do</em> with the scanned content.</p>
+
+<pre><code>val barcodeScanner = BarcodeScanning.getClient(
+    BarcodeScannerOptions.Builder()
+        .setBarcodeFormats(Barcode.FORMAT_QR_CODE, Barcode.FORMAT_EAN_13)
+        .build()
+)
+
+// In your ImageAnalysis.Analyzer
+barcodeScanner.process(inputImage).addOnSuccessListener { barcodes -&gt;
+    barcodes.forEach { barcode -&gt;
+        when (barcode.valueType) {
+            Barcode.TYPE_URL -&gt; openUrl(barcode.url!!.url!!)
+            Barcode.TYPE_WIFI -&gt; connectToWifi(barcode.wifi!!)
+            Barcode.TYPE_CONTACT_INFO -&gt; addContact(barcode.contactInfo!!)
+            Barcode.TYPE_PRODUCT -&gt; searchProduct(barcode.rawValue!!)
+            else -&gt; showRawValue(barcode.rawValue!!)
+        }
+    }
+}</code></pre>
+
+    <p>The power move: <strong>contextual actions</strong>. Don't just show the barcode content &mdash; act on it. A URL gets an "Open" button. A Wi-Fi code gets "Connect." A product barcode gets "View product info." Each content type triggers a different, useful action.</p>
+
+    <h2>AR-Style Annotations</h2>
+
+    <p>Drawing labels and information anchored to detected objects in the camera feed creates an AR-lite experience without the complexity of ARCore.</p>
+
+<pre><code>@Composable
+fun AnnotatedOverlay(detections: List&lt;Detection&gt;, imageSize: Size, viewSize: Size) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        detections.forEach { detection -&gt;
+            val rect = scaleRect(detection.boundingBox, imageSize, viewSize)
+
+            // Draw bounding box
+            drawRoundRect(color = Color(0xFF2563EB), topLeft = Offset(rect.left, rect.top),
+                size = Size(rect.width(), rect.height()),
+                cornerRadius = CornerRadius(8f), style = Stroke(3.dp.toPx()))
+
+            // Draw label background
+            val labelHeight = 24.dp.toPx()
+            drawRoundRect(color = Color(0xFF2563EB),
+                topLeft = Offset(rect.left, rect.top - labelHeight),
+                size = Size(rect.width(), labelHeight),
+                cornerRadius = CornerRadius(8f, 8f, 0f, 0f))
+        }
+    }
+    // Draw text labels using Compose Text (Canvas drawText is limited)
+    detections.forEach { detection -&gt;
+        val rect = scaleRect(detection.boundingBox, imageSize, viewSize)
+        Text(detection.label,
+            modifier = Modifier.offset(x = rect.left.dp, y = (rect.top - 24).dp),
+            color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}</code></pre>
+
+    <p>The key challenge is <strong>coordinate transformation</strong>: the ML model works in image coordinates (e.g., 640x480), but the screen is a different size and aspect ratio. Always scale the bounding boxes to match the preview view size.</p>
+
+    <h2>Frame Rate Management</h2>
+
+    <p>Not every camera frame needs AI analysis. Smart frame management keeps the experience smooth without overloading the CPU.</p>
+
+    <h3>Strategy 1: Analyze Every Nth Frame</h3>
+<pre><code>class ThrottledAnalyzer(
+    private val innerAnalyzer: ImageAnalysis.Analyzer,
+    private val skipFrames: Int = 2 // analyze every 3rd frame
+) : ImageAnalysis.Analyzer {
+    private var frameCount = 0
+
+    override fun analyze(imageProxy: ImageProxy) {
+        if (frameCount++ % (skipFrames + 1) == 0) {
+            innerAnalyzer.analyze(imageProxy)
+        } else {
+            imageProxy.close() // skip this frame
+        }
+    }
+}</code></pre>
+
+    <h3>Strategy 2: Async Pipeline</h3>
+    <p>Process frame N on a background thread while the camera captures frame N+1. Use <code>STRATEGY_KEEP_ONLY_LATEST</code> (which we already set) so old frames are automatically dropped if analysis is slower than capture.</p>
+
+    <h3>Strategy 3: Adaptive Rate</h3>
+    <p>Analyze more frequently when results are changing (camera moving, new objects appearing) and less frequently when stable (camera stationary, same objects). Measure the difference between consecutive results to decide.</p>
+
+    <div class="tip-box">
+      <p><strong>Start with "every 3rd frame."</strong> Most ML Kit detectors run in 30-50ms, and the camera captures at 30fps (33ms per frame). Analyzing every 3rd frame gives you ~100ms per analysis while keeping the preview smooth at 30fps. Adjust based on your model's speed.</p>
+    </div>
+
+    <h2>Camera Permission UX</h2>
+
+    <p>A camera feature is useless without camera permission. How you ask for it determines whether users grant it.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Cold Permission Request</p>
+        <p class="prompt-text">App launches → immediately shows system dialog: "Allow access to camera?"
+
+User thinks: Why? What will it do? Is this safe? → taps Deny</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Contextual Permission Request</p>
+        <p class="prompt-text">User taps "Scan Receipt" → app shows a friendly screen: "To scan receipts, we need your camera. Your photos are processed on-device and never uploaded." → then the system dialog
+
+User thinks: OK, that makes sense. → taps Allow</p>
+      </div>
+    </div>
+
+    <p>Always explain <em>why</em> before asking, and mention privacy ("processed on-device") if applicable. If the user denies permanently, show a helpful message with a button to open Settings &mdash; never nag.</p>
+
+    <h2>Memory and Thermal Management</h2>
+
+    <p>Continuous camera + ML inference is the most hardware-intensive feature you can build on Android. It drains the battery and heats up the phone.</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Monitor thermal state:</strong> Use <code>PowerManager.getThermalStatus()</code> and reduce analysis frequency when the device is warm</li>
+      <li class="checked"><strong>Release camera on background:</strong> Unbind CameraX in <code>onStop()</code> &mdash; never run camera in the background</li>
+      <li class="checked"><strong>Use GPU delegation:</strong> MediaPipe and TFLite both support GPU acceleration, which is more power-efficient than CPU for ML inference</li>
+      <li class="checked"><strong>Limit resolution:</strong> Analyze at 640x480 or lower. Higher resolution doesn't improve most detection tasks but costs more battery</li>
+      <li class="checked"><strong>Show battery impact:</strong> If the feature will be used for extended periods, consider a subtle battery indicator</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>Thermal throttling is real.</strong> After 2-3 minutes of continuous camera AI, the phone may throttle CPU speed to cool down. Your inference time doubles, frame rate drops, and the experience degrades. Monitor and adapt &mdash; reduce analysis frequency before the user notices the slowdown.</p>
+    </div>
+
+    <h2>Testing Camera Features</h2>
+
+    <p>You can't hold a phone in front of a real document during automated tests. Here's how to test without a physical camera:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Test Type</th>
+          <th>Approach</th>
+          <th>What It Validates</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Unit tests</td>
+          <td>Pass static <code>Bitmap</code> images to your analyzer</td>
+          <td>Detection logic, coordinate scaling, result filtering</td>
+        </tr>
+        <tr>
+          <td>Integration tests</td>
+          <td>Feed pre-recorded video frames to <code>ImageAnalysis</code></td>
+          <td>Full pipeline from frame to detection to overlay</td>
+        </tr>
+        <tr>
+          <td>Screenshot tests</td>
+          <td>Render overlay on a fixed image and compare</td>
+          <td>Bounding box positioning, label rendering, styling</td>
+        </tr>
+        <tr>
+          <td>Manual QA</td>
+          <td>Print test images and hold them in front of the camera</td>
+          <td>Real-world conditions: lighting, angles, distance</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The Test Image Library</h3>
+      <p>Build a set of 20-30 test images that cover your feature's use cases: clean documents, crumpled receipts, barcodes at angles, low-light photos, blurry images. Use these consistently across unit and integration tests. When a user reports a bug, add their scenario to the library. Your test coverage grows with real-world edge cases.</p>
+    </div>
+
+    <h2>Your Turn: Build a Smart Scanner</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Smart Document Scanner</h3>
+      <p>Build a camera feature that scans documents and extracts text. Here's your plan:</p>
+      <ol>
+        <li><strong>Camera setup:</strong> Use CameraX with <code>PreviewView</code> and a "Capture" button overlay</li>
+        <li><strong>Document detection:</strong> Use Google's Document Scanner API for the complete scanning experience (edge detection, crop, dewarp)</li>
+        <li><strong>Text extraction:</strong> Run ML Kit Text Recognition on the scanned image to get raw text</li>
+        <li><strong>Structured parsing:</strong> Send the raw text to Gemini Flash with a prompt to extract structured data (document type, key fields, summary)</li>
+        <li><strong>Results UI:</strong> Show the scanned image alongside the extracted structured data in a Compose card</li>
+        <li><strong>Permission handling:</strong> Show a contextual rationale before requesting camera permission</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add barcode detection &mdash; if the scanned document contains a barcode (QR code, EAN), detect it and show a contextual action button (open URL, search product, etc.).</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've mastered real-time camera AI &mdash; detecting objects, scanning documents, reading barcodes, and drawing overlays. Combined with Chapter 7's image understanding, your app can see and understand the visual world.</p>
+
+    <p>Now let's make your app proactive. Instead of waiting for users to ask, what if your app anticipated what they need? <strong>Chapter 9: Intelligent Notifications &amp; Recommendations</strong> covers AI-driven timing, content recommendations, and behavior prediction &mdash; features that help users before they ask.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="07-image-understanding.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Image Understanding &amp; Visual Search</span>
+        </a>
+        <a href="09-notifications-recommendations.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Intelligent Notifications &amp; Recommendations</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

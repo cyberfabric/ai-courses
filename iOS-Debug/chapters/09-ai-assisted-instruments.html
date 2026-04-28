@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: AI-Assisted Instruments Profiling | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-energy-thermal.html">&#8592; Prev</a>
+      <a href="10-flaky-tests.html">Next &#8594;</a>
+      <a href="maps/09-ai-assisted-instruments-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>AI-Assisted Instruments Profiling</h1>
+    <p class="subtitle">Instruments shows beautiful graphs. AI explains what they mean in your code&rsquo;s context.</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <section>
+      <h2>The Profiler Data Gap</h2>
+
+      <p>Here&rsquo;s the uncomfortable truth about Instruments: it&rsquo;s the most powerful profiling tool on any platform, and most iOS developers use maybe 5% of it. Not because they&rsquo;re lazy &mdash; because the output is <em>dense</em>. A Time Profiler trace with 4,000 samples across 12 threads is a haystack with a hundred needles, and you need to find the three that matter.</p>
+
+      <p>This is where AI transforms the profiling workflow. Instruments captures <em>structured, numerical data</em> &mdash; call trees with sample counts, allocation sizes with timestamps, thread states with durations. That&rsquo;s exactly the kind of data LLMs process well. You stop staring at a flame graph wondering &ldquo;is 340 samples a lot?&rdquo; and start getting answers like &ldquo;This method accounts for 38% of main-thread CPU during scroll &mdash; here&rsquo;s the allocation it triggers and the fix.&rdquo;</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">73%</div>
+          <div class="stat-label">of iOS devs say they &ldquo;rarely&rdquo; use Instruments beyond Time Profiler</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">4,000+</div>
+          <div class="stat-label">samples in a typical 10-second Time Profiler recording</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">12+</div>
+          <div class="stat-label">instrument templates ship with Xcode 26</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Instruments + AI Workflow -->
+    <section>
+      <h2>The Instruments + AI Workflow</h2>
+
+      <p>Think of this as a translator pattern. Instruments speaks &ldquo;profiler&rdquo; &mdash; sample counts, virtual memory regions, mach_absolute_time deltas. You need it translated into &ldquo;developer&rdquo; &mdash; which method to fix, why it&rsquo;s slow, and what the fix looks like. AI is the translator.</p>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <h4>Record in Instruments</h4>
+            <p>Profile with the right template (Time Profiler, Allocations, System Trace, Power Profiler)</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <h4>Extract the Data</h4>
+            <p>Copy the call tree, export via <code>xctrace</code>, or screenshot the timeline</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <h4>Feed to AI</h4>
+            <p>Paste profiler data + relevant Swift source into Claude Code or Xcode 26 AI</p>
+          </div>
+        </div>
+        <span class="step-arrow">→</span>
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <h4>Get Actionable Fixes</h4>
+            <p>AI identifies bottlenecks, explains why, and suggests concrete code changes</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>When to use which AI tool:</strong> Use <strong>Xcode 26 Swift Assist</strong> when you&rsquo;re already in Instruments and want a quick explanation of a specific call tree branch. Use <strong>Claude Code</strong> when you want a holistic analysis &mdash; correlating profiler data across instruments, comparing runs, or generating an optimization plan with code changes.
+      </div>
+    </section>
+
+    <!-- Time Profiler Deep Dive -->
+    <section>
+      <h2>Time Profiler Deep Dive</h2>
+
+      <p>Time Profiler is the instrument you&rsquo;ll use most. It samples the CPU at 1ms intervals and records which function is running at each sample. More samples = more CPU time in that function. It&rsquo;s a statistical profiler &mdash; not exact, but remarkably accurate for finding hot spots.</p>
+
+      <h3>Reading the Call Tree</h3>
+
+      <p>The call tree is the key output. Here&rsquo;s what a typical heavy method looks like when you copy it from Instruments:</p>
+
+      <div class="debug-trace">
+        <div class="trace-header">Time Profiler &mdash; Call Tree (Main Thread, 10s recording)</div>
+<pre>
+Weight    Self Weight   Symbol Name
+3412 ms   12 ms         Main Thread
+ 3108 ms   0 ms          UIKit: Event handling
+  2841 ms   0 ms           -[UITableView layoutSubviews]
+   2610 ms   4 ms            ProductListViewController.tableView(_:cellForRowAt:)
+    1890 ms   8 ms             ProductCell.configure(with:)
+     1204 ms   2 ms              ImageProcessor.applyFilters(_:)
+      1198 ms  1198 ms             CoreImage: CIGaussianBlur.apply()
+     642 ms   642 ms              JSONDecoder.decode(_:from:)
+    340 ms   340 ms             NSAttributedString.init(data:options:documentAttributes:)
+   198 ms   198 ms            Auto Layout Engine
+</pre>
+        <div class="trace-analysis">
+          <strong>AI Analysis:</strong> Three bottlenecks on the main thread during table view scroll:
+          <strong>(1)</strong> <code>CIGaussianBlur</code> takes 1,198ms (35% of recording) &mdash; image filtering happening synchronously in <code>cellForRowAt:</code>.
+          <strong>(2)</strong> <code>JSONDecoder.decode</code> takes 642ms (19%) &mdash; JSON parsing on every cell configuration, likely re-decoding cached data.
+          <strong>(3)</strong> <code>NSAttributedString</code> HTML initialization takes 340ms (10%) &mdash; expensive WebKit-based HTML parsing on main thread.
+          Combined: 64% of main-thread CPU spent on work that should be background or cached.
+        </div>
+      </div>
+
+      <h3>The Flame Graph</h3>
+
+      <p>Xcode 26 shows flame graphs directly in Instruments. The wider a bar, the more CPU time that function consumed. AI reads flame graphs the same way &mdash; you can screenshot one and feed it to Claude Code&rsquo;s vision, or copy the call tree text.</p>
+
+      <div class="tip-box">
+        <strong>Flame graph tip:</strong> Click <em>Call Tree</em> in Instruments, then enable <em>Invert Call Tree</em> to see leaf functions (the actual work) at the top. This is often easier for AI to analyze because it shows <em>what</em> is slow without the framework wrapper noise.
+      </div>
+
+      <h3>Comparing Profiling Sessions</h3>
+
+      <p>Xcode 26 lets you compare call trees across profiling sessions: <em>View &gt; Detail Area &gt; Compare With</em>. Select a previous run and Instruments shows which functions got faster or slower. This is gold for AI analysis &mdash; feed both the before and after call trees to Claude Code and ask: &ldquo;Did my optimization actually work?&rdquo;</p>
+    </section>
+
+    <!-- Root Cause from Time Profiler -->
+    <section>
+      <h2>From Profiler Data to Root Cause</h2>
+
+      <div class="root-cause">
+        <h4>Root Cause: Synchronous Image Processing in Cell Configuration</h4>
+        <p><strong>Evidence:</strong> <code>CIGaussianBlur.apply()</code> has 1,198ms Self Weight on the main thread during a 10-second scroll recording. It&rsquo;s called from <code>ProductCell.configure(with:)</code> inside <code>cellForRowAt:</code>.</p>
+        <p><strong>Why it matters:</strong> Core Image filters are GPU-accelerated but the <em>setup and result extraction</em> block the main thread. At ~20ms per cell, scrolling at 60fps (16ms budget) causes visible stuttering.</p>
+        <p><strong>Root cause:</strong> Image filtering is performed synchronously every time a cell is configured, with no caching of filtered results.</p>
+      </div>
+
+      <div class="fix-pattern">
+        <h4>Fix Pattern: Move Image Processing Off Main Thread + Cache Results</h4>
+<pre><code>// BEFORE: Synchronous filtering in cellForRowAt
+func configure(with product: Product) {
+    let filtered = ImageProcessor.applyFilters(product.image)
+    imageView.image = filtered  // 20ms+ blocking main thread
+}
+
+// AFTER: Async processing with cache
+func configure(with product: Product) {
+    imageView.image = placeholder
+
+    if let cached = ImageCache.shared[product.id] {
+        imageView.image = cached
+        return
+    }
+
+    Task.detached(priority: .userInitiated) {
+        let filtered = ImageProcessor.applyFilters(product.image)
+        ImageCache.shared[product.id] = filtered
+        await MainActor.run {
+            // Only update if cell hasn't been reused
+            guard self.currentProductId == product.id else { return }
+            self.imageView.image = filtered
+        }
+    }
+}</code></pre>
+      </div>
+
+      <div class="performance-metric">
+        <div class="metric-before">
+          <h4>Before</h4>
+          <ul>
+            <li>Main thread CPU: 64% during scroll</li>
+            <li>Frame drops: 22 per 10s scroll</li>
+            <li>CIGaussianBlur: 1,198ms on main</li>
+          </ul>
+        </div>
+        <div class="metric-after">
+          <h4>After</h4>
+          <ul>
+            <li>Main thread CPU: 18% during scroll</li>
+            <li>Frame drops: 0 per 10s scroll</li>
+            <li>CIGaussianBlur: 0ms on main (moved to Task.detached)</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Allocations Instrument -->
+    <section>
+      <h2>Allocations Instrument: Heap Growth Analysis</h2>
+
+      <p>Time Profiler tells you where CPU goes. Allocations tells you where <em>memory</em> goes. The two together give AI the full picture: this method is slow <em>and</em> it allocates 40MB of transient objects per second.</p>
+
+      <h3>Transient vs Persistent Allocations</h3>
+
+      <p>Think of it like a party. <strong>Transient</strong> allocations are guests who arrive, stay briefly, and leave (temporary buffers, intermediate strings). <strong>Persistent</strong> allocations are guests who never leave (cached images, singletons, leaked objects). A lot of transient allocations cause CPU overhead from malloc/free churn. Persistent growth means you have a leak or unbounded cache.</p>
+
+      <h3>Generation Analysis</h3>
+
+      <p>Generation analysis is one of the most underused features in Instruments. Click &ldquo;Mark Generation&rdquo; at key moments (screen transition, completing a task, navigating back). Everything allocated between marks that <em>persists</em> after the next mark is suspect &mdash; it survived when it probably shouldn&rsquo;t have.</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Good Prompt</div>
+        <div class="prompt-text">I recorded an Allocations trace while navigating to ProductDetailView and back 5 times. Here&rsquo;s the generation analysis &mdash; Generation B shows 2.4MB of persistent growth per navigation cycle:
+
+Generation B (after first back navigation):
+- 840KB: ProductDetailViewModel (5 instances, 0 destroyed)
+- 620KB: UIImage transient (320 created, 280 destroyed)
+- 480KB: Data (network response bodies)
+- 460KB: String (product descriptions)
+
+The ViewModel is never deallocated. Here&rsquo;s ProductDetailView.swift [paste source]. Why are the ViewModels persisting and how do I fix it?</div>
+      </div>
+
+      <div class="prompt-example bad">
+        <div class="prompt-label">Bad Prompt</div>
+        <div class="prompt-text">My app uses too much memory. Fix it.</div>
+      </div>
+    </section>
+
+    <!-- System Trace -->
+    <section>
+      <h2>System Trace: Thread Scheduling Deep Dive</h2>
+
+      <p>System Trace answers a question Time Profiler can&rsquo;t: is my code slow because it&rsquo;s doing <em>work</em>, or because it&rsquo;s <em>waiting</em>? Time Profiler only samples when threads are running. System Trace shows the full picture: running, blocked, preempted, or waiting for a lock.</p>
+
+      <h3>What to Look For</h3>
+
+      <div class="comparison">
+        <div class="compare-column">
+          <h4>Thread Is Running (CPU bound)</h4>
+          <ul>
+            <li>Long green bars in System Trace</li>
+            <li>Fix: optimize the algorithm, move to background thread, or cache results</li>
+            <li>Time Profiler will show you exactly which function</li>
+          </ul>
+        </div>
+        <div class="compare-column">
+          <h4>Thread Is Blocked (I/O or lock bound)</h4>
+          <ul>
+            <li>Gray/red bars in System Trace</li>
+            <li>Fix: async I/O, reduce lock contention, avoid priority inversion</li>
+            <li>Time Profiler will <em>miss</em> this &mdash; it only samples running threads</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>Priority Inversion</h3>
+
+      <p>Priority inversion is when a high-priority thread (like the main thread) waits for a low-priority thread to release a lock. iOS has priority inheritance to mitigate this, but it doesn&rsquo;t always kick in &mdash; especially with <code>DispatchQueue</code> and Swift actors. System Trace shows these as yellow &ldquo;priority boosted&rdquo; events.</p>
+
+      <div class="warning-box">
+        <strong>Swift concurrency gotcha:</strong> Actor-isolated code runs on the cooperative thread pool. If a high-priority <code>Task</code> awaits an actor that&rsquo;s processing a low-priority task, you get priority inversion. System Trace reveals this; Time Profiler does not. Feed both traces to AI for the complete picture.
+      </div>
+    </section>
+
+    <!-- Power Profiler -->
+    <section>
+      <h2>Power Profiler: Subsystem-Level Energy Attribution</h2>
+
+      <p>We covered Power Profiler in Chapter 8 for energy optimization. Here we&rsquo;ll focus on how to <em>extract</em> its data for AI analysis.</p>
+
+      <p>Power Profiler shows energy broken down by subsystem &mdash; CPU (per-core on Apple silicon), GPU, Display, Network, Location. In Xcode 26, the timeline correlates power usage directly with your code execution, so you can see &ldquo;this network request spike cost 120mW for 3 seconds.&rdquo;</p>
+
+      <div class="tip-box">
+        <strong>Remember:</strong> You <em>must</em> use wireless debugging for Power Profiler. USB charging makes all power readings zero. Connect your device via WiFi in Window &gt; Devices and Simulators, then profile wirelessly.
+      </div>
+
+      <h3>Feeding Power Data to AI</h3>
+
+      <p>Copy the subsystem breakdown from Power Profiler for a specific time range. The structured format is ideal for AI:</p>
+
+      <div class="debug-trace">
+        <div class="trace-header">Power Profiler &mdash; 30s User Session Summary</div>
+<pre>
+Subsystem        Avg Power    Peak Power   Duration
+CPU (P-cores)    180 mW       620 mW       12.4s active
+CPU (E-cores)    45 mW        120 mW       28.1s active
+GPU              95 mW        340 mW       8.2s active
+Network          210 mW       480 mW       6.8s active
+Location         60 mW        60 mW        30.0s active (continuous)
+Display          320 mW       320 mW       30.0s (always on)
+</pre>
+        <div class="trace-analysis">
+          <strong>AI Analysis:</strong> Location is active for the entire 30s session at constant 60mW &mdash; continuous GPS tracking for an app that only needs city-level accuracy. Network spikes to 480mW suggest uncompressed payloads or redundant requests. CPU P-cores peak at 620mW, likely during the image processing identified in Time Profiler. Quick wins: (1) Switch to <code>significantLocationChanges</code>, (2) enable gzip on API responses, (3) move image filtering off main thread (already fixed above).
+        </div>
+      </div>
+    </section>
+
+    <!-- xctrace CLI -->
+    <section>
+      <h2>xctrace: Instruments from the Command Line</h2>
+
+      <p>You don&rsquo;t need to open Instruments.app to profile. <code>xctrace</code> is the CLI tool that powers Instruments, and it&rsquo;s essential for CI profiling and AI automation via XcodeBuildMCP.</p>
+
+      <h3>Recording a Trace</h3>
+
+<pre><code># Record 10 seconds of Time Profiler on a running app
+xcrun xctrace record \
+  --template "Time Profiler" \
+  --device "My iPhone" \
+  --attach "MyApp" \
+  --time-limit 10s \
+  --output /tmp/profile.trace
+
+# Record during a specific user flow (launch profiling)
+xcrun xctrace record \
+  --template "Time Profiler" \
+  --launch com.mycompany.MyApp \
+  --time-limit 15s \
+  --output /tmp/launch-profile.trace</code></pre>
+
+      <h3>Exporting Trace Data for AI</h3>
+
+<pre><code># List what's in the trace
+xcrun xctrace export --input /tmp/profile.trace --toc
+
+# Export Time Profiler data as XML
+xcrun xctrace export \
+  --input /tmp/profile.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
+  --output /tmp/time-profile.xml</code></pre>
+
+      <p>The exported XML contains the full call tree with sample counts. Feed it directly to Claude Code for analysis. For CI, you can automate this: record during a test suite, export, and pipe to AI for regression detection.</p>
+
+      <div class="tool-card">
+        <div class="tool-icon">🔧</div>
+        <div class="tool-name">XcodeBuildMCP + xctrace</div>
+        <div class="tool-desc">XcodeBuildMCP can trigger <code>xctrace</code> recordings, export the data, and feed it to Claude Code automatically. Set up a CI step that profiles key user flows on every PR and flags performance regressions before they merge.</div>
+      </div>
+    </section>
+
+    <!-- Building the /profile-cpu Skill -->
+    <section>
+      <h2>Building a <code>/profile-cpu</code> Skill</h2>
+
+      <p>Let&rsquo;s build a Claude Code skill that takes Time Profiler call tree data and returns actionable optimization advice.</p>
+
+      <div class="fix-pattern">
+        <h4>The /profile-cpu Skill</h4>
+<pre><code># .claude/commands/profile-cpu.md
+
+Analyze this Time Profiler call tree data from Xcode Instruments.
+
+## Your task:
+1. Identify the top 3 CPU bottlenecks by Self Weight
+2. For each bottleneck:
+   - Method name and Self Weight (ms and % of total)
+   - Which thread it runs on (main thread = urgent)
+   - Why it's expensive (algorithm, I/O, allocation churn)
+   - Concrete fix with Swift code
+3. Flag any main-thread work that should be background
+4. Check for these common patterns:
+   - JSON decoding on main thread
+   - Image processing on main thread
+   - Synchronous file I/O
+   - Excessive Auto Layout recalculation
+   - String interpolation in tight loops
+5. Estimate the performance improvement if fixes are applied
+
+## Format:
+Return a structured report:
+- 🔴 Critical (main thread, >20% of samples)
+- 🟡 Warning (any thread, >10% of samples)
+- 🟢 Optimization opportunity (<10% but fixable)
+
+## Context:
+The project uses [describe your stack: SwiftUI/UIKit,
+Combine/async-await, SPM packages, etc.]
+
+$ARGUMENTS</code></pre>
+      </div>
+
+      <p>Use it by pasting the call tree from Instruments:</p>
+
+<pre><code>/profile-cpu
+Weight    Self Weight   Symbol Name
+3412 ms   12 ms         Main Thread
+ 3108 ms   0 ms          UIKit: Event handling
+  2841 ms   4 ms           -[UITableView layoutSubviews]
+...</code></pre>
+
+      <div class="tip-box">
+        <strong>Pro tip:</strong> In Instruments, select the time range you care about (e.g., just the scroll), then Cmd+C to copy the call tree. The clipboard format is exactly what AI needs &mdash; tab-indented with Weight, Self Weight, and Symbol Name columns.
+      </div>
+    </section>
+
+    <!-- Combining Instruments -->
+    <section>
+      <h2>Combining Multiple Instruments for AI</h2>
+
+      <p>The real power emerges when you feed AI data from <em>multiple</em> instruments simultaneously. Each instrument sees one dimension. AI correlates them.</p>
+
+      <div class="highlight-box">
+        <h4>The Multi-Instrument Prompt Pattern</h4>
+        <p>When diagnosing a complex performance issue, give Claude Code:</p>
+        <ul>
+          <li><strong>Time Profiler call tree</strong> &mdash; where CPU time goes</li>
+          <li><strong>Allocations summary</strong> &mdash; where memory goes</li>
+          <li><strong>System Trace thread states</strong> &mdash; running vs blocked time</li>
+          <li><strong>The Swift source code</strong> of the hot path</li>
+        </ul>
+        <p>AI connects the dots: &ldquo;This method is slow (Time Profiler) <em>because</em> it allocates 200 transient strings per call (Allocations) <em>while</em> holding a lock that blocks the main thread (System Trace). Here&rsquo;s the fix.&rdquo;</p>
+      </div>
+
+      <h3>Xcode 26 AI Integration</h3>
+
+      <p>Xcode 26&rsquo;s Coding Intelligence can explain Instruments results directly within Xcode. Select a call tree branch, right-click, and choose <em>Explain with AI</em>. For quick, focused questions (&ldquo;Why is this slow?&rdquo;), the native integration is faster. For holistic multi-instrument analysis, Claude Code with your full project context is more thorough.</p>
+
+      <h3>Foundation Models Instrument</h3>
+
+      <p>Xcode 26 introduces a <strong>Foundation Models Instrument</strong> specifically for profiling on-device AI inference via the FoundationModels framework. If your app uses Apple&rsquo;s on-device models, this instrument shows token generation rate, memory usage, and Neural Engine utilization. Feed this data to Claude Code alongside your other profiler data for a complete performance picture.</p>
+    </section>
+
+    <!-- AI Interpretation Patterns -->
+    <section>
+      <h2>AI Interpretation Patterns</h2>
+
+      <p>After feeding hundreds of profiler traces to AI, patterns emerge in how it reasons about performance. Here are the most useful interpretation templates:</p>
+
+      <div class="checklist">
+        <h4>What AI Looks for in Time Profiler Data</h4>
+        <ul>
+          <li>Methods with high Self Weight on the main thread (immediate scrolling/animation impact)</li>
+          <li>Deep call stacks that suggest unnecessary abstraction layers</li>
+          <li>Framework methods that indicate you&rsquo;re fighting the framework (excessive layout passes, repeated decoding)</li>
+          <li>Asymmetry between Weight and Self Weight (the method itself isn&rsquo;t slow &mdash; something it calls is)</li>
+          <li>Thread imbalance: main thread at 90% while 7 background threads sit idle</li>
+        </ul>
+      </div>
+
+      <div class="checklist">
+        <h4>What AI Looks for in Allocations Data</h4>
+        <ul>
+          <li>Persistent growth between generations (memory leak or unbounded cache)</li>
+          <li>High transient allocation rate in hot paths (malloc/free churn = CPU overhead)</li>
+          <li>Large single allocations (images decoded at full resolution, entire file reads into memory)</li>
+          <li>Many small allocations of the same type (tight loop creating objects that could be reused)</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Common Profiler Mistakes -->
+    <section>
+      <h2>Profiling Pitfalls AI Helps You Avoid</h2>
+
+      <div class="warning-box">
+        <strong>Pitfall #1: Profiling Debug builds.</strong> Debug builds disable compiler optimizations (<code>-Onone</code>), include extra runtime checks, and skip inlining. A method that takes 50ms in Debug might take 2ms in Release. <em>Always</em> profile Release builds. Xcode: Edit Scheme &gt; Run &gt; Build Configuration &gt; Release.
+      </div>
+
+      <div class="warning-box">
+        <strong>Pitfall #2: Optimizing the wrong thing.</strong> A method with 800ms Weight but 0ms Self Weight is just a container &mdash; the real work is deeper in the call tree. AI reads Self Weight to find the actual bottleneck, not the wrapper.
+      </div>
+
+      <div class="warning-box">
+        <strong>Pitfall #3: Ignoring blocked time.</strong> Time Profiler only shows CPU-active samples. If your app feels slow but Time Profiler shows low CPU, use System Trace &mdash; the thread is probably blocked on I/O or a lock. Tell AI: &ldquo;Low CPU but laggy UI. Here&rsquo;s the System Trace.&rdquo;
+      </div>
+
+      <div class="tip-box">
+        <strong>Profiling on the right device:</strong> Always profile on the <em>lowest-spec device</em> your app supports. An iPhone 16 Pro Max can brute-force through inefficient code. An iPhone SE (3rd gen) will expose every performance issue. Your users are on the SE.
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Profile a Screen Transition with Time Profiler</h3>
+
+        <p><strong>Goal:</strong> Record a Time Profiler trace during a screen transition, extract the call tree, and use Claude Code to identify the top 3 optimization opportunities.</p>
+
+        <ol>
+          <li><strong>Switch to Release build:</strong> Edit Scheme &gt; Run &gt; Build Configuration &gt; Release</li>
+          <li><strong>Open Instruments:</strong> Product &gt; Profile (Cmd+I) &gt; choose &ldquo;Time Profiler&rdquo;</li>
+          <li><strong>Record the transition:</strong> Press Record, navigate from your list screen to a detail screen and back 3 times, then Stop</li>
+          <li><strong>Focus the time range:</strong> Drag to select just one forward-and-back transition in the timeline</li>
+          <li><strong>Copy the call tree:</strong> Click &ldquo;Call Tree&rdquo; in the bottom panel, enable &ldquo;Separate by Thread&rdquo; and &ldquo;Invert Call Tree&rdquo;, then Cmd+A &gt; Cmd+C</li>
+          <li><strong>Feed to Claude Code:</strong></li>
+        </ol>
+
+<pre><code>/profile-cpu
+Here's a Time Profiler call tree from a list-to-detail
+navigation transition (Release build, iPhone SE 3rd gen):
+
+[paste call tree here]
+
+The app uses SwiftUI with NavigationStack.
+Navigation feels sluggish — about 300ms delay.
+What are the top 3 things to fix?</code></pre>
+
+        <p><strong>What to look for in the AI response:</strong></p>
+        <ul>
+          <li>Does it identify the main thread bottleneck?</li>
+          <li>Does it distinguish between your code and framework code?</li>
+          <li>Are the suggested fixes specific to your call tree, not generic advice?</li>
+          <li>Does it estimate the expected improvement?</li>
+        </ul>
+
+        <p><strong>Bonus:</strong> Run the same recording using the Allocations template. Feed both the Time Profiler call tree and the Allocations generation data to Claude Code together and see how AI correlates CPU and memory bottlenecks.</p>
+      </div>
+    </section>
+
+    <!-- Automation with XcodeBuildMCP -->
+    <section>
+      <h2>CI Profiling with xctrace + XcodeBuildMCP</h2>
+
+      <p>The ultimate profiling workflow is automated: every PR gets profiled, and AI flags regressions before humans review. Here&rsquo;s the pattern:</p>
+
+<pre><code># ci-profile.sh — run on every PR
+# 1. Build Release
+xcodebuild -scheme MyApp -configuration Release -derivedDataPath ./build
+
+# 2. Record a 15s trace during app launch + key flow
+xcrun xctrace record \
+  --template "Time Profiler" \
+  --launch com.mycompany.MyApp \
+  --time-limit 15s \
+  --output ./traces/pr-$(git rev-parse --short HEAD).trace
+
+# 3. Export call tree for AI analysis
+xcrun xctrace export \
+  --input ./traces/pr-*.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
+  --output ./traces/profile-data.xml
+
+# 4. XcodeBuildMCP feeds to Claude Code for regression check
+# Compare against baseline trace from main branch</code></pre>
+
+      <div class="tool-card">
+        <div class="tool-icon">🤖</div>
+        <div class="tool-name">Automated Performance Regression Detection</div>
+        <div class="tool-desc">With XcodeBuildMCP&rsquo;s built-in MCP server (Xcode 26.3+), your CI pipeline can record traces, export data, and have Claude Code compare against baseline profiles &mdash; all without manual intervention. Flag any method that regressed by more than 20% as a PR blocker.</div>
+      </div>
+    </section>
+
+    <!-- Preview of Next Chapter -->
+    <section>
+      <h2>What&rsquo;s Next</h2>
+
+      <p>You now know how to extract profiler data and get AI to explain it. But there&rsquo;s another silent productivity killer: <strong>flaky tests</strong>. In Chapter 10, we&rsquo;ll use AI to diagnose XCTest and XCUITest flakiness &mdash; timing-dependent failures, simulator quirks, and the shared mutable state that makes tests pass locally and fail in CI. When &ldquo;retry and ignore&rdquo; becomes your team&rsquo;s default response to red builds, you&rsquo;ve got a trust problem that AI can solve.</p>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-energy-thermal.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Energy &amp; Thermal Optimization</span>
+      </a>
+      <a href="10-flaky-tests.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Flaky Test Diagnosis</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

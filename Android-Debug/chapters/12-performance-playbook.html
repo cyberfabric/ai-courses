@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Performance Budgets and Your Debugging Playbook | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="11-production-monitoring.html">&larr; Prev</a>
+      <a href="13-16kb-page-size.html">Next &rarr;</a>
+      <a href="maps/12-performance-playbook-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Performance Budgets and Your Debugging Playbook</h1>
+    <p class="subtitle">Measurable targets, automated benchmarks, and the complete AI-debugging toolkit</p>
+  </header>
+
+  <main>
+
+    <h2>Tying It All Together</h2>
+
+    <p>Over 11 chapters, you&rsquo;ve built skills for every debugging domain: crashes, ANRs, memory leaks, Compose performance, networking, build times, battery, profiling, flaky tests, and production monitoring. That&rsquo;s a powerful toolkit &mdash; but tools without a system are just a messy drawer.</p>
+
+    <p>This final chapter gives you the system: <strong>performance budgets</strong> that define &ldquo;good enough,&rdquo; <strong>benchmarks</strong> that enforce them automatically, a <strong>debugging decision tree</strong> that routes you to the right tool, and a <strong>30-day challenge</strong> to make AI-assisted debugging a daily habit.</p>
+
+    <h2>What Performance Budgets Are</h2>
+
+    <p>A performance budget is a concrete threshold: a number you commit to not exceeding. Not &ldquo;the app should be fast&rdquo; &mdash; that&rsquo;s a wish. A budget is: &ldquo;cold start must be under 800ms on a Pixel 6.&rdquo;</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">&lt;800 ms</span>
+        <span class="stat-label">Cold start budget (time to first frame)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt;16 ms</span>
+        <span class="stat-label">Frame budget (P95 frame render time)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">99.5%</span>
+        <span class="stat-label">Crash-free rate budget</span>
+      </div>
+    </div>
+
+    <p>Budgets make performance <em>measurable</em> and <em>enforceable</em>. Without them, performance degrades with every release because nobody notices the extra 50ms here, the extra 2MB there. With budgets, CI fails when you exceed them.</p>
+
+    <h3>Setting Budgets for Your App</h3>
+
+    <p>Claude Code can help you choose realistic budgets. Feed it your app category and current metrics:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Help me set performance budgets for an e-commerce Android app. Here are our current metrics:
+
+- Cold start (Pixel 6): 1,247ms
+- Warm start: 680ms
+- P95 frame time during scroll: 24ms
+- APK size: 28MB
+- Memory usage (typical): 142MB
+- Crash-free rate: 99.2%
+- ANR rate: 0.38%
+
+Our user base is 60% mid-range Samsung phones, 25% Pixels, 15% budget devices. What budgets should we target, and which ones should we prioritize improving first?</div>
+      <div class="prompt-explanation">AI will set targets based on your app category (e-commerce = users browse quickly, startup matters) and device mix (mid-range Samsungs need wider margins). It'll prioritize: cold start and frame time first (directly felt by users), then crash rate and APK size.</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Budget</th>
+          <th>Why This Number</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Cold start (P90)</td>
+          <td>&lt;800 ms</td>
+          <td>Users perceive &gt;1s as &ldquo;slow&rdquo;; 800ms is snappy on mid-range devices</td>
+        </tr>
+        <tr>
+          <td>Warm start</td>
+          <td>&lt;400 ms</td>
+          <td>Returning to the app should feel instant</td>
+        </tr>
+        <tr>
+          <td>Frame time (P95)</td>
+          <td>&lt;16 ms</td>
+          <td>60 FPS target; &lt;8ms for 120 FPS devices</td>
+        </tr>
+        <tr>
+          <td>APK size</td>
+          <td>&lt;20 MB</td>
+          <td>Each MB over 10 costs ~0.5% install conversion on Play Store</td>
+        </tr>
+        <tr>
+          <td>Memory (foreground)</td>
+          <td>&lt;150 MB</td>
+          <td>Budget devices have 3&ndash;4 GB RAM shared across all apps</td>
+        </tr>
+        <tr>
+          <td>Crash-free rate</td>
+          <td>&gt;99.5%</td>
+          <td>Google Play threshold for &ldquo;good&rdquo; behavior</td>
+        </tr>
+        <tr>
+          <td>ANR rate</td>
+          <td>&lt;0.47%</td>
+          <td>Google Play threshold; lower is better</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Benchmark Libraries: Measuring Budgets Automatically</h2>
+
+    <p>Budgets are useless if you only check them manually. Android&rsquo;s Jetpack Benchmark libraries run performance tests in CI and fail when budgets are exceeded.</p>
+
+    <h3>Macrobenchmark: Startup and Scroll</h3>
+
+    <pre><code>// Create a :macrobenchmark module
+// build.gradle.kts:
+plugins {
+    id("com.android.test")
+}
+
+android {
+    targetProjectPath = ":app"
+    experimentalProperties["android.experimental.self-instrumenting"] = true
+}
+
+dependencies {
+    implementation("androidx.benchmark:benchmark-macro-junit4:1.4.1")
+}
+
+// StartupBenchmark.kt:
+@RunWith(AndroidJUnit4::class)
+class StartupBenchmark {
+    @get:Rule
+    val benchmarkRule = MacrobenchmarkRule()
+
+    @Test
+    fun startupCold() = benchmarkRule.measureRepeated(
+        packageName = "com.example.myapp",
+        metrics = listOf(StartupTimingMetric()),
+        iterations = 5,
+        startupMode = StartupMode.COLD
+    ) {
+        pressHome()
+        startActivityAndWait()
+    }
+
+    @Test
+    fun scrollProductList() = benchmarkRule.measureRepeated(
+        packageName = "com.example.myapp",
+        metrics = listOf(FrameTimingMetric()),
+        iterations = 5,
+        startupMode = StartupMode.WARM
+    ) {
+        startActivityAndWait()
+        device.findObject(By.res("product_list")).fling(Direction.DOWN)
+        device.waitForIdle()
+    }
+}</code></pre>
+
+    <h3>Microbenchmark: Hot Code Paths</h3>
+
+    <pre><code>// For measuring specific functions:
+@RunWith(AndroidJUnit4::class)
+class PriceFormatterBenchmark {
+    @get:Rule
+    val benchmarkRule = BenchmarkRule()
+
+    @Test
+    fun formatPrice() = benchmarkRule.measureRepeated {
+        PriceFormatter.format(49.99, "USD")
+    }
+}</code></pre>
+
+    <div class="debug-trace">
+      <h4>Benchmark Results: Startup Regression Detected</h4>
+<pre><code>StartupBenchmark.startupCold
+  Median: 1,247ms
+  Min: 1,102ms
+  Max: 1,398ms
+
+  ⚠️ BUDGET EXCEEDED: Cold start budget is 800ms.
+  Regression from previous run: +312ms (was 935ms)
+
+StartupBenchmark.scrollProductList
+  P50 frame time: 8.2ms ✓
+  P95 frame time: 14.1ms ✓
+  P99 frame time: 22.7ms ⚠️ (budget: 16ms)
+
+  Janky frames: 3.1% (budget: <2%)</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) Cold start</strong> is 447ms over budget and 312ms worse than the previous run &mdash; a clear regression. This likely correlates with a recent dependency addition, initialization code in <code>Application.onCreate()</code>, or a new ContentProvider. <strong>(2) Scroll performance</strong> is within budget at P50 and P95, but P99 exceeds the frame budget &mdash; there are occasional janky frames. <strong>(3) The 3.1% jank rate</strong> suggests an intermittent issue, possibly GC pauses or one expensive item in the list.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: New SDK Initialization in Application.onCreate()</h4>
+      <p>The 312ms regression correlates with a recent commit that added a new analytics SDK. The SDK&rsquo;s <code>initialize()</code> method runs synchronously on the main thread during <code>Application.onCreate()</code>, adding ~300ms to cold start. This is a common pattern: SDKs that look like one-line additions but carry hidden startup costs.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Defer SDK Initialization with App Startup Library</h4>
+<pre><code>// BEFORE: Synchronous initialization blocks startup
+class ShopApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        AnalyticsSDK.initialize(this)     // 300ms blocking!
+        CrashReporter.initialize(this)     // 50ms
+        FeatureFlags.initialize(this)      // 80ms
+        ImageLoader.initialize(this)       // 40ms
+    }
+}
+
+// AFTER: Use App Startup for lazy/async initialization
+// 1. Remove manual init from Application.onCreate()
+// 2. Create initializers:
+class AnalyticsInitializer : Initializer&lt;AnalyticsSDK&gt; {
+    override fun create(context: Context): AnalyticsSDK {
+        return AnalyticsSDK.initialize(context)
+    }
+    override fun dependencies() = emptyList&lt;Class&lt;Initializer&lt;*&gt;&gt;&gt;()
+}
+
+// 3. For non-critical SDKs, defer to background:
+class ShopApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        // Only critical SDK (crash reporter) on main thread
+        CrashReporter.initialize(this)
+
+        // Defer everything else
+        lifecycleScope.launch(Dispatchers.Default) {
+            AnalyticsSDK.initialize(this@ShopApplication)
+            FeatureFlags.initialize(this@ShopApplication)
+        }
+    }
+}</code></pre>
+      <p><strong>Result:</strong> Cold start drops by ~380ms because only the crash reporter blocks the main thread. Analytics and feature flags initialize in the background while the first screen renders.</p>
+    </div>
+
+    <h2>Building a <code>/check-budgets</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/check-budgets.md</code>:</p>
+
+    <pre><code># /check-budgets — Performance Budget Check
+
+Compare current benchmark results against performance budgets
+and flag violations.
+
+## Input
+The user will provide benchmark results from Macrobenchmark,
+Microbenchmark, or manual profiling, along with their budget targets.
+
+## Analysis Steps
+
+1. **Compare each metric against its budget** — flag anything over.
+2. **Identify regressions** — compare against previous results if
+   provided. Any increase > 10% is a regression worth investigating.
+3. **Rank violations by user impact:**
+   - Startup time: directly affects first impression
+   - Frame time: affects perceived smoothness
+   - APK size: affects install conversion
+   - Memory: affects background kill priority
+   - Crash rate: affects retention
+4. **Suggest which budgets to tackle first** based on how far
+   over budget and how many users are affected.
+
+## Output Format
+
+### Budget Status
+| Metric | Budget | Actual | Status |
+|--------|--------|--------|--------|
+[Table of all metrics]
+
+### Violations (ranked by impact)
+[Each violation with: how far over, likely cause, suggested fix]
+
+### Regressions
+[Metrics that got worse since last check]
+
+### Recommended Actions
+[Top 3 things to fix this sprint]</code></pre>
+
+    <h2>APK Size Analysis</h2>
+
+    <p>APK size is the easiest budget to exceed and the hardest to fix after the fact. Every library, every image asset, every unused class adds up.</p>
+
+    <pre><code># Analyze APK size breakdown:
+$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer \
+    apk summary app-release.apk
+
+# Top files by size:
+$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer \
+    files list --order-by SIZE app-release.apk | head -20
+
+# Check for unused resources:
+$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer \
+    resources unused app-release.apk</code></pre>
+
+    <div class="tip-box">
+      Feed the <code>apkanalyzer</code> output to Claude Code: &ldquo;Here are the top 20 files by size in my APK. Which ones can I reduce or eliminate?&rdquo; AI often spots: uncompressed PNGs that should be WebP, unused native libraries for architectures you don&rsquo;t need, and bundled fonts that could use system fonts instead.
+    </div>
+
+    <h2>The Debugging Decision Tree</h2>
+
+    <p>When something goes wrong, you need to know which tool to reach for. Here&rsquo;s the decision tree that routes you to the right chapter and skill:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Symptom</th>
+          <th>Tool / Skill</th>
+          <th>Chapter</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>App crashes with a stacktrace</td>
+          <td><code>/analyze-crash</code></td>
+          <td>Ch 2</td>
+        </tr>
+        <tr>
+          <td>App freezes / &ldquo;not responding&rdquo;</td>
+          <td><code>/analyze-anr</code></td>
+          <td>Ch 3</td>
+        </tr>
+        <tr>
+          <td>LeakCanary notification</td>
+          <td><code>/analyze-leak</code></td>
+          <td>Ch 4</td>
+        </tr>
+        <tr>
+          <td>UI is janky / dropped frames</td>
+          <td><code>/analyze-recomposition</code> or <code>/profile-cpu</code></td>
+          <td>Ch 5, 9</td>
+        </tr>
+        <tr>
+          <td>API call fails / 401 / timeout</td>
+          <td><code>/analyze-network</code></td>
+          <td>Ch 6</td>
+        </tr>
+        <tr>
+          <td>Build is slow</td>
+          <td><code>/analyze-build</code></td>
+          <td>Ch 7</td>
+        </tr>
+        <tr>
+          <td>Battery drain complaint</td>
+          <td><code>/analyze-battery</code></td>
+          <td>Ch 8</td>
+        </tr>
+        <tr>
+          <td>Test passes sometimes, fails sometimes</td>
+          <td><code>/diagnose-flaky</code></td>
+          <td>Ch 10</td>
+        </tr>
+        <tr>
+          <td>Production crash spike</td>
+          <td><code>/triage-crash</code></td>
+          <td>Ch 11</td>
+        </tr>
+        <tr>
+          <td>Benchmark exceeds budget</td>
+          <td><code>/check-budgets</code></td>
+          <td>Ch 12</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Your Complete Skill Toolkit</h2>
+
+    <p>Here&rsquo;s every skill you&rsquo;ve built across this course. These should all live in <code>.claude/commands/</code> in your project and be committed to your repo so your entire team can use them.</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">1</div>
+      <div class="tool-info">
+        <div class="tool-name">/debug</div>
+        <div class="tool-desc">General-purpose structured crash analysis from any stacktrace</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">2</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-crash</div>
+        <div class="tool-desc">Android-specific crash log analysis with Caused-by chain tracing</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">3</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-anr</div>
+        <div class="tool-desc">ANR trace analysis &mdash; blocked thread, lock holder, fix suggestion</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">4</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-leak</div>
+        <div class="tool-desc">LeakCanary trace analysis with retention chain explanation</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">5</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-recomposition</div>
+        <div class="tool-desc">Compose recomposition analysis from compiler metrics</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">6</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-network</div>
+        <div class="tool-desc">HTTP traffic analysis from OkHttp interceptor logs</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">7</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-build</div>
+        <div class="tool-desc">Gradle build profile analysis with optimization suggestions</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">8</div>
+      <div class="tool-info">
+        <div class="tool-name">/analyze-battery</div>
+        <div class="tool-desc">Battery stats analysis &mdash; wake locks, location, scheduling audit</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">9</div>
+      <div class="tool-info">
+        <div class="tool-name">/profile-cpu</div>
+        <div class="tool-desc">CPU profiler method trace analysis with frame budget check</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">10</div>
+      <div class="tool-info">
+        <div class="tool-name">/diagnose-flaky</div>
+        <div class="tool-desc">Flaky test categorization and root cause identification</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">11</div>
+      <div class="tool-info">
+        <div class="tool-name">/triage-crash</div>
+        <div class="tool-desc">Production crash triage with severity and priority assessment</div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-icon">12</div>
+      <div class="tool-info">
+        <div class="tool-name">/check-budgets</div>
+        <div class="tool-desc">Benchmark results vs performance budget comparison</div>
+      </div>
+    </div>
+
+    <p>Plus the prevention skills: <code>/check-anr-risks</code>, <code>/scan-for-leaks</code>, and <code>/weekly-crash-report</code>.</p>
+
+    <h2>CI Integration: Automated Budget Enforcement</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Manual Performance Checks</h4>
+        <p><strong>Performance regressions caught:</strong> After user complaints</p>
+        <p><strong>Benchmark cadence:</strong> &ldquo;When someone remembers&rdquo;</p>
+        <p><strong>APK size tracking:</strong> None</p>
+        <p><strong>Cold start trend:</strong> Growing 50ms per quarter</p>
+        <p><strong>Team awareness:</strong> &ldquo;Feels slow sometimes&rdquo;</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: Automated Budget Gates</h4>
+        <p><strong>Performance regressions caught:</strong> In CI, before merge</p>
+        <p><strong>Benchmark cadence:</strong> Every PR (Macrobenchmark in CI)</p>
+        <p><strong>APK size tracking:</strong> Reported in PR comment</p>
+        <p><strong>Cold start trend:</strong> Stable at 780ms</p>
+        <p><strong>Team awareness:</strong> Dashboards + weekly AI report</p>
+      </div>
+    </div>
+
+    <h2>The 30-Day Debugging Challenge</h2>
+
+    <p>Knowledge without practice evaporates. Here&rsquo;s a 30-day plan to make AI-assisted debugging a habit:</p>
+
+    <h3>Week 1: Crash Analysis (Chapters 1&ndash;3)</h3>
+    <ul>
+      <li><strong>Day 1&ndash;2:</strong> Set up <code>CLAUDE.md</code> and <code>/debug</code> skill in your project</li>
+      <li><strong>Day 3&ndash;4:</strong> Triage 3 real crashes from Crashlytics using <code>/analyze-crash</code></li>
+      <li><strong>Day 5:</strong> Pull an ANR trace and run <code>/analyze-anr</code> on it</li>
+    </ul>
+
+    <h3>Week 2: Profiling (Chapters 4&ndash;6)</h3>
+    <ul>
+      <li><strong>Day 6&ndash;7:</strong> Run LeakCanary, analyze any leaks with <code>/analyze-leak</code></li>
+      <li><strong>Day 8&ndash;9:</strong> Enable Compose compiler metrics, run <code>/analyze-recomposition</code></li>
+      <li><strong>Day 10:</strong> Capture OkHttp logs from a failing flow, run <code>/analyze-network</code></li>
+    </ul>
+
+    <h3>Week 3: Infrastructure (Chapters 7&ndash;9)</h3>
+    <ul>
+      <li><strong>Day 11&ndash;12:</strong> Profile your Gradle build, run <code>/analyze-build</code>, apply top fix</li>
+      <li><strong>Day 13&ndash;14:</strong> Capture battery stats, run <code>/analyze-battery</code></li>
+      <li><strong>Day 15:</strong> CPU-profile a slow screen, run <code>/profile-cpu</code></li>
+    </ul>
+
+    <h3>Week 4: Tests and Production (Chapters 10&ndash;12)</h3>
+    <ul>
+      <li><strong>Day 16&ndash;17:</strong> Fix your team&rsquo;s most notorious flaky test with <code>/diagnose-flaky</code></li>
+      <li><strong>Day 18&ndash;19:</strong> Generate your first <code>/weekly-crash-report</code>, share with team</li>
+      <li><strong>Day 20:</strong> Set up performance budgets and Macrobenchmark for cold start</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>You&rsquo;re an AI-Powered Debugger Now</h3>
+      <p>Twelve chapters ago, debugging meant staring at logs and guessing. Now you have 15 reusable skills, a performance budget system, and a debugging decision tree that routes any problem to the right tool in seconds. The AI doesn&rsquo;t replace your Android expertise &mdash; it amplifies it. You bring the domain knowledge. AI brings the pattern recognition. Together, you debug in minutes what used to take hours. Go build something great &mdash; and when it breaks, you know exactly what to do.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Final Exercise: Your Personal Debugging Playbook</h4>
+      <ol>
+        <li><strong>Set your budgets:</strong> Use the table in this chapter as a starting point. Paste your current metrics into Claude Code and ask for tailored budget recommendations for your app category.</li>
+        <li><strong>Set up Macrobenchmark:</strong> Create a <code>:macrobenchmark</code> module with at least a cold start test and a scroll test for your main list screen.</li>
+        <li><strong>Commit all skills:</strong> Ensure all 15 skills from this course are in <code>.claude/commands/</code> and committed to your repo. Run <code>ls .claude/commands/</code> to verify.</li>
+        <li><strong>Share with your team:</strong> Post the debugging decision tree in your team&rsquo;s wiki or Slack channel. When someone says &ldquo;the app crashed,&rdquo; point them to <code>/analyze-crash</code> instead of &ldquo;let me take a look.&rdquo;</li>
+        <li><strong>Start the 30-day challenge:</strong> Commit to one debugging exercise per day for 20 working days. By the end, AI-assisted debugging will be muscle memory.</li>
+      </ol>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="11-production-monitoring.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Production Monitoring &amp; Crash Reporting</span>
+      </a>
+      <a href="13-16kb-page-size.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Debugging 16 KB Page Size Compatibility for Native Libraries</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

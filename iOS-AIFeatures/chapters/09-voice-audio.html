@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Voice &amp; Audio Intelligence | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-image-generation.html">&larr; Prev</a>
+      <a href="10-siri-app-intents.html">Next &rarr;</a>
+      <a href="maps/09-voice-audio-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Voice &amp; Audio Intelligence</h1>
+    <p class="subtitle">SpeechAnalyzer, sound classification, voice-to-action pipelines, and building audio features that feel like magic</p>
+  </header>
+
+  <main>
+
+    <!-- Introduction -->
+    <p>In Chapter 8 you taught your app to see and create images. Now it&rsquo;s time to teach it to <em>listen</em>.</p>
+
+    <p>Voice and audio are the most natural interfaces humans have. We spoke for thousands of years before we typed. Yet most apps still treat voice as a second-class citizen &mdash; a glorified dictation button stuck in a corner. That&rsquo;s a missed opportunity, and Apple&rsquo;s new SpeechAnalyzer framework makes it easier than ever to build voice-first features that feel effortless.</p>
+
+    <div class="highlight-box">
+      <h3>What Changed in iOS 26</h3>
+      <p><strong>SpeechAnalyzer</strong> replaces the decade-old <code>SFSpeechRecognizer</code>. It&rsquo;s modular, Swift Concurrency-native, and entirely on-device. It supports long-form audio, distant microphones, automatic language detection, and is 2.2&times; faster than Whisper Large V3 Turbo. It already powers Notes, Voice Memos, and Journal.</p>
+    </div>
+
+    <!-- User Story -->
+    <div class="user-story-box">
+      <h3>User Story: The Meeting That Summarized Itself</h3>
+      <p>Sarah finishes a 30-minute project meeting. She opens the app, taps &ldquo;Meeting Summary,&rdquo; and within seconds sees: a 5-bullet recap, a list of action items with owners, and three key decisions. She shares it to Slack with one tap. The entire pipeline &mdash; transcription, understanding, extraction &mdash; ran on her iPhone. No cloud. No subscription. No waiting.</p>
+    </div>
+
+    <!-- SpeechAnalyzer Architecture -->
+    <h2>The SpeechAnalyzer Architecture</h2>
+
+    <p>The old <code>SFSpeechRecognizer</code> was a single monolithic class that tried to do everything. SpeechAnalyzer takes the opposite approach: it&rsquo;s <strong>modular</strong>. You compose the capabilities you need by adding modules to a session.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>SpeechAnalyzer</h4>
+          <p>The session manager. Create one, add modules, start analyzing.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Modules</h4>
+          <p>SpeechTranscriber, DictationTranscriber, or SpeechDetector &mdash; pick what you need.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h4>AsyncSequence</h4>
+          <p>Streaming partial results via Swift Concurrency. No delegates, no callbacks.</p>
+        </div>
+      </div>
+    </div>
+
+    <h3>Three Modules, Three Use Cases</h3>
+
+    <table>
+      <thead>
+        <tr><th>Module</th><th>What It Does</th><th>Best For</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SpeechTranscriber</code></td>
+          <td>Clean transcription optimized for commands and structured input</td>
+          <td>Voice commands, search queries, form filling</td>
+        </tr>
+        <tr>
+          <td><code>DictationTranscriber</code></td>
+          <td>Natural dictation with punctuation, paragraph breaks, formatting</td>
+          <td>Note-taking, email composition, long-form text</td>
+        </tr>
+        <tr>
+          <td><code>SpeechDetector</code></td>
+          <td>Detects voice activity without full transcription</td>
+          <td>Push-to-talk, voice activation, silence detection</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <h4>Tip: DictationTranscriber vs SpeechTranscriber</h4>
+      <p>If the user is <em>dictating</em> (composing text), use <code>DictationTranscriber</code> &mdash; it adds punctuation and formatting automatically. If the user is <em>commanding</em> (telling the app what to do), use <code>SpeechTranscriber</code> &mdash; it gives you clean, parseable text without extra formatting.</p>
+    </div>
+
+    <!-- API Recipe: Real-time transcription -->
+    <div class="api-recipe">
+      <h3>API Recipe: Real-Time Transcription with SpeechAnalyzer</h3>
+      <p><strong>Goal:</strong> Transcribe speech in real time and display streaming text in SwiftUI.</p>
+
+      <h4>Step 1: Configure the analyzer</h4>
+<pre><code>import Speech
+
+let analyzer = SpeechAnalyzer()
+let transcriber = SpeechTranscriber()
+try await analyzer.add(transcriber)</code></pre>
+
+      <h4>Step 2: Start analyzing from the microphone</h4>
+<pre><code>// Analyze live audio from the default microphone
+try await analyzer.start()</code></pre>
+
+      <h4>Step 3: Stream partial results</h4>
+<pre><code>// Results arrive as an AsyncSequence
+for await result in transcriber.results {
+    let text = result.transcription.formattedString
+    await MainActor.run {
+        self.transcribedText = text
+    }
+}</code></pre>
+
+      <h4>Step 4: Stop when done</h4>
+<pre><code>analyzer.stop()</code></pre>
+
+      <p><strong>Result:</strong> A live transcription that updates word-by-word as the user speaks. Entirely on-device. No network required.</p>
+    </div>
+
+    <h3>Capabilities vs the Old World</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>SpeechAnalyzer (iOS 26)</h4>
+        <ul>
+          <li>Modular &mdash; add only what you need</li>
+          <li>AsyncSequence streaming (Swift Concurrency native)</li>
+          <li>Automatic language detection</li>
+          <li>Long-form audio (lectures, meetings)</li>
+          <li>Distant microphone support</li>
+          <li>2.2&times; faster than Whisper Large V3 Turbo</li>
+          <li>Already powers Notes, Voice Memos, Journal</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>SFSpeechRecognizer (iOS 10&ndash;25)</h4>
+        <ul>
+          <li>Monolithic &mdash; one-size-fits-all</li>
+          <li>Delegate-based callbacks</li>
+          <li>Manual locale configuration</li>
+          <li>60-second limit for on-device (without network)</li>
+          <li>Close-mic only</li>
+          <li>Slower, less accurate</li>
+          <li>Still available for backward compatibility</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Transcription UX -->
+    <h2>Building a Transcription UI in SwiftUI</h2>
+
+    <p>A bare text field that updates isn&rsquo;t good enough. Users need visual feedback that tells them: the app is listening, speech is being processed, and the result is building in real time.</p>
+
+    <div class="product-pattern">
+      <h3>Product Pattern: The Voice Note Experience</h3>
+      <p><strong>The pattern:</strong> Tap to record &rarr; live waveform + streaming text &rarr; tap to stop &rarr; instant summary + action items.</p>
+      <p><strong>Why it works:</strong> Users can <em>see</em> that the app is listening (waveform), see the transcription build word-by-word (streaming text), and immediately get value (summary). No waiting, no &ldquo;processing&rdquo; spinner at the end.</p>
+      <p><strong>Where to use it:</strong> Voice memos, meeting notes, journal entries, interview recording, lecture capture, field notes.</p>
+      <p><strong>Key insight:</strong> The streaming text is the loading indicator. If users see words appearing, they trust the system is working. A waveform alone isn&rsquo;t enough &mdash; they need to see <em>understanding</em> happening.</p>
+    </div>
+
+    <h3>The Five States of a Voice UI</h3>
+
+    <div class="checklist">
+      <label><input type="checkbox"> <strong>Idle:</strong> Microphone button with clear &ldquo;Tap to speak&rdquo; affordance. No ambiguity about what happens when they tap.</label>
+      <label><input type="checkbox"> <strong>Listening:</strong> Animated waveform or pulsing indicator. Streaming text appears word-by-word. The button changes to &ldquo;Tap to stop.&rdquo;</label>
+      <label><input type="checkbox"> <strong>Processing:</strong> Brief moment after the user stops speaking. Show &ldquo;Finalizing&hellip;&rdquo; if needed, but SpeechAnalyzer is fast enough that this state is often invisible.</label>
+      <label><input type="checkbox"> <strong>Result:</strong> Final transcription displayed. If you&rsquo;re chaining with Foundation Models (summarize, extract), show a brief &ldquo;Analyzing&hellip;&rdquo; state.</label>
+      <label><input type="checkbox"> <strong>Error:</strong> Microphone denied, no speech detected, or device unsupported. Always offer a text-input fallback.</label>
+    </div>
+
+    <div class="tip-box">
+      <h4>Tip: Always Provide a Text Fallback</h4>
+      <p>Not everyone can or wants to speak. Noisy environments, public spaces, accessibility needs &mdash; always provide a way to type what they would have said. Voice should be an <em>accelerator</em>, not a <em>requirement</em>.</p>
+    </div>
+
+    <!-- Voice-to-Action Pipeline -->
+    <h2>The Voice-to-Action Pipeline</h2>
+
+    <p>Transcription alone is table stakes. The real magic happens when you chain speech recognition with Foundation Models to turn spoken words into app actions.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>Speak</h4>
+          <p>User says: &ldquo;Schedule lunch with Anna tomorrow at noon&rdquo;</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Transcribe</h4>
+          <p>SpeechTranscriber converts speech to text</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h4>Understand</h4>
+          <p>Foundation Models extracts structured data via @Generable</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <h4>Act</h4>
+          <p>App creates calendar event, shows confirmation</p>
+        </div>
+      </div>
+    </div>
+
+    <h3>Structured Extraction with @Generable</h3>
+
+<pre><code>import FoundationModels
+
+@Generable
+struct CalendarAction {
+    @Guide(description: "The event title")
+    var title: String
+    @Guide(description: "Person or people involved")
+    var attendees: [String]
+    @Guide(description: "Date in ISO 8601 format")
+    var date: String
+    @Guide(description: "Time in HH:mm format")
+    var time: String
+}
+
+let session = LanguageModelSession()
+let action: CalendarAction = try await session.respond(
+    to: "Extract the calendar event: \(transcribedText)",
+    generating: CalendarAction.self
+)</code></pre>
+
+    <p>Vision sees pixels. SpeechAnalyzer hears words. Foundation Models <em>understands meaning</em>. The pipeline is always the same: capture &rarr; transcribe &rarr; structure &rarr; act.</p>
+
+    <div class="warning-box">
+      <h4>Warning: Always Confirm Before Acting</h4>
+      <p>Never execute an action silently after voice input. Show the extracted data (&ldquo;Lunch with Anna, tomorrow 12:00 PM&rdquo;) and let the user confirm or edit. Voice recognition is good &mdash; but not perfect. A misheard &ldquo;Anna&rdquo; could become &ldquo;Hannah&rdquo; and schedule the wrong person.</p>
+    </div>
+
+    <!-- Sound Classification -->
+    <h2>Sound Classification: Hearing the World</h2>
+
+    <p>SpeechAnalyzer understands human speech. But what about everything else? Dogs barking, doorbells ringing, applause, sirens, music? That&rsquo;s where the Sound Analysis framework comes in.</p>
+
+    <p><code>SNClassifySoundRequest</code> can identify <strong>300+ sound categories</strong> in real time using Apple&rsquo;s built-in Core ML model. No training, no model management, no cost.</p>
+
+    <h3>Real-World Sound Classification Features</h3>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">300+</div>
+        <div class="stat-label">Sound categories</div>
+        <div class="stat-detail">Applause, sirens, music, dog barks, baby crying, doorbell, and hundreds more</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">0.5&ndash;15s</div>
+        <div class="stat-label">Inference window</div>
+        <div class="stat-detail">Configurable via <code>inferenceWindowSize</code>. Shorter = faster but less accurate</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">$0</div>
+        <div class="stat-label">Cost per classification</div>
+        <div class="stat-detail">On-device, free, no network required. Available since iOS 15</div>
+      </div>
+    </div>
+
+    <h3>The Audio Pipeline</h3>
+
+    <p>Sound classification uses the same audio engine pattern across iOS:</p>
+
+<pre><code>import AVFoundation
+import SoundAnalysis
+
+let engine = AVAudioEngine()
+let inputNode = engine.inputNode
+let bus = 0
+let format = inputNode.outputFormat(forBus: bus)
+
+let analyzer = SNAudioStreamAnalyzer(format: format)
+let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+try analyzer.add(request, withObserver: self)
+
+inputNode.installTap(onBus: bus, bufferSize: 8192,
+                     format: format) { buffer, time in
+    analyzer.analyze(buffer, atAudioFramePosition: time.sampleTime)
+}
+
+try engine.start()</code></pre>
+
+    <p>Results arrive via the <code>SNResultsObserving</code> protocol:</p>
+
+<pre><code>func request(_ request: SNRequest,
+             didProduce result: SNResult) {
+    guard let classification = result as? SNClassificationResult,
+          let top = classification.classifications.first,
+          top.confidence > 0.7 else { return }
+    // top.identifier = "dog_bark", "siren", "music", etc.
+    print("\(top.identifier): \(top.confidence)")
+}</code></pre>
+
+    <h3>Contextual Features Powered by Sound</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Smart Sound Features</h4>
+        <ul>
+          <li><strong>Accessibility:</strong> Alert deaf users to doorbells, alarms, baby crying</li>
+          <li><strong>Fitness:</strong> Detect music tempo to match workout pace</li>
+          <li><strong>Home:</strong> Identify appliance sounds (washer done, timer beep)</li>
+          <li><strong>Wildlife:</strong> Classify bird songs during nature walks</li>
+          <li><strong>Safety:</strong> Detect sirens, glass breaking, smoke alarms</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Don&rsquo;t Build These</h4>
+        <ul>
+          <li><strong>Surveillance:</strong> Continuous background recording of conversations</li>
+          <li><strong>Profiling:</strong> Classifying users by their environment sounds</li>
+          <li><strong>Always-on:</strong> Battery-draining 24/7 listening without clear purpose</li>
+          <li><strong>Covert:</strong> Sound analysis without the user knowing it&rsquo;s active</li>
+          <li><strong>Creepy:</strong> &ldquo;We noticed you&rsquo;re in a restaurant&rdquo; notifications</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Voice Assistant Loop -->
+    <h2>Building a Voice Assistant</h2>
+
+    <p>The most ambitious voice feature is a complete voice interaction loop: the user speaks, the app understands, takes action, and responds. Here&rsquo;s the full architecture:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>Listen</h4>
+          <p>SpeechTranscriber captures and transcribes speech</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Understand</h4>
+          <p>Foundation Models interprets intent with tool calling</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h4>Execute</h4>
+          <p>Tool call triggers app action (search, create, navigate)</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <h4>Respond</h4>
+          <p>AVSpeechSynthesizer speaks the result back to the user</p>
+        </div>
+      </div>
+    </div>
+
+    <h3>Voice Response with AVSpeechSynthesizer</h3>
+
+<pre><code>import AVFoundation
+
+func speak(_ text: String) {
+    let utterance = AVSpeechUtterance(string: text)
+    utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+    utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+    utterance.pitchMultiplier = 1.0
+    let synthesizer = AVSpeechSynthesizer()
+    synthesizer.speak(utterance)
+}</code></pre>
+
+    <div class="tip-box">
+      <h4>Tip: Don&rsquo;t Overdo Voice Responses</h4>
+      <p>Spoken responses work for short confirmations (&ldquo;Event created for tomorrow at noon&rdquo;) but annoy users for long content. Show long results on screen and only speak a brief summary. Nobody wants to listen to a 200-word meeting summary read aloud.</p>
+    </div>
+
+    <!-- Speech + Foundation Models Combo -->
+    <h2>Speech + Text: The Meeting Notes Pipeline</h2>
+
+    <p>The killer feature everyone wants to build: record a conversation, get a structured summary with action items. Here&rsquo;s the complete pipeline.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h4>Record</h4>
+          <p>SpeechAnalyzer with DictationTranscriber. Long-form, distant mic, automatic punctuation.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h4>Transcribe</h4>
+          <p>Streaming results build the full transcript in real time.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h4>Summarize</h4>
+          <p>Foundation Models generates a structured summary via @Generable.</p>
+        </div>
+      </div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <h4>Extract</h4>
+          <p>Action items, decisions, and topics pulled into typed Swift structs.</p>
+        </div>
+      </div>
+    </div>
+
+<pre><code>@Generable
+struct MeetingSummary {
+    @Guide(description: "3-5 bullet summary of the meeting")
+    var keyPoints: [String]
+    @Guide(description: "Action items with owner names")
+    var actionItems: [ActionItem]
+    @Guide(description: "Key decisions that were made")
+    var decisions: [String]
+    @Guide(description: "Suggested title for the meeting")
+    var suggestedTitle: String
+}
+
+@Generable
+struct ActionItem {
+    var description: String
+    var owner: String
+}</code></pre>
+
+    <div class="warning-box">
+      <h4>Warning: Context Window Limits</h4>
+      <p>Foundation Models has a ~4,096 token context window. A 30-minute meeting transcript can easily exceed this. Use the <strong>map-reduce pattern</strong> from Chapter 6: chunk the transcript into segments, summarize each, then summarize the summaries. Two good summaries merged beats one truncated summary.</p>
+    </div>
+
+    <!-- Multilingual Support -->
+    <h2>Multilingual Voice Features</h2>
+
+    <p>SpeechAnalyzer supports <strong>automatic language detection</strong> &mdash; no need to ask the user what language they speak. The framework figures it out from the audio.</p>
+
+    <p>For multilingual apps, you can chain SpeechAnalyzer with Foundation Models for a complete pipeline:</p>
+
+    <ol>
+      <li><strong>Transcribe</strong> in the user&rsquo;s language (automatic detection)</li>
+      <li><strong>Translate</strong> with Foundation Models if needed</li>
+      <li><strong>Extract</strong> structured data in a language-agnostic format (@Generable)</li>
+      <li><strong>Display</strong> results in the user&rsquo;s preferred language</li>
+    </ol>
+
+    <div class="tip-box">
+      <h4>Tip: Test with Accented Speech</h4>
+      <p>Real-world speech includes accents, code-switching (mixing languages mid-sentence), and background noise. Test with diverse audio samples, not just studio-quality recordings. Apple&rsquo;s model handles accents well, but edge cases exist &mdash; especially with technical jargon and proper nouns.</p>
+    </div>
+
+    <!-- Privacy & Permissions -->
+    <h2>Privacy: The Microphone Is Sacred</h2>
+
+    <p>The microphone is the most sensitive permission on iOS. Users grant camera access without much thought. They hesitate with the microphone. Here&rsquo;s how to earn their trust.</p>
+
+    <div class="checklist">
+      <label><input type="checkbox"> <strong>Explain before asking:</strong> Show a pre-permission screen that explains exactly what you&rsquo;ll use the microphone for. &ldquo;To transcribe your voice notes&rdquo; not &ldquo;To improve your experience.&rdquo;</label>
+      <label><input type="checkbox"> <strong>Process on-device:</strong> SpeechAnalyzer is 100% on-device. Lead with this. &ldquo;Your voice never leaves your iPhone.&rdquo;</label>
+      <label><input type="checkbox"> <strong>Show the recording indicator:</strong> iOS shows an orange dot when the mic is active. Don&rsquo;t try to minimize or hide this &mdash; embrace it. Add your own in-app indicator too.</label>
+      <label><input type="checkbox"> <strong>Stop when backgrounded:</strong> If your app goes to background, stop recording immediately unless you have a legitimate background audio use case. Users notice when the orange dot persists.</label>
+      <label><input type="checkbox"> <strong>Don&rsquo;t store raw audio:</strong> Transcribe, extract what you need, then discard the audio buffer. Store the transcript, not the recording (unless the user explicitly chose to save the recording).</label>
+      <label><input type="checkbox"> <strong>Handle denial gracefully:</strong> If the user denies microphone access, show a text input fallback with a friendly message. Never shame them or repeatedly prompt.</label>
+    </div>
+
+    <h3>The Permission Dialog Matters</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Good Permission Context</h4>
+        <p>&ldquo;VoiceNotes needs microphone access to transcribe your spoken notes into text. All processing happens on your iPhone &mdash; your voice is never sent to any server.&rdquo;</p>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Bad Permission Context</h4>
+        <p>&ldquo;Allow microphone access to enable audio features.&rdquo;</p>
+      </div>
+    </div>
+
+    <!-- Battery & Performance -->
+    <h2>Battery and Performance</h2>
+
+    <p>Continuous audio processing is a battery killer. Users will blame your app when their phone dies at 2 PM. Here&rsquo;s how to be responsible.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">~5%</div>
+        <div class="stat-label">Battery per hour</div>
+        <div class="stat-detail">Approximate drain for continuous SpeechAnalyzer transcription on iPhone 15 Pro</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">16 kHz</div>
+        <div class="stat-label">Sample rate</div>
+        <div class="stat-detail">SpeechAnalyzer works fine at 16 kHz. No need for 44.1 kHz or 48 kHz for speech</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">8192</div>
+        <div class="stat-label">Buffer size</div>
+        <div class="stat-detail">Good default for <code>installTap</code>. Larger = fewer callbacks but more latency</div>
+      </div>
+    </div>
+
+    <h3>Power-Efficient Audio Strategies</h3>
+
+    <ul>
+      <li><strong>Use SpeechDetector first:</strong> Only run full transcription when speech is detected. SpeechDetector is much lighter than SpeechTranscriber.</li>
+      <li><strong>Stop promptly:</strong> When the user pauses speaking, stop the analyzer. Don&rsquo;t keep it running &ldquo;just in case.&rdquo;</li>
+      <li><strong>Respect Low Power Mode:</strong> Check <code>ProcessInfo.processInfo.isLowPowerModeEnabled</code> and reduce audio quality or disable non-essential features.</li>
+      <li><strong>Handle interruptions:</strong> Phone calls, alarms, and other apps interrupt the audio session. Register for <code>AVAudioSession.interruptionNotification</code> and pause gracefully.</li>
+      <li><strong>Background audio:</strong> Only request <code>audio</code> background mode if your feature genuinely needs it (like a meeting recorder). App Store Review scrutinizes this.</li>
+    </ul>
+
+    <!-- Audio Session Configuration -->
+    <h2>Audio Session Configuration</h2>
+
+    <p>Before any audio recording, configure the audio session properly. Getting this wrong causes silent failures that are maddening to debug.</p>
+
+<pre><code>let session = AVAudioSession.sharedInstance()
+try session.setCategory(.playAndRecord,
+                        mode: .default,
+                        options: [.defaultToSpeaker,
+                                  .allowBluetooth])
+try session.setActive(true)</code></pre>
+
+    <div class="tip-box">
+      <h4>Tip: Category Matters</h4>
+      <p>Use <code>.playAndRecord</code> if your app both listens and speaks (voice assistant). Use <code>.record</code> if it only listens (transcription). Using the wrong category causes audio routing issues &mdash; Bluetooth headphones stop working, speaker output disappears, or the volume drops to near-silent.</p>
+    </div>
+
+    <!-- Cross-reference -->
+    <div class="highlight-box">
+      <h3>Going Deeper</h3>
+      <p>For detailed SpeechAnalyzer configuration, custom Sound Analysis models, and audio pipeline optimization, see <strong>iOS-OnDevice Chapter 5</strong>. This chapter focuses on the product experience; the companion course covers the infrastructure.</p>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Build a Voice Notes Feature</h3>
+      <p>Build a complete voice notes feature with AI-powered analysis:</p>
+      <ol>
+        <li><strong>Record:</strong> Tap-to-record button with a pulsing animation and waveform visualization</li>
+        <li><strong>Transcribe:</strong> Live transcription displayed in real time using SpeechAnalyzer with DictationTranscriber</li>
+        <li><strong>Analyze:</strong> When recording stops, Foundation Models generates:
+          <ul>
+            <li>A 3-bullet summary</li>
+            <li>Key topics extracted as tags</li>
+            <li>A suggested title</li>
+          </ul>
+        </li>
+        <li><strong>Display:</strong> Show the full transcript and AI analysis in an editable SwiftUI view</li>
+        <li><strong>Persist:</strong> Save to SwiftData with the transcript, summary, tags, and title</li>
+      </ol>
+      <p><strong>Stretch goal:</strong> Add a &ldquo;voice command&rdquo; mode where the user says &ldquo;summarize,&rdquo; &ldquo;find action items,&rdquo; or &ldquo;translate to Spanish&rdquo; and Foundation Models processes the command with tool calling.</p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What&rsquo;s Next</h2>
+
+    <p>Your app can now see (Vision), create (Image Playground), and hear (SpeechAnalyzer). But all of these features live <em>inside</em> your app. In Chapter 10, we&rsquo;ll break out of the app sandbox and make your AI features accessible <strong>everywhere</strong> &mdash; through Siri, Shortcuts, Spotlight, widgets, and the Lock Screen. Your users shouldn&rsquo;t have to open your app to benefit from its intelligence.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-image-generation.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Image Generation &amp; Creative AI</span>
+      </a>
+      <a href="10-siri-app-intents.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Siri, App Intents &amp; System Integration</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

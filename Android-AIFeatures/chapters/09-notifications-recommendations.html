@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Intelligent Notifications &amp; Recommendations | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-smart-camera.html">&larr; Prev</a>
+      <a href="10-smart-forms.html">Next &rarr;</a>
+      <a href="maps/09-notifications-recommendations-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Intelligent Notifications &amp; Recommendations</h1>
+    <p class="subtitle">AI-driven timing, personalized content, and behavior prediction &mdash; helping users before they ask</p>
+  </header>
+
+  <main>
+
+    <h2>The Notification Paradox</h2>
+
+    <p>Notifications are the most powerful and most dangerous tool in your app. A well-timed, relevant notification drives engagement. A badly timed, irrelevant one drives uninstalls.</p>
+
+    <p>Think of notifications like a colleague tapping you on the shoulder. If they interrupt your focus to tell you something urgent and relevant, you're grateful. If they interrupt you during a meeting to say "hey, we have new posts!" you want to throw your phone out the window.</p>
+
+    <p>AI can fix this by answering three questions: <strong>What</strong> to notify (is this content worth interrupting for?), <strong>When</strong> to notify (is now a good time for this user?), and <strong>How</strong> to say it (what message will resonate?).</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">50%</span>
+        <span class="stat-label">Of users disable notifications within the first week</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">4x</span>
+        <span class="stat-label">Higher open rate for personalized vs generic notifications</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">28%</span>
+        <span class="stat-label">Of uninstalls are triggered by annoying notifications</span>
+      </div>
+    </div>
+
+    <h2>Smart Notification Timing</h2>
+
+    <p>Sending a notification at 3am because that's when a new article was published is lazy engineering. Sending it at 7:30am because that's when <em>this user</em> typically opens the app is smart engineering.</p>
+
+    <h3>On-Device Behavior Signals</h3>
+
+    <p>You don't need a cloud ML pipeline to figure out when a user is available. Android gives you signals right on the device:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Signal</th>
+          <th>API</th>
+          <th>What It Tells You</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>App usage patterns</td>
+          <td><code>UsageStatsManager</code></td>
+          <td>When the user typically opens your app (morning? evening? lunch?)</td>
+        </tr>
+        <tr>
+          <td>Activity recognition</td>
+          <td><code>ActivityRecognitionClient</code></td>
+          <td>Is the user walking, driving, or still? (Don't notify while driving)</td>
+        </tr>
+        <tr>
+          <td>Do Not Disturb</td>
+          <td><code>NotificationManager</code></td>
+          <td>Is the device in DND mode? Respect it.</td>
+        </tr>
+        <tr>
+          <td>Screen state</td>
+          <td><code>PowerManager</code></td>
+          <td>Is the screen on? If so, the user is active and more likely to engage</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="api-recipe">
+      <h3>Recipe: Learning the User's Active Hours</h3>
+      <p><strong>Goal:</strong> Figure out when the user typically opens your app and schedule notifications for those windows.</p>
+      <p><strong>Step 1:</strong> Log app open times locally:</p>
+<pre><code>@Entity
+data class AppOpenEvent(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val hourOfDay: Int,     // 0-23
+    val dayOfWeek: Int,     // 1-7 (Monday-Sunday)
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+// In your Application.onCreate() or main Activity
+appOpenDao.insert(AppOpenEvent(
+    hourOfDay = LocalTime.now().hour,
+    dayOfWeek = LocalDate.now().dayOfWeek.value
+))</code></pre>
+      <p><strong>Step 2:</strong> Calculate the optimal notification window:</p>
+<pre><code>fun getOptimalNotificationHour(events: List&lt;AppOpenEvent&gt;): Int {
+    if (events.size &lt; 7) return 9 // default to 9am until we have enough data
+
+    // Find the most common hour the user opens the app
+    return events
+        .groupBy { it.hourOfDay }
+        .maxByOrNull { it.value.size }
+        ?.key ?: 9
+}
+
+// For day-specific optimization:
+fun getOptimalHourForDay(events: List&lt;AppOpenEvent&gt;, dayOfWeek: Int): Int {
+    val dayEvents = events.filter { it.dayOfWeek == dayOfWeek }
+    if (dayEvents.size &lt; 3) return getOptimalNotificationHour(events)
+    return dayEvents.groupBy { it.hourOfDay }.maxByOrNull { it.value.size }?.key ?: 9
+}</code></pre>
+      <p><strong>Step 3:</strong> Schedule notifications using WorkManager:</p>
+<pre><code>fun scheduleSmartNotification(content: NotificationContent) {
+    val optimalHour = getOptimalHourForDay(
+        appOpenDao.getRecentEvents(days = 30),
+        LocalDate.now().plusDays(1).dayOfWeek.value
+    )
+    val delay = calculateDelayUntilHour(optimalHour)
+
+    val request = OneTimeWorkRequestBuilder&lt;NotificationWorker&gt;()
+        .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+        .setInputData(workDataOf("content" to content.toJson()))
+        .build()
+    WorkManager.getInstance(context).enqueue(request)
+}</code></pre>
+      <p>After two weeks of data, your app knows that this user opens it at 8am on weekdays and 10am on weekends. Notifications arrive right when the user is likely to see them.</p>
+    </div>
+
+    <h2>Notification Content Personalization</h2>
+
+    <p>The same notification can perform very differently based on how you phrase it. AI can help you tailor the message to each user's preferences:</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <p class="prompt-label">Generic Notification</p>
+        <p class="prompt-text">"New recipes available"
+
+Every user gets the same message. Low open rate. Feels like spam.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Personalized Notification</p>
+        <p class="prompt-text">"3 new chicken recipes — including one under 20 minutes"
+
+Tailored to what this user likes (chicken) and cares about (quick meals). 4x higher open rate.</p>
+      </div>
+    </div>
+
+    <p>You don't need an LLM for every notification. A template system with user preferences works great:</p>
+
+<pre><code>fun buildNotificationText(user: UserPreferences, newContent: List&lt;Content&gt;): String {
+    val relevant = newContent.filter { it.matchesPreferences(user) }
+    if (relevant.isEmpty()) return "" // don't notify if nothing is relevant
+
+    val topCategory = relevant.groupBy { it.category }.maxByOrNull { it.value.size }
+    val count = relevant.size
+    val highlight = relevant.firstOrNull { it.isQuick }?.let {
+        " — including one under ${it.cookTime} minutes"
+    } ?: ""
+
+    return "$count new ${topCategory?.key ?: "items"}$highlight"
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The personalization spectrum:</strong> Start with template-based personalization (cheap, fast, deterministic). If you need more creativity &mdash; like summarizing 10 different updates into one engaging sentence &mdash; use an LLM, but batch-generate notifications server-side, not on-device per-user.</p>
+    </div>
+
+    <h2>Content Recommendation Engines</h2>
+
+    <p>Recommendations are the proactive version of search. Instead of the user asking "what should I read/cook/buy?", your app answers that question before it's asked.</p>
+
+    <h3>The Three Approaches</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Approach</th>
+          <th>How It Works</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Collaborative filtering</strong></td>
+          <td>"Users like you also liked X"</td>
+          <td>Large user bases (&gt;10K users) with shared content</td>
+        </tr>
+        <tr>
+          <td><strong>Content-based</strong></td>
+          <td>"Similar to what you've liked before"</td>
+          <td>Any user base; works with embeddings from Chapter 4</td>
+        </tr>
+        <tr>
+          <td><strong>Hybrid</strong></td>
+          <td>Combines both for better accuracy</td>
+          <td>Production systems with enough data for both</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>For most Android apps starting out, <strong>content-based</strong> is the way to go. You already have the tools from Chapter 4 &mdash; content embeddings and user preference vectors. Recommendations are just "find content closest to the user's preference vector."</p>
+
+<pre><code>fun getRecommendations(
+    userPreference: FloatArray,  // average of recently engaged content embeddings
+    allContent: List&lt;Content&gt;,
+    alreadySeen: Set&lt;Long&gt;
+): List&lt;Content&gt; {
+    return allContent
+        .filter { it.id !in alreadySeen }  // don't recommend what they've seen
+        .map { it to cosineSimilarity(userPreference, it.embedding) }
+        .sortedByDescending { it.second }
+        .take(10)
+        .map { it.first }
+}</code></pre>
+
+    <div class="product-pattern">
+      <h3>The Proactive Assistant Pattern</h3>
+      <p>The best recommendation features surface information <strong>before the user asks</strong>, at the moment they're most likely to need it. The pattern:</p>
+      <ol>
+        <li><strong>Learn the user's routine:</strong> What do they do at what time? (Check weather at 7am, browse recipes at 5pm, review expenses on Sundays)</li>
+        <li><strong>Prepare relevant content:</strong> Pre-compute recommendations based on their patterns and preferences</li>
+        <li><strong>Surface at the right moment:</strong> Show a card on the home screen, a widget update, or a well-timed notification</li>
+        <li><strong>Make it dismissible:</strong> If the user doesn't want proactive suggestions, let them turn it off</li>
+      </ol>
+      <p><strong>Real-world examples:</strong> Google Maps shows your commute time without asking. A fitness app suggests today's workout at your usual exercise time. A news app surfaces your preferred topics as a morning digest.</p>
+    </div>
+
+    <h2>On-Device Recommendation Models</h2>
+
+    <p>For privacy-sensitive apps, you can run the entire recommendation engine on-device. No user data leaves the phone.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Marco uses a health and wellness app that tracks his meals and suggests recipes. The app never sends his dietary data to a server. Instead, a lightweight TFLite recommendation model runs locally, learning from his meal history that he prefers Mediterranean cuisine, avoids dairy, and usually cooks quick meals on weekdays.</p>
+      <p>Every evening at 5pm, a card appears on his home screen: "Tonight's suggestion: 20-Minute Lemon Herb Salmon." It's relevant, timely, and private. Marco taps it and starts cooking.</p>
+    </div>
+
+    <p>The architecture is simple: train a small recommendation model on aggregate, anonymized data (server-side). Deploy it to devices. Let it personalize using the user's local history.</p>
+
+<pre><code>class OnDeviceRecommender(context: Context) {
+    private val model = Interpreter(
+        FileUtil.loadMappedFile(context, "recommender.tflite")
+    )
+
+    fun recommend(
+        userHistory: List&lt;Long&gt;,   // IDs of recently engaged items
+        candidateIds: List&lt;Long&gt;    // IDs of items to score
+    ): List&lt;Pair&lt;Long, Float&gt;&gt; {
+        val input = preprocessHistory(userHistory) // encode as model input
+        val output = Array(1) { FloatArray(candidateIds.size) }
+        model.run(input, output)
+
+        return candidateIds.zip(output[0].toList())
+            .sortedByDescending { it.second }
+    }
+}</code></pre>
+
+    <h2>Behavior Prediction</h2>
+
+    <p>Beyond recommendations, you can predict what the user wants to do <em>next</em> based on patterns. This doesn't require fancy ML &mdash; often, simple rules work beautifully:</p>
+
+<pre><code>data class UserPattern(
+    val action: String,        // "check_weather", "browse_recipes", "log_expense"
+    val typicalHour: Int,      // most common hour for this action
+    val typicalDay: Int?,      // null = every day, or specific day of week
+    val confidence: Float      // how consistent is this pattern
+)
+
+fun detectPatterns(events: List&lt;UserEvent&gt;): List&lt;UserPattern&gt; {
+    return events
+        .groupBy { it.action }
+        .mapNotNull { (action, actionEvents) -&gt;
+            val hourCounts = actionEvents.groupBy { it.hourOfDay }
+            val peakHour = hourCounts.maxByOrNull { it.value.size }
+            val consistency = (peakHour?.value?.size?.toFloat() ?: 0f) / actionEvents.size
+
+            if (consistency &gt; 0.3f &amp;&amp; actionEvents.size &gt; 10) {
+                UserPattern(action, peakHour!!.key, null, consistency)
+            } else null
+        }
+}</code></pre>
+
+    <p>"You usually check weather at 7am" &rarr; show a weather card at 6:55am. "You log expenses on Sundays" &rarr; send a gentle reminder on Sunday morning. Simple patterns, big impact.</p>
+
+    <h2>Notification Grouping and Summarization</h2>
+
+    <p>When 12 notifications arrive while the user is away, don't show 12 individual notifications. Group and summarize them:</p>
+
+    <div class="workflow-steps">
+      <div class="step">12 Raw Notifications</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Group by Source</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">AI Summarize</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">1-3 Smart Notifications</div>
+    </div>
+
+<pre><code>fun summarizeNotificationBatch(notifications: List&lt;RawNotification&gt;): List&lt;SmartNotification&gt; {
+    val grouped = notifications.groupBy { it.source }
+
+    return grouped.map { (source, items) -&gt;
+        if (items.size &lt;= 2) {
+            // Few items — show individually
+            items.map { SmartNotification(title = source, body = it.preview) }
+        } else {
+            // Many items — summarize
+            val summary = when (source) {
+                "messages" -&gt; "${items.size} messages from ${items.distinctBy { it.sender }.size} people"
+                "news" -&gt; "${items.size} articles about ${items.first().category}"
+                else -&gt; "${items.size} updates from $source"
+            }
+            listOf(SmartNotification(title = source, body = summary))
+        }
+    }.flatten()
+}</code></pre>
+
+    <p>For richer summaries, send the batch to an LLM: "Summarize these 8 messages into one notification preview" &rarr; "5 messages from Anna about the project deadline, 3 from the team chat about lunch plans."</p>
+
+    <h2>Engagement Metrics That Matter</h2>
+
+    <p>To improve your notifications and recommendations, you need to measure the right things:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>What It Measures</th>
+          <th>Target</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Open rate</strong></td>
+          <td>% of notifications tapped</td>
+          <td>&gt;15% (industry average is ~5%)</td>
+        </tr>
+        <tr>
+          <td><strong>Dismissal rate</strong></td>
+          <td>% swiped away without opening</td>
+          <td>&lt;60%</td>
+        </tr>
+        <tr>
+          <td><strong>Action rate</strong></td>
+          <td>% that led to meaningful in-app action</td>
+          <td>&gt;8%</td>
+        </tr>
+        <tr>
+          <td><strong>Opt-out rate</strong></td>
+          <td>% of users disabling notifications</td>
+          <td>&lt;10% in first month</td>
+        </tr>
+        <tr>
+          <td><strong>Recommendation CTR</strong></td>
+          <td>% of recommended items tapped</td>
+          <td>&gt;5% (varies by domain)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <p><strong>High open rate + high uninstall rate = manipulation.</strong> If your notifications are clickbait that gets opens but doesn't deliver value, users will eventually leave. Optimize for <strong>action rate</strong> and <strong>retention</strong>, not just opens.</p>
+    </div>
+
+    <h2>Avoiding the Filter Bubble</h2>
+
+    <p>A recommendation engine that only shows what users already like creates an echo chamber. Users get stuck in a loop of similar content and never discover anything new.</p>
+
+    <h3>Diversification Strategies</h3>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Serendipity slot:</strong> Reserve 1-2 positions in every recommendation list for content outside the user's usual preferences. "You might also like..." from a different category</li>
+      <li class="checked"><strong>Exploration bonus:</strong> Boost the score of content the user hasn't interacted with before, even if it's less similar to their preferences</li>
+      <li class="checked"><strong>Category cap:</strong> No single category can take more than 40% of recommendation slots. Force variety</li>
+      <li class="checked"><strong>User control:</strong> Let users explicitly say "show me less of this" or "explore more categories." Put the user in the driver's seat</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Recommendation Ethics Test</h3>
+      <p>Ask yourself: "Would I be comfortable if the user could see exactly why this was recommended?" If the answer is "because they'll click and spend more time in the app," that's a manipulative recommendation. If the answer is "because it matches their interests and saves them time finding it," that's a helpful recommendation. Build the latter.</p>
+    </div>
+
+    <h2>Your Turn: Build a Smart Digest</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Smart Digest Notification</h3>
+      <p>Build a "smart digest" notification feature for a content app. Here's your plan:</p>
+      <ol>
+        <li><strong>Track app opens:</strong> Log the hour and day of week when the user opens the app. Store in Room</li>
+        <li><strong>Detect optimal timing:</strong> After 7+ days of data, calculate the user's most common app-open hour for each day of the week</li>
+        <li><strong>Build the digest:</strong> Gather the day's new content, filter by user preferences (categories they've engaged with), and create a personalized summary</li>
+        <li><strong>Schedule delivery:</strong> Use WorkManager to schedule the notification for the optimal hour, minus 30 minutes (so it's waiting when they usually open the app)</li>
+        <li><strong>Measure:</strong> Log open rate, dismissal rate, and whether the user engaged with recommended content after opening</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add a "serendipity slot" &mdash; one item in the digest from a category the user hasn't explored yet, with a label "Something different: [category]."</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've built proactive intelligence &mdash; notifications that arrive at the right time, recommendations that match user interests, and behavior prediction that anticipates needs. Your app doesn't just respond to users; it helps them before they ask.</p>
+
+    <p>Next, we're going back to a practical feature with immediate user value. <strong>Chapter 10: Smart Forms &amp; Data Extraction</strong> covers auto-filling forms from photos, receipt parsing, natural language to structured data, and intelligent validation &mdash; eliminating the tedium of manual data entry.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="08-smart-camera.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Smart Camera &amp; Real-Time Processing</span>
+        </a>
+        <a href="10-smart-forms.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Smart Forms &amp; Data Extraction</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Codex, Cursor, and Windsurf — AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-claude-code-under-the-hood.html">Prev</a>
+      <a href="08-browser-apps.html">Next</a>
+      <a href="maps/07-codex-cursor-windsurf-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Codex, Cursor, and Windsurf</h1>
+    <p class="subtitle">Same LLMs, different harnesses &mdash; how three tools solve the same problems differently</p>
+  </header>
+
+  <main>
+
+    <p>
+      Chapter 6 took Claude Code apart bolt by bolt. Now let's line up three other major AI coding tools and see how they solve the same fundamental problems &mdash; system prompts, tools, context, memory, guardrails, and persistence &mdash; with completely different architectures.
+    </p>
+
+    <p>
+      The point isn't to crown a winner. It's to show that <strong>the same model can produce vastly different results depending on the harness</strong>. Each tool makes different tradeoffs, and understanding those tradeoffs will make you a better user of whichever tool you choose.
+    </p>
+
+    <p>
+      Think of it like comparing three different car manufacturers. They all have engines, steering wheels, and brakes. But a Tesla, a Toyota, and a Ferrari feel completely different to drive &mdash; because the engineering around the engine is different.
+    </p>
+
+    <!-- OpenAI Codex -->
+    <h2>OpenAI Codex</h2>
+
+    <h3>Architecture: Cloud-First, Sandbox by Default</h3>
+
+    <p>
+      Codex takes a fundamentally different approach from Claude Code. While Claude Code runs locally on your machine, <strong>Codex runs in the cloud</strong> &mdash; inside sandboxed containers managed by OpenAI. Your code gets cloned into a cloud VM, the agent works there, and you review the results as a diff or PR.
+    </p>
+
+    <p>
+      This has a big architectural implication: Codex is <strong>sandboxed by default</strong>. The agent runs in an isolated environment with Landlock and seccomp security, meaning it physically cannot access your local filesystem, your browser, or your network (except for allowed endpoints). This is the most restrictive security model of any major coding agent.
+    </p>
+
+    <div class="tip-box">
+      Codex's sandbox eliminates an entire category of risk. The agent can't accidentally delete your files, leak secrets to the network, or modify anything outside the sandbox. The tradeoff: it can't access local services, databases, or tools that exist only on your machine.
+    </div>
+
+    <h3>The Agent Loop: Items, Turns, and Threads</h3>
+
+    <p>
+      Codex structures its agent loop around three abstractions:
+    </p>
+
+    <ul>
+      <li><strong>Items</strong> &mdash; The atomic unit. Each item is an input or output with a lifecycle: "started" &rarr; optional "delta" events (streaming) &rarr; "completed." Items can be user messages, agent messages, tool executions, or approval requests.</li>
+      <li><strong>Turns</strong> &mdash; A sequence of items from a single unit of work. One turn might include multiple tool calls and iterations.</li>
+      <li><strong>Threads</strong> &mdash; Durable containers for ongoing sessions. They support creation, resumption, forking, and archival.</li>
+    </ul>
+
+    <p>
+      Communication happens over a <strong>JSON-RPC protocol</strong> (a bidirectional "JSON-RPC lite" variant over stdio). This is different from Claude Code's simpler tool-call-and-response pattern &mdash; Codex's protocol supports richer interactions like streaming diffs, approval workflows, and server-initiated requests.
+    </p>
+
+    <h3>AGENTS.md and Progressive Disclosure</h3>
+
+    <p>
+      Where Claude Code uses CLAUDE.md, Codex uses <strong>AGENTS.md</strong> &mdash; but with a different philosophy. Codex emphasizes <strong>progressive disclosure</strong>: start with a small entry point (~100 lines) and let the agent navigate to deeper context on demand.
+    </p>
+
+<pre><code># AGENTS.md (root — kept small)
+
+## Overview
+E-commerce platform: Next.js frontend, Python FastAPI backend.
+
+## Structure
+- frontend/ — Next.js 15 app (see frontend/AGENTS.md)
+- backend/ — FastAPI service (see backend/AGENTS.md)
+- docs/ — Architecture decisions and API specs
+
+## Key Commands
+- make test — run all tests
+- make lint — run linters
+- make dev — start development servers</code></pre>
+
+    <p>
+      The root AGENTS.md is intentionally brief. Subdirectories have their own AGENTS.md files with progressively more detail. The agent loads what it needs, when it needs it &mdash; keeping the context lean.
+    </p>
+
+    <p>
+      Codex also supports a <strong>Skills system</strong>: reusable task definitions with metadata loaded first and full instructions loaded only when needed. Skills turn recurring engineering tasks (PR review, release prep, verification) into repeatable workflows.
+    </p>
+
+    <p>
+      Interestingly, OpenAI evaluated MCP for Codex's tool protocol but decided it was insufficient. MCP's tool-oriented model didn't support IDE-specific features like streaming diffs, approval flows, and thread persistence. So they built JSON-RPC instead &mdash; a reminder that standards don't always fit every use case.
+    </p>
+
+    <!-- Cursor -->
+    <h2>Cursor</h2>
+
+    <h3>Architecture: IDE-Native, Model-Specific Tuning</h3>
+
+    <p>
+      Cursor takes the opposite approach from Codex: instead of running in the cloud, it's <strong>embedded in your IDE</strong>. The agent lives inside your editor, sees your open tabs, your cursor position, and your recent edits. This gives it context that cloud-based agents can't access.
+    </p>
+
+    <p>
+      But Cursor's most distinctive feature is <strong>per-model harness tuning</strong>. Every model in Cursor's agent gets different instructions and different tool configurations optimized for how that specific model was trained.
+    </p>
+
+    <div class="inside-look-box">
+      <p><strong>What per-model tuning looks like in practice:</strong></p>
+      <p>When Cursor integrated OpenAI's Codex model, they found they needed to:</p>
+      <ul>
+        <li>Limit reasoning summaries to 1&ndash;2 sentences (the model responded better to concise instructions)</li>
+        <li>Remove mid-turn communication language (Codex couldn't communicate mid-turn like Claude can)</li>
+        <li>Use more direct instructions ("implement this" instead of "propose and then implement")</li>
+        <li>Name tools to match Unix commands the model was trained on (<code>rg</code> instead of "search")</li>
+      </ul>
+      <p>These changes alone produced a <strong>30% performance difference</strong> on Cursor's internal benchmarks. Same model, different harness instructions, dramatically different results.</p>
+    </div>
+
+    <h3>Subagents and Parallel Work</h3>
+
+    <p>
+      Cursor supports up to <strong>8 parallel background agents</strong>, each working in an isolated git worktree. This means you can have multiple agents working on different tasks simultaneously without interfering with each other.
+    </p>
+
+    <p>
+      The subagent architecture forms a tree: a parent agent can spawn child agents, which can spawn their own children. Each agent gets:
+    </p>
+
+    <ul>
+      <li>An independent context window (exploration doesn't bloat the parent)</li>
+      <li>Its own git worktree (isolated file changes)</li>
+      <li>A custom system prompt (specialized for the task)</li>
+      <li>Filtered tool access (only what the sub-task needs)</li>
+    </ul>
+
+    <p>
+      Three built-in subagent types: <strong>Explore</strong> (search with a faster model), <strong>Bash</strong> (isolate verbose terminal output), and <strong>Browser</strong> (control browsers via MCP, filter noisy DOM snapshots).
+    </p>
+
+    <h3>CursorBench: Measuring Harness Quality</h3>
+
+    <p>
+      Cursor built their own evaluation suite, <strong>CursorBench</strong>, based on real engineering sessions from their own team. Why? Because public benchmarks like SWE-Bench don't capture real developer workflows &mdash; they test isolated bug fixes, not the messy reality of multi-file feature work.
+    </p>
+
+    <p>
+      CursorBench measures solution correctness, code quality, efficiency, and interaction behavior. It's better at distinguishing models than public benchmarks because it tests actual Cursor usage patterns, not academic scenarios.
+    </p>
+
+    <div class="tip-box">
+      This is a harness engineering insight worth remembering: <strong>how you evaluate your harness matters as much as how you build it.</strong> Public benchmarks test narrow scenarios. Cursor built their own benchmark based on real usage, and it tells them things public benchmarks can't &mdash; like whether a model handles multi-file refactoring well, or how it behaves in the middle of a long session.
+    </div>
+
+    <!-- Windsurf -->
+    <h2>Windsurf</h2>
+
+    <h3>Architecture: Persistent, Aware, Co-Designed</h3>
+
+    <p>
+      Windsurf's Cascade is the most architecturally different of the three. While Codex and Cursor use general-purpose frontier models with harness tuning, Windsurf took a radical step: they <strong>trained their model and harness together</strong>.
+    </p>
+
+    <p>
+      Their SWE-1 model family was built using reinforcement learning directly on the Cascade agent harness in real coding environments. The model learned not just how to code, but <strong>how to use the specific tools in the Cascade harness</strong>. This is like training a driver specifically for one car, rather than teaching a generic driver to adapt to any vehicle.
+    </p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">40%</span>
+        <span class="stat-label">SWE-1.5 score on SWE-Bench Pro &mdash; second only to Claude Sonnet 4.5's 43.6%</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">~14x</span>
+        <span class="stat-label">Faster than Claude Sonnet 4.5 &mdash; ~950 tokens/sec vs 69 tokens/sec</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">Co-designed</span>
+        <span class="stat-label">Model + harness trained as a unified system via reinforcement learning</span>
+      </div>
+    </div>
+
+    <h3>Code Mode vs. Chat Mode</h3>
+
+    <p>
+      Windsurf explicitly separates two operating modes:
+    </p>
+
+    <ul>
+      <li><strong>Code Mode</strong> &mdash; Full agent with file modification. Building features, refactoring, fixing bugs. The model can read and write your code.</li>
+      <li><strong>Chat Mode</strong> &mdash; Read-only assistant. Questions, suggestions, architectural advice. The model can see your code but won't touch it.</li>
+    </ul>
+
+    <p>
+      This is similar to Claude Code's plan mode vs. default mode, but Windsurf makes the separation more prominent in the UI. The two modes use different harness configurations &mdash; different system prompts, different tool access, different guardrails.
+    </p>
+
+    <h3>Real-Time Awareness</h3>
+
+    <p>
+      Cascade's most distinctive feature is <strong>Flows</strong> &mdash; real-time awareness of your actions. Unlike other tools that only get context when you send a message, Cascade tracks your edits, terminal commands, clipboard activity, and cursor position continuously. It infers your intent from your actions.
+    </p>
+
+    <p>
+      This means Windsurf can adapt context <em>before you ask</em>. If you're editing a test file, Cascade already knows the relevant source file. If you copy an error from the terminal, the context updates automatically. No explicit context management required from the user.
+    </p>
+
+    <div class="warning-box">
+      The tradeoff with real-time awareness: it can include noise. If you're jumping between unrelated files or experimenting, Cascade might incorporate irrelevant context. The implicit approach works well for focused work but can misfire during exploration.
+    </div>
+
+    <!-- Side-by-Side Comparisons -->
+    <h2>Side-by-Side: The Six Components</h2>
+
+    <p>
+      Let's compare how each tool handles the six harness components we defined in Chapter 2.
+    </p>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Codex &mdash; System Prompt</div>
+        <p>AGENTS.md with progressive disclosure. Small root file, deeper context in subdirectories. Skills system for reusable task definitions. Context loaded on demand.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Cursor &mdash; System Prompt</div>
+        <p>Per-model customized instructions. Each frontier model gets different prompts tuned to its strengths. .cursorrules for project-level context. Most harness-aware approach to prompt design.</p>
+      </div>
+    </div>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Codex &mdash; Tools &amp; Context</div>
+        <p>Skills-based tools with dynamic loading. Cloud sandbox execution. Progressive disclosure keeps context lean. Prompt caching enables efficient retrieval across turns.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Windsurf &mdash; Tools &amp; Context</div>
+        <p>Real-time Flows tracking all user actions. Context updates automatically as you work. Model co-designed with tool harness via RL. Checkpoint system for reverting changes.</p>
+      </div>
+    </div>
+
+    <div class="compare-box">
+      <div class="compare-item">
+        <div class="compare-title">Codex &mdash; Guardrails</div>
+        <p>Strongest sandbox: Landlock + seccomp by default. Three modes: workspace-write (default), danger-full-access, on-request. Approval workflow via JSON-RPC protocol. Zero Data Retention for enterprise.</p>
+      </div>
+      <div class="compare-item">
+        <div class="compare-title">Cursor &mdash; Guardrails</div>
+        <p>Git worktree isolation per agent. Approval system for parallel operations. Per-agent tool filtering. IDE-level file access controls. Self-hosted option for enterprise deployment.</p>
+      </div>
+    </div>
+
+    <!-- Comparison Table -->
+    <h2>The Full Comparison</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>Codex</th>
+          <th>Cursor</th>
+          <th>Windsurf</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Execution</strong></td>
+          <td>Cloud sandbox</td>
+          <td>Local + cloud agents</td>
+          <td>Local (IDE)</td>
+        </tr>
+        <tr>
+          <td><strong>Model strategy</strong></td>
+          <td>Own models + API</td>
+          <td>Multi-model, per-model tuning</td>
+          <td>Co-designed SWE-1.5</td>
+        </tr>
+        <tr>
+          <td><strong>Parallelism</strong></td>
+          <td>Multiple cloud VMs</td>
+          <td>8 parallel agents</td>
+          <td>Cascade flows</td>
+        </tr>
+        <tr>
+          <td><strong>Context files</strong></td>
+          <td>AGENTS.md (progressive)</td>
+          <td>.cursorrules</td>
+          <td>Memories (autonomous)</td>
+        </tr>
+        <tr>
+          <td><strong>Sandbox</strong></td>
+          <td>Default (strongest)</td>
+          <td>Git worktrees</td>
+          <td>Checkpoints</td>
+        </tr>
+        <tr>
+          <td><strong>Protocol</strong></td>
+          <td>JSON-RPC</td>
+          <td>Native IDE</td>
+          <td>Cascade flows</td>
+        </tr>
+        <tr>
+          <td><strong>Unique strength</strong></td>
+          <td>Security isolation</td>
+          <td>Per-model optimization</td>
+          <td>Real-time awareness</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Inside the Harness: Same Task, Three Approaches -->
+    <h2>Inside the Harness: Same Task, Three Approaches</h2>
+
+    <p>
+      Let's trace what happens when you give the same task &mdash; <code>add rate limiting to the API endpoints</code> &mdash; to each tool.
+    </p>
+
+    <div class="inside-look-box">
+      <p><strong>Codex:</strong> Your repo is cloned into a cloud sandbox. The agent reads AGENTS.md, navigates to <code>backend/AGENTS.md</code> for API details, identifies the middleware layer, writes the rate limiting code, runs tests inside the sandbox. You get a PR with a clean diff. The sandbox means the agent couldn't access your local Redis &mdash; it had to mock it or use an in-sandbox alternative.</p>
+
+      <p><strong>Cursor:</strong> The agent works in your IDE. It uses semantic code search to find all route definitions, reads your existing middleware patterns, and crafts a solution that matches your project's style. Because it can see your open tabs and recent edits, it notices you were just working on the auth middleware and follows that pattern. Per-model instructions ensure the LLM uses tools efficiently. Your local Redis is accessible for testing.</p>
+
+      <p><strong>Windsurf:</strong> Cascade's real-time awareness already knows you've been editing API routes. Before you even finish typing, it has context on your route structure. SWE-1.5, co-trained with Cascade's tools, navigates your codebase naturally. It creates a checkpoint before changes so you can revert if the approach doesn't work. Everything happens locally, fast.</p>
+
+      <p><strong>Same task, same quality of result &mdash; but different paths.</strong> Codex prioritized security (sandbox isolation). Cursor prioritized accuracy (per-model tuning + IDE context). Windsurf prioritized speed (co-designed model + real-time awareness). The harness shaped the experience.</p>
+    </div>
+
+    <!-- Exercise -->
+    <h2>Try It Yourself</h2>
+
+    <div class="exercise-box">
+      <p><strong>Compare Two Tools on the Same Task</strong></p>
+      <p>If you have access to two or more of these tools (including Claude Code from Chapter 6), try this experiment:</p>
+      <ol>
+        <li><strong>Pick a concrete task</strong> &mdash; something specific like "add input validation to the signup form" or "write integration tests for the user API."</li>
+        <li><strong>Give the exact same task</strong> to both tools, in the same project if possible.</li>
+        <li><strong>Observe the differences:</strong></li>
+      </ol>
+      <ul>
+        <li>How did each tool explore the codebase? (Tool calls, file reads, search patterns)</li>
+        <li>How many steps did each take?</li>
+        <li>What context did each seem to understand? (Did it know your testing framework? Your code style?)</li>
+        <li>What permissions did each ask for?</li>
+        <li>How did the final code differ in style, structure, and completeness?</li>
+      </ul>
+      <p>
+        The differences you observe are almost entirely <strong>harness differences</strong>. The underlying models may be similar or even identical. The harness &mdash; system prompt, tools, context strategy, guardrails &mdash; is what shapes the result.
+      </p>
+    </div>
+
+    <!-- What's Next -->
+    <h2>What's Next</h2>
+
+    <p>
+      We've covered the most sophisticated coding harnesses. But not all harnesses need to be complex. In <strong>Chapter 8: Browser Apps &mdash; ChatGPT and Claude.ai</strong>, we'll see how simpler harnesses built on the same principles power the chat interfaces billions of people use every day.
+    </p>
+
+    <p>
+      They have fewer tools, simpler context management, and different guardrails. But once you understand the harness framework, you'll see exactly <em>why</em> ChatGPT is great for conversation but mediocre for coding &mdash; and it's not the model's fault.
+    </p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-claude-code-under-the-hood.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">6. Claude Code Under the Hood</span>
+      </a>
+      <a href="08-browser-apps.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">8. Browser Apps: ChatGPT &amp; Claude.ai</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

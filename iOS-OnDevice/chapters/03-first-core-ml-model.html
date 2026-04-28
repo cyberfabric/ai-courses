@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Your First Core ML Model — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="02-ml-models-apple-silicon.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="04-vision-framework.html">Next &rarr;</a>
+      <a href="maps/03-first-core-ml-model-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Your First Core ML Model</h1>
+    <p class="subtitle">From PyTorch conversion to live camera classification on your iPhone</p>
+  </header>
+
+  <main>
+
+    <h2>Time to Ship Something Real</h2>
+
+    <p>In Chapters 1 and 2, we covered the <em>why</em> and the <em>what</em>. Now it's time for the <em>how</em>. By the end of this chapter, you'll have a SwiftUI app running on your iPhone that classifies objects in real time through the camera. No cloud. No API keys. Just your phone's Neural Engine doing its thing.</p>
+
+    <p>Here's the plan: convert a model, integrate it into Xcode, build a camera pipeline, and display live predictions. Let's go.</p>
+
+    <div class="model-pipeline">
+      <div class="workflow-steps">
+        <div class="step">
+          <h4>Convert</h4>
+          <p>PyTorch &rarr; Core ML with coremltools</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>Integrate</h4>
+          <p>Drag .mlpackage into Xcode</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>Camera</h4>
+          <p>AVCaptureSession + SwiftUI preview</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>Classify</h4>
+          <p>VNCoreMLRequest on each frame</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>Display</h4>
+          <p>Labels + confidence in SwiftUI</p>
+        </div>
+      </div>
+    </div>
+
+    <h2>Step 1: Setting Up the Xcode Project</h2>
+
+    <p>Create a new Xcode project: <strong>iOS &rarr; App</strong>, SwiftUI interface, Swift language. Name it <code>LiveClassifier</code>. Select your physical iPhone as the run destination &mdash; the Simulator can't access the camera.</p>
+
+    <p>Before we write any code, we need a model. You have two options:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Option A: Use a pre-built model</div>
+        <div class="prompt-text">Download MobileNetV2.mlmodel from Apple's Core ML Models page</div>
+        <div class="prompt-explanation">Fastest path. Drag it into Xcode and skip to Step 3. Great for your first time.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">Option B: Convert from PyTorch</div>
+        <div class="prompt-text">Use coremltools to convert a torchvision model yourself</div>
+        <div class="prompt-explanation">Teaches you the conversion workflow. Essential for custom models later. We cover this in Step 2.</div>
+      </div>
+    </div>
+
+    <h2>Step 2: Converting a PyTorch Model with coremltools</h2>
+
+    <p>Most ML models in the wild are PyTorch or TensorFlow. Apple's <code>coremltools</code> library converts them to Core ML format. You'll need Python installed (the one from Homebrew or python.org is fine).</p>
+
+<pre><code># Install coremltools (one-time setup)
+pip install coremltools torch torchvision</code></pre>
+
+    <p>Now create a Python script called <code>convert_mobilenet.py</code>:</p>
+
+<pre><code>import torch
+import torchvision
+import coremltools as ct
+
+# Load a pre-trained MobileNetV2 from torchvision
+model = torchvision.models.mobilenet_v2(weights="IMAGENET1K_V1")
+model.eval()
+
+# Trace the model with a sample input
+example = torch.rand(1, 3, 224, 224)
+traced = torch.jit.trace(model, example)
+
+# Convert to Core ML with image input type
+mlmodel = ct.convert(
+    traced,
+    inputs=[ct.ImageType(
+        name="image",
+        shape=(1, 3, 224, 224),
+        scale=1.0 / (0.226 * 255.0),
+        bias=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
+        color_layout=ct.colorlayout.RGB
+    )],
+    minimum_deployment_target=ct.target.iOS16,
+    classifier_config=ct.ClassifierConfig("imagenet_classes.txt"),
+)
+
+# Save as .mlpackage
+mlmodel.save("MobileNetV2.mlpackage")
+print("Done! Model saved.")</code></pre>
+
+    <div class="tip-box">
+      <strong>What's that scale and bias?</strong> ImageNet models expect normalized pixel values. The <code>scale</code> and <code>bias</code> tell Core ML how to transform raw pixel values (0&ndash;255) into the range the model was trained on. These specific numbers are the ImageNet normalization constants that PyTorch's torchvision uses.
+    </div>
+
+    <p>Run the script: <code>python convert_mobilenet.py</code>. You'll get a <code>MobileNetV2.mlpackage</code> directory. Drag it into your Xcode project navigator. Make sure "Copy items if needed" is checked and your app target is selected.</p>
+
+    <div class="warning-box">
+      <strong>Classifier labels file.</strong> The <code>classifier_config</code> parameter needs a text file with one class label per line (1,000 lines for ImageNet). You can find <code>imagenet_classes.txt</code> in many GitHub repos or generate it from torchvision. If you skip this, the model will output indices instead of readable labels.
+    </div>
+
+    <h2>Step 3: Loading the Model in Swift</h2>
+
+    <p>When you drag the model into Xcode, it auto-generates a Swift class. Build the project (Cmd+B) so Xcode generates it, then you can use it:</p>
+
+<pre><code>import CoreML
+import Vision
+
+class ImageClassifier: ObservableObject {
+    @Published var topLabel = ""
+    @Published var confidence: Float = 0.0
+
+    private let vnModel: VNCoreMLModel
+
+    init() {
+        let config = MLModelConfiguration()
+        config.computeUnits = .all
+        let coreMLModel = try! MobileNetV2(configuration: config).model
+        vnModel = try! VNCoreMLModel(for: coreMLModel)
+    }
+}</code></pre>
+
+    <p>We wrap the Core ML model in <code>VNCoreMLModel</code> so we can use it with Vision's request pipeline. As we learned in Chapter 2, Vision handles all the image preprocessing &mdash; resizing, normalizing, orientation &mdash; so we don't have to.</p>
+
+    <div class="apple-framework">
+      <strong>MLModelConfiguration</strong>
+      <p><strong>Key property:</strong> <code>computeUnits</code> controls which hardware runs the model.</p>
+      <ul>
+        <li><code>.all</code> &mdash; Core ML picks the best option (Neural Engine, GPU, or CPU). <strong>Use this.</strong></li>
+        <li><code>.cpuAndNeuralEngine</code> &mdash; Skips GPU. Use when GPU is busy with rendering.</li>
+        <li><code>.cpuOnly</code> &mdash; Slowest. Only for debugging.</li>
+      </ul>
+      <p><strong>Available since:</strong> iOS 12. The auto-generated model class accepts it in its initializer.</p>
+    </div>
+
+    <h2>Step 4: The VNCoreMLRequest Workflow</h2>
+
+    <p>Now add the classification method to our <code>ImageClassifier</code> class:</p>
+
+<pre><code>func classify(pixelBuffer: CVPixelBuffer) {
+    let request = VNCoreMLRequest(model: vnModel) { [weak self] request, error in
+        guard let results = request.results as? [VNClassificationObservation],
+              let top = results.first else { return }
+
+        DispatchQueue.main.async {
+            self?.topLabel = top.identifier
+            self?.confidence = top.confidence
+        }
+    }
+
+    // imageCropAndScaleOption controls how Vision resizes the image
+    request.imageCropAndScaleOption = .centerCrop
+
+    let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer)
+    try? handler.perform([request])
+}</code></pre>
+
+    <p>That's the entire inference pipeline. Let's break down what happens:</p>
+
+    <ol>
+      <li><strong>VNCoreMLRequest</strong> wraps your model and specifies a completion handler</li>
+      <li>The completion handler receives <code>VNClassificationObservation</code> results, already sorted by confidence</li>
+      <li><code>imageCropAndScaleOption = .centerCrop</code> tells Vision to center-crop the image to the model's expected aspect ratio</li>
+      <li><strong>VNImageRequestHandler</strong> takes the raw pixel buffer and runs the request</li>
+      <li>Results arrive on a background thread, so we dispatch to main for UI updates</li>
+    </ol>
+
+    <h2>Step 5: Camera Integration with AVFoundation</h2>
+
+    <p>Now we need a live camera feed. This is the most code-heavy part, but the pattern is standard iOS camera work:</p>
+
+<pre><code>import AVFoundation
+
+class CameraManager: NSObject, ObservableObject {
+    let session = AVCaptureSession()
+    var onFrame: ((CVPixelBuffer) -> Void)?
+
+    func start() {
+        session.sessionPreset = .hd1280x720
+
+        guard let device = AVCaptureDevice.default(
+            .builtInWideAngleCamera, for: .video, position: .back
+        ),
+        let input = try? AVCaptureDeviceInput(device: device)
+        else { return }
+
+        session.addInput(input)
+
+        let output = AVCaptureVideoDataOutput()
+        output.setSampleBufferDelegate(self, queue: DispatchQueue(label: "camera"))
+        output.alwaysDiscardsLateVideoFrames = true
+        session.addOutput(output)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.session.startRunning()
+        }
+    }
+}
+
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        onFrame?(pixelBuffer)
+    }
+}</code></pre>
+
+    <p>Key decisions in this code:</p>
+
+    <ul>
+      <li><strong><code>.hd1280x720</code></strong> &mdash; High enough quality for classification, low enough for smooth performance. Don't use 4K for ML inference.</li>
+      <li><strong><code>alwaysDiscardsLateVideoFrames = true</code></strong> &mdash; If inference is slower than the frame rate, drop frames instead of queuing them. This prevents memory buildup.</li>
+      <li><strong>Background queue</strong> &mdash; Camera delivery happens on a dedicated serial queue. Never block the main thread with camera frames.</li>
+    </ul>
+
+    <div class="warning-box">
+      <strong>Camera permission required.</strong> Add <code>NSCameraUsageDescription</code> to your Info.plist with a message like "Camera is used for real-time image classification." Without this, your app will crash on launch.
+    </div>
+
+    <h2>Step 6: Displaying the Camera Preview in SwiftUI</h2>
+
+    <p>SwiftUI doesn't have a native camera view, so we bridge <code>AVCaptureVideoPreviewLayer</code> using <code>UIViewRepresentable</code>:</p>
+
+<pre><code>import SwiftUI
+
+struct CameraPreview: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        let layer = AVCaptureVideoPreviewLayer(session: session)
+        layer.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(layer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if let layer = uiView.layer.sublayers?.first as? AVCaptureVideoPreviewLayer {
+            layer.frame = uiView.bounds
+        }
+    }
+}</code></pre>
+
+    <h2>Step 7: Wiring It All Together</h2>
+
+    <p>Now let's build the main view that combines camera preview with classification results:</p>
+
+<pre><code>struct ContentView: View {
+    @StateObject private var camera = CameraManager()
+    @StateObject private var classifier = ImageClassifier()
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            CameraPreview(session: camera.session)
+                .ignoresSafeArea()
+
+            VStack(spacing: 8) {
+                Text(classifier.topLabel)
+                    .font(.title2.bold())
+                Text("\(Int(classifier.confidence * 100))%")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .padding()
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.bottom, 40)
+        }
+        .onAppear {
+            camera.onFrame = { pixelBuffer in
+                classifier.classify(pixelBuffer: pixelBuffer)
+            }
+            camera.start()
+        }
+    }
+}</code></pre>
+
+    <p>Run it on your iPhone. Point the camera at objects around you. You should see labels and confidence percentages updating in real time at the bottom of the screen.</p>
+
+    <div class="highlight-box">
+      <h3>What just happened?</h3>
+      <p>Every camera frame flows through: <strong>AVCaptureSession</strong> (captures frame) &rarr; <strong>CVPixelBuffer</strong> (raw pixels) &rarr; <strong>VNImageRequestHandler</strong> (preprocesses) &rarr; <strong>VNCoreMLRequest</strong> (Neural Engine inference) &rarr; <strong>VNClassificationObservation</strong> (result) &rarr; <strong>SwiftUI Text</strong> (display). All on-device. All in milliseconds.</p>
+    </div>
+
+    <h2>Step 8: Threading Strategy</h2>
+
+    <p>There's a subtle problem with the code above: we're running inference on the camera's delivery queue, which can cause dropped frames if inference is slow. A better approach uses a dedicated inference queue with throttling:</p>
+
+<pre><code>class ImageClassifier: ObservableObject {
+    @Published var topLabel = ""
+    @Published var confidence: Float = 0.0
+
+    private let vnModel: VNCoreMLModel
+    private let inferenceQueue = DispatchQueue(label: "inference")
+    private var isProcessing = false
+
+    func classify(pixelBuffer: CVPixelBuffer) {
+        // Skip if still processing previous frame
+        guard !isProcessing else { return }
+        isProcessing = true
+
+        inferenceQueue.async { [weak self] in
+            defer { self?.isProcessing = false }
+            // ... VNCoreMLRequest code from Step 4 ...
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <strong>Why throttle?</strong> The camera delivers 30 frames per second. MobileNetV2 on the Neural Engine runs in ~4ms, so it can keep up. But larger models or CPU-only inference might take 50&ndash;100ms. The <code>isProcessing</code> guard ensures we never queue up a backlog of frames. We always classify the most recent frame, not one from 10 frames ago.
+    </div>
+
+    <h2>Performance Baseline</h2>
+
+    <p>Let's measure how fast our classifier actually runs. Add timing instrumentation:</p>
+
+<pre><code>let start = CFAbsoluteTimeGetCurrent()
+try? handler.perform([request])
+let elapsed = CFAbsoluteTimeGetCurrent() - start
+print("Inference: \(String(format: "%.1f", elapsed * 1000)) ms")</code></pre>
+
+    <div class="device-benchmark">
+      <strong>MobileNetV2 Inference — Real Device Measurements</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>Device</th>
+            <th>Compute Units</th>
+            <th>Inference Time</th>
+            <th>FPS Headroom</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>iPhone 15 Pro (A17 Pro)</td>
+            <td>.all (Neural Engine)</td>
+            <td>~3.5 ms</td>
+            <td>285 fps</td>
+          </tr>
+          <tr>
+            <td>iPhone 16 Pro (A18 Pro)</td>
+            <td>.all (Neural Engine)</td>
+            <td>~3.0 ms</td>
+            <td>333 fps</td>
+          </tr>
+          <tr>
+            <td>iPhone 15 Pro (A17 Pro)</td>
+            <td>.cpuAndGPU</td>
+            <td>~12 ms</td>
+            <td>83 fps</td>
+          </tr>
+          <tr>
+            <td>iPhone 15 Pro (A17 Pro)</td>
+            <td>.cpuOnly</td>
+            <td>~45 ms</td>
+            <td>22 fps</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>On the Neural Engine, MobileNetV2 runs in ~3ms &mdash; that's 10x faster than the camera's 30fps frame rate. You have massive headroom for more complex models or additional processing per frame.</p>
+    </div>
+
+    <h2>Common Pitfalls and Fixes</h2>
+
+    <p>Here are the issues that trip up every developer building their first Core ML camera app:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Problem</th>
+          <th>Cause</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Crash on launch</td>
+          <td>Missing <code>NSCameraUsageDescription</code> in Info.plist</td>
+          <td>Add the key with a descriptive string</td>
+        </tr>
+        <tr>
+          <td>"Model not found" crash</td>
+          <td>Model not added to app target</td>
+          <td>Select the .mlmodel file &rarr; File Inspector &rarr; check your target</td>
+        </tr>
+        <tr>
+          <td>Wrong or random predictions</td>
+          <td>Image orientation not handled</td>
+          <td>Pass <code>orientation: .right</code> to VNImageRequestHandler (camera frames are landscape-right)</td>
+        </tr>
+        <tr>
+          <td>Dropped frames / stuttering</td>
+          <td>Inference blocking camera queue</td>
+          <td>Use a separate inference queue with <code>isProcessing</code> throttle</td>
+        </tr>
+        <tr>
+          <td>Labels are numbers, not words</td>
+          <td>Missing classifier labels during conversion</td>
+          <td>Re-convert with <code>classifier_config</code> parameter in coremltools</td>
+        </tr>
+        <tr>
+          <td>App killed in background</td>
+          <td>Camera session not stopped</td>
+          <td>Call <code>session.stopRunning()</code> in <code>onDisappear</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>The orientation fix is the one everyone forgets.</strong> iPhone camera frames arrive in <code>.right</code> orientation (landscape-right). If you don't tell Vision about this, the model sees a rotated image and predictions are wrong. Always pass orientation explicitly: <code>VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right)</code>
+    </div>
+
+    <h2>Adding Top-5 Predictions</h2>
+
+    <p>A single label isn't always enough. Let's display the top 5 predictions to give users more context:</p>
+
+<pre><code>struct Prediction: Identifiable {
+    let id = UUID()
+    let label: String
+    let confidence: Float
+}
+
+// In the completion handler:
+let predictions = results.prefix(5).map {
+    Prediction(label: $0.identifier, confidence: $0.confidence)
+}
+
+// In the SwiftUI view:
+ForEach(classifier.predictions) { p in
+    HStack {
+        Text(p.label.prefix(25))
+        Spacer()
+        Text("\(Int(p.confidence * 100))%")
+            .foregroundStyle(.secondary)
+    }
+    .font(.subheadline)
+}</code></pre>
+
+    <h2>The Complete Architecture</h2>
+
+    <p>Here's how all the pieces fit together:</p>
+
+    <div class="model-pipeline">
+      <strong>LiveClassifier App Architecture</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Role</th>
+            <th>Thread</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>CameraManager</code></td>
+            <td>Captures frames via AVCaptureSession</td>
+            <td>Camera queue (serial)</td>
+          </tr>
+          <tr>
+            <td><code>ImageClassifier</code></td>
+            <td>Runs VNCoreMLRequest on each frame</td>
+            <td>Inference queue (serial)</td>
+          </tr>
+          <tr>
+            <td><code>CameraPreview</code></td>
+            <td>Displays live camera via AVCaptureVideoPreviewLayer</td>
+            <td>Main (UIKit layer)</td>
+          </tr>
+          <tr>
+            <td><code>ContentView</code></td>
+            <td>Overlays classification results on camera</td>
+            <td>Main (SwiftUI)</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Three threads working in parallel: camera captures, inference processes, UI displays. They communicate through @Published properties and closures. No thread blocks another.</p>
+    </div>
+
+    <h2>Try It: Build Your Live Classifier</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Real-Time Image Classification</h3>
+      <ol>
+        <li>Create the <code>LiveClassifier</code> Xcode project with SwiftUI</li>
+        <li>Download MobileNetV2 from Apple's Core ML Models page (or convert it yourself with coremltools)</li>
+        <li>Implement <code>ImageClassifier</code>, <code>CameraManager</code>, <code>CameraPreview</code>, and <code>ContentView</code> using the code from this chapter</li>
+        <li>Add <code>NSCameraUsageDescription</code> to Info.plist</li>
+        <li>Run on your iPhone and point the camera at <strong>10 different objects</strong></li>
+        <li>For each object, record:
+          <ul>
+            <li>The top prediction and confidence</li>
+            <li>Whether it was correct</li>
+            <li>The inference time (from the console log)</li>
+          </ul>
+        </li>
+      </ol>
+      <p><strong>Reflect:</strong> Which objects did the model nail? Which did it get wrong? Remember &mdash; MobileNetV2 knows 1,000 ImageNet categories. If your object isn't in that list (like your coffee mug's specific brand), it'll pick the closest match. In Chapter 9, you'll train a custom model that knows <em>your</em> objects.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've built your first on-device AI feature end-to-end: model conversion, Xcode integration, camera pipeline, real-time inference, and SwiftUI display. That's a fully working AI app on your iPhone.</p>
+
+    <p>But we used a custom Core ML model for classification &mdash; one specific task. In <strong>Chapter 4: Vision Framework &mdash; See Like an iPhone</strong>, we'll explore Apple's built-in computer vision capabilities: text recognition, face detection, body pose tracking, document scanning, and barcode reading. All pre-trained, Apple-maintained, and ready to use without any model files.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="02-ml-models-apple-silicon.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">How ML Models Work on Apple Silicon</span>
+      </a>
+      <a href="04-vision-framework.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Vision Framework &mdash; See Like an iPhone</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

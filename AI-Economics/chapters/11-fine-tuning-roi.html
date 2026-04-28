@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11 — Fine-Tuning ROI | AI Economics</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="10-self-hosting-math.html">← Prev</a>
+      <a href="12-finops-for-ai.html">Next →</a>
+      <a href="maps/11-fine-tuning-roi-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Fine-Tuning ROI: When Custom Pays Off</h1>
+    <p class="chapter-subtitle">The prompt → RAG → fine-tune ladder, the real cost of a custom model, and when the math actually works.</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Off-the-rack, tailored, or bespoke?</h2>
+
+      <p>Buying an AI model works like buying a suit.</p>
+
+      <ul>
+        <li><strong>Off-the-rack</strong> — you use the API with a good prompt. Cheap, fast, fits most people.</li>
+        <li><strong>Tailored</strong> — you add retrieval (RAG) so the model gets access to your documents. Still the same suit, but it looks like it was made for you.</li>
+        <li><strong>Bespoke</strong> — you fine-tune. Now the suit is actually made for your body. Expensive up front. Fantastic fit. A nightmare if your body changes next week.</li>
+      </ul>
+
+      <p>Every team eventually asks: &ldquo;should we fine-tune?&rdquo; The answer is usually <em>not yet</em>. Sometimes it&rsquo;s <em>absolutely yes</em>. This chapter gives you the decision tree and the real 2026 numbers.</p>
+
+      <div class="highlight-box">
+        <strong>The rule of escalation:</strong> try prompt engineering first. If that&rsquo;s not enough, add RAG. If <em>that&rsquo;s</em> not enough, then — and only then — consider fine-tuning. Each step roughly 10× more expensive than the last in total project cost.
+      </div>
+    </section>
+
+    <section>
+      <h2>The three-rung ladder</h2>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content"><strong>Prompt engineering.</strong> Few-shot examples, clearer instructions, structured output. Cost: $0 engineering + zero additional inference cost. Try this for a week before climbing higher.</div>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content"><strong>RAG (retrieval-augmented generation).</strong> Give the model your docs at inference time. Cost: weeks of eng + vector DB + extra input tokens. Solves most &ldquo;the model doesn&rsquo;t know my data&rdquo; problems.</div>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content"><strong>Fine-tuning.</strong> Modify the weights. Cost: months of eng + training compute + serving overhead. Solves &ldquo;the model doesn&rsquo;t know how to <em>behave</em>&rdquo; problems.</div>
+        </div>
+      </div>
+
+      <p>If your task is &ldquo;know more facts,&rdquo; you almost certainly want RAG. If your task is &ldquo;behave differently&rdquo; — different tone, consistent structured output, a narrow classification with lots of edge cases — that&rsquo;s when fine-tuning earns its keep.</p>
+
+      <div class="warning-box">
+        <strong>Do not fine-tune before product-market fit.</strong> The single biggest money pit in AI engineering is training a custom model in April, watching the product pivot in May, and realizing your 10,000 carefully labeled examples are now worthless. Ship the prompt, validate the product, <em>then</em> train.
+      </div>
+    </section>
+
+    <section>
+      <h2>The four techniques, ranked by cost</h2>
+
+      <p>Not all fine-tuning is equally expensive. In 2026 the four main approaches look like this:</p>
+
+      <!-- source: https://www.spheron.network/blog/how-to-fine-tune-llm-2026/ as of 2026-04 -->
+      <!-- source: https://www.runpod.io/articles/guides/how-to-fine-tune-large-language-models-on-a-budget as of 2026-04 -->
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Technique</th>
+              <th>What it does</th>
+              <th>VRAM (7B model)</th>
+              <th>Typical compute cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>QLoRA</strong></td>
+              <td>4-bit quantized base + low-rank adapters</td>
+              <td>~8–12 GB</td>
+              <td>$5–$16 on RTX 4090 or H100<sup><a href="#src-1">[1]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>LoRA</strong></td>
+              <td>Freeze base, train small adapter matrices</td>
+              <td>~16–20 GB</td>
+              <td>$20–$100 on a single H100<sup><a href="#src-1">[1]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Full fine-tune (7B)</strong></td>
+              <td>Retrain every parameter</td>
+              <td>~56 GB</td>
+              <td>$250–$510 on 8× H100<sup><a href="#src-2">[2]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Full fine-tune (70B)</strong></td>
+              <td>Large model, full retrain</td>
+              <td>~100+ GB</td>
+              <td>$12,500–$45,000 incl. setup &amp; eval<sup><a href="#src-2">[2]</a></sup></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Most teams in 2026 pick QLoRA or LoRA. They&rsquo;re cheap, fast, and keep the base model intact so you can train multiple adapters side-by-side. Research shows LoRA reaches ~95% of full-fine-tune performance at ~10% of the cost.<sup><a href="#src-3">[3]</a></sup></p>
+
+      <div class="savings-callout banner">
+        LoRA → ~95% of full fine-tune quality at ~10% of the cost. For most production tasks, full fine-tuning is nostalgia, not strategy.
+      </div>
+    </section>
+
+    <section>
+      <h2>Three real-world fine-tuning price tags</h2>
+
+      <p>Let&rsquo;s price three concrete scenarios at April 2026 rates.</p>
+
+      <h3>Scenario 1 — QLoRA on a 7B model, RTX 4090</h3>
+
+      <div class="cost-breakdown-box">
+        <div class="breakdown-title">Scenario 1 — LoRA / QLoRA on consumer hardware</div>
+        <div class="breakdown-line"><span class="breakdown-label">Data prep (1,000 examples, your time)</span><span class="breakdown-value">8–20 hrs</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">GPU time (RTX 4090, ~3 hrs @ $0.45/hr)</span><span class="breakdown-value">$1.35</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Cloud spin-up / storage / egress overhead</span><span class="breakdown-value">$5–$10</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Eval pass (1,000 judge-model calls on Haiku)</span><span class="breakdown-value">~$3</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Direct compute cost</span><span class="breakdown-value">&lt; $20</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">With your own engineering time (fully loaded)</span><span class="breakdown-value">$800–$2,500</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Realistic total project cost</span><span class="breakdown-value">$800–$2,500</span></div>
+      </div>
+
+      <h3>Scenario 2 — LoRA on Llama-3-70B, 4× H100</h3>
+
+      <div class="cost-breakdown-box">
+        <div class="breakdown-title">Scenario 2 — LoRA on 70B model</div>
+        <div class="breakdown-line"><span class="breakdown-label">Training: 4× H100 × 15 hrs × $2.69/hr</span><span class="breakdown-value">$161.40<sup><a href="#src-1">[1]</a></sup></span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Data prep + labeling (10K examples, mixed synth/human)</span><span class="breakdown-value">$500–$3,000</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Eval runs + iteration (3–5 training passes)</span><span class="breakdown-value">$500–$800</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Engineer time (2–3 weeks senior)</span><span class="breakdown-value">$6,000–$12,000</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Total project cost</span><span class="breakdown-value">$7,200–$16,000</span></div>
+      </div>
+
+      <h3>Scenario 3 — OpenAI hosted fine-tuning (GPT-4.1)</h3>
+
+      <div class="cost-breakdown-box">
+        <div class="breakdown-title">Scenario 3 — Provider-hosted FT (OpenAI GPT-4.1)</div>
+        <div class="breakdown-line"><span class="breakdown-label">Training: 10M tokens × $3.00/M</span><span class="breakdown-value">$30<sup><a href="#src-4">[4]</a></sup></span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Inference on tuned model (per 1M in/out)</span><span class="breakdown-value">$3.00 / $12.00<sup><a href="#src-4">[4]</a></sup></span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Inference uplift vs base GPT-4.1</span><span class="breakdown-value">~50% more expensive</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Data prep + eval engineering</span><span class="breakdown-value">$4,000–$12,000</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Runway to a custom model</span><span class="breakdown-value">~$4,000 all-in</span></div>
+      </div>
+
+      <p>Notice the theme: the <em>training bill</em> is almost never the expensive part. It&rsquo;s the <em>engineering around it</em> — data prep, evaluation, iteration — that costs real money.</p>
+    </section>
+
+    <section>
+      <h2>Provider-hosted vs self-hosted fine-tuning</h2>
+
+      <p>You have two paths. Rent a GPU and train your own. Or pay a provider to do it for you. Here&rsquo;s the 2026 lay of the land.</p>
+
+      <!-- source: https://www.anthropic.com/news/fine-tune-claude-3-haiku as of 2026-04 -->
+      <!-- source: https://cloud.google.com/vertex-ai/generative-ai/pricing as of 2026-04 -->
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Technique</th>
+              <th>Training cost</th>
+              <th>Inference on tuned model</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>OpenAI</strong></td>
+              <td>Hosted (GPT-4.1, GPT-4.1 Mini)</td>
+              <td>$3.00/M (GPT-4.1); $0.80/M (Mini)<sup><a href="#src-4">[4]</a></sup></td>
+              <td>Same as base × ~1.5 uplift</td>
+            </tr>
+            <tr>
+              <td><strong>Google (Vertex AI)</strong></td>
+              <td>Hosted (Gemini Flash &amp; Pro)</td>
+              <td>Per training-hour + hosting<sup><a href="#src-5">[5]</a></sup></td>
+              <td>Same as base model rates</td>
+            </tr>
+            <tr>
+              <td><strong>Anthropic</strong></td>
+              <td>Claude 3 Haiku via AWS Bedrock only<sup><a href="#src-6">[6]</a></sup></td>
+              <td>Bedrock custom-model pricing</td>
+              <td>Provisioned Throughput required</td>
+            </tr>
+            <tr>
+              <td><strong>DIY (OSS)</strong></td>
+              <td>LoRA/QLoRA/full on any GPU</td>
+              <td>$5–$500 compute typical</td>
+              <td>Your serving stack, your rules</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="warning-box">
+        <strong>Anthropic is the odd one out.</strong> Native Claude fine-tuning is not available in April 2026 — only Claude 3 Haiku via AWS Bedrock, US West (Oregon), with mandatory Provisioned Throughput for inference.<sup><a href="#src-6">[6]</a></sup> If you&rsquo;re on Anthropic and want a custom model, you&rsquo;re pushed toward OSS or a different provider.
+      </div>
+
+      <div class="tip-box">
+        <strong>Rule of thumb for picking a path:</strong> if you&rsquo;re doing &lt; 3 fine-tunes a year and the task is narrow, go hosted (OpenAI or Vertex). If you&rsquo;re doing &gt; 10 fine-tunes a year or you need to ship the weights into your own VPC, go DIY with QLoRA on rented GPUs.
+      </div>
+    </section>
+
+    <section>
+      <h2>The distill-from-Opus pattern</h2>
+
+      <p>Here&rsquo;s the move that unlocked small-model economics in 2026.</p>
+
+      <ol>
+        <li>Use an expensive frontier model (Opus, GPT-5.4, Gemini 3 Pro) to <strong>generate 5,000–50,000 training examples</strong> — input + ideal output — for your narrow task.</li>
+        <li>Fine-tune a <strong>small open model</strong> (Llama 4 Scout, Mistral Small 4) on that synthetic dataset.</li>
+        <li>Serve the fine-tuned small model in production for pennies per 1M tokens.</li>
+      </ol>
+
+      <p>You get ~95% of the big model&rsquo;s quality on your narrow task and pay small-model inference rates forever.</p>
+
+      <div class="cost-breakdown-box">
+        <div class="breakdown-title">Distill-from-Opus, monthly, support-ticket classifier, 10M tickets/mo</div>
+        <div class="breakdown-line"><span class="breakdown-label">Always-Opus classification</span><span class="breakdown-value">10M × 200 tok × $5/M = $10,000</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">One-time synthetic data gen on Opus (10K examples × 500 tok)</span><span class="breakdown-value">$25</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">One-time LoRA fine-tune on Llama 4 Scout, 4× H100 × 4 hrs</span><span class="breakdown-value">$43</span></div>
+        <div class="breakdown-line"><span class="breakdown-label">Monthly inference on fine-tuned Scout self-hosted</span><span class="breakdown-value">~$600</span></div>
+        <div class="breakdown-line breakdown-total"><span class="breakdown-label">Monthly net after month 1</span><span class="breakdown-value">$600 vs $10,000 → $9,400 saved/mo</span></div>
+      </div>
+
+      <div class="savings-callout">
+        Distilling Opus into a fine-tuned Scout for a classification task: 94% cheaper forever. Payback window: &lt; 1 day.
+      </div>
+    </section>
+
+    <section>
+      <h2>Where fine-tuning actually earns its keep</h2>
+
+      <p>The research is pretty consistent in 2026: fine-tuned models improve on domain-specific tasks by ~25% in accuracy on average, with the biggest gains concentrated in narrow, well-defined problems.<sup><a href="#src-3">[3]</a></sup></p>
+
+      <div class="roi-box">
+        <div class="roi-scenarios">
+          <div class="scenario scenario-a">
+            <h4>❌ Fine-tuning loses</h4>
+            <ul>
+              <li>Goal: model knows new facts → use RAG instead</li>
+              <li>Training data: 50 examples, hand-picked → prompt engineering first</li>
+              <li>Task scope changes monthly → you&rsquo;ll retrain forever</li>
+              <li>No eval suite → you can&rsquo;t tell if training helped</li>
+              <li>Already &lt; $200/month API spend → not worth the engineering</li>
+            </ul>
+            <p><strong>Net:</strong> train nothing. Ship the prompt.</p>
+          </div>
+          <div class="scenario scenario-b">
+            <h4>✅ Fine-tuning wins</h4>
+            <ul>
+              <li>Narrow task: classification, extraction, style transfer</li>
+              <li>500+ labeled examples, consistent format</li>
+              <li>Already hit quality ceiling with prompting + RAG</li>
+              <li>Eval suite returns a number in &lt; 10 min</li>
+              <li>Task runs ≥ 1M times/month at premium-model cost</li>
+            </ul>
+            <p><strong>Net:</strong> 3–10× cost reduction + equal or better quality in production.</p>
+          </div>
+        </div>
+        <div class="roi-verdict">
+          <strong>Verdict:</strong> Fine-tuning ROI is a step function, not a slope. If your task is narrow, labeled, and high-volume, the ROI is spectacular. If any one of those three is missing, the ROI is usually negative.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The evaluation suite is the bottleneck</h2>
+
+      <p>You cannot fine-tune what you cannot measure. Every successful fine-tune project in 2026 starts with an <em>evaluation harness</em>: a deterministic test set with expected outputs and a scoring function.</p>
+
+      <p>Without that, fine-tuning becomes a lottery. You&rsquo;ll push a new checkpoint, run a few manual spot-checks, declare victory, and ship something that&rsquo;s measurably worse on edge cases you didn&rsquo;t re-test.</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <div class="label">✅ A usable eval suite</div>
+          <pre>200–500 labeled examples
+covering common cases + edge cases.
+Exact-match or LLM-as-judge scoring.
+Runs in &lt; 10 minutes.
+Returns a single number, versioned.</pre>
+        </div>
+        <div class="prompt-example bad">
+          <div class="label">❌ What most teams have</div>
+          <pre>A Slack channel of complaints.
+Five demo prompts in a Jupyter notebook.
+Vibe-based sign-off.
+Surfaces regressions three weeks late.</pre>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Build the eval suite <em>before</em> you start fine-tuning.</strong> If you can&rsquo;t come up with 200 labeled examples + a scoring function in a week, your task isn&rsquo;t ready to fine-tune. That&rsquo;s a feature, not a bug — it saves you from wasting training budget on a target you can&rsquo;t hit.
+      </div>
+    </section>
+
+    <section>
+      <h2>Runtime savings — where the money actually comes from</h2>
+
+      <p>Training cost is a rounding error compared to inference cost. A fine-tuned small model running for a year can save 10–100× more than the fine-tune itself costs.</p>
+
+      <!-- source: https://developers.openai.com/api/docs/pricing as of 2026-04 -->
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Always-Opus (in/out per 1M)</th>
+              <th>Fine-tuned small (self-hosted)</th>
+              <th>Per-1M-token savings</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Ticket classification</td>
+              <td>$5 / $25</td>
+              <td>~$0.99</td>
+              <td>~96%</td>
+            </tr>
+            <tr>
+              <td>Named entity extraction</td>
+              <td>$3 / $15</td>
+              <td>~$0.99</td>
+              <td>~90%</td>
+            </tr>
+            <tr>
+              <td>Tone/style rewriting</td>
+              <td>$3 / $15</td>
+              <td>~$0.99</td>
+              <td>~90%</td>
+            </tr>
+            <tr>
+              <td>Free-form reasoning</td>
+              <td>$5 / $25</td>
+              <td>Often regresses &mdash; don&rsquo;t</td>
+              <td>N/A</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>That last row is the warning. Fine-tuning shines on narrow, repeatable tasks. It&rsquo;s the wrong tool for &ldquo;the model needs to reason more deeply.&rdquo; For reasoning, you want a better base model, not a customized cheaper one.</p>
+    </section>
+
+    <section>
+      <h2>The hidden ops cost: serving a fine-tuned model</h2>
+
+      <p>One gotcha most teams miss: a fine-tuned model <em>needs somewhere to live</em>.</p>
+
+      <ul>
+        <li>Hosted fine-tunes (OpenAI, Vertex) include serving, but usually at a price premium of 30–50% over the base model.</li>
+        <li>OSS fine-tunes you trained yourself need to run on your own GPUs. Refer back to Chapter 10 — the self-hosting math kicks in immediately.</li>
+        <li>Bedrock-hosted Claude fine-tunes require <em>Provisioned Throughput</em>, which has a flat monthly floor regardless of your actual traffic.</li>
+      </ul>
+
+      <p>If you only train one adapter on top of a base model you&rsquo;re already self-hosting, the marginal serving cost is near zero. If you train five specialized adapters, you can multiplex them on the same GPU. But if you train one fine-tune and then need a dedicated endpoint, add $500–$3,000/month of fixed serving cost on top.</p>
+    </section>
+
+    <section>
+      <h2>Exercise: price one candidate fine-tune</h2>
+
+      <div class="exercise-box">
+        <h3>🛠️ Do it yourself (60 min)</h3>
+        <ol>
+          <li><strong>Pick a task</strong> where you&rsquo;re currently using a premium model (Sonnet, Opus, GPT-5.4). Classification, extraction, or style-transfer — narrow tasks are the sweet spot.</li>
+          <li><strong>Count monthly volume.</strong> How many calls × avg tokens in + out. Compute current monthly API bill for this task only.</li>
+          <li><strong>Pick a fine-tune target.</strong> Llama 4 Scout or Mistral Small 4 for OSS, or GPT-4.1 Mini for a hosted option.</li>
+          <li><strong>Estimate training data cost.</strong> 5,000 synthetic examples via Opus at $25–$100, or labeled dataset at $500–$3,000.</li>
+          <li><strong>Estimate LoRA cost.</strong> Single H100, 4 hours = ~$11. Add $40 in eval iteration.</li>
+          <li><strong>Estimate runtime cost.</strong> Monthly calls × fine-tuned model rate (self-hosted: ~$1/1M tokens; hosted: ~$1-$3/1M tokens).</li>
+          <li><strong>Compute payback.</strong> (Training total) ÷ (monthly savings) = months to break even. Under 3 months? Strong candidate. Over 12 months? Walk away.</li>
+        </ol>
+        <p><strong>Bonus:</strong> also compute what happens if the product pivots and the data becomes obsolete after 6 months. Does the payback still hold?</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The go/no-go checklist</h2>
+
+      <div class="checklist">
+        <ul>
+          <li>✅ You&rsquo;ve already optimized with prompts + RAG and still have a quality gap</li>
+          <li>✅ The task is narrow, well-defined, and won&rsquo;t pivot in the next 3 months</li>
+          <li>✅ You have ≥ 500 labeled examples (synthetic or human)</li>
+          <li>✅ You have an eval suite that returns a single number in &lt; 10 min</li>
+          <li>✅ Current spend on this task is ≥ $500/month, ideally ≥ $2,000/month</li>
+          <li>✅ You&rsquo;ve picked a base model (not &ldquo;we&rsquo;ll figure it out later&rdquo;)</li>
+          <li>✅ You know where the fine-tuned model will be served, including the monthly floor</li>
+          <li>✅ You&rsquo;ve budgeted for at least 3 training iterations, not just one</li>
+        </ul>
+      </div>
+
+      <p>Every unchecked box doubles your risk. If two or more are unchecked, go back to prompt + RAG until you can check them.</p>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+
+      <p>Chapter 12 — the finale — pulls all eleven chapters together into a <strong>FinOps playbook for AI</strong>: per-feature budgets, forecasting under cost deflation, organizational patterns, and the 10-item production checklist you can actually put on your team&rsquo;s wiki on Monday.</p>
+
+      <p>You&rsquo;ve learned the levers. The last chapter is about running them as a discipline.</p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources</h3>
+      <ol>
+        <li id="src-1"><a href="https://www.spheron.network/blog/how-to-fine-tune-llm-2026/" target="_blank" rel="noopener">Spheron — How to Fine-Tune LLMs in 2026: Costs, GPUs, and Code</a></li>
+        <li id="src-2"><a href="https://calcix.net/guides/business-startup/ai-model-training-cost-guide-llama3" target="_blank" rel="noopener">Calcix — Llama-3 Fine-Tuning Cost (2026 Price Guide)</a></li>
+        <li id="src-3"><a href="https://www.stratagem-systems.com/blog/lora-fine-tuning-cost-analysis-2026" target="_blank" rel="noopener">Stratagem Systems — LoRA Fine-Tuning Cost 2026 + ROI analysis</a></li>
+        <li id="src-4"><a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener">OpenAI — Fine-tuning pricing (April 2026)</a></li>
+        <li id="src-5"><a href="https://cloud.google.com/vertex-ai/generative-ai/pricing" target="_blank" rel="noopener">Google Cloud — Vertex AI Gemini fine-tuning pricing (2026)</a></li>
+        <li id="src-6"><a href="https://www.anthropic.com/news/fine-tune-claude-3-haiku" target="_blank" rel="noopener">Anthropic — Fine-tune Claude 3 Haiku in Amazon Bedrock</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-self-hosting-math.html">← Chapter 10: Self-Hosting Math</a>
+      <a href="index.html">Contents</a>
+      <a href="12-finops-for-ai.html">Chapter 12: FinOps for AI →</a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Plan Mode &amp; Context Strategy | AI Harness Engineering</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Harness Engineering</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-building-your-own.html">Prev</a>
+      <a href="maps/11-context-and-planning-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Plan Mode &amp; Context Strategy</h1>
+    <p class="subtitle">When to think before acting &mdash; and when to forget on purpose</p>
+  </header>
+
+  <main>
+
+    <!-- S1: The Ten-Chapter Dilemma -->
+    <section>
+      <h2>The Ten-Chapter Dilemma</h2>
+
+      <p>Imagine you're generating a ten-chapter HTML course using Claude Code. You have a custom command &mdash; <code>/generate-next-chapter</code> &mdash; that reads your CLAUDE.md, checks which chapter is next, searches the web for fresh material, and writes 400&ndash;600 lines of HTML. You run it once. Beautiful chapter. You run it again. Another good one. By chapter five, you start wondering.</p>
+
+      <p>Should I enter <strong>plan mode</strong> before each generation? Would the extra thinking time produce better results? Or am I burning tokens on something the command already handles?</p>
+
+      <p>Should I type <strong>/clear</strong> between chapters? The context is getting heavy &mdash; five chapters' worth of file reads, tool calls, and conversation history. Is all that context helping or hurting? And what about the cache &mdash; am I throwing away something expensive when I clear?</p>
+
+      <p>These aren't just UI decisions. They're <strong>harness engineering decisions</strong>. Plan mode controls how the model reasons. <code>/clear</code> controls what the model knows. Together, they're two of the most powerful knobs you can turn on the Claude Code harness &mdash; and most developers never think about when to turn them.</p>
+    </section>
+
+    <!-- S2: What Plan Mode Actually Is -->
+    <section>
+      <h2>What Plan Mode Actually Is</h2>
+
+      <p>In Chapter 6, we saw plan mode mentioned as "read-only operations." Let's look at what that actually means for the harness.</p>
+
+      <p>When you press <code>Shift+Tab</code> to enter plan mode (or pass <code>--mode plan</code> when starting Claude Code), the harness does three things:</p>
+
+      <ol>
+        <li><strong>Swaps the tool registry.</strong> Write, Edit, and destructive Bash commands are removed. The model keeps Read, Grep, Glob, and Agent &mdash; it can look at anything but touch nothing.</li>
+        <li><strong>Injects planning instructions.</strong> The system prompt gains a new section telling the model to explore, reason, and write a plan file &mdash; not to execute. Remember from Chapter 6: Claude Code has 110+ conditional prompt fragments. Plan mode activates a different subset.</li>
+        <li><strong>Creates a plan file.</strong> The model writes its approach to a markdown file you can review, edit, and approve before any code changes happen.</li>
+      </ol>
+
+      <p>Think of it like putting on safety glasses before working in a machine shop. You can walk around, inspect every machine, measure parts, sketch designs on paper. But the power tools are locked out. You can't accidentally cut something.</p>
+
+      <p>The key insight: plan mode isn't just "the model thinking harder." It's a <strong>constraint mechanism</strong>. The harness physically prevents execution, which forces the model to reason about its approach instead of jumping straight to implementation. It's the difference between a contractor who sketches before building and one who starts swinging a hammer.</p>
+
+      <div class="tip-box">
+        <h3>How to Toggle Plan Mode</h3>
+        <p><strong>In a session:</strong> Press <code>Shift+Tab</code> to toggle between plan and act modes. You can plan first, review the plan, then switch to act mode for implementation.</p>
+        <p><strong>From the command line:</strong> Start with <code>claude --mode plan</code> to begin in plan mode. Or <code>claude --mode auto</code> to let the model decide when to plan.</p>
+      </div>
+    </section>
+
+    <!-- S3: When Plan Mode Earns Its Keep -->
+    <section>
+      <h2>When Plan Mode Earns Its Keep</h2>
+
+      <p>Plan mode costs tokens &mdash; the model reads files, reasons through approaches, and writes a plan before doing any actual work. That's time and money. When is it worth it?</p>
+
+      <p><strong>Complex multi-file changes.</strong> In Chapter 6 we noted the rule of thumb: if a change touches 3 or more files, use plan mode. Each additional file adds compounding decisions. Planning catches architectural mistakes before they're coded into existence.</p>
+
+      <p><strong>Unfamiliar codebases.</strong> First day on a new project? Plan mode forces the model to explore before acting. It reads the directory structure, checks existing patterns, understands conventions &mdash; then proposes an approach that fits what's already there, instead of guessing.</p>
+
+      <p><strong>Expensive-to-undo changes.</strong> Database migrations, API changes with downstream consumers, configuration that affects production environments. If a wrong implementation is hard to reverse, the planning tax pays for itself.</p>
+
+      <p><strong>Ambiguous requirements.</strong> When the user's request could be interpreted multiple ways, plan mode surfaces those ambiguities. The plan file becomes a conversation checkpoint: "Here's what I think you mean &mdash; is this right?" Much better than implementing the wrong interpretation.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">3+ files</div>
+          <div class="stat-label">The threshold where planning consistently improves outcomes</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">5&ndash;15%</div>
+          <div class="stat-label">Token overhead for plan mode on typical tasks</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">50%+</div>
+          <div class="stat-label">Reduction in rework when planning catches wrong assumptions early</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- S4: When Plan Mode Is Overhead -->
+    <section>
+      <h2>When Plan Mode Is Overhead</h2>
+
+      <p>Not every task needs a blueprint. Sometimes the blueprint costs more than the building.</p>
+
+      <p><strong>Well-defined repetitive tasks.</strong> Remember our ten-chapter scenario? If you have a <code>/generate-next-chapter</code> command that already specifies the structure, tone, CSS classes, and content requirements &mdash; the "plan" is baked into the command. Plan mode would re-derive what the command already states.</p>
+
+      <p><strong>Single-file edits with clear patterns.</strong> "Add a new endpoint that follows the same pattern as the existing ones." The model can see the pattern in the file, replicate it, and it's done. Planning would just say "I'll follow the existing pattern" &mdash; not worth the round trip.</p>
+
+      <p><strong>Tasks the model has just done successfully.</strong> If you just generated chapter 3 and it was perfect, the model understands the template. Chapters 4 through 10 don't need fresh plans &mdash; the pattern is established in context.</p>
+
+      <div class="warning-box">
+        <h3>The Plan Mode Paradox</h3>
+        <p>Plan mode is most valuable when you know the least about a task, and least valuable when you know the most. If you find yourself reading the plan and thinking "yes, obviously" &mdash; you probably didn't need plan mode. If you find yourself thinking "oh, I hadn't considered that" &mdash; it just saved you a failed implementation.</p>
+      </div>
+
+      <p>For the ten-chapter scenario: <strong>use plan mode for chapter 1</strong> (establishing the template, making structural decisions). <strong>Skip it for chapters 2&ndash;10</strong> (the pattern is set, the command is clear, repetition is the point).</p>
+    </section>
+
+    <!-- S5: What /clear Actually Does -->
+    <section>
+      <h2>What /clear Actually Does</h2>
+
+      <p>Type <code>/clear</code> in Claude Code and the entire conversation vanishes. Not summarized. Not compressed. <em>Gone.</em></p>
+
+      <p>Here's what happens mechanically:</p>
+
+      <ol>
+        <li><strong>Conversation history is deleted.</strong> Every message you sent, every response, every tool call and result &mdash; erased from the context.</li>
+        <li><strong>The system prompt is rebuilt from scratch.</strong> Claude Code re-reads your CLAUDE.md files, reloads tool definitions, re-evaluates conditional prompt fragments for your platform and mode.</li>
+        <li><strong>You start with a fresh context window.</strong> The only tokens in the window are the system prompt, tools, and CLAUDE.md content &mdash; exactly what you'd get if you'd just opened a new terminal session.</li>
+      </ol>
+
+      <p>What <strong>survives</strong> <code>/clear</code>: everything on disk. Your CLAUDE.md, settings, hooks, MCP servers, permission rules, and any files the model created or edited. The filesystem is permanent; the conversation is ephemeral.</p>
+
+      <p>What <strong>doesn't survive</strong>: discovered conventions ("I noticed your tests always use this pattern"), accumulated understanding of project structure, cross-references between files the model read, in-flight reasoning, and any preferences learned during the conversation.</p>
+
+      <p>One catch worth knowing: <code>/clear</code> looks nuclear, but every session is auto-saved to disk. <code>claude --resume</code> or <code>/resume</code> reloads the full transcript &mdash; including tool results &mdash; so <code>/clear</code> is reversible if you named the session first with <code>/rename</code>. We'll come back to this in section 11.</p>
+
+      <div class="warning-box">
+        <h3>/clear vs /compact: Nuclear vs Surgical</h3>
+        <p><code>/clear</code> is a full reset &mdash; everything goes. <code>/compact</code> is a lossy summary &mdash; the harness condenses the conversation into a compact form, preserving key facts (what files were read, what decisions were made, what's in progress) while dropping the raw details. In Chapter 3, we saw that compaction is like reading meeting notes instead of the full transcript. <code>/clear</code> is like shredding the notes entirely.</p>
+      </div>
+    </section>
+
+    <!-- S6: The Prompt Cache and the 5-Minute Window -->
+    <section>
+      <h2>The Prompt Cache and the 5-Minute Window</h2>
+
+      <p>Here's something most developers don't realize: there's a cache involved, and <code>/clear</code> interacts with it in non-obvious ways.</p>
+
+      <p>Anthropic's API uses <strong>prompt caching</strong>. Every time Claude Code sends a request, it includes the system prompt, CLAUDE.md content, tool definitions, and conversation history. The first part of that request &mdash; the system prompt and tool definitions &mdash; tends to be identical across requests. This prefix gets cached on the server side.</p>
+
+      <p>The cache has a <strong>5-minute TTL</strong> (time to live). If you make another request within 5 minutes using the same prefix, it's a <strong>cache hit</strong> &mdash; faster and cheaper. If you wait longer, the cached prefix expires and the next request pays full price.</p>
+
+      <p>What does this mean for <code>/clear</code>?</p>
+
+      <ul>
+        <li><strong>Clearing within 5 minutes:</strong> Your system prompt prefix may still be cached. The next request after <code>/clear</code> can hit the cache for the system prompt portion. You lose conversation history but keep the cache benefit on the static prefix.</li>
+        <li><strong>Clearing after 5+ minutes:</strong> Full cache miss. The entire request &mdash; system prompt, tools, everything &mdash; is processed from scratch. This is the most expensive restart.</li>
+        <li><strong>Not clearing at all:</strong> Each request includes the growing conversation history. The prefix stays cached (as long as you're within 5 minutes between requests), but you're paying for all those accumulated tokens on every subsequent request.</li>
+      </ul>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">5 min</div>
+          <div class="stat-label">Prompt cache TTL &mdash; how long the cached prefix survives</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~10&ndash;15K</div>
+          <div class="stat-label">Typical tokens in system prompt + CLAUDE.md + tool definitions (the cached prefix)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">90%</div>
+          <div class="stat-label">Cost reduction on cached tokens vs uncached</div>
+        </div>
+      </div>
+
+      <div class="inside-look-box">
+        <h3>&#128269; Inside the Harness: Before and After /clear</h3>
+
+        <h4>Before /clear &mdash; At Chapter 10 of a Sequential Generation</h4>
+        <p>Your context window contains:</p>
+        <ul>
+          <li>System prompt + CLAUDE.md + tool definitions: ~12K tokens</li>
+          <li>9 rounds of "generate chapter" prompts: ~5K tokens</li>
+          <li>9 chapter HTML outputs: ~45K tokens</li>
+          <li>File reads (style.css, index.html, previous chapters): ~30K tokens</li>
+          <li>Web search results accumulated over 9 chapters: ~20K tokens</li>
+          <li>Tool call metadata and model reasoning: ~15K tokens</li>
+        </ul>
+        <p><strong>Total: ~127K tokens in context.</strong> The model sees everything. Cross-references are easy. Consistency is automatic. But you're paying for 127K input tokens on every request, and older chapters are deep in the "lost in the middle" zone from Chapter 3.</p>
+
+        <h4>After /clear &mdash; Fresh Start for Chapter 10</h4>
+        <p>Your context window contains:</p>
+        <ul>
+          <li>System prompt + CLAUDE.md + tool definitions: ~12K tokens</li>
+        </ul>
+        <p><strong>Total: ~12K tokens.</strong> Clean, cheap, focused. But the model doesn't know what tone was used, what CSS classes worked well, what cross-reference patterns were established, or what the previous 9 chapters even covered. It has to re-discover all of that from CLAUDE.md and the files on disk.</p>
+      </div>
+    </section>
+
+    <!-- S7: Context as Asset vs Liability -->
+    <section>
+      <h2>Context: Asset or Liability?</h2>
+
+      <p>This is the core question. That accumulated context &mdash; is it helping or hurting?</p>
+
+      <p>The answer depends on one thing: <strong>how relevant the accumulated context is to the current task.</strong></p>
+
+      <h3>When Context Is an Asset</h3>
+
+      <ul>
+        <li><strong>Consistency.</strong> If the model generated chapters 1&ndash;5, it has internalized the tone, terminology, and structure. Chapter 6 will be consistent without being told to "match the style of previous chapters."</li>
+        <li><strong>Cross-references.</strong> The model knows what was covered in chapter 3 and can reference it naturally in chapter 7. Without that context, cross-references become generic or wrong.</li>
+        <li><strong>Discovered conventions.</strong> Maybe the model noticed that your CSS has a <code>.inside-look-box</code> class and started using it effectively. After <code>/clear</code>, it needs to re-discover this from the CSS file.</li>
+        <li><strong>Error correction.</strong> If you corrected the model's behavior in chapter 2 ("don't use Python examples, use JSON config snippets"), that correction carries forward. After <code>/clear</code>, the same mistake may reappear.</li>
+      </ul>
+
+      <h3>When Context Is a Liability</h3>
+
+      <ul>
+        <li><strong>Irrelevant noise.</strong> When generating chapter 10 about building your own harness, the detailed web search results about MCP protocol history from chapter 4 are just noise. They take up tokens and attention without helping.</li>
+        <li><strong>Attention degradation.</strong> The "lost in the middle" problem from Chapter 3. In a 127K-token context, the model pays strong attention to the beginning (system prompt) and the end (recent messages) but may gloss over the middle &mdash; where your chapter 3 corrections and chapter 5 conventions live.</li>
+        <li><strong>Token cost.</strong> Every token in the context is billed on every request. 127K tokens of context means you're paying for 127K input tokens for every model response, even if 80% of that context is irrelevant to the current chapter.</li>
+        <li><strong>Auto-compaction risk.</strong> Hit 95% context capacity and the harness auto-compacts (Chapter 3). You don't control what gets preserved and what gets dropped. A well-timed <code>/clear</code> or <code>/compact</code> is better than an emergency auto-compaction.</li>
+      </ul>
+
+      <div class="highlight-box">
+        <h3>The Relevance Heuristic</h3>
+        <p>If more than half the accumulated context is relevant to your current task &mdash; <strong>keep it</strong>. If less than half is relevant &mdash; <strong>/compact or /clear</strong>. If you're switching task domains entirely (frontend to database, generation to debugging) &mdash; <strong>always /clear</strong>.</p>
+      </div>
+    </section>
+
+    <!-- S8: Token Economics -->
+    <section>
+      <h2>Token Economics: What Context Actually Costs</h2>
+
+      <p>Let's make this concrete with the ten-chapter scenario.</p>
+
+      <p><strong>Strategy A: Never clear.</strong> Chapter 1 starts with ~12K tokens of context. By chapter 10, you're at ~127K. Each chapter generation uses more input tokens than the last. Total input tokens across all 10 chapters: roughly 700K. Plus you risk auto-compaction around chapters 7&ndash;8 depending on your model's window size.</p>
+
+      <p><strong>Strategy B: Clear before every chapter.</strong> Each chapter starts at ~12K tokens. But the model re-reads style.css (~1.5K), index.html (~250 lines), and the previous chapter (~500 lines) each time. That's maybe 15&ndash;20K of re-discovery per chapter. Total input tokens: roughly 200K. Cheaper, but you lose consistency and cross-references.</p>
+
+      <p><strong>Strategy C: The sweet spot.</strong> Run chapters 1&ndash;4 without clearing (context is still manageable, consistency matters while establishing patterns). <code>/compact</code> before chapter 5 (preserve key conventions, drop raw details). Run 5&ndash;7 with fresh compacted context. <code>/clear</code> before chapter 8 (CLAUDE.md captures the conventions by now). Run 8&ndash;10 fresh. Total input tokens: roughly 350K &mdash; a middle ground that preserves quality where it matters.</p>
+
+      <div class="tip-box">
+        <h3>The Re-Discovery Tax</h3>
+        <p>Clearing context isn't free. Every file the model needs to re-read, every convention it needs to re-discover, every correction it needs to re-learn &mdash; those are tokens too. The question isn't "is clearing cheaper?" It's "is carrying the old context more expensive than re-discovering what I need?" Sometimes yes, sometimes no.</p>
+      </div>
+    </section>
+
+    <!-- S9: The Decision Framework -->
+    <section>
+      <h2>The Decision Framework</h2>
+
+      <p>Here's a practical decision tree you can use for any multi-step workflow.</p>
+
+      <div class="workflow-steps">
+        <div class="step">
+          <strong>Similar task?</strong><br>Is the next task similar to the previous one?
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <strong>Context heavy?</strong><br>Past 50% of window capacity?
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <strong>Conventions safe?</strong><br>Are important patterns in CLAUDE.md?
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <strong>Action</strong><br>Keep / /compact / /clear
+        </div>
+      </div>
+
+      <p><strong>Similar task + light context:</strong> Keep going. The accumulated context is almost entirely relevant.</p>
+      <p><strong>Similar task + heavy context:</strong> Use <code>/compact</code>. Preserve the conventions, drop the raw details.</p>
+      <p><strong>Different task + any context:</strong> Use <code>/clear</code>. The old context is noise for the new task.</p>
+      <p><strong>Complex new task:</strong> <code>/clear</code> then enter plan mode. Start clean, think first.</p>
+
+      <h3>The Ten-Chapter Playbook</h3>
+
+      <p>Applying this to sequential course generation:</p>
+
+      <div class="checklist">
+        <div><strong>Chapters 1&ndash;3:</strong> No /clear, no plan mode. Context is light, you're establishing patterns, and consistency between early chapters matters most. (Exception: use plan mode for chapter 1 if the template isn't well-defined yet.)</div>
+        <div><strong>Chapters 4&ndash;5:</strong> Run <code>/compact</code> before chapter 4 or 5. Context is getting heavy but the established patterns are valuable. Compaction preserves what matters.</div>
+        <div><strong>Chapters 6&ndash;7:</strong> Consider <code>/clear</code> before chapter 6 or 7 &mdash; but only if your CLAUDE.md captures the conventions the model learned. If your CLAUDE.md is thin, use <code>/compact</code> instead.</div>
+        <div><strong>Chapters 8&ndash;10:</strong> <code>/clear</code> is safe. By now, your CLAUDE.md and command template define the pattern. The model doesn't need conversation history from chapter 2 to write chapter 9.</div>
+      </div>
+    </section>
+
+    <!-- S10: What Gets Lost -->
+    <section>
+      <h2>What Gets Lost &mdash; and How to Protect It</h2>
+
+      <p>Every <code>/clear</code> kills knowledge. The question is: does it kill knowledge that matters?</p>
+
+      <h3>Types of Knowledge That Die</h3>
+
+      <ul>
+        <li><strong>Learned corrections.</strong> "Don't use Python examples" &mdash; gone. The model may revert to its default behavior.</li>
+        <li><strong>Discovered patterns.</strong> "This project uses msw for API mocking" &mdash; the model figured this out by reading test files. After <code>/clear</code>, it hasn't read those files yet.</li>
+        <li><strong>Cross-file understanding.</strong> The model read 8 files and understands how they relate. After <code>/clear</code>, each file is unknown again.</li>
+        <li><strong>Conversation-specific preferences.</strong> "Make the analogies more concrete" &mdash; a preference you stated in turn 3 that shaped every subsequent response.</li>
+      </ul>
+
+      <h3>The Protection Strategy: Write It Down</h3>
+
+      <p>The filesystem survives <code>/clear</code>. The conversation doesn't. So the protection strategy is simple: <strong>move important knowledge from the conversation to the filesystem before clearing.</strong></p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">CLAUDE.md updated with session-discovered conventions</div>
+<pre><code>## Content Generation Rules
+- Code examples: config snippets only (JSON, YAML, shell). NOT Python.
+- Analogies: concrete and specific, not abstract. "Like a restaurant
+  kitchen" not "like a system."
+- Each chapter MUST include at least one .inside-look-box
+- Use .stats-grid for any numerical evidence
+- Cross-reference earlier chapters by number: "In Chapter 3, we saw..."
+- Line target: 400-600 lines. Count before finalizing.</code></pre>
+      </div>
+
+      <div class="prompt-example bad">
+        <div class="prompt-label">Clearing without saving &mdash; knowledge lost forever</div>
+<pre><code># What happened:
+# - Turn 3: User corrected "don't use Python examples"
+# - Turn 7: Model discovered .inside-look-box CSS class
+# - Turn 12: User said "analogies should be more concrete"
+# - Turn 15: /clear
+#
+# Result: Chapter 6 has Python examples, no inside-look-box,
+# and abstract analogies. The model re-learned nothing.</code></pre>
+      </div>
+
+      <div class="tip-box">
+        <h3>The Pre-Clear Checklist</h3>
+        <p>Before typing <code>/clear</code>, ask yourself: did the model learn anything in this session that isn't already in CLAUDE.md? If yes, add it to CLAUDE.md first. Two minutes of updating CLAUDE.md saves twenty minutes of re-correcting the model.</p>
+      </div>
+    </section>
+
+    <!-- S10b: Tool Results & Web Research -->
+    <section>
+      <h2>What Happens to Tool Results &mdash; and How to Keep Web Research</h2>
+
+      <p>You just spent eight tool calls and a generous web-search budget gathering material for a chapter. Then you hit <code>/compact</code> &mdash; or worse, <code>/clear</code>. Did the research survive?</p>
+
+      <p>The question matters because every refresh of a chapter starts with WebSearch and WebFetch dumping pages of raw HTML into the conversation. That research is the most expensive thing in the window, and the most repetitive thing to redo. Here's what the official Claude Code docs say happens to tool output &mdash; and four ways to keep it.</p>
+
+      <h3>1. /compact summarizes tool output, it doesn't delete it</h3>
+
+      <p>Auto-compaction is not a deletion event. The official docs describe it like this:</p>
+
+      <blockquote>"Claude Code automatically optimizes costs through prompt caching (which reduces costs for repeated content like system prompts) and auto-compaction (which summarizes conversation history when approaching context limits)." &mdash; <a href="https://code.claude.com/docs/en/costs#reduce-token-usage">code.claude.com/docs/en/costs</a></blockquote>
+
+      <p>In practice the bulky tool outputs &mdash; full WebFetch pages, large file reads &mdash; are the first things condensed. Your prompts, recent decisions, and the citation URLs the model wrote down stay; the raw 40KB HTML pages get replaced by a few sentences of summary. So when you compact <em>mid-chapter</em>, you don't lose the research &mdash; you compress the part of the research that has already done its job.</p>
+
+      <h3>2. /compact takes a focus argument &mdash; and it's the lever most people miss</h3>
+
+      <p>Bare <code>/compact</code> lets the model decide what to keep. <code>/compact &lt;instruction&gt;</code> tells it explicitly:</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Steering compaction toward what matters</div>
+<pre><code># Mid-chapter, after WebFetch dumped 5 pages
+/compact Focus on verified facts and citation URLs from the web research
+
+# Between two related chapters
+/compact Focus on the conventions and CSS classes established so far
+
+# Before switching from research to writing
+/compact Focus on the chapter outline and source quotes</code></pre>
+      </div>
+
+      <p>You can also bake this into <code>CLAUDE.md</code> so it applies to every compaction in the project. The official docs show the syntax:</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">CLAUDE.md &mdash; persistent compaction instructions</div>
+<pre><code># Compact instructions
+
+When compacting, preserve:
+- Citation URLs and exact quotes from web research
+- The chapter outline and section list
+- CSS classes the model has decided to use
+- User corrections from this session
+
+Drop:
+- Raw HTML page contents from WebFetch
+- File contents already written to disk
+- Search-result preambles</code></pre>
+      </div>
+
+      <p>Reference: <a href="https://code.claude.com/docs/en/costs#reduce-token-usage">code.claude.com/docs/en/costs &mdash; Manage context proactively</a>.</p>
+
+      <h3>3. The subagent pattern: search without bloating context</h3>
+
+      <p>If you want web research to never enter your main context in the first place, delegate it to a subagent. The subagent runs in its own context window, gets flooded with raw search results, and returns only a summary &mdash; the noise stays in the subagent's window, not yours. The official docs are explicit that this is the intended use:</p>
+
+      <blockquote>"Use one when a side task would flood your main conversation with search results, logs, or file contents you won't reference again: the subagent does that work in its own context and returns only the summary." &mdash; <a href="https://code.claude.com/docs/en/sub-agents">code.claude.com/docs/en/sub-agents</a></blockquote>
+
+      <p>And from the cost-management page:</p>
+
+      <blockquote>"Delegate verbose operations to subagents. Running tests, fetching documentation, or processing log files can consume significant context. Delegate these to subagents so the verbose output stays in the subagent's context while only a summary returns to your main conversation." &mdash; <a href="https://code.claude.com/docs/en/costs#reduce-token-usage">code.claude.com/docs/en/costs</a></blockquote>
+
+      <div class="inside-look-box">
+        <h3>&#128269; Inside the Harness: Web Research With and Without a Subagent</h3>
+
+        <h4>Without a subagent</h4>
+        <p>Main session WebFetches five pages. Each is 8&ndash;15KB. The conversation now contains roughly 60KB of raw HTML, which the model re-reads on every subsequent turn. Cost over the next 10 turns: 60KB &times; 10 = 600KB of input tokens for content the model only needed once.</p>
+
+        <h4>With a subagent</h4>
+        <p>Main session asks an Explore subagent: "Research X, return verified facts with URLs, under 400 words." The subagent's context fills with the same 60KB of HTML. The subagent returns a 1KB summary. The main session sees only the 1KB. Cost over the next 10 turns: 1KB &times; 10 = 10KB &mdash; a 60&times; reduction. The raw research is gone, but the citations survive.</p>
+      </div>
+
+      <h3>4. Saved sessions preserve tool results across /clear</h3>
+
+      <p>This is the single most important thing missing from most users' mental model: <code>/clear</code> looks nuclear, but every session is auto-saved to disk, and <code>--resume</code> brings the whole conversation back, tool results included.</p>
+
+      <blockquote>"Conversation Storage: All conversations are automatically saved locally with their full message history. ... Tool State: Tool usage and results from the previous conversation are preserved." &mdash; <a href="https://code.claude.com/docs/en/common-workflows#resume-previous-conversations">code.claude.com/docs/en/common-workflows</a></blockquote>
+
+      <p>The trick is <strong>naming the session before you clear</strong>, so you can find it later:</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">The "/clear but keep the research" workflow</div>
+<pre><code># After the chapter is written, before you reset
+/rename ai-advanced-ch04-research
+
+# Now safe to start fresh for the next chapter
+/clear
+
+# ...later, if you need that chapter's research again
+claude --resume ai-advanced-ch04-research
+
+# Or, from inside any session:
+/resume ai-advanced-ch04-research</code></pre>
+      </div>
+
+      <p>This is the literal answer to "can I clear context but keep the WebSearch?" &mdash; yes, by parking each chapter's session under a memorable name and pulling it back on demand. The cost-management page recommends this exact pattern:</p>
+
+      <blockquote>"Use <code>/clear</code> to start fresh when switching to unrelated work. Stale context wastes tokens on every subsequent message. Use <code>/rename</code> before clearing so you can easily find the session later, then <code>/resume</code> to return to it." &mdash; <a href="https://code.claude.com/docs/en/costs#reduce-token-usage">code.claude.com/docs/en/costs</a></blockquote>
+
+      <h3>5. The filesystem is your zero-cost cache</h3>
+
+      <p>If you'd rather not depend on resume (or you want research to outlive a single project), tell the model to dump verified facts to a markdown file before any reset:</p>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">Persisting research to disk</div>
+<pre><code># Mid-chapter
+"Before we continue, write the verified facts and citation URLs
+to chapters/.research/04-prompt-caching.md so they survive /clear."
+
+# Later, in a fresh session
+"Read chapters/.research/04-prompt-caching.md and use those
+citations for the rewrite."</code></pre>
+      </div>
+
+      <p>Files cost zero context tokens until you <code>@</code>-reference them, and they survive both <code>/compact</code> and <code>/clear</code>. They're also reusable across courses &mdash; the same research file can feed an AI-Harness chapter and an AI-Economics chapter.</p>
+
+      <div class="tip-box">
+        <h3>The Refresh-Chapter Playbook</h3>
+        <p>A concrete recipe for sequential chapter-refresh workflows:</p>
+        <ol>
+          <li><strong>Skip plan mode</strong> for routine refreshes &mdash; the existing chapter file <em>is</em> the plan. Reach for plan mode only when you're rewriting a chapter's structure, not its content.</li>
+          <li><strong>Compact mid-chapter</strong> after the WebSearch / WebFetch phase, before the writing phase: <code>/compact Focus on verified facts and citation URLs</code>. Raw pages collapse into citable notes; the cache stays warm for the writing turn.</li>
+          <li><strong>Between two related refreshes in the same course:</strong> <code>/compact</code>. Conventions and CSS choices stay; the prior chapter's research compresses to a summary.</li>
+          <li><strong>Between two unrelated refreshes</strong> (or when switching courses entirely): <code>/rename &lt;memorable-name&gt;</code> then <code>/clear</code>. The next refresh starts cheap; the old research is one <code>--resume</code> away if you ever need it.</li>
+          <li><strong>Anything you wish CLAUDE.md already knew</strong>, write to CLAUDE.md before clearing &mdash; that's the only knowledge that auto-loads in every future session, with zero re-discovery cost.</li>
+        </ol>
+      </div>
+
+    </section>
+
+    <!-- S11: Putting It Together -->
+    <section>
+      <h2>Putting It All Together</h2>
+
+      <p>Plan mode and <code>/clear</code> aren't competing features. They're complementary tools for different problems.</p>
+
+      <table class="map-compare">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>What It Controls</th>
+            <th>Use When</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Plan mode</strong></td>
+            <td>Reasoning depth &mdash; forces exploration before execution</td>
+            <td>Complex tasks, unfamiliar codebases, 3+ file changes</td>
+          </tr>
+          <tr>
+            <td><strong>/compact</strong></td>
+            <td>Context density &mdash; preserves key facts, drops raw details</td>
+            <td>Context is heavy but conventions in conversation still matter</td>
+          </tr>
+          <tr>
+            <td><strong>/clear</strong></td>
+            <td>Context scope &mdash; full reset to system prompt + CLAUDE.md</td>
+            <td>Switching tasks, context is mostly irrelevant, CLAUDE.md captures conventions</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The best practitioners combine them naturally. Plan mode for the first task in a new domain. Skip plan mode for repetitive tasks. <code>/compact</code> when context is heavy but still useful. <code>/clear</code> when switching gears entirely. Update CLAUDE.md before clearing to preserve what matters.</p>
+    </section>
+
+    <!-- S12: Exercise -->
+    <section>
+      <h2>Try It Yourself</h2>
+
+      <div class="exercise-box">
+        <h3>&#9997;&#65039; Audit Your Context Strategy</h3>
+        <p>Take a multi-step task you do regularly and test the impact of context management.</p>
+
+        <ol>
+          <li><strong>Establish a baseline.</strong> Run 3 related tasks (e.g., create 3 similar components or fix 3 related bugs) without <code>/clear</code> or plan mode. Note the quality and consistency of the output.</li>
+
+          <li><strong>Try plan mode first.</strong> Do the same task, but enter plan mode for the first one. Review the plan, then switch to act mode. Was the plan useful? Did it catch anything you wouldn't have?</li>
+
+          <li><strong>Try clearing between tasks.</strong> Do the same 3 tasks but type <code>/clear</code> between each one. Note what the model "forgets" &mdash; does it re-discover conventions? Does it make mistakes it didn't make before?</li>
+
+          <li><strong>Try the hybrid approach.</strong> No clear for tasks 1&ndash;2, then <code>/compact</code> before task 3. Compare quality and cost.</li>
+
+          <li><strong>Update your CLAUDE.md.</strong> Whatever the model keeps forgetting after <code>/clear</code> &mdash; add it to CLAUDE.md. That's the knowledge worth persisting.</li>
+        </ol>
+
+        <p>The goal isn't to find the "right" strategy. It's to develop an intuition for when accumulated context helps and when it hurts &mdash; for <em>your</em> specific workflow.</p>
+      </div>
+    </section>
+
+    <!-- S13: Closing -->
+    <section>
+      <h2>The Engine Room Is Yours</h2>
+
+      <p>Eleven chapters ago, you were a developer who used AI coding tools without thinking about what was happening behind the scenes. Now you know. You've seen the system prompt, the tool registry, the context window, the memory layers, the permission system, and the verification loops. You've looked under the hood of Claude Code, Codex, Cursor, Windsurf, ChatGPT, and Claude.ai.</p>
+
+      <p>More importantly, you know how to make it all work better. Not by waiting for the next model release &mdash; but by engineering the harness around the model you already have. You know when to constrain reasoning with plan mode, when to reset context with <code>/clear</code>, and when to let accumulated knowledge carry you forward.</p>
+
+      <p>The tools will keep evolving. New models, new features, new competitors. But the fundamentals you've learned &mdash; context curation, tool design, verification, progressive disclosure, constraint-based architecture &mdash; those are durable. They'll apply to whatever comes next.</p>
+
+      <p>Now go configure something. Your <code>CLAUDE.md</code> is waiting.</p>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-building-your-own.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">10. Building Your Own</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

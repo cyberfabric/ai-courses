@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 14: Subagents | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="13-plugins-and-marketplace.html">&larr; Prev</a>
+      <a href="15-claude-code-anywhere.html">Next &rarr;</a>
+      <a href="maps/14-subagents-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 14</span>
+    <h1>Subagents &mdash; Specialized Agents for Specialized Jobs</h1>
+    <p class="subtitle">Delegate heavy work to focused agents with their own context window, tools, and model &mdash; and stop drowning your main conversation in logs.</p>
+  </header>
+
+  <main>
+
+    <h2>The Context-Window Problem You Didn&rsquo;t Know You Had</h2>
+
+    <p>You&rsquo;re working on a feature. You ask Claude to find every place a deprecated API is called. It runs ten greps, reads thirty files, and spits a 4,000-line wall of search results into the conversation. You needed three lines of summary; you got the entire codebase. Now your main conversation is bloated with logs you&rsquo;ll never reference again, the next message costs more tokens, and Claude&rsquo;s next decision has to wade through search noise to find your actual intent.</p>
+
+    <p>Subagents fix this. A subagent runs in its own context window, with its own system prompt, its own tool allowlist, and (optionally) its own model. It does the heavy work somewhere else and returns a summary &mdash; nothing else. Your main conversation stays clean. Your costs stay sane. And because the subagent has a focused prompt, it often does the job better than the main agent would have.</p>
+
+    <p>This is the &ldquo;delegate to a focused agent&rdquo; primitive that Chapter 11 hinted at when it talked about orchestration. We&rsquo;re going to name it, build a few, and see where it fits in the broader automation stack you&rsquo;ve assembled across this course.</p>
+
+    <h2>What a Subagent Actually Is</h2>
+
+    <p>A subagent is a markdown file. That&rsquo;s it. The file lives in <code>.claude/agents/&lt;name&gt;.md</code> (project-level, shared with the team) or <code>~/.claude/agents/&lt;name&gt;.md</code> (user-level, available across all your projects). It has YAML frontmatter on top and a system prompt below. Claude Code discovers them automatically.</p>
+
+    <pre><code>---
+name: code-reviewer
+description: Use for thorough code reviews on staged changes. Invoke before opening a PR.
+tools: Read, Grep, Glob, Bash
+model: sonnet
+---
+
+You are a senior Android code reviewer. Your job is to review the staged
+changes against the team's checklist:
+
+1. Lifecycle: are coroutines scoped to viewModelScope or lifecycleScope?
+2. Threading: any blocking calls on Dispatchers.Main?
+3. Memory: any retained references that could leak across config changes?
+4. Tests: does each new public function have at least one unit test?
+5. Style: does the code match the conventions in CLAUDE.md?
+
+For each issue, output:
+- Severity (blocker / nit)
+- File and line
+- The problem in one sentence
+- The suggested fix as a code snippet
+
+End with a one-line PR verdict: ship / fix-then-ship / rework.</code></pre>
+
+    <p>Drop that into <code>.claude/agents/code-reviewer.md</code>, commit it, and every engineer on your team has a code-reviewer agent they can invoke.</p>
+
+    <h2>Frontmatter Reference</h2>
+
+    <p>Only <code>name</code> and <code>description</code> are required. The rest are optional but high-leverage:</p>
+
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Required?</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>name</code></td>
+          <td>Yes</td>
+          <td>The handle. Used in <code>@agent-name</code> mentions and in the Task tool. Must be unique within the project.</td>
+        </tr>
+        <tr>
+          <td><code>description</code></td>
+          <td>Yes</td>
+          <td>The trigger that Claude matches against your request to decide whether to delegate. Write it in &ldquo;use when&rdquo; form. Vague descriptions = vague delegation.</td>
+        </tr>
+        <tr>
+          <td><code>tools</code></td>
+          <td>No</td>
+          <td>Comma-separated allowlist of tools the subagent can use. <strong>If you omit it</strong>, the subagent inherits the parent thread&rsquo;s tools. Whitelist for tight control.</td>
+        </tr>
+        <tr>
+          <td><code>model</code></td>
+          <td>No</td>
+          <td>Model alias (<code>haiku</code>, <code>sonnet</code>, <code>opus</code>) or full model ID. <code>inherit</code> uses whatever the main conversation is using. Defaults to the parent model if omitted.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <p><strong>The description is the most important field.</strong> Claude uses it to decide when to delegate. &ldquo;Use for code reviews&rdquo; is OK; &ldquo;Use for thorough Android code reviews on staged changes &mdash; checks lifecycle, threading, memory leaks; invoke before opening a PR&rdquo; is much better. Phrases like &ldquo;use when&rdquo;, &ldquo;best for&rdquo;, &ldquo;invoke before&rdquo; pattern-match well to user intent.</p>
+    </div>
+
+    <h2>How Delegation Actually Works</h2>
+
+    <p>There are three ways a subagent gets invoked, and they shade into each other:</p>
+
+    <ol>
+      <li><strong>Auto-delegation by description.</strong> Claude reads every available subagent&rsquo;s <code>description</code> against your request and decides whether to delegate. This is why descriptions matter so much &mdash; they&rsquo;re the only signal Claude has at decision time.</li>
+      <li><strong>Explicit <code>@</code>-mention.</strong> Type <code>@code-reviewer</code> in your prompt and Claude routes that work to the named subagent unconditionally. April 2026 added typeahead for this &mdash; start typing <code>@</code> and you&rsquo;ll get a picker. Use it when you want certainty.</li>
+      <li><strong>Programmatic via the Task tool.</strong> When you orchestrate workflows from skills, slash commands, or the Claude Agent SDK, you can spawn subagents directly with the <code>Task</code> tool, passing a <code>subagent_type</code> field. This is how Chapter 11&rsquo;s pipelines compose specialists.</li>
+    </ol>
+
+    <p>Auto-delegation is the magic; <code>@</code>-mention is the safety net. If you find yourself <code>@</code>-mentioning the same agent every time, your description is too vague &mdash; tighten it and let auto-delegation do its job.</p>
+
+    <h2>The Three Built-In Subagents</h2>
+
+    <p>You&rsquo;ve been using subagents already, even before reading this chapter. Claude Code ships with three:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">🔍</div>
+      <div class="tool-info">
+        <div class="tool-name">Explore</div>
+        <div class="tool-desc">Read-only codebase search. Finds files, traces symbols, answers &ldquo;how does X work?&rdquo; questions across many files. Use when scope is uncertain or many areas of the codebase are involved. Returns a digest, not a wall of code.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">📋</div>
+      <div class="tool-info">
+        <div class="tool-name">Plan</div>
+        <div class="tool-desc">Software-architect agent. Designs implementation plans, identifies critical files, considers trade-offs. Reach for it before non-trivial implementation work &mdash; it&rsquo;s the difference between &ldquo;start coding and hope&rdquo; and &ldquo;know where you&rsquo;re going.&rdquo;</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🤖</div>
+      <div class="tool-info">
+        <div class="tool-name">general-purpose</div>
+        <div class="tool-desc">The default catch-all. Multi-step tasks, complex research, anything that doesn&rsquo;t fit Explore or Plan. When in doubt, this is the one Claude reaches for.</div>
+      </div>
+    </div>
+
+    <p>Custom subagents fill the gaps the built-ins don&rsquo;t cover &mdash; team-specific reviewers, domain-flavored auditors, repeated workflows.</p>
+
+    <h2>Writing Your First Subagent</h2>
+
+    <p>Time to build one. We&rsquo;ll create a code-reviewer that runs your team&rsquo;s checklist before every PR.</p>
+
+    <div class="recipe-box">
+      <h3>Build a code-reviewer subagent in 10 minutes</h3>
+      <ol>
+        <li><strong>Use the interactive helper.</strong> Inside Claude Code, run <code>/agents</code>. The interactive UI walks you through name, description, tools, and model. It can even draft a first system prompt from a one-line description.</li>
+        <li><strong>Or write the file directly.</strong> Create <code>.claude/agents/code-reviewer.md</code> with the frontmatter from the example above (or a variant for your stack &mdash; Compose, KMM, server-side, whatever you ship).</li>
+        <li><strong>Tighten the tools.</strong> A reviewer is read-only. Restrict to <code>Read, Grep, Glob, Bash</code> &mdash; <code>Bash</code> only because reviewers often need to run a single linter or test. Don&rsquo;t give it <code>Write</code> or <code>Edit</code>: a code-reviewer that edits files is no longer a reviewer.</li>
+        <li><strong>Pick the right model.</strong> Code review benefits from strong reasoning &mdash; <code>sonnet</code> is the safe default, <code>opus</code> when stakes are high. <code>haiku</code> is too small for nuanced review.</li>
+        <li><strong>Test it.</strong> Stage a real diff, then in your main session: <code>@code-reviewer review the staged changes</code>. The <code>@</code> mention (added April 2026) gives you direct, reliable invocation; you can also let Claude auto-delegate based on the description.</li>
+        <li><strong>Iterate the system prompt.</strong> If reviews come back too lenient, add &ldquo;assume the change must be production-ready&rdquo;. Too pedantic, add &ldquo;skip nits in test files&rdquo;. The system prompt is your knob.</li>
+        <li><strong>Commit it.</strong> <code>git add .claude/agents/code-reviewer.md</code>, push, and your whole team gets the same reviewer. Project-level agents are a team standard, not a personal toy.</li>
+      </ol>
+    </div>
+
+    <div class="automation-box">
+      <p><strong>Subagents are reusable system prompts with batteries.</strong> Every time you find yourself pasting the same &ldquo;OK now act as a careful reviewer&rdquo; preamble into Claude, that&rsquo;s a subagent waiting to be born. The frontmatter is the &ldquo;batteries&rdquo;: tool allowlist, model choice, auto-delegation. Move the prompt into <code>.claude/agents/</code> and you stop retyping it forever.</p>
+    </div>
+
+    <h2>Subagent vs. Skill vs. Plugin</h2>
+
+    <p>Three customization primitives, easy to confuse. Here&rsquo;s when each one wins:</p>
+
+    <table>
+      <thead>
+        <tr><th>Primitive</th><th>Lives in</th><th>Best for</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Skill / slash command</strong></td>
+          <td><code>.claude/commands/*.md</code> or <code>.claude/skills/&lt;name&gt;/SKILL.md</code></td>
+          <td>Reusable prompts you invoke as <code>/name</code>. Run in your main context. Great for code generation, doc writing, PR descriptions.</td>
+        </tr>
+        <tr>
+          <td><strong>Subagent</strong></td>
+          <td><code>.claude/agents/&lt;name&gt;.md</code></td>
+          <td>Tasks that produce a lot of intermediate output (reading files, running tools) you don&rsquo;t want polluting your main context. Reviewers, auditors, researchers, test runners.</td>
+        </tr>
+        <tr>
+          <td><strong>Plugin</strong></td>
+          <td>Installed via <code>/plugin install</code></td>
+          <td>The <em>distribution</em> layer. Plugins bundle skills + subagents + hooks + MCP servers into one shareable unit. See Chapter 13.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The decision rule is mostly about output volume: <strong>does the task generate a bunch of stuff you don&rsquo;t want to see in the main thread?</strong> If yes, subagent. If no, skill.</p>
+
+    <h2>Cost Optimization: Right-Sizing the Model</h2>
+
+    <p>Every subagent invocation is its own model call. The model field gives you a knob most people forget about.</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Routine, structural work &rarr; Haiku.</strong> Boilerplate generation, mechanical refactors, rote test scaffolding. Haiku is fast and cheap; on these tasks it&rsquo;s indistinguishable from Sonnet to a careful reviewer.</li>
+      <li class="checked"><strong>Reasoning, nuance, judgment &rarr; Sonnet.</strong> Code review, design feedback, ambiguity-resolving research. Sonnet is the daily driver default.</li>
+      <li class="checked"><strong>Tricky novel work &rarr; Opus.</strong> Tough debugging, architecture design, security audits where one missed detail matters. Use sparingly; the cost difference is real.</li>
+      <li class="checked"><strong><code>model: inherit</code></strong> &mdash; explicitly opt into &ldquo;use whatever the main session is using.&rdquo; Useful for orchestration agents whose job is just to coordinate; you want the orchestrator to match the user&rsquo;s expected quality bar.</li>
+    </ul>
+
+    <h2>Running Subagents in Parallel</h2>
+
+    <p>Here&rsquo;s the unlock: subagents are stateless and independent, so you can fire several at once. When Claude is investigating something with multiple unrelated angles &mdash; database schema, API surface, UI flow &mdash; it can spawn three subagents in one go and merge the summaries.</p>
+
+    <p>You don&rsquo;t do anything special; Claude handles parallel spawning when the work is genuinely independent. What you can do is design subagents that are <em>fit for parallel work</em>:</p>
+
+    <ul>
+      <li><strong>Narrow scope</strong> &mdash; one subagent shouldn&rsquo;t need to know what the others are doing.</li>
+      <li><strong>Pure-research role</strong> &mdash; if a subagent edits files, parallel runs can race.</li>
+      <li><strong>Bounded output</strong> &mdash; each summary should be small enough that merging three of them still fits comfortably in the main context.</li>
+    </ul>
+
+    <h2>Subagents in CI</h2>
+
+    <p>The same subagent file works in CI without modification. Anthropic&rsquo;s <code>claude-code-action@v1</code> picks up <code>.claude/agents/</code> from the repo automatically, which means CI can spawn the exact specialists your local Claude Code uses.</p>
+
+    <pre><code># .github/workflows/pr-checks.yml
+name: PR specialist review
+on: [pull_request]
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            @code-reviewer review the diff against main.
+            @security-auditor scan for OWASP issues.
+            @test-runner run the test suite and report failures only.</code></pre>
+
+    <p>Three specialists, three context windows, one merged review comment on the PR. The <code>code-reviewer.md</code>, <code>security-auditor.md</code>, and <code>test-runner.md</code> files in <code>.claude/agents/</code> are all the wiring you need.</p>
+
+    <h2>Project-Level vs. User-Level Subagents</h2>
+
+    <table>
+      <thead>
+        <tr><th>Scope</th><th>Path</th><th>Use For</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Project</strong></td>
+          <td><code>.claude/agents/</code> (committed to repo)</td>
+          <td>Team standards: the team&rsquo;s reviewer, the team&rsquo;s test runner, the team&rsquo;s security auditor. PR-reviewed like any other code.</td>
+        </tr>
+        <tr>
+          <td><strong>User</strong></td>
+          <td><code>~/.claude/agents/</code> (your home dir)</td>
+          <td>Personal specialists: a code-archaeology agent for legacy investigations, a CSS-untangler, anything you bring to every project.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>When both define the same name, the project-level agent wins &mdash; teams should be able to override your personal preferences with shared standards.</p>
+
+    <h2>Common Mistakes</h2>
+
+    <div class="warning-box">
+      <p><strong>Over-fragmentation.</strong> Twenty tiny subagents (one for each linter, one for each file type) means Claude has to read twenty descriptions to delegate one task. Aim for half a dozen <em>strong</em> specialists, not thirty weak ones. If two subagents have descriptions that overlap, merge them.</p>
+    </div>
+
+    <div class="warning-box">
+      <p><strong>Wrong tool allowlist.</strong> A reviewer with <code>Write</code> access becomes a fixer-upper that quietly mutates your files. A research agent without <code>WebSearch</code> can&rsquo;t do its job. Be deliberate about the <code>tools</code> field &mdash; restrict reviewers to read-only, give researchers web access, and never give a subagent more capability than its role requires.</p>
+    </div>
+
+    <div class="warning-box">
+      <p><strong>Vague descriptions.</strong> &ldquo;Use for reviews&rdquo; collides with the built-in <code>general-purpose</code> agent and your subagent never gets picked. Specific, concrete descriptions win delegation.</p>
+    </div>
+
+    <h2>An Android-Flavored Subagent Gallery</h2>
+
+    <p>Four agents I&rsquo;d drop into any Android project today:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">♻️</div>
+      <div class="tool-info">
+        <div class="tool-name">lifecycle-checker</div>
+        <div class="tool-desc">Reviews coroutine scoping, lifecycle observation, and config-change behavior. Read-only. Sonnet. Description: &ldquo;Use when reviewing changes to ViewModels, Activities, Fragments, or Composables &mdash; checks lifecycle scoping, leaks, and config-change correctness.&rdquo;</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">⚙️</div>
+      <div class="tool-info">
+        <div class="tool-name">gradle-doctor</div>
+        <div class="tool-desc">Diagnoses Gradle build failures and slow builds. Read + Bash. Sonnet. Description: &ldquo;Invoke when a Gradle build fails or takes &gt;2 minutes &mdash; analyzes scan output and suggests targeted fixes.&rdquo;</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🎨</div>
+      <div class="tool-info">
+        <div class="tool-name">compose-reviewer</div>
+        <div class="tool-desc">Reviews Compose code for recomposition correctness, key usage, state hoisting, and accessibility. Read-only. Sonnet. Description: &ldquo;Use when reviewing Composables &mdash; flags unstable parameters, missing keys, accessibility gaps.&rdquo;</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">🛡️</div>
+      <div class="tool-info">
+        <div class="tool-name">security-auditor</div>
+        <div class="tool-desc">Scans for OWASP Mobile Top 10, exported components, insecure storage, and certificate-pinning gaps. Read + Grep + Bash. Opus &mdash; security mistakes are expensive. Description: &ldquo;Run before any release build &mdash; scans the AndroidManifest, network config, and storage code for OWASP Mobile Top 10 issues.&rdquo;</div>
+      </div>
+    </div>
+
+    <h2>Where Subagents Fit in the Stack</h2>
+
+    <p>You now have every customization primitive Claude Code offers. Here&rsquo;s the picture:</p>
+
+    <div class="workflow-steps">
+      <div class="step">CLAUDE.md (rules)</div>
+      <span class="step-arrow">→</span>
+      <div class="step">Skills (one-shot prompts)</div>
+      <span class="step-arrow">→</span>
+      <div class="step">Hooks (event-driven)</div>
+      <span class="step-arrow">→</span>
+      <div class="step">Subagents (specialists)</div>
+      <span class="step-arrow">→</span>
+      <div class="step">Plugins (distribution)</div>
+    </div>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Before subagents</h4>
+        <ol>
+          <li>You ask Claude to find every API call to <code>UserService.getOldFlow()</code>.</li>
+          <li>It runs greps, reads 30 files, dumps 4,000 lines of context into the conversation.</li>
+          <li>You wanted a list of call sites. You got the codebase.</li>
+          <li>Next message costs more. Claude&rsquo;s next decision wades through search noise.</li>
+        </ol>
+        <p><strong>Main thread bloat. Cost creeps up. Quality degrades.</strong></p>
+      </div>
+      <div class="after">
+        <h4>With a research subagent</h4>
+        <ol>
+          <li>Claude delegates the search to a research subagent (parallel context).</li>
+          <li>Subagent does the heavy reading, returns a 12-line digest of call sites with file:line references.</li>
+          <li>Your main conversation gets only the 12 lines.</li>
+          <li>Token usage stays flat. Claude&rsquo;s next decision is on signal, not noise.</li>
+        </ol>
+        <p><strong>One summary in. Heavy lifting elsewhere.</strong></p>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build Three Specialists for Your Project</h3>
+      <p>Plan: 45 minutes. Build a <em>real</em> trio that solves real PRs in your real repo.</p>
+      <ol>
+        <li><strong>Pick three roles</strong> that recur in your team&rsquo;s work. Suggested defaults: <em>code-reviewer</em>, <em>test-runner</em>, <em>security-auditor</em>. Substitute domain-specific roles if those don&rsquo;t fit (database-migrator, query-perf-checker, accessibility-auditor).</li>
+        <li><strong>Run <code>/agents</code></strong> for each one. Use the interactive helper to draft each agent&rsquo;s system prompt; refine afterwards.</li>
+        <li><strong>Tighten frontmatter:</strong> for each agent, set <code>tools</code> explicitly (don&rsquo;t inherit) and pick the smallest model that still does the job well.</li>
+        <li><strong>Test on a real PR.</strong> Stage a non-trivial diff. In one prompt: &ldquo;<code>@code-reviewer review the diff. @test-runner run the suite. @security-auditor scan it.</code>&rdquo; All three run in parallel; you read three summaries.</li>
+        <li><strong>Wire into CI.</strong> Add the three to a GitHub Actions workflow using <code>anthropics/claude-code-action@v1</code> with a similar three-mention prompt. Confirm a PR triggers all three with reasonable cost.</li>
+        <li><strong>Commit project-level.</strong> Push <code>.claude/agents/*</code> to the repo. Tell two teammates. Have them run <code>@code-reviewer</code> on their next PR.</li>
+        <li><strong>Bonus:</strong> bundle the three agents into a plugin (Chapter 13) and publish via your team&rsquo;s marketplace. Now any project can install them with one command.</li>
+      </ol>
+    </div>
+
+    <div class="highlight-box">
+      <h3>The Big Idea</h3>
+      <p>A subagent is a markdown file that gives Claude a focused colleague: own context, own tools, own model. Use one when a task would otherwise drown your main thread in logs you don&rsquo;t need. Three good specialists beat thirty weak ones. The frontmatter is the lever &mdash; right-size the tools, right-size the model, write a description specific enough to win delegation.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You&rsquo;ve now built every piece of the customization stack on your laptop: rules, skills, hooks, subagents, plugins. The next chapter changes the surface itself &mdash; <strong>Claude Code on the Web and Mobile</strong>. Your automations don&rsquo;t have to live on the machine where you&rsquo;re typing. Sandboxed cloud sessions, mobile dashboards for scheduled agents, and persistent sessions across surfaces let you run the long-running work somewhere that doesn&rsquo;t depend on whether your laptop is open. Same primitives, new venues.</p>
+
+    <p class="footnote-line"><small><em>Sources verified 2026-04-26:</em> <a href="https://code.claude.com/docs/en/sub-agents">code.claude.com/docs/en/sub-agents</a>, <a href="https://claude.com/blog/subagents-in-claude-code">claude.com/blog/subagents-in-claude-code</a>, <a href="https://platform.claude.com/docs/en/agent-sdk/subagents">platform.claude.com/docs/en/agent-sdk/subagents</a>.</small></p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="13-plugins-and-marketplace.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Plugins &amp; the Marketplace</span>
+      </a>
+      <a href="15-claude-code-anywhere.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Claude Code on the Web and Mobile</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

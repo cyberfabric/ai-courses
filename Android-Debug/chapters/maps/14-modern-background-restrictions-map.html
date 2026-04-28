@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Background-Work Restrictions on Modern Android | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../14-modern-background-restrictions.html">Chapter</a>
+      <a href="13-16kb-page-size-map.html">&#8592; Prev Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 14</span>
+    <h1>Background-Work Restrictions on Modern Android</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Modern Android (15 / 16) restricts background work in two distinct ways: <strong>noisy</strong> exceptions like <code>ForegroundServiceStartNotAllowedException</code> from a <code>BOOT_COMPLETED</code> receiver, and <strong>silent</strong> failures where jobs simply don&rsquo;t fire because of standby buckets, the 6-hour FGS timeout, or Android 16 quota concurrency. The same diagnostic loop &mdash; <em>signature &rarr; AI &rarr; root cause &rarr; skill</em> &mdash; works for both, you just need to know where to look.</p>
+    </div>
+
+    <!-- ====== TIMELINE ====== -->
+    <h2>📅 The Restriction Timeline</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="12">
+        <h4>Android 12</h4>
+        <p>Background apps can no longer start FGS in most cases. <code>ForegroundServiceStartNotAllowedException</code> is born.</p>
+      </li>
+      <li class="map-timeline-item" data-step="13">
+        <h4>Android 13</h4>
+        <p>POST_NOTIFICATIONS runtime permission. Users can revoke FGS notifications &mdash; FGS still runs but is silent.</p>
+      </li>
+      <li class="map-timeline-item" data-step="14">
+        <h4>Android 14</h4>
+        <p>FGS must declare a <code>foregroundServiceType</code>. New <code>shortService</code> type. Microphone restricted from BOOT_COMPLETED.</p>
+      </li>
+      <li class="map-timeline-item" data-step="15">
+        <h4>Android 15</h4>
+        <p>BOOT_COMPLETED restrictions extended to most types. 6-hour <code>dataSync</code> &amp; <code>mediaProcessing</code> timeouts. New <code>mediaProcessing</code> type.</p>
+      </li>
+      <li class="map-timeline-item" data-step="16">
+        <h4>Android 16</h4>
+        <p>JobScheduler quotas now enforced concurrent with FGS and in active bucket. <code>setImportantWhileForeground()</code> ignored. New <code>getPendingJobReasonsHistory</code> API.</p>
+      </li>
+    </ol>
+
+    <!-- ====== THE THREE CRASH/SILENT SIGNATURES ====== -->
+    <h2>🚨 The Three Signatures You Must Know</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔌</span>
+        <div class="map-card-title">BOOT_COMPLETED FGS Crash</div>
+        <div class="map-card-desc"><code>ForegroundServiceStartNotAllowedException</code> with message <code>BG-FGS-start not allowed: BOOT_COMPLETED restricted for type &lt;type&gt;</code>. Fires the moment a user reboots after your release.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⏱️</span>
+        <div class="map-card-title">6-Hour FGS Timeout</div>
+        <div class="map-card-desc"><code>RemoteServiceException: "did not stop within its timeout"</code> if you don&rsquo;t handle <code>onTimeout()</code>. Or <code>"Time limit already exhausted for foreground service type dataSync"</code> when starting.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔇</span>
+        <div class="map-card-title">Silent Job Skip (Android 16)</div>
+        <div class="map-card-desc">No exception. Just a job that doesn&rsquo;t run. Look in <code>dumpsys jobscheduler</code> for <code>STOP_REASON_QUOTA</code>, <code>STOP_REASON_DEVICE_STATE</code>, or <code>STOP_REASON_TIMEOUT</code>.</div>
+      </div>
+    </div>
+
+    <!-- ====== BOOT_COMPLETED RESTRICTED TYPES ====== -->
+    <h2>🚪 BOOT_COMPLETED FGS Type Allowlist</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Restricted from BOOT_COMPLETED</th>
+          <th>Still allowed from BOOT_COMPLETED</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>dataSync</code></td>
+          <td><code>location</code> (GPS-related)</td>
+        </tr>
+        <tr>
+          <td><code>camera</code></td>
+          <td><code>connectedDevice</code></td>
+        </tr>
+        <tr>
+          <td><code>mediaPlayback</code></td>
+          <td><code>health</code></td>
+        </tr>
+        <tr>
+          <td><code>mediaProjection</code></td>
+          <td><code>remoteMessaging</code></td>
+        </tr>
+        <tr>
+          <td><code>phoneCall</code></td>
+          <td><code>specialUse</code></td>
+        </tr>
+        <tr>
+          <td><code>microphone</code> (since Android 14)</td>
+          <td><code>systemExempted</code></td>
+        </tr>
+        <tr>
+          <td><code>mediaProcessing</code></td>
+          <td>—</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== KEY ADB COMMANDS ====== -->
+    <h2>🛠️ The ADB Cheat Sheet</h2>
+
+    <dl class="map-terms">
+      <dt>Force BOOT_COMPLETED restriction</dt>
+      <dd><code>adb shell am compat enable FGS_BOOT_COMPLETED_RESTRICTIONS &lt;pkg&gt;</code> &mdash; reproduce the crash on any Android 15+ device without bumping <code>targetSdk</code>.</dd>
+
+      <dt>Force the 6-hour timeout</dt>
+      <dd><code>adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS &lt;pkg&gt;</code></dd>
+
+      <dt>Shrink the timeout for testing</dt>
+      <dd><code>adb shell device_config put activity_manager data_sync_fgs_timeout_duration 60000</code> &mdash; one-minute timeout instead of six hours.</dd>
+
+      <dt>Inspect job state</dt>
+      <dd><code>adb shell dumpsys jobscheduler | grep -A 30 &lt;pkg&gt;</code> &mdash; look for STOP_REASON_*.</dd>
+
+      <dt>Check standby bucket</dt>
+      <dd><code>adb shell am get-standby-bucket &lt;pkg&gt;</code> &rarr; <code>active | working_set | frequent | rare | restricted</code>.</dd>
+
+      <dt>Force standby bucket</dt>
+      <dd><code>adb shell am set-standby-bucket &lt;pkg&gt; active</code> for testing without throttling.</dd>
+
+      <dt>Capture for Battery Historian</dt>
+      <dd><code>adb bugreport &gt; bug.zip</code>, then upload to Battery Historian web UI.</dd>
+    </dl>
+
+    <!-- ====== DECISION FLOW ====== -->
+    <h2>🌳 Should This Be a Foreground Service?</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">User-initiated &amp; visible?</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Use FGS</div>
+      <span class="map-flow-arrow">|</span>
+      <div class="map-flow-step">Background or post-boot?</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Use WorkManager</div>
+      <span class="map-flow-arrow">|</span>
+      <div class="map-flow-step">Quick on-demand &lt; 3 min?</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">shortService FGS</div>
+    </div>
+
+    <!-- ====== FGS TYPES AT A GLANCE ====== -->
+    <h2>📦 FGS Type Decision Matrix</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Use case</th>
+          <th>Right tool</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Music playback</td>
+          <td><code>mediaPlayback</code> FGS &mdash; no time limit</td>
+        </tr>
+        <tr>
+          <td>Live navigation</td>
+          <td><code>location</code> FGS &mdash; exempt from many limits</td>
+        </tr>
+        <tr>
+          <td>VoIP / phone call</td>
+          <td><code>phoneCall</code> FGS &mdash; OS-integrated</td>
+        </tr>
+        <tr>
+          <td>Resume sync after reboot</td>
+          <td><strong>WorkManager</strong> &mdash; BOOT_COMPLETED can&rsquo;t legally start most FGS types</td>
+        </tr>
+        <tr>
+          <td>Periodic backup / upload</td>
+          <td><strong>WorkManager</strong> with constraints &mdash; survives the 6-hour ceiling</td>
+        </tr>
+        <tr>
+          <td>Video transcoding ≤ 6h</td>
+          <td><code>mediaProcessing</code> FGS with <code>onTimeout()</code></td>
+        </tr>
+        <tr>
+          <td>Quick user-triggered task &lt; 3 min</td>
+          <td><code>shortService</code> FGS</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== onTimeout PATTERN ====== -->
+    <h2>⏱️ The onTimeout Contract</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">⏰ OS calls onTimeout(int, int)</div>
+      <div class="map-rel-node">💾 Persist checkpoint</div>
+      <div class="map-rel-center">📞 stopSelf() within<br>a few seconds</div>
+      <div class="map-rel-node">🔄 Enqueue WorkManager resume</div>
+      <div class="map-rel-node">⚠️ Or get killed by RemoteServiceException</div>
+    </div>
+
+    <!-- ====== ANDROID 16 NEW APIs ====== -->
+    <h2>🆕 Android 16: The New Diagnostic APIs</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🔍</span>
+        <div class="map-card-title">getPendingJobReasons(jobId)</div>
+        <div class="map-card-desc">Returns an int[] of <code>PENDING_JOB_REASON_*</code> constants &mdash; finally tells you why a job hasn&rsquo;t fired right now.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📜</span>
+        <div class="map-card-title">getPendingJobReasonsHistory(jobId)</div>
+        <div class="map-card-desc">Recent constraint changes &mdash; great for &ldquo;why was it pending five minutes ago?&rdquo; investigations.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🪦</span>
+        <div class="map-card-title">setImportantWhileForeground</div>
+        <div class="map-card-desc">Silently ignored in Android 16. Drop the call &mdash; it doesn&rsquo;t throw, it just does nothing now.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚖️</span>
+        <div class="map-card-title">Concurrent FGS no longer exempt</div>
+        <div class="map-card-desc">Pre-16 loophole closed: jobs running concurrent with an FGS now adhere to their runtime quota.</div>
+      </div>
+    </div>
+
+    <!-- ====== KEY TERMS ====== -->
+    <h2>🧠 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>FGS (Foreground Service)</dt>
+      <dd>A service the user is meant to be aware of via a notification. Runs at higher priority but with stricter rules than ever in 2026.</dd>
+
+      <dt>foregroundServiceType</dt>
+      <dd>Required attribute on <code>&lt;service&gt;</code> in the manifest since Android 14. Determines which restrictions apply.</dd>
+
+      <dt>BG-FGS-start</dt>
+      <dd>The OS&rsquo;s shorthand for &ldquo;starting an FGS while the app is in background.&rdquo; Restricted since Android 12, much more restricted in 15+.</dd>
+
+      <dt>App Standby Bucket</dt>
+      <dd>active &rarr; working_set &rarr; frequent &rarr; rare &rarr; restricted. Lower buckets get less background runtime.</dd>
+
+      <dt>STOP_REASON_QUOTA</dt>
+      <dd>JobScheduler stop reason indicating the app exceeded its job runtime quota for the bucket.</dd>
+
+      <dt>onTimeout(int, int)</dt>
+      <dd>Service callback (Android 15+) signaling the FGS&rsquo;s 6-hour budget is up. You have a few seconds to call <code>stopSelf()</code>.</dd>
+
+      <dt>WorkManager</dt>
+      <dd>The 2026 default for non-user-visible background work. Handles retries, constraints, batching, and survives every restriction in this chapter.</dd>
+    </dl>
+
+    <!-- ====== BUILT SKILL ====== -->
+    <h2>🧰 Skill Built in This Chapter</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">🩺</span>
+        <div class="map-card-title">/diagnose-background-restriction</div>
+        <div class="map-card-desc">Takes a logcat excerpt + <code>dumpsys jobscheduler</code> output. Identifies which restriction fired (BOOT_COMPLETED FGS, 6-hour timeout, missing FGS type, generic background-FGS-start, Android 16 job quota, standby bucket). Names the offending component, recommends the fix, and gives the exact <code>adb</code> command to reproduce.</div>
+      </div>
+    </div>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <div class="map-quiz">
+      <h3>🧪 Quick Quiz</h3>
+
+      <details>
+        <summary>Your release added <code>targetSdk=35</code>. Three weeks later, support tickets say &ldquo;sync stopped after reboot.&rdquo; What restriction probably fired?</summary>
+        <p class="quiz-answer">BOOT_COMPLETED FGS restriction. Most types (<code>dataSync</code>, <code>camera</code>, <code>mediaPlayback</code>, <code>mediaProjection</code>, <code>phoneCall</code>, <code>microphone</code>, <code>mediaProcessing</code>) can no longer be started from a <code>BOOT_COMPLETED</code> receiver on Android 15+. Migrate to WorkManager.</p>
+      </details>
+
+      <details>
+        <summary>You implement <code>Service.onTimeout()</code> but get killed by <code>RemoteServiceException</code> anyway. What went wrong?</summary>
+        <p class="quiz-answer">You took longer than a few seconds to call <code>stopSelf()</code>. The OS gives you only a brief grace period after <code>onTimeout()</code> &mdash; persist the bare-minimum checkpoint and stop. Resume work via WorkManager later.</p>
+      </details>
+
+      <details>
+        <summary>How do you reproduce the 6-hour timeout in test without waiting six hours?</summary>
+        <p class="quiz-answer"><code>adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS &lt;pkg&gt;</code> to force the behavior, then <code>adb shell device_config put activity_manager data_sync_fgs_timeout_duration 60000</code> to drop the window to one minute.</p>
+      </details>
+
+      <details>
+        <summary>A job runs fine on Android 15 but stops mid-execution and re-schedules on Android 16. The app has an FGS running. What changed?</summary>
+        <p class="quiz-answer">Android 16 closed the &ldquo;FGS exempts your jobs from their quota&rdquo; loophole. Jobs concurrent with an FGS now adhere to their runtime quota. Use <code>JobScheduler#getPendingJobReasonsHistory(jobId)</code> to confirm.</p>
+      </details>
+
+      <details>
+        <summary>Where do you look to find out why a job is silently pending?</summary>
+        <p class="quiz-answer">Three places: <code>adb shell dumpsys jobscheduler | grep -A 30 &lt;pkg&gt;</code> (look for STOP_REASON_*), <code>adb shell am get-standby-bucket &lt;pkg&gt;</code> (you might be in <code>rare</code> or <code>restricted</code>), and Battery Historian on a recent bug report (visualize the FGS and JobScheduler swimlanes).</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">When a release bumps <code>targetSdk</code>, ask first: which OS-version restrictions just turned on for me? Crashes weeks later usually trace back to that single flip.</li>
+        <li class="map-summary-item">BOOT_COMPLETED can no longer legally start most FGS types on Android 15+. The fix is almost always WorkManager, not a different FGS type.</li>
+        <li class="map-summary-item">The 6-hour <code>dataSync</code> / <code>mediaProcessing</code> ceiling is real. Implement <code>Service.onTimeout(int, int)</code>, persist a checkpoint within seconds, call <code>stopSelf()</code>.</li>
+        <li class="map-summary-item">Android 16 closed the &ldquo;jobs are exempt while an FGS is running&rdquo; loophole. <code>setImportantWhileForeground()</code> is silently ignored. Use <code>getPendingJobReasonsHistory()</code> to debug.</li>
+        <li class="map-summary-item">For silent failures, the diagnostic stack is: reproduce on a 15/16 device &rarr; <code>dumpsys jobscheduler</code> &rarr; Battery Historian &rarr; standby-bucket sanity check.</li>
+        <li class="map-summary-item">You can force every restriction on without bumping <code>targetSdk</code> via <code>adb shell am compat enable FGS_BOOT_COMPLETED_RESTRICTIONS</code> and <code>FGS_INTRODUCE_TIME_LIMITS</code>. No excuse to wait for production.</li>
+        <li class="map-summary-item">Add <code>/diagnose-background-restriction</code> to your team&rsquo;s commands. The taxonomy is finite; the skill makes triage minutes instead of days.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="13-16kb-page-size-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">Debugging 16 KB Page Size Compatibility</span>
+      </a>
+      <a href="../14-modern-background-restrictions.html" class="next">
+        <span class="nav-direction">Back to Chapter</span>
+        <span class="nav-chapter">Background-Work Restrictions on Modern Android</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

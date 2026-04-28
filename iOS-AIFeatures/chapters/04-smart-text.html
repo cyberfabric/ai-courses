@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Smart Text with Foundation Models | Building AI-Powered Features for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-ai-ux-trust.html">&larr; Prev</a>
+      <a href="05-chat-conversational.html">Next &rarr;</a>
+      <a href="maps/04-smart-text-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Smart Text with Foundation Models</h1>
+    <p class="subtitle">@Generable structured output, Writing Tools, classification, summarization &mdash; turning unstructured text into typed Swift data</p>
+  </header>
+
+  <main>
+
+    <h2>Foundation Models 101</h2>
+
+    <p>In Chapter 1, we showed you three lines of code to generate text. In Chapter 3, we streamed it to the screen with a typing animation. Now it&rsquo;s time to go deep. This chapter is where you stop playing with the framework and start building real features.</p>
+
+    <p>The Foundation Models framework gives your app access to Apple&rsquo;s ~3B parameter on-device language model. It&rsquo;s the same model powering Writing Tools, Mail suggestions, and Safari summaries. Three key objects to know:</p>
+
+    <ul>
+      <li><code>LanguageModelSession</code> &mdash; Your conversation with the model. Create one, send prompts, get responses. It&rsquo;s stateful &mdash; it remembers previous turns.</li>
+      <li><code>@Generable</code> &mdash; A macro you put on Swift structs and enums. The model fills your types instead of returning raw text. This is the killer feature.</li>
+      <li><code>@Guide</code> &mdash; Constraints on properties. Tell the model a rating must be 1&ndash;5, or a category must come from your enum. The model literally cannot produce invalid values.</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>Why @Generable Changes Everything</h3>
+      <p>Without @Generable, you get a string back from the model and parse it yourself. With @Generable, you define a Swift struct, and the model fills it &mdash; guaranteed to match your schema through constrained decoding. No JSON parsing. No regex. No &ldquo;the model returned the wrong format.&rdquo; The compiler and the model work together.</p>
+    </div>
+
+    <h2>The @Generable Macro</h2>
+
+    <p>This is the feature that makes Foundation Models genuinely different from every other AI API. You define a Swift type, the model fills it. Let&rsquo;s start with a practical example:</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Extract Meeting Details from Text</h3>
+      <p><strong>Goal:</strong> Turn &ldquo;Let&rsquo;s meet with Anna on Thursday at 2pm in the boardroom&rdquo; into a typed Swift struct.</p>
+      <p><strong>Step 1:</strong> Define the output type:</p>
+<pre><code>import FoundationModels
+
+@Generable
+struct MeetingDetails {
+    @Guide(description: "The people mentioned in the meeting")
+    var attendees: [String]
+
+    @Guide(description: "The date and time of the meeting")
+    var dateTime: String
+
+    @Guide(description: "The location of the meeting")
+    var location: String
+
+    @Guide(description: "Brief summary of the meeting purpose")
+    var purpose: String
+}</code></pre>
+      <p><strong>Step 2:</strong> Ask the model to fill it:</p>
+<pre><code>let session = LanguageModelSession()
+let text = "Let's meet with Anna on Thursday at 2pm in the boardroom to discuss Q3 goals"
+let result = try await session.respond(
+    to: "Extract meeting details from: \(text)",
+    generating: MeetingDetails.self
+)
+// result.attendees → ["Anna"]
+// result.dateTime → "Thursday at 2pm"
+// result.location → "the boardroom"
+// result.purpose → "Discuss Q3 goals"</code></pre>
+      <p>That&rsquo;s it. No JSON parsing. No string manipulation. The model returns a <code>MeetingDetails</code> instance with typed properties. If a property can&rsquo;t be found, the model still returns a valid struct (with empty strings or arrays) &mdash; it never crashes.</p>
+    </div>
+
+    <h2>@Guide Constraints: The Safety Net</h2>
+
+    <p>What if you need the model to choose from a fixed set of values? That&rsquo;s where <code>@Guide</code> shines. Combined with enums, it guarantees the model can only produce values you&rsquo;ve defined:</p>
+
+<pre><code>@Generable
+enum Priority: String {
+    case high, medium, low
+}
+
+@Generable
+enum ContentCategory: String {
+    case work, personal, health, finance, travel
+}
+
+@Generable
+struct NoteAnalysis {
+    @Guide(description: "Priority based on urgency and importance")
+    var priority: Priority
+
+    @Guide(description: "The best category for this note")
+    var category: ContentCategory
+
+    @Guide(description: "A one-sentence summary")
+    var summary: String
+}</code></pre>
+
+    <p>When you generate a <code>NoteAnalysis</code>, the <code>priority</code> will always be <code>.high</code>, <code>.medium</code>, or <code>.low</code>. Never <code>"urgent"</code>, never <code>"kinda important"</code>, never garbage. This is <strong>constrained decoding</strong> &mdash; the model&rsquo;s token generation is restricted at inference time to only produce valid enum cases.</p>
+
+    <div class="tip-box">
+      <p><strong>Use enums aggressively.</strong> Every time you&rsquo;d write a <code>String</code> property and hope the model returns something reasonable, ask yourself: can I make this an enum? Categories, priorities, sentiments, ratings, statuses &mdash; all safer as enums.</p>
+    </div>
+
+    <h2>Building a &ldquo;TL;DR&rdquo; Feature</h2>
+
+    <p>Let&rsquo;s build a complete feature end-to-end: the user reads a long article, taps &ldquo;Summarize,&rdquo; and sees a streaming AI summary with an &ldquo;AI Summary&rdquo; badge.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Marcus is reading a 2,000-word article about climate policy in his news app. He&rsquo;s interested but short on time. He taps the &ldquo;TL;DR&rdquo; button at the top. A gentle animation starts: &ldquo;Summarizing&hellip;&rdquo; Then, sentence by sentence, a 3-line summary streams onto the screen. Below it, a small &ldquo;AI Summary&rdquo; badge and an &ldquo;Expand&rdquo; button to see the full article. All of this happened on his device, for free, in under 2 seconds.</p>
+    </div>
+
+    <div class="product-pattern">
+      <h3>The TL;DR Pattern</h3>
+      <ol>
+        <li><strong>Trigger</strong> &mdash; A clear button or gesture (&ldquo;Summarize,&rdquo; &ldquo;TL;DR,&rdquo; or an icon). Never auto-summarize without the user asking.</li>
+        <li><strong>Loading</strong> &mdash; Contextual text: &ldquo;Summarizing article&hellip;&rdquo; (not &ldquo;Loading&hellip;&rdquo;).</li>
+        <li><strong>Streaming</strong> &mdash; Show the summary building word-by-word. Users trust text they watch being written.</li>
+        <li><strong>Result</strong> &mdash; Summary with an &ldquo;AI Summary&rdquo; badge, plus &ldquo;Expand&rdquo; to see the original. Optionally, thumbs up/down for feedback.</li>
+        <li><strong>Cache</strong> &mdash; Store the summary locally. If the user returns, show the cached version instantly.</li>
+      </ol>
+      <p>This pattern works for articles, emails, notes, chat histories, documents &mdash; anything with text the user might want shorter.</p>
+    </div>
+
+    <h2>Writing Tools Integration</h2>
+
+    <p>Here&rsquo;s a gift from Apple: if your app uses standard text views (<code>TextEditor</code>, <code>UITextView</code>, <code>NSTextView</code>), you get Writing Tools for <strong>free</strong>. Users can select text, tap &ldquo;Writing Tools,&rdquo; and access Rewrite, Proofread, and Summarize &mdash; all powered by Apple Intelligence, with zero code from you.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">0</span>
+        <span class="stat-label">Lines of code for basic Writing Tools integration</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3</span>
+        <span class="stat-label">Built-in actions: Rewrite, Proofread, Summarize</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&infin;</span>
+        <span class="stat-label">Custom actions you can add via App Intents</span>
+      </div>
+    </div>
+
+    <p>Want to go further? You can add <strong>custom Writing Tools actions</strong> specific to your app using App Intents. A legal app could add &ldquo;Simplify Legal Language.&rdquo; A marketing tool could add &ldquo;Make It More Persuasive.&rdquo; These show up alongside Apple&rsquo;s built-in options in the Writing Tools menu.</p>
+
+    <div class="tip-box">
+      <p><strong>Free features are the best features.</strong> Before building a custom text AI feature, check if Writing Tools already does what you need. Summarization, proofreading, and tone adjustments are built in. Don&rsquo;t reinvent what Apple gives you for free &mdash; extend it.</p>
+    </div>
+
+    <h2>Text Classification In-App</h2>
+
+    <p>Classification is the sweet spot for @Generable: the model reads text and produces a category. It&rsquo;s reliable, fast, and the constrained decoding means you never get unexpected values.</p>
+
+<pre><code>@Generable
+enum Sentiment: String {
+    case positive, neutral, negative
+}
+
+@Generable
+struct FeedbackAnalysis {
+    @Guide(description: "Overall sentiment of the feedback")
+    var sentiment: Sentiment
+
+    @Guide(description: "Main topics mentioned, up to 3")
+    var topics: [String]
+
+    @Guide(description: "Is this feedback actionable by the team?")
+    var isActionable: Bool
+}
+
+// Usage
+let session = LanguageModelSession()
+let analysis = try await session.respond(
+    to: "Analyze this customer feedback: \(feedbackText)",
+    generating: FeedbackAnalysis.self
+)
+
+switch analysis.sentiment {
+case .positive: showConfetti()
+case .neutral: logForReview()
+case .negative: alertSupportTeam()
+}</code></pre>
+
+    <p>Because <code>Sentiment</code> is a <code>@Generable</code> enum, the model can only return <code>.positive</code>, <code>.neutral</code>, or <code>.negative</code>. Your <code>switch</code> is exhaustive. No <code>default</code> case needed. No &ldquo;what if the model returns something weird?&rdquo;</p>
+
+    <h2>Prompt Engineering for a ~3B Model</h2>
+
+    <p>The on-device model is capable, but it&rsquo;s not GPT-5. It&rsquo;s a ~3 billion parameter model optimized for speed and efficiency. Writing good prompts for it requires a different approach than prompting a cloud model:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Good: Specific, Direct</p>
+        <p class="prompt-text">Summarize this article in exactly 3 bullet points. Each bullet should be one sentence. Focus on the main argument, the key evidence, and the conclusion.</p>
+        <p class="prompt-explanation">Clear structure, specific length, focused scope. The model knows exactly what you want.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Bad: Vague, Overloaded</p>
+        <p class="prompt-text">Read this article carefully. Consider the author's perspective, the historical context, the counterarguments, and the implications. Then provide a comprehensive analysis with recommendations.</p>
+        <p class="prompt-explanation">Too many sub-tasks for a ~3B model. It will produce a shallow attempt at all of them instead of a strong answer to one.</p>
+      </div>
+    </div>
+
+    <h3>Tips for the On-Device Model</h3>
+    <ul>
+      <li><strong>Be specific about output format</strong> &mdash; &ldquo;in 3 bullet points&rdquo; or &ldquo;in one sentence&rdquo; works better than &ldquo;briefly&rdquo;</li>
+      <li><strong>One task per prompt</strong> &mdash; Classify OR summarize OR extract. Don&rsquo;t ask for all three in one prompt (use @Generable for that instead)</li>
+      <li><strong>Use instructions for persona</strong> &mdash; Set session instructions for consistent behavior: <code>LanguageModelSession(instructions: "You are a helpful recipe assistant. Answer cooking questions only.")</code></li>
+      <li><strong>Prefer @Generable over free text</strong> &mdash; When you know the output structure, always use @Generable. It&rsquo;s faster and more reliable than parsing free text</li>
+      <li><strong>Give examples in-prompt</strong> &mdash; &ldquo;Classify the tone. Examples: &lsquo;I love it!&rsquo; &rarr; positive, &lsquo;It broke on day one&rsquo; &rarr; negative&rdquo; &mdash; in-context examples dramatically improve accuracy on the ~3B model</li>
+      <li><strong>Use #Playground in Xcode</strong> &mdash; Add <code>#Playground</code> to any code file and iterate on prompts with live preview in the canvas, just like SwiftUI previews</li>
+    </ul>
+
+    <h3>Session Instructions vs Prompts</h3>
+
+    <p>Foundation Models separates <strong>instructions</strong> from <strong>prompts</strong>. Instructions define how the model behaves across all interactions in a session. Prompts are individual requests. Think of instructions as the model&rsquo;s job description and prompts as individual tasks:</p>
+
+<pre><code>// Instructions set the persona (stays for the whole session)
+let session = LanguageModelSession(
+    instructions: """
+    You are a nutrition assistant for a meal planning app.
+    Only answer questions about food, nutrition, and recipes.
+    Keep answers under 3 sentences.
+    """
+)
+
+// Prompts are individual tasks
+let response1 = try await session.respond(to: "Is avocado a fruit?")
+let response2 = try await session.respond(to: "How much protein in chicken?")</code></pre>
+
+    <p>The instructions persist across both prompts &mdash; the model stays in character as a nutrition assistant for the entire session. This is far more reliable than repeating the persona in every prompt.</p>
+
+    <h2>Streaming @Generable Results</h2>
+
+    <p>You can stream structured output too &mdash; not just free text. When generating a @Generable struct, partial results arrive as properties get filled:</p>
+
+<pre><code>let stream = session.streamResponse(
+    to: "Analyze this note: \(noteText)",
+    generating: NoteInsights.self
+)
+for try await partial in stream {
+    // partial.summaryBullets may be populated before priority
+    updateUI(with: partial)
+}</code></pre>
+
+    <p>This lets you show the summary bullets appearing one by one while the priority badge fills in a moment later &mdash; a polished, progressive reveal instead of waiting for the entire struct.</p>
+
+    <h2>Content Quality Control</h2>
+
+    <p>The model will sometimes produce weak results. That&rsquo;s not a bug &mdash; it&rsquo;s the nature of a ~3B model working on-device. Plan for it:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Generate</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Validate</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Show or Retry</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Fallback to Cloud</div>
+    </div>
+
+    <ul>
+      <li><strong>Regenerate button</strong> &mdash; Let users tap &ldquo;Try Again&rdquo; to get a different output. Sometimes the second attempt is better.</li>
+      <li><strong>Prompt fallback</strong> &mdash; If the first prompt produces weak results, try a simpler version. &ldquo;Summarize in one sentence&rdquo; is easier for the model than &ldquo;Provide a comprehensive summary.&rdquo;</li>
+      <li><strong>Cloud escalation</strong> &mdash; For complex tasks, detect low quality and offer to process via a cloud API: &ldquo;Want a more detailed analysis? This requires an internet connection.&rdquo;</li>
+    </ul>
+
+    <div class="warning-box">
+      <p><strong>Don&rsquo;t silently escalate to cloud.</strong> If you switch from on-device to cloud processing, tell the user. Their data is leaving the device &mdash; that&rsquo;s a privacy decision they should make, not you.</p>
+    </div>
+
+    <h2>Caching Generated Content</h2>
+
+    <p>AI inference is free but not instant. If a user summarized an article yesterday, show the cached summary today instead of regenerating it:</p>
+
+<pre><code>struct CachedSummary {
+    let sourceHash: String  // Hash of the original text
+    let summary: String
+    let generatedAt: Date
+}
+
+func getSummary(for text: String) async throws -&gt; String {
+    let hash = text.hashValue.description
+
+    // Check cache first
+    if let cached = SummaryCache.shared.get(hash: hash) {
+        return cached.summary  // Instant!
+    }
+
+    // Generate fresh
+    let session = LanguageModelSession()
+    let response = try await session.respond(
+        to: "Summarize in 3 bullet points: \(text)"
+    )
+
+    // Cache for next time
+    SummaryCache.shared.store(
+        CachedSummary(sourceHash: hash, summary: response.content, generatedAt: .now)
+    )
+    return response.content
+}</code></pre>
+
+    <p>Invalidate the cache when the source text changes. A simple hash comparison works: if the hash is different, regenerate. You can store cached results in SwiftData for persistence across app launches, or use a simple in-memory dictionary for session-only caching.</p>
+
+    <div class="tip-box">
+      <p><strong>Cache aggressively for text features.</strong> AI summaries and classifications rarely change for the same input text. Caching turns a 1-second generation into a 0ms lookup. Users notice &mdash; returning to a previously summarized article and seeing the result instantly feels premium.</p>
+    </div>
+
+    <h2>Real-World Examples</h2>
+
+    <p>Third-party developers are already shipping production features with Foundation Models:</p>
+
+    <h3>Signeasy &mdash; Contract Insights</h3>
+    <p>Users can ask questions about their contracts and get plain-language answers. The app uses Foundation Models to extract key clauses, dates, and obligations &mdash; all on-device. Legal documents are deeply sensitive, so on-device processing is essential for user trust. The AI highlights what matters most: &ldquo;This contract auto-renews on March 15&rdquo; is far more useful than making the user read 20 pages of legalese.</p>
+
+    <h3>Zoho Notebooks &mdash; Smart Summaries</h3>
+    <p>When users accumulate dozens of notes, the app summarizes each one so they can scan their library without opening every note. A one-line summary per note, generated on-device, cached locally. This turns a chaotic note collection into a scannable library &mdash; a feature that wouldn&rsquo;t be economically viable if each summary cost money via a cloud API, but is trivially free with Foundation Models.</p>
+
+    <h3>Capture &mdash; Smart Categorization</h3>
+    <p>As users type a note or task, the app suggests categories in real time. &ldquo;Buy groceries&rdquo; gets tagged as &ldquo;Shopping.&rdquo; &ldquo;Call Dr. Kim&rdquo; gets tagged as &ldquo;Health.&rdquo; Foundation Models with @Generable enum output makes this reliable and instant. The categorization is a perfect fit for constrained decoding &mdash; the model can only pick from the user&rsquo;s existing categories, so it never invents a random new one.</p>
+
+    <div class="tip-box">
+      <p><strong>Notice the pattern:</strong> all three apps use AI to turn unstructured text into structured data. That&rsquo;s the sweet spot for Foundation Models + @Generable. If your feature is about understanding, extracting, or classifying text, you&rsquo;re in the right place.</p>
+    </div>
+
+    <h2>Your Turn</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Build a &ldquo;Smart Notes&rdquo; Feature</h3>
+      <p>Build a feature where the user writes a note, taps &ldquo;Analyze,&rdquo; and sees structured AI insights. Use @Generable for the entire output:</p>
+      <ol>
+        <li><strong>Define the output struct:</strong>
+<pre><code>@Generable
+struct NoteInsights {
+    @Guide(description: "Three bullet-point summary of the note")
+    var summaryBullets: [String]
+
+    @Guide(description: "People, dates, and places mentioned")
+    var entities: [String]
+
+    @Guide(description: "Priority: high, medium, or low")
+    var priority: Priority  // Use your @Generable enum
+}</code></pre>
+        </li>
+        <li><strong>Build the SwiftUI view:</strong> A <code>TextEditor</code> for the note, an &ldquo;Analyze&rdquo; button, and a results section showing the summary, entities, and priority badge.</li>
+        <li><strong>Add streaming:</strong> Show the analysis building in real time, not all at once.</li>
+        <li><strong>Add caching:</strong> If the user taps &ldquo;Analyze&rdquo; again without changing the note, show the cached result instantly.</li>
+        <li><strong>Add error handling:</strong> What if Foundation Models isn&rsquo;t available on this device? Show a graceful fallback message.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add Writing Tools support to the <code>TextEditor</code> so users can also use Apple&rsquo;s built-in Rewrite/Proofread on their notes &mdash; for free.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You can now turn unstructured text into typed Swift data with @Generable, classify content with constrained enums, build streaming summaries, and integrate Writing Tools. That covers single-turn text features &mdash; the user sends one prompt, gets one result.</p>
+
+    <p>But what about <em>conversations</em>? What if your AI feature needs to maintain context across multiple exchanges? That&rsquo;s <strong>Chapter 5: In-App Chat &amp; Conversational AI</strong> &mdash; building a SwiftUI chat UI, multi-turn sessions with <code>LanguageModelSession</code>, tool calling, and making your chatbot actually useful instead of just impressive.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="03-ai-ux-trust.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">Designing AI UX That iOS Users Trust</span>
+        </a>
+        <a href="05-chat-conversational.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">In-App Chat &amp; Conversational AI</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

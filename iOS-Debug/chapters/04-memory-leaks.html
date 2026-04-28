@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Memory Leak Detection with AI | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-hangs-responsiveness.html">&larr; Prev</a>
+      <a href="05-swiftui-rendering.html">Next &rarr;</a>
+      <a href="maps/04-memory-leaks-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Memory Leak Detection with AI</h1>
+    <p class="subtitle">Combine Memory Graph Debugger and Instruments with AI to find and fix retain cycles</p>
+  </header>
+
+  <main>
+
+    <h2>The Slow Kill: Why Memory Leaks Matter on iOS</h2>
+
+    <p>A crash is a bullet. A memory leak is poison. Your app doesn't die immediately &mdash; it gets slower, heavier, and hungrier until iOS kills it with a jetsam termination. The user never sees a crash dialog. The app just vanishes from the background, and next time they open it, all their state is gone.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">OOM</div>
+        <div class="stat-label">Out-of-memory jetsam &mdash; iOS silently kills your app when memory pressure is high</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">EXC_RESOURCE</div>
+        <div class="stat-label">Exception when your app exceeds its memory limit &mdash; appears in crash reports</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">~50MB</div>
+        <div class="stat-label">Memory footprint where iOS starts watching your app closely for pressure</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">#1</div>
+        <div class="stat-label">Retain cycles are the most common cause of memory leaks in Swift apps</div>
+      </div>
+    </div>
+
+    <p>Unlike languages with garbage collection, Swift uses <strong>Automatic Reference Counting (ARC)</strong>. ARC is deterministic and efficient, but it can't break retain cycles. Two objects pointing to each other with strong references will live forever &mdash; leaking memory until jetsam kicks in.</p>
+
+    <h2>Memory Graph Debugger: Your X-Ray Machine</h2>
+
+    <p>Xcode's Memory Graph Debugger is the single most powerful tool for finding retain cycles. It captures a snapshot of every object in your app's heap and shows you the reference graph visually.</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Run your app</strong>
+          <p>Navigate to the screen you suspect leaks</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Capture</strong>
+          <p>Debug Navigator &rarr; click the memory graph icon (three circles)</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Find leaks</strong>
+          <p>Purple <code>!</code> markers = auto-detected leaks. Filter by your module name.</p>
+        </div>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <strong>Read the graph</strong>
+          <p>Click an object &rarr; see who retains it. Follow the arrows to find the cycle.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <h4>The Navigation Test for Leaks</h4>
+      <p>The simplest leak test: push a view controller, pop it, then capture the memory graph. If the view controller (or its view model) still appears in the heap, you have a leak. The object should be deallocated when you pop &mdash; if it isn't, something is retaining it.</p>
+      <p>For SwiftUI: navigate to a detail view, go back, and check if the detail view's <code>@Observable</code> model is still alive.</p>
+    </div>
+
+    <h2>Feeding Memory Graph Data to AI</h2>
+
+    <p>The Memory Graph Debugger shows you visual arrows, but the real power comes from extracting the retention chain as text and feeding it to AI. Here's how:</p>
+
+    <p>In the Memory Graph Debugger, select a leaked object. The right panel shows the <strong>backtrace</strong> (where it was allocated) and the <strong>references</strong> (who retains it). Copy this text output:</p>
+
+    <div class="debug-trace">
+      <h4>Memory Graph Debugger &mdash; Retain Cycle Detected</h4>
+<pre>Leaked Object: ProfileViewModel (0x600003a04b80)
+  Allocated at: ProfileViewModel.init() — ProfileViewModel.swift:12
+  Size: 256 bytes
+
+Retention Chain:
+  ROOT → ProfileViewController (strong)
+    → ProfileViewController.viewModel (strong)
+      → ProfileViewModel (strong)
+        → ProfileViewModel.onUpdate (strong)  // closure
+          → ProfileViewController (strong)    // captured self!
+
+Cycle: ProfileViewController ↔ ProfileViewModel.onUpdate closure
+
+Additional leaked objects held by ProfileViewModel:
+  - UserProfileData (128 bytes)
+  - [UIImage] (3 items, 4.2 MB total)</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>Leak type:</strong> Classic closure-based retain cycle. <code>ProfileViewModel</code> holds a closure (<code>onUpdate</code>) that captures <code>ProfileViewController</code> strongly, while the VC holds the VM strongly.</p>
+      <p><strong>Total leaked memory:</strong> ~4.6 MB (mostly the UIImage array held by the leaked VM). Each time the user visits the profile screen, another 4.6 MB leaks permanently.</p>
+      <p><strong>Fix:</strong> Add <code>[weak self]</code> to the <code>onUpdate</code> closure's capture list in <code>ProfileViewController</code>, where the closure is assigned.</p>
+      <p><strong>Secondary fix:</strong> Consider whether <code>onUpdate</code> should be a delegate pattern (with <code>weak var delegate</code>) instead of a closure, which would prevent this class of leak entirely.</p>
+    </div>
+
+    <p>The retention chain is structured data &mdash; AI reads it like a linked list and immediately identifies where the cycle breaks.</p>
+
+    <h2>Instruments: Leaks and Allocations</h2>
+
+    <p>The Memory Graph Debugger gives you a snapshot. Instruments gives you a <em>timeline</em>. Use both:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Tool</th>
+            <th>What It Shows</th>
+            <th>When to Use</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Memory Graph Debugger</td>
+            <td>Object graph with reference arrows</td>
+            <td>Pinpointing <em>which</em> objects form a cycle</td>
+          </tr>
+          <tr>
+            <td>Instruments &mdash; Leaks</td>
+            <td>Automatic leak detection over time</td>
+            <td>Finding leaks during a usage session</td>
+          </tr>
+          <tr>
+            <td>Instruments &mdash; Allocations</td>
+            <td>Heap growth, persistent vs transient objects</td>
+            <td>Detecting memory that grows and never shrinks</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>In Instruments Allocations, use <strong>Generation Analysis</strong> (Mark Generation button): mark before a user action, mark after, and see what persisted. If objects survive that should have been freed, you've found a leak.</p>
+
+    <h2>Building an <code>/analyze-leak</code> Skill</h2>
+
+    <div class="fix-pattern">
+      <h4>The <code>/analyze-leak</code> Skill</h4>
+      <p>Create <code>.claude/commands/analyze-leak.md</code>:</p>
+<pre>Analyze this iOS memory leak data from Xcode's Memory Graph
+Debugger or Instruments.
+
+## Analysis Steps:
+1. Parse the retention chain or object graph
+2. Identify the retain cycle — which objects point to each
+   other with strong references?
+3. Find the closure or delegate that creates the cycle
+4. Read the source file where the cycle originates
+5. Determine the correct fix: [weak self], weak delegate,
+   or architectural change
+6. Check for collateral damage — other objects held alive
+   by the leaked object (images, data, caches)
+
+## Output Format:
+- **Leaked object:** [class name + allocation site]
+- **Cycle:** [A → B → C → A simplified chain]
+- **Leaked memory:** [estimated size including held objects]
+- **Root cause:** [which reference should be weak]
+- **Fix:** [specific code change with capture list or delegate]
+- **Alternative:** [architectural change to prevent this class]
+- **Collateral:** [other objects leaked as a consequence]
+
+## Input:
+$ARGUMENTS</pre>
+    </div>
+
+    <h2>The Classic iOS Memory Leaks</h2>
+
+    <p>AI recognizes these patterns instantly because they appear in virtually every iOS codebase:</p>
+
+    <div class="root-cause">
+      <h4>The 6 Classic Retain Cycle Patterns</h4>
+      <p><strong>1. Closure capturing <code>self</code>:</strong> The most common. A closure stored as a property captures <code>self</code> strongly, creating a cycle. Fix: <code>[weak self]</code> or <code>[unowned self]</code> in the capture list.</p>
+      <p><strong>2. Strong delegate:</strong> <code>var delegate: ProfileDelegate</code> instead of <code>weak var delegate: ProfileDelegate?</code>. The delegator and delegate retain each other. Fix: always declare delegates as <code>weak</code>.</p>
+      <p><strong>3. <code>Timer</code> retain cycle:</strong> <code>Timer.scheduledTimer(withTimeInterval:repeats:block:)</code> retains the closure, and if the closure captures <code>self</code>, the timer keeps the object alive. The timer must be invalidated to break the cycle.</p>
+      <p><strong>4. <code>NotificationCenter</code> observer leaks:</strong> Pre-iOS 9, observers weren't removed automatically. Even post-iOS 9, block-based observers with <code>addObserver(forName:object:queue:using:)</code> return a token that retains the closure. Store and remove it in <code>deinit</code>.</p>
+      <p><strong>5. <code>CADisplayLink</code> strong target:</strong> <code>CADisplayLink(target:selector:)</code> strongly retains the target. If the target owns the display link, you have a cycle. Fix: use a weak proxy object or <code>preferredFrameRateRange</code> with a closure-based approach.</p>
+      <p><strong>6. Combine <code>sink</code> + <code>store(in:)</code>:</strong> <code>publisher.sink { self.update($0) }.store(in: &amp;cancellables)</code> &mdash; the <code>sink</code> closure captures <code>self</code> strongly, and <code>cancellables</code> is owned by <code>self</code>. Fix: <code>[weak self]</code> in the <code>sink</code> closure.</p>
+    </div>
+
+    <h2><code>weak</code> vs <code>unowned</code>: When Each Is Correct</h2>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th><code>weak</code></th>
+          <th><code>unowned</code></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Reference becomes</td>
+          <td><code>nil</code> when object deallocates</td>
+          <td>Dangling pointer (crash on access!)</td>
+        </tr>
+        <tr>
+          <td>Type</td>
+          <td>Must be optional (<code>T?</code>)</td>
+          <td>Non-optional (<code>T</code>)</td>
+        </tr>
+        <tr>
+          <td>Use when</td>
+          <td>The referenced object may outlive or die first</td>
+          <td>You're <em>certain</em> the object lives at least as long</td>
+        </tr>
+        <tr>
+          <td>Safety</td>
+          <td>Safe &mdash; nil access is handled by optionals</td>
+          <td>Unsafe &mdash; accessing after dealloc = <code>EXC_BAD_ACCESS</code></td>
+        </tr>
+        <tr>
+          <td>Performance</td>
+          <td>Tiny overhead (zeroing weak reference)</td>
+          <td>No overhead</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <h4>Default to <code>weak</code></h4>
+      <p>Unless you have a <em>proven</em> performance bottleneck from <code>weak</code> references (you won't), always use <code>weak</code>. An unexpected <code>nil</code> is debuggable. An <code>unowned</code> crash on a deallocated object is the same <code>EXC_BAD_ACCESS</code> you saw in Chapter 2 &mdash; and it happens at a completely unrelated time, making it extremely hard to trace.</p>
+      <p>Ask Claude Code: <em>"Audit my project for <code>unowned</code> references and check whether each one is actually safe."</em></p>
+    </div>
+
+    <h2>SwiftUI Memory Considerations</h2>
+
+    <p>SwiftUI introduced new memory management patterns &mdash; and new leak vectors:</p>
+
+    <h3><code>@StateObject</code> vs <code>@ObservedObject</code></h3>
+
+    <p><code>@StateObject</code> owns the object's lifecycle &mdash; it creates the object once and keeps it alive for the view's lifetime. <code>@ObservedObject</code> doesn't own it &mdash; if nothing else retains it, it can be deallocated and recreated on every view re-evaluation.</p>
+
+<pre><code>// CORRECT: Parent creates and owns the VM
+struct ProfileView: View {
+    @StateObject private var viewModel = ProfileViewModel()
+    var body: some View { ProfileContent(viewModel: viewModel) }
+}
+
+// CORRECT: Child receives but doesn't own
+struct ProfileContent: View {
+    @ObservedObject var viewModel: ProfileViewModel
+    var body: some View { Text(viewModel.name) }
+}
+
+// BUG: Creating @ObservedObject inline — recreated every re-evaluation!
+struct BuggyView: View {
+    @ObservedObject var viewModel = ProfileViewModel() // Leaked or recreated!
+    var body: some View { Text(viewModel.name) }
+}</code></pre>
+
+    <h3><code>@Observable</code> and <code>@State</code></h3>
+
+    <p>With Swift's Observation framework, you store <code>@Observable</code> classes in <code>@State</code>:</p>
+
+<pre><code>@Observable class ProfileModel {
+    var name = ""
+    var avatar: UIImage?
+}
+
+struct ProfileView: View {
+    @State private var model = ProfileModel()
+    var body: some View { Text(model.name) }
+}</code></pre>
+
+    <div class="warning-box">
+      <h4>Known Issue: @State + @Observable Leaks</h4>
+      <p>There have been reports of <code>@State</code> with <code>@Observable</code> reference types leaking in certain iOS versions (particularly iOS 17 early releases). The objects are created but never released when the view is removed from the hierarchy. This was largely resolved in iOS 18, but <strong>always verify with Memory Graph Debugger</strong> when using this pattern. If your deployment target includes iOS 17, consider sticking with <code>@StateObject</code> + <code>ObservableObject</code>.</p>
+    </div>
+
+    <h2>Combine Memory Leaks</h2>
+
+    <p>Combine publishers and subscribers are a common leak source. The pattern is always the same: a <code>sink</code> closure captures <code>self</code>, and the <code>AnyCancellable</code> is stored on <code>self</code>:</p>
+
+<pre><code>class SettingsViewModel: ObservableObject {
+    @Published var settings: [Setting] = []
+    private var cancellables = Set&lt;AnyCancellable&gt;()
+
+    init() {
+        // BUG: sink captures self strongly, cancellables owned by self
+        settingsPublisher
+            .sink { self.settings = $0 }  // strong capture!
+            .store(in: &amp;cancellables)
+    }
+}
+
+// FIX: Use [weak self]
+settingsPublisher
+    .sink { [weak self] newSettings in
+        self?.settings = newSettings
+    }
+    .store(in: &amp;cancellables)</code></pre>
+
+    <div class="tip-box">
+      <h4>Xcode 26 AI for Combine Leaks</h4>
+      <p>Swift Assist in Xcode 26 can analyze Combine chains and flag missing <code>[weak self]</code> in <code>sink</code> closures. When you hover over a <code>.sink</code> call, Xcode shows whether <code>self</code> is captured and whether the cancellable's lifetime creates a cycle. This inline analysis is faster than running the Memory Graph Debugger for known patterns.</p>
+    </div>
+
+    <h2>Building a <code>/scan-for-leaks</code> Skill</h2>
+
+    <p>This skill doesn't analyze runtime data &mdash; it statically scans your Swift source files for known leak patterns:</p>
+
+    <div class="fix-pattern">
+      <h4>The <code>/scan-for-leaks</code> Skill</h4>
+      <p>Create <code>.claude/commands/scan-for-leaks.md</code>:</p>
+<pre>Scan Swift source files for common memory leak patterns.
+
+## Patterns to Check:
+1. Closures stored as properties that capture self without
+   [weak self] or [unowned self]
+2. Delegate properties not declared as `weak`
+3. Timer.scheduledTimer with closures capturing self
+4. NotificationCenter block-based observers without stored
+   tokens or removal in deinit
+5. CADisplayLink with self as target without a weak proxy
+6. Combine .sink closures capturing self strongly when
+   stored in a cancellables set owned by self
+7. @ObservedObject used with inline initialization (should
+   be @StateObject)
+8. Strong references in completion handlers passed to
+   long-lived services
+
+## For each finding, report:
+- **File:line** — location of the potential leak
+- **Pattern** — which leak pattern it matches
+- **Risk** — high/medium/low based on object lifetime
+- **Fix** — specific code change
+
+Scan these files: $ARGUMENTS</pre>
+    </div>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt</h4>
+      <p>"Run /scan-for-leaks on all files in Sources/Features/Profile/ and Sources/Features/Settings/. Focus on Combine subscriptions and closure-based callbacks."</p>
+    </div>
+
+    <p>This is a static analysis skill &mdash; it works without running the app. Use it as a code review step before merging PRs.</p>
+
+    <h2>XcodeBuildMCP: Automated Leak Detection in CI</h2>
+
+    <p>Combine XcodeBuildMCP with Memory Graph Debugger's <code>memgraph</code> export format for automated leak detection:</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt</h4>
+      <p>"Build and run the app using XcodeBuildMCP. Navigate to the profile screen, then back to the main screen. Check if ProfileViewModel is still in memory by running the LLDB command <code>expression -l objc -O -- [NSClassFromString(@\"MyApp.ProfileViewModel\") _allInstancesOfClass]</code>. If it's still there, we have a leak."</p>
+    </div>
+
+    <div class="performance-metric">
+      <h4>Memory Footprint: Before &amp; After Leak Fixes</h4>
+      <div class="metric-before">
+        <h5>Before (With Retain Cycles)</h5>
+        <ul>
+          <li>Memory after 10 profile screen visits: <strong>87 MB</strong> (growing ~4.5 MB each visit)</li>
+          <li>Memory after 5 minutes of normal use: <strong>120 MB</strong> (steadily climbing)</li>
+          <li>Background jetsam rate: <strong>15% of sessions</strong></li>
+          <li>Objects leaked per navigation cycle: <strong>3 ViewModels + associated data</strong></li>
+        </ul>
+      </div>
+      <div class="metric-after">
+        <h5>After (Cycles Fixed)</h5>
+        <ul>
+          <li>Memory after 10 profile screen visits: <strong>42 MB</strong> (stable, objects deallocated)</li>
+          <li>Memory after 5 minutes of normal use: <strong>45 MB</strong> (flat plateau)</li>
+          <li>Background jetsam rate: <strong>&lt;1% of sessions</strong></li>
+          <li>Objects leaked per navigation cycle: <strong>0</strong></li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Hands-On Exercise</h2>
+
+    <div class="exercise-box">
+      <h4>Exercise: Find and Fix a Retain Cycle</h4>
+      <p>Create a deliberate retain cycle, visualize it, and fix it with AI assistance.</p>
+      <ol>
+        <li>
+          <strong>Create the leak.</strong> Add this to your project:
+<pre><code>class LeakyViewController: UIViewController {
+    var onDismiss: (() -&gt; Void)?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // Retain cycle: closure captures self, self owns closure
+        onDismiss = {
+            print("Dismissed \(self.title ?? "unknown")")
+        }
+    }
+
+    deinit {
+        print("LeakyViewController deallocated") // This never prints!
+    }
+}</code></pre>
+        </li>
+        <li><strong>Present and dismiss.</strong> Push this VC onto a navigation stack, then pop it. Check the console &mdash; <code>deinit</code> should print but doesn't.</li>
+        <li><strong>Capture the memory graph.</strong> After popping, click the Memory Graph Debugger button. Find <code>LeakyViewController</code> &mdash; it'll have a purple <code>!</code> marker. Copy the retention chain text.</li>
+        <li>
+          <strong>Analyze with Claude Code:</strong>
+<pre><code>claude
+> /analyze-leak
+Leaked Object: LeakyViewController
+Retention: self → onDismiss (closure) → captures self (strong)</code></pre>
+        </li>
+        <li><strong>Apply the fix.</strong> Claude Code should suggest adding <code>[weak self]</code>:
+<pre><code>onDismiss = { [weak self] in
+    print("Dismissed \(self?.title ?? "unknown")")
+}</code></pre>
+        </li>
+        <li><strong>Verify.</strong> Run again, push and pop. Confirm <code>deinit</code> prints. Capture memory graph again &mdash; no more purple markers.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Try the same exercise with a Combine <code>sink</code> closure. Create a publisher subscription that captures <code>self</code> strongly in a ViewModel, verify the leak with Memory Graph Debugger, and fix it with <code>[weak self]</code>.</p>
+    </div>
+
+    <div class="highlight-box">
+      <h4>Key Takeaways</h4>
+      <ul>
+        <li><strong>Memory leaks are silent killers.</strong> They don't crash your app &mdash; they slowly consume memory until iOS jetsams you out.</li>
+        <li>Use <strong>Memory Graph Debugger</strong> for pinpointing cycles (who retains whom) and <strong>Instruments Allocations</strong> for tracking growth over time.</li>
+        <li>The retention chain from Memory Graph Debugger is <strong>structured data AI reads perfectly</strong> &mdash; paste it into <code>/analyze-leak</code>.</li>
+        <li><strong>Default to <code>weak</code></strong> over <code>unowned</code>. The performance difference is negligible; the crash risk of <code>unowned</code> is not.</li>
+        <li>Watch for SwiftUI's <code>@Observable</code> + <code>@State</code> on iOS 17 &mdash; verify with Memory Graph Debugger.</li>
+        <li>Use <code>/scan-for-leaks</code> as a <strong>static analysis step</strong> in code reviews &mdash; catch leaks before they ship.</li>
+      </ul>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>Memory leaks waste resources silently. SwiftUI rendering performance wastes resources <em>visibly</em> &mdash; as dropped frames, stuttery scrolling, and laggy animations. In <strong>Chapter 5: SwiftUI Rendering Performance</strong>, you'll learn to use <code>Self._printChanges()</code>, the Instruments View Body track, and AI to diagnose why your views re-evaluate 47 times during a single scroll and how to fix it.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="03-hangs-responsiveness.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Hangs &amp; Responsiveness Diagnosis</span>
+      </a>
+      <a href="05-swiftui-rendering.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">SwiftUI Rendering Performance</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

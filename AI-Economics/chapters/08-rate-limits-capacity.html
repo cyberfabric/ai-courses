@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 8 — Rate Limits, Tiering &amp; Capacity Planning | AI Economics</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Economics &amp; Cost Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="07-model-cascading-routing.html">← Prev</a>
+      <a href="09-cost-observability.html">Next →</a>
+      <a href="maps/08-rate-limits-capacity-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Rate Limits, Tiering &amp; Capacity Planning</h1>
+    <p class="chapter-subtitle">The provider&rsquo;s ceiling is real. Here&rsquo;s how high it is, how to climb it, and why 2026&rsquo;s agent traffic might smash through it overnight.</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The electricity-grid analogy</h2>
+      <p>
+        Your house has a main fuse. No matter how many appliances you own, you can&rsquo;t run them all at once &mdash; the fuse trips. Providers work the same way. You can have the best-optimized cascade in the world, but if your requests slam into a 50-per-minute rate limit, you&rsquo;re shedding traffic and losing users.
+      </p>
+      <p>
+        Rate limits are the fuse box of your AI stack. They&rsquo;re boring, they&rsquo;re invisible when things go well, and they become a five-alarm emergency the moment your product gets a write-up on Hacker News.
+      </p>
+      <p>
+        In 2026, the rules changed. Limits are now measured in <em>tokens</em>, not requests. Tiers unlock by cumulative <em>spend</em>, not by asking nicely. And a new traffic category &mdash; <strong>agents</strong> &mdash; can multiply your token usage 10&ndash;30&times; overnight. This chapter maps out the landscape and teaches you to forecast capacity before a bad Monday.
+      </p>
+
+      <div class="highlight-box">
+        <p><strong>The one thing to remember:</strong> rate limits are a cost-engineering problem as much as a reliability one. When you hit the ceiling and fall back to a more-expensive model (or an entirely different provider), your cost per request jumps. Capacity planning <em>is</em> cost planning.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>From requests-per-minute to tokens-per-minute</h2>
+      <p>
+        Old rate limits measured &ldquo;API calls per minute.&rdquo; That worked when every call was cheap and roughly the same size. In 2026 it&rsquo;s a joke: one 100K-token summarization call costs the provider orders of magnitude more compute than one 200-token classification call, yet a per-request limit treats them identically.
+      </p>
+      <p>
+        Every major provider has now standardized on <strong>token-based limits</strong>, usually sliced three ways:
+      </p>
+      <ul>
+        <li><strong>RPM</strong> &mdash; requests per minute (the old-school cap, still there as a floor)</li>
+        <li><strong>ITPM</strong> &mdash; <em>input</em> tokens per minute (what you send)</li>
+        <li><strong>OTPM</strong> &mdash; <em>output</em> tokens per minute (what you receive)</li>
+        <li><strong>TPD</strong> / <strong>RPD</strong> &mdash; daily ceilings, often 10&times; the per-minute cap</li>
+      </ul>
+      <p>
+        All four apply simultaneously. You can run clean on TPM and still get a 429 because RPM spiked from a user loop-clicking a button.<sup><a href="#src-openai-rate">[1]</a></sup>
+      </p>
+
+      <div class="tip-box">
+        <p><strong>The math you should carry:</strong> token-based rate limits mean a single LLM request can consume anywhere from 100 to 100,000 tokens. Size your capacity by the <em>average</em> conversation, not the typical request, and leave a 2&times; headroom for the long-context outliers.<sup><a href="#src-zuplo">[2]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The 2026 tier landscape, side by side</h2>
+      <p>
+        Every major provider stacks limits into spend-gated tiers. You climb automatically as your cumulative bill grows. Here&rsquo;s how the four matter most to production developers:
+      </p>
+
+      <div class="pricing-table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Entry tier</th>
+              <th>Mid tier</th>
+              <th>Top tier</th>
+              <th>Rate-limit style</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Anthropic</strong></td>
+              <td>Tier 1: $5 deposit &rarr; $100 monthly cap, 50 RPM across models<sup><a href="#src-anthropic-rate">[3]</a></sup></td>
+              <td>Tier 2&ndash;3: scales with deposit &amp; time</td>
+              <td>Tier 4+ ($400+ deposit), Standard 200 RPM / Scale 2,000 RPM<sup><a href="#src-anthropic-rate">[3]</a></sup></td>
+              <td>Per-model RPM + ITPM + OTPM; Haiku has higher default than Opus</td>
+            </tr>
+            <tr>
+              <td><strong>OpenAI</strong></td>
+              <td>Tier 1: GPT-5 class ~500K TPM, ~1,000 RPM<sup><a href="#src-openai-rate">[1]</a></sup></td>
+              <td>Tier 2&ndash;3: 2&ndash;4M TPM (most startups land here)</td>
+              <td>Tier 5: 30M TPM at $1,000+ cumulative spend<sup><a href="#src-openai-rate">[1]</a></sup></td>
+              <td>5-tier ladder, measured in RPM / TPM / RPD / TPD / IPM</td>
+            </tr>
+            <tr>
+              <td><strong>Google Gemini</strong></td>
+              <td>Free: 5&ndash;15 RPM, Flash/Flash-Lite only<sup><a href="#src-gemini-rate">[4]</a></sup></td>
+              <td>Tier 1: 150&ndash;300 RPM; Tier 2: 1,000+ RPM ($250 + 3 days)<sup><a href="#src-gemini-rate">[4]</a></sup></td>
+              <td>Tier 3: up to 4,000+ RPM ($1,000 + 30 days)<sup><a href="#src-gemini-rate">[4]</a></sup></td>
+              <td>Per-project, not per-key &mdash; all keys in one project share a bucket</td>
+            </tr>
+            <tr>
+              <td><strong>Perplexity</strong></td>
+              <td>T0: new accounts, most Sonar models 50 RPM<sup><a href="#src-perplexity">[5]</a></sup></td>
+              <td>T1 ($50+), T2, T3 ($500+)<sup><a href="#src-perplexity">[5]</a></sup></td>
+              <td>T4&ndash;T5: enterprise, higher bursts</td>
+              <td>Leaky bucket: 50 tokens capacity, 50/s leak rate, refills every 20 ms<sup><a href="#src-perplexity">[5]</a></sup></td>
+            </tr>
+            <tr>
+              <td><strong>Together AI</strong></td>
+              <td>Dynamic (since Jan 26, 2026): limits grow with sustained steady usage<sup><a href="#src-together">[6]</a></sup></td>
+              <td>Scale plan: higher baselines + SLAs</td>
+              <td>Enterprise plan: custom</td>
+              <td>Spike &gt; 2&times; of past-hour sustained load = capacity not guaranteed<sup><a href="#src-together">[6]</a></sup></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="warning-box">
+        <p><strong>Gemini&rsquo;s per-project quota is a silent killer.</strong> If you rotate API keys for security, every key inside one Google Cloud project still shares the <em>same</em> token bucket. Splitting by key doesn&rsquo;t give you more throughput &mdash; you need separate projects.<sup><a href="#src-gemini-rate">[4]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The anatomy of a 429</h2>
+      <p>
+        When you hit a limit, you get HTTP 429 (<code>rate_limit_error</code>). When the <em>provider</em> is overloaded, you get HTTP 529 (<code>overloaded_error</code>). They look similar but need completely different responses.
+      </p>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <div class="example-label">HTTP 429 &mdash; you went over</div>
+          <p>The server is telling you: <em>you</em> sent too much. Backing off doesn&rsquo;t fix the root cause.</p>
+          <p><strong>Response:</strong> drop concurrency, raise caching, route easy traffic to a cheaper tier, request a tier bump.</p>
+        </div>
+        <div class="prompt-example good">
+          <div class="example-label">HTTP 529 &mdash; they&rsquo;re overloaded</div>
+          <p>The provider&rsquo;s fleet is saturated (global, not your fault). Typically resolves in 2&ndash;5 minutes.<sup><a href="#src-anthropic-errors">[7]</a></sup></p>
+          <p><strong>Response:</strong> retry with exponential backoff + jitter. If it persists, fail over to a secondary provider.</p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <p><strong>Exponential backoff with jitter, not without.</strong> If five instances of your app all retry after exactly 1 second, you&rsquo;ll reproduce the same thundering-herd spike. Add random jitter (e.g., <code>sleep(base * 2**attempt + random(0, 1))</code>) so the retries spread out. Anthropic&rsquo;s Python SDK auto-retries 408/409/429/5xx twice by default with exponential backoff.<sup><a href="#src-anthropic-errors">[7]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Agents: the 2026 capacity wildcard</h2>
+      <p>
+        A chat message used to cost one API call. An agent task can cost <em>thirty</em> &mdash; maybe more. That&rsquo;s not a rounding error; it changes your capacity math fundamentally.
+      </p>
+      <p>
+        A single agent task with a 5-step refinement loop re-reading a 25,000-token context can consume 125,000+ tokens per user action.<sup><a href="#src-zuplo">[2]</a></sup> Multiply that across your user base and you&rsquo;re not planning for traditional &ldquo;1 call per user per minute.&rdquo; You&rsquo;re planning for agent-shaped traffic that is <em>steadier, heavier, and more persistent</em> than anything you&rsquo;ve seen before.
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>The agent multiplier effect: one feature, two traffic profiles</h4>
+        <p><strong>Feature:</strong> a code assistant answering 1,000 developer questions per hour.</p>
+        <ul>
+          <li><strong>Chat-style baseline:</strong> 1 request, 2K input + 500 output = 2,500 tokens &rarr; <strong>2.5M tokens/hour</strong> total</li>
+          <li><strong>Agent-style (avg 8 steps):</strong> 8 requests, 25K input + 500 output each = 204K tokens/task &rarr; <strong>204M tokens/hour</strong> total</li>
+          <li><strong>Traffic multiplier:</strong> <strong>~82&times;</strong> on the exact same user-facing feature.</li>
+        </ul>
+      </div>
+
+      <div class="savings-callout banner">→ The same 1,000 questions/hour that comfortably fit in Anthropic Tier 2 as chat will blow through Tier 4 ceilings as an agent.</div>
+    </section>
+
+    <section>
+      <h2>Capacity forecasting: three numbers that matter</h2>
+      <p>
+        Capacity planning isn&rsquo;t a spreadsheet exercise for the ops team &mdash; it&rsquo;s a back-of-envelope calculation every AI engineer should do before shipping. Three numbers tell you whether you&rsquo;re safe:
+      </p>
+
+      <ol>
+        <li><strong>Peak RPS</strong> &mdash; requests per second at the 95th percentile hour. Pull from your last month of logs.</li>
+        <li><strong>Tokens per request</strong> &mdash; average input + output, weighted by model. Don&rsquo;t forget the agent multiplier.</li>
+        <li><strong>Growth factor</strong> &mdash; your expected multiple in 6 months. If you&rsquo;re growing 3&times; / quarter, use 9&times;.</li>
+      </ol>
+
+      <p>
+        Multiply. Compare to your current tier&rsquo;s TPM. If the result exceeds 70&nbsp;% of your ceiling, you&rsquo;re one marketing email from an outage.
+      </p>
+
+      <div class="cost-breakdown-box">
+        <h4>Capacity check: a real-time support bot</h4>
+        <ul>
+          <li>Peak RPS: 15 requests/sec &rarr; <strong>900 RPM</strong></li>
+          <li>Tokens per request: 3,000 in + 400 out = <strong>3,400</strong></li>
+          <li>Peak TPM: 900 &times; 3,400 = <strong>3.06M TPM</strong></li>
+          <li>6-month growth factor: 5&times; &rarr; projected <strong>15.3M TPM</strong></li>
+          <li>Current tier (OpenAI Tier 3): 4M TPM &rarr; <strong>will breach in ~3 months</strong></li>
+          <li>Action: request Tier 4 bump now, or start routing 40 % of traffic to a cheaper/second provider</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Read the headers, Luke</h2>
+      <p>
+        Every provider returns rate-limit state on every response. Reading those headers in production is how you see the wall approaching, instead of feeling it when you smack into it.
+      </p>
+      <ul>
+        <li><strong>Anthropic:</strong> <code>anthropic-ratelimit-requests-remaining</code>, <code>-tokens-remaining</code>, <code>-input-tokens-remaining</code>, <code>-output-tokens-remaining</code>, plus <code>-reset</code> timestamps for each.</li>
+        <li><strong>OpenAI:</strong> <code>x-ratelimit-remaining-requests</code>, <code>x-ratelimit-remaining-tokens</code>, <code>x-ratelimit-reset-requests</code>, <code>x-ratelimit-reset-tokens</code>.</li>
+        <li><strong>Google Gemini:</strong> quota consumption is visible via Google Cloud Console; client headers are minimal, so instrument at your gateway layer.</li>
+        <li><strong>Perplexity:</strong> standard <code>Retry-After</code> when you breach; leaky-bucket state is inferred from request timing.</li>
+      </ul>
+      <p>
+        Log the &ldquo;remaining&rdquo; values alongside your per-request cost. When the remaining ratio dips below 30&nbsp;%, your app should start shedding or slowing non-critical traffic automatically.
+      </p>
+
+      <div class="tip-box">
+        <p><strong>Build a &ldquo;ceiling proximity&rdquo; dashboard.</strong> Chart <code>1 - (remaining / ceiling)</code> over the past hour. Alert at 80&nbsp;%. This one metric replaces a dozen reactive postmortems about &ldquo;why did we suddenly start seeing 429s last night.&rdquo;</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Streaming, sockets, and the hidden capacity cost</h2>
+      <p>
+        Streaming responses feel instant to users but hold an open connection until the last token. Most providers count the full response against your TPM even if the client disconnects mid-stream. A user who gets impatient and closes a tab doesn&rsquo;t refund your tokens.
+      </p>
+      <p>
+        This matters for capacity planning in three ways:
+      </p>
+      <ul>
+        <li><strong>Long outputs &times; long context &times; many users = silent TPM burn.</strong> A 50K-token streamed answer to 1,000 concurrent users is 50M tokens in flight whether they read it or not.</li>
+        <li><strong>Concurrency caps on streaming are tighter.</strong> Some providers impose a separate concurrent-streams limit; Perplexity&rsquo;s Sonar Deep Research is 5&ndash;100 RPM precisely because each call holds a connection for ages.<sup><a href="#src-perplexity">[5]</a></sup></li>
+        <li><strong>Cancel-on-disconnect is on you.</strong> If your server keeps streaming after the client closes the socket, you pay for tokens nobody reads. Wire up abort semantics end-to-end.</li>
+      </ul>
+
+      <div class="warning-box">
+        <p><strong>Max-tokens is your seatbelt.</strong> Always set <code>max_output_tokens</code> explicitly. An unbounded generation on a chatty reasoning model can produce 30K+ tokens you never wanted &mdash; billed at output rate, and counting against your TPM ceiling. Default to a sensible cap (say 2,000 for chat, 8,000 for reasoning) and raise only where the feature demands it.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Graceful degradation: what happens when you hit the wall</h2>
+      <p>
+        You <em>will</em> hit rate limits at some point. What matters is whether that translates into a 500 page for your users or a slightly-worse-but-still-working response.
+      </p>
+
+      <div class="workflow-steps">
+        <div class="step">🚦<br><strong>Detect</strong><br>429/529 or RPM&gt;80%</div>
+        <div class="step-arrow">→</div>
+        <div class="step">🧯<br><strong>Throttle</strong><br>Concurrency cap, queue</div>
+        <div class="step-arrow">→</div>
+        <div class="step">🧭<br><strong>Route</strong><br>Switch to cheaper model or 2nd provider</div>
+        <div class="step-arrow">→</div>
+        <div class="step">📦<br><strong>Cache / preset</strong><br>Return canned response if all else fails</div>
+      </div>
+
+      <ul>
+        <li><strong>Concurrency caps.</strong> A semaphore limits how many concurrent calls your app makes, turning 429s into queue-and-retry instead of user-facing errors.</li>
+        <li><strong>Token budget per request.</strong> Cap max input + max output per feature. Agent tasks with runaway loops are your biggest risk.</li>
+        <li><strong>Cross-provider failover.</strong> Keep a secondary provider warm. Cost may jump 20&ndash;40 %, but uptime is worth it. Portkey, OpenRouter, and your own hand-rolled fallback all do this.</li>
+        <li><strong>Feature-level degradation.</strong> When the big model is flaky, drop streaming, shrink max_output, or serve a cached past response. Tell the user, don&rsquo;t silently fail.</li>
+      </ul>
+
+      <div class="warning-box">
+        <p><strong>Do not flood the API with parallel retries.</strong> If your app retries 10 times concurrently on a 529, you&rsquo;re making the overload worse and racing every other customer doing the same thing. One calm retry, then backoff. Anthropic&rsquo;s docs explicitly call this out.<sup><a href="#src-anthropic-errors">[7]</a></sup></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Requesting a tier bump</h2>
+      <p>
+        When growth outruns auto-tiering, you can ask for a manual increase. Providers look at a short list of signals:
+      </p>
+      <ul>
+        <li><strong>Clean history.</strong> Low 429 rate, low 5xx rate. If you&rsquo;re already over-retrying, fix that first.</li>
+        <li><strong>Steady usage pattern.</strong> Spiky traffic gets smaller bumps than steady climbs. Together AI&rsquo;s dynamic tiering literally rewards sustained, consistent load.<sup><a href="#src-together">[6]</a></sup></li>
+        <li><strong>Deposit or committed spend.</strong> Top tiers often require a prepay. Anthropic Tier 4 starts at $400 deposit; OpenAI Tier 5 requires $1,000+ cumulative spend.<sup><a href="#src-openai-rate">[1]</a></sup></li>
+        <li><strong>Business context.</strong> Describe your workload, traffic shape, and any PR / launch spikes on the calendar.</li>
+      </ul>
+
+      <div class="tip-box">
+        <p><strong>Ask before you need it.</strong> Typical approval timelines are 3&ndash;10 business days. If you have a big launch in a week, it&rsquo;s already too late. Request a bump as soon as your forecast shows a breach in the next quarter.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Multi-provider capacity: when the complexity pays off</h2>
+      <p>
+        Running across two providers is the cleanest way to double your effective ceiling. It&rsquo;s also the messiest to maintain &mdash; different SDKs, different rate-limit headers, different behavior on streaming, and quality drift you have to monitor weekly.
+      </p>
+
+      <div class="roi-box">
+        <div class="roi-scenarios">
+          <div class="scenario-a">
+            <h4>✅ Multi-provider wins when&hellip;</h4>
+            <ul>
+              <li>You&rsquo;re close to (or past) a single-provider tier ceiling</li>
+              <li>Downtime costs you real money (SaaS SLAs)</li>
+              <li>You&rsquo;re already using a router / gateway (OpenRouter, Portkey)</li>
+              <li>Your prompts are portable across providers</li>
+              <li>You run regions where one provider has latency issues</li>
+            </ul>
+          </div>
+          <div class="scenario-b">
+            <h4>❌ Multi-provider loses when&hellip;</h4>
+            <ul>
+              <li>You lean heavily on provider-specific features (cache_control, JSON mode flavors, tool calling idioms)</li>
+              <li>Team is small and already stretched</li>
+              <li>Your current tier has 5&times; headroom</li>
+              <li>Eval coverage is thin &mdash; quality drift between providers is invisible</li>
+            </ul>
+          </div>
+        </div>
+        <div class="roi-verdict">
+          <strong>Verdict:</strong> start by raising your primary tier. Go multi-provider only when your forecast <em>and</em> your reliability needs justify the engineering cost.
+        </div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>🧪 Exercise: Capacity fire-drill</h3>
+      <ol>
+        <li>Pick your highest-traffic AI endpoint. Pull the last 7 days of logs.</li>
+        <li>Compute peak RPS in your busiest 1-minute window.</li>
+        <li>Compute average tokens-per-request (input + output).</li>
+        <li>Multiply: <code>peak_RPM &times; avg_tokens = peak_TPM</code>.</li>
+        <li>Look up your current provider tier. What&rsquo;s the TPM ceiling?</li>
+        <li>Compute the headroom: <code>1 &minus; (peak_TPM / tier_TPM)</code>.</li>
+        <li>If headroom &lt; 30&nbsp;%, you&rsquo;re one viral moment from a 429. Schedule a tier bump or routing change this week.</li>
+        <li>Repeat the calculation assuming 10&times; growth. Where does it break?</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>The production capacity checklist</h2>
+      <div class="checklist">
+        <ul>
+          <li>✅ You know your peak TPM and your current tier&rsquo;s TPM ceiling.</li>
+          <li>✅ You have a documented forecast at 3x and 10x growth.</li>
+          <li>✅ Your app handles 429 and 529 differently (throttle vs. backoff-retry).</li>
+          <li>✅ Exponential backoff uses jitter, not a fixed delay.</li>
+          <li>✅ There&rsquo;s a concurrency cap (semaphore) on outgoing LLM calls.</li>
+          <li>✅ Token budgets per feature are enforced &mdash; agents can&rsquo;t spiral into runaway loops.</li>
+          <li>✅ You monitor 429 rate as a first-class metric, like error rate.</li>
+          <li>✅ You have a failover provider configured (even if unused today).</li>
+          <li>✅ Tier-bump conversations start 6&ndash;12 weeks before projected breach.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+      <p>
+        You&rsquo;ve learned the five request-side levers (caching, batching, compression, routing, rate-limit planning). They all share one prerequisite: <strong>you can&rsquo;t optimize what you can&rsquo;t see</strong>.
+      </p>
+      <p>
+        If you can&rsquo;t tell what each feature costs per request, which model is handling it, what the cache hit rate looks like, and where your top 10 most expensive queries come from, you&rsquo;re flying blind. Chapter 9 covers cost observability &mdash; Langfuse, Braintrust, Phoenix, Portkey, and the gateway + eval-tool pattern that became the 2026 best practice for per-feature cost attribution.
+      </p>
+    </section>
+
+    <section class="chapter-footnotes">
+      <h3>Sources (verified April 2026)</h3>
+      <ol>
+        <li id="src-openai-rate"><a href="https://inference.net/content/openai-rate-limits-guide/" target="_blank" rel="noopener">Inference.net &mdash; OpenAI rate limits 2026 (GPT-5 Tier 1 ~500K TPM / 1,000 RPM; Tier 5 cap 30M TPM at $1,000+ spend)</a></li>
+        <li id="src-zuplo"><a href="https://zuplo.com/learning-center/token-based-rate-limiting-ai-agents" target="_blank" rel="noopener">Zuplo &mdash; Token-based rate limiting for AI agents (agent multiplier, 125K+ tokens per task)</a></li>
+        <li id="src-anthropic-rate"><a href="https://platform.claude.com/docs/en/api/rate-limits" target="_blank" rel="noopener">Anthropic &mdash; Rate limits (Tier 1 $5 deposit / 50 RPM; Standard 200 RPM / Scale 2,000 RPM after April 3, 2026 restructure)</a></li>
+        <li id="src-gemini-rate"><a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener">Google &mdash; Gemini API rate limits (Free 5&ndash;15 RPM; Tier 2 $250 + 3 days; Tier 3 $1,000 + 30 days; per-project bucket)</a></li>
+        <li id="src-perplexity"><a href="https://docs.perplexity.ai/docs/admin/rate-limits-usage-tiers" target="_blank" rel="noopener">Perplexity &mdash; Rate limits &amp; usage tiers T0&ndash;T5 (leaky bucket: 50 capacity, 50/s leak rate; most Sonar 50 RPM)</a></li>
+        <li id="src-together"><a href="https://docs.together.ai/docs/rate-limits" target="_blank" rel="noopener">Together AI &mdash; Dynamic rate limits (rolled out January 26, 2026; spike &gt; 2&times; sustained = capacity not guaranteed)</a></li>
+        <li id="src-anthropic-errors"><a href="https://platform.claude.com/docs/en/api/errors" target="_blank" rel="noopener">Anthropic &mdash; API errors (429 rate_limit vs 529 overloaded; SDK auto-retries 408/409/429/5xx with exponential backoff)</a></li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="07-model-cascading-routing.html">← Chapter 7</a>
+    <a href="09-cost-observability.html">Chapter 9 →</a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: Video Understanding & Analysis | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-text-to-speech.html">&larr; Prev</a>
+      <a href="10-realtime-pipelines.html">Next &rarr;</a>
+      <a href="maps/09-video-understanding-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 9</div>
+    <h1>Video Understanding &amp; Analysis</h1>
+    <p class="subtitle">Teaching AI to watch, follow, and make sense of the world in motion</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>The Final Frontier of Multimodal AI</h2>
+
+      <p>In Chapter 7, we taught AI to listen. In Chapter 8, we taught it to speak. Now we're going to teach it to <strong>watch</strong>.</p>
+
+      <p>Video is the ultimate multimodal challenge. It's not just one image &mdash; it's thousands of images played in sequence, often with an audio track layered on top. A single minute of 30fps video contains 1,800 individual frames. Each frame is an image. Each image has millions of pixels. And the meaning isn't just in any single frame &mdash; it's in how frames <em>change over time</em>.</p>
+
+      <div class="highlight-box">
+        <h3>Why Video Is the Hardest Modality</h3>
+        <p>A single 1080p image has about 6 million numbers (pixels &times; 3 color channels). A one-minute video at 30fps has <strong>10.8 billion numbers</strong> &mdash; almost 2,000 times more data than a single image. Processing all of that in real-time is like trying to read War and Peace while someone flips the pages for you at high speed. AI needs clever shortcuts to make sense of video without drowning in data.</p>
+      </div>
+
+      <p>But here's the good news: you don't need a PhD in computer vision to work with video AI. The tools have gotten remarkably accessible. In this chapter, you'll learn the practical techniques for extracting meaning from video &mdash; from simple frame sampling to Gemini's native video understanding to building your own video analysis pipelines.</p>
+    </section>
+
+    <!-- Why Video Is Hard -->
+    <section>
+      <h2>Why Video Is Different from Images</h2>
+
+      <p>You might think, "Well, video is just a bunch of images. I already know how to send images to LLMs from Chapter 4. Can't I just send a lot of images?" You're on the right track, but video understanding requires something images don't: <strong>temporal reasoning</strong>.</p>
+
+      <p>Consider this: you show an AI a single frame of someone holding a ball. The AI can tell you "a person is holding a ball." But only by watching the <em>sequence</em> of frames can the AI tell you:</p>
+
+      <ul>
+        <li>The person <strong>threw</strong> the ball (it was in their hand, then it wasn't)</li>
+        <li>The ball <strong>bounced</strong> twice before being caught</li>
+        <li>The catch was <strong>one-handed</strong> (left hand reached out while right hand stayed down)</li>
+        <li>The crowd <strong>reacted</strong> with excitement (audio: cheering; visual: people standing up)</li>
+      </ul>
+
+      <p>None of that information exists in any single frame. It only emerges when you look at frames <em>in order, over time</em>. That's temporal reasoning &mdash; understanding what happened, what's happening now, and even predicting what might happen next.</p>
+
+      <div class="modality-box">
+        <h3>Video: The Multi-Layer Modality</h3>
+        <p>Video is actually <strong>three modalities stacked together</strong>:</p>
+        <ul>
+          <li><strong>Visual stream:</strong> A sequence of images (frames) showing how the scene changes over time</li>
+          <li><strong>Audio stream:</strong> Speech, music, sound effects, ambient noise &mdash; everything you'd hear if you were there</li>
+          <li><strong>Temporal structure:</strong> The ordering, pacing, and causal relationships between events. This is what makes "the ball was thrown" different from "the ball will be thrown"</li>
+        </ul>
+        <p>A complete video understanding system needs to process all three layers and understand how they relate. The explosion in the audio is the ball hitting the ground. The person speaking on camera is the one whose voice you hear. The subtitle text matches the spoken words. Getting these cross-modal connections right is what makes video AI so challenging &mdash; and so powerful.</p>
+      </div>
+
+      <p>The analogy? Understanding a single image is like looking at a photograph. Understanding video is like <strong>watching a movie with subtitles in a foreign language</strong> &mdash; you need to understand what you SEE, what you HEAR, and how they relate to each other over time. One frame tells you what's in the scene. The sequence tells you the story.</p>
+    </section>
+
+    <!-- Frame Extraction -->
+    <section>
+      <h2>The Simple Approach: Frame Extraction</h2>
+
+      <p>Let's start with the most practical technique for video understanding &mdash; one you can use <em>right now</em> with any vision model you already have access to. It's called <strong>frame extraction</strong>, and it's exactly what it sounds like: pull out individual frames from a video and analyze them as images.</p>
+
+      <p>The key insight is that you don't need every frame. A 30fps video shows 30 nearly-identical images per second. Most of the time, nothing visually significant changes between consecutive frames. You just need <em>enough</em> frames to capture the important moments.</p>
+
+      <h3>Sampling Strategies</h3>
+
+      <p>How do you choose which frames to extract? There are three common approaches:</p>
+
+      <h4>1. Uniform Sampling (Every N Seconds)</h4>
+      <p>The simplest approach: grab one frame every N seconds. For a 2-minute video sampled at 1 frame per second, you get 120 frames. At 1 frame every 5 seconds, you get 24 frames. Easy to implement, easy to reason about.</p>
+
+      <h4>2. Scene Detection</h4>
+      <p>Smarter sampling: detect when the visual content changes significantly (a camera cut, a new scene, a big motion) and grab a frame from each distinct scene. This is more efficient because you don't waste tokens on frames that look nearly identical.</p>
+
+      <h4>3. Keyframe Extraction</h4>
+      <p>Video files already contain "keyframes" (I-frames) &mdash; complete reference frames that the video codec uses as anchors. These are natural sampling points because they tend to appear at scene boundaries.</p>
+
+      <div class="pipeline-box">
+        <h3>Frame Extraction Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Video File</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">FFmpeg: Extract Frames</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Resize &amp; Filter</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Send to Vision LLM</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Text Analysis</span>
+        </div>
+        <p style="margin-top: 1rem;">FFmpeg does the heavy lifting of pulling frames out of the video. You resize them (720p is usually enough for LLM analysis &mdash; no need for 4K). Then send them to Claude, GPT-4, or Gemini as a sequence of images with a prompt asking about the video content.</p>
+      </div>
+
+      <p>Here's how to extract frames with Python and FFmpeg:</p>
+
+<pre><code>import subprocess
+import os
+
+def extract_frames(video_path, output_dir, fps=1):
+    """Extract frames at specified FPS using FFmpeg."""
+    os.makedirs(output_dir, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-vf", f"fps={fps}",      # 1 frame per second
+        "-q:v", "2",               # high quality JPEG
+        f"{output_dir}/frame_%04d.jpg"
+    ]
+    subprocess.run(cmd, capture_output=True)
+
+extract_frames("meeting.mp4", "frames/", fps=0.5)
+# Extracts 1 frame every 2 seconds
+</code></pre>
+
+      <div class="tip-box">
+        <strong>How many frames should you extract?</strong> It depends on your budget and the video content. For a talking-head video (webinar, meeting), 1 frame every 10 seconds is plenty &mdash; the visual content barely changes. For a fast-paced sports clip, you might want 2-3 frames per second. Start low and increase only if the model's analysis misses important events.
+      </div>
+
+      <h3>Scene-Based Sampling with PySceneDetect</h3>
+
+      <p>For smarter frame selection, use PySceneDetect to find scene boundaries:</p>
+
+<pre><code>from scenedetect import detect, ContentDetector
+
+# Detect scene changes in the video
+scenes = detect("product_demo.mp4",
+                ContentDetector(threshold=30))
+# scenes = [(start_time, end_time), ...]
+
+# Extract the middle frame of each scene
+for i, (start, end) in enumerate(scenes):
+    mid = (start.get_seconds() + end.get_seconds()) / 2
+    print(f"Scene {i}: {start} to {end}, "
+          f"sample at {mid:.1f}s")
+</code></pre>
+
+      <p>This way, you get one representative frame per scene instead of wasting tokens on visually redundant frames.</p>
+    </section>
+
+    <!-- Sending Video to LLMs -->
+    <section>
+      <h2>Sending Video to LLMs</h2>
+
+      <p>Once you have your frames, how do you actually send them to an LLM for analysis? There are two approaches: the <strong>multi-image</strong> approach (works with any vision model) and <strong>native video</strong> (currently Gemini's specialty).</p>
+
+      <h3>Multi-Image Approach: Claude &amp; GPT-4</h3>
+
+      <p>Send your extracted frames as multiple images in a single prompt. The model sees them as a sequence and can reason about what happened across frames:</p>
+
+<pre><code>import anthropic, base64, glob
+
+client = anthropic.Anthropic()
+frames = sorted(glob.glob("frames/frame_*.jpg"))
+
+# Encode frames as base64 images
+content = []
+for i, frame in enumerate(frames[:20]):  # max ~20
+    with open(frame, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+    content.append({"type": "text",
+        "text": f"Frame {i+1} (t={i*2}s):"})
+    content.append({"type": "image",
+        "source": {"type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": img_b64}})
+
+content.append({"type": "text",
+    "text": "Describe what happens in this video."})
+
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": content}]
+)
+</code></pre>
+
+      <div class="warning-box">
+        <strong>Token cost adds up fast.</strong> Each image sent to Claude or GPT-4 costs tokens based on its resolution. Sending 20 frames of 720p images could cost 10,000-30,000 tokens per request. That's $0.03-0.10 per video analysis. Resize frames to the minimum resolution needed, and sample fewer frames when possible.
+      </div>
+
+      <h3>Native Video: Gemini</h3>
+
+      <p>Google's Gemini models can accept video files directly &mdash; no frame extraction needed. You upload the video and ask questions about it:</p>
+
+<pre><code>import google.generativeai as genai
+
+genai.configure(api_key="your-key")
+model = genai.GenerativeModel("gemini-1.5-pro")
+
+video = genai.upload_file("product_demo.mp4")
+response = model.generate_content([
+    video,
+    "Summarize this video. What product is "
+    "being demonstrated and what are its "
+    "key features?"
+])
+print(response.text)
+</code></pre>
+
+      <p>Gemini handles the frame sampling internally. It can process videos up to an hour long and reason about temporal relationships that span the entire video. This is currently the easiest way to do video understanding if your video fits within the upload limits.</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <p class="prompt-label">Good Video Prompt</p>
+          <div class="prompt-text">These frames are from a 2-minute cooking tutorial, sampled at 1 frame every 5 seconds. Please:
+1. List the main steps shown
+2. Identify the ingredients visible
+3. Note any technique the cook demonstrates
+4. Flag any food safety concerns you notice</div>
+          <p class="prompt-explanation">Provides context (cooking tutorial, 2 minutes, sampling rate) and asks specific questions. The model knows what to look for.</p>
+        </div>
+        <div class="prompt-example bad">
+          <p class="prompt-label">Bad Video Prompt</p>
+          <div class="prompt-text">What's in this video?</div>
+          <p class="prompt-explanation">Too vague. The model will give a surface-level description instead of useful structured analysis. No context about what the video is or what you need.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Model Comparison -->
+    <section>
+      <h2>Who Does Video Best? Model Comparison</h2>
+
+      <p>The video understanding landscape is evolving fast. Here's where the major players stand:</p>
+
+      <div class="model-card">
+        <div class="model-icon">G</div>
+        <div class="model-info">
+          <div class="model-name">Google Gemini 1.5 Pro / 2.0</div>
+          <div class="model-desc">The current leader for video. Native video input &mdash; upload entire files, no frame extraction needed. Supports videos up to 1 hour. Excellent temporal reasoning: can answer "what happened at 3:42?" or "when did the speaker change topics?" The 1M+ token context window means it can process very long videos. Best choice for general video understanding today.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">C</div>
+        <div class="model-info">
+          <div class="model-name">Claude (Anthropic)</div>
+          <div class="model-desc">Excellent vision capabilities for individual frames. No native video input &mdash; use the multi-image approach with extracted frames. Strong at detailed analysis of what's visible in each frame and reasoning across a sequence. Great for structured extraction tasks (analyzing UI recordings, reading on-screen text across frames).</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">O</div>
+        <div class="model-info">
+          <div class="model-name">GPT-4o (OpenAI)</div>
+          <div class="model-desc">Strong vision model that handles multi-image sequences well. No native video upload in the standard API, but handles frame sequences effectively. GPT-4o's speed makes it practical for processing many frames. Good at describing actions and scenes across frame sequences.</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>Gemini</th>
+            <th>Claude</th>
+            <th>GPT-4o</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Native video input</strong></td>
+            <td>Yes (up to 1hr)</td>
+            <td>No (use frames)</td>
+            <td>No (use frames)</td>
+          </tr>
+          <tr>
+            <td><strong>Temporal reasoning</strong></td>
+            <td>Excellent</td>
+            <td>Good (with frames)</td>
+            <td>Good (with frames)</td>
+          </tr>
+          <tr>
+            <td><strong>Audio track analysis</strong></td>
+            <td>Yes (built-in)</td>
+            <td>Separate (Whisper)</td>
+            <td>Separate (Whisper)</td>
+          </tr>
+          <tr>
+            <td><strong>Max frames per request</strong></td>
+            <td>N/A (native)</td>
+            <td>~20 images</td>
+            <td>~20 images</td>
+          </tr>
+          <tr>
+            <td><strong>Best for</strong></td>
+            <td>Long videos, Q&amp;A</td>
+            <td>Detailed frame analysis</td>
+            <td>Fast frame analysis</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Video Q&A and Summarization -->
+    <section>
+      <h2>Video Q&amp;A and Summarization</h2>
+
+      <p>Two of the most useful things you can do with video AI are asking questions about video content and generating summaries. Let's look at practical patterns for both.</p>
+
+      <h3>Video Q&amp;A: Ask Anything About a Video</h3>
+
+      <p>Once you've fed frames (or a video file) to an LLM, you can ask surprisingly specific questions:</p>
+
+      <ul>
+        <li>"How many people appear in this video?" &mdash; The model counts across frames</li>
+        <li>"What brand of laptop is the presenter using?" &mdash; It reads visible logos and text</li>
+        <li>"Does the speaker seem confident or nervous?" &mdash; It analyzes body language and facial expressions</li>
+        <li>"At what point does the demo fail?" &mdash; It identifies the moment things go wrong</li>
+        <li>"Is this video appropriate for a work presentation?" &mdash; Content moderation</li>
+      </ul>
+
+      <h3>Video Summarization Pipeline</h3>
+
+      <p>For longer videos, a two-pass approach works well: first analyze segments, then synthesize a summary.</p>
+
+      <div class="pipeline-box">
+        <h3>Two-Pass Video Summarization</h3>
+        <div class="workflow-steps">
+          <span class="step">Video</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Split into Segments</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Analyze Each Segment</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Combine Summaries</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Final Summary</span>
+        </div>
+        <p style="margin-top: 1rem;"><strong>Pass 1:</strong> Break the video into 30-60 second segments. Extract a few frames from each segment, plus transcribe the audio. Send each segment to the LLM: "Describe what happens in this segment."</p>
+        <p><strong>Pass 2:</strong> Collect all segment descriptions and send them to the LLM: "Here are descriptions of each 30-second segment of a video. Write a coherent summary of the full video, noting key moments and transitions."</p>
+      </div>
+
+      <p>This two-pass approach works for videos of any length. A 1-hour meeting becomes 120 segment descriptions, which the LLM synthesizes into a structured summary with timestamps, action items, and key decisions.</p>
+
+      <div class="try-it-box">
+        <h3>Try It: Summarize a YouTube Video</h3>
+        <p>Pick a short YouTube video (2-5 minutes). Download it using <code>yt-dlp</code> (a command-line tool). Extract frames at 1 per 5 seconds using FFmpeg. Send the frames to Claude or GPT-4 with the prompt: "These frames are sampled every 5 seconds from a video. Provide a timeline summary of what happens." Compare the AI's summary to what you see when you actually watch the video. How much did it capture? What did it miss?</p>
+      </div>
+    </section>
+
+    <!-- Action Recognition and Object Tracking -->
+    <section>
+      <h2>Action Recognition &amp; Object Tracking</h2>
+
+      <p>Beyond "what's in the video," there are two specialized video tasks worth understanding: recognizing <em>actions</em> and <em>tracking objects</em> across frames.</p>
+
+      <h3>Action Recognition</h3>
+
+      <p>Action recognition answers the question: "What is happening?" Not what objects are present, but what <em>activity</em> is occurring. Is the person walking, running, cooking, typing, dancing, falling?</p>
+
+      <p>For LLM-based approaches, you don't need specialized models &mdash; sending a sequence of frames to Claude or GPT-4 with the prompt "What actions are being performed?" works surprisingly well for common activities. But for high-volume or real-time action recognition (like security camera analysis), specialized models are more efficient.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">400+</span>
+          <span class="stat-label">Action classes recognized by models like SlowFast and VideoMAE</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">30fps</span>
+          <span class="stat-label">Real-time action recognition speed on modern GPUs</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">95%+</span>
+          <span class="stat-label">Top-5 accuracy on standard benchmarks (Kinetics-400)</span>
+        </div>
+      </div>
+
+      <h3>Object Tracking</h3>
+
+      <p>Object tracking follows a specific object across frames. You identify something in frame 1 &mdash; say, a red car &mdash; and the tracker follows it through every subsequent frame, even when it's partially hidden, changes angle, or temporarily disappears behind another object.</p>
+
+      <p>Think of it like keeping your eye on a specific player during a football match. Even when players overlap, change direction, or the camera pans, you know which one is "your" player.</p>
+
+      <p>Dedicated tracking models like <strong>SAM 2 (Segment Anything Model 2)</strong> from Meta are exceptional at this. You click on an object in one frame, and SAM 2 segments and tracks it through the entire video. This is incredibly useful for:</p>
+
+      <ul>
+        <li><strong>Sports analytics:</strong> Track individual players across a game</li>
+        <li><strong>Security:</strong> Follow a person of interest through multiple camera feeds</li>
+        <li><strong>Video editing:</strong> Select and modify a moving object across all frames</li>
+        <li><strong>Autonomous driving:</strong> Track pedestrians, vehicles, and obstacles</li>
+      </ul>
+
+      <div class="tip-box">
+        <strong>LLMs vs dedicated models for video tasks:</strong> For one-off video analysis (summarize this meeting, what happened in this clip), LLMs with frame extraction are the easy choice. For high-volume, real-time, or specialized tasks (track this player for 90 minutes, classify every action in 1,000 security clips), dedicated models like SlowFast, VideoMAE, or SAM 2 are far more efficient and accurate.
+      </div>
+    </section>
+
+    <!-- Combining Video + Audio -->
+    <section>
+      <h2>Combining Video and Audio Analysis</h2>
+
+      <p>The real power of video understanding comes from analyzing the visual and audio tracks together. The audio tells you what's being <em>said</em>. The visuals tell you what's being <em>shown</em>. Together, you get the full picture.</p>
+
+      <p>Here's a practical pipeline that combines both:</p>
+
+      <div class="pipeline-box">
+        <h3>Full Video Analysis Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Video File</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Split Audio &amp; Visual</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Whisper: Transcribe</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Vision: Analyze Frames</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">LLM: Merge &amp; Summarize</span>
+        </div>
+        <p style="margin-top: 1rem;"><strong>Step 1:</strong> Extract the audio track and video frames separately using FFmpeg. <strong>Step 2:</strong> Send the audio to Whisper for transcription with timestamps. <strong>Step 3:</strong> Send sampled frames to a vision LLM for visual descriptions. <strong>Step 4:</strong> Combine the timestamped transcript with the frame descriptions and send everything to an LLM for a unified analysis.</p>
+      </div>
+
+<pre><code>import subprocess, json
+from openai import OpenAI
+
+client = OpenAI()
+
+# Step 1: Extract audio
+subprocess.run([
+    "ffmpeg", "-i", "lecture.mp4",
+    "-q:a", "0", "audio.mp3"
+], capture_output=True)
+
+# Step 2: Transcribe with timestamps
+transcript = client.audio.transcriptions.create(
+    model="whisper-1",
+    file=open("audio.mp3", "rb"),
+    response_format="verbose_json",
+    timestamp_granularities=["segment"]
+)
+
+# Step 3: Combine with frame analysis
+# (frame analysis from earlier step)
+prompt = f"""Transcript: {transcript.text}
+
+Visual descriptions: {frame_descriptions}
+
+Create a comprehensive summary combining what
+was said and what was shown on screen."""
+</code></pre>
+
+      <p>This combined approach is especially powerful for:</p>
+
+      <ul>
+        <li><strong>Lecture recordings:</strong> The transcript captures what the professor says; the frames capture what's on the slides</li>
+        <li><strong>Product demos:</strong> The speech explains features; the visuals show the UI in action</li>
+        <li><strong>News broadcasts:</strong> The anchor's speech plus the B-roll footage and graphics tell the complete story</li>
+        <li><strong>Meeting recordings:</strong> Who said what, plus what was on the shared screen at each moment</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Audio-visual alignment matters.</strong> When combining transcript and frame data, include timestamps for both. "At 2:30, the speaker says 'let me show you the dashboard' and the screen switches to a chart" is far more useful than disconnected lists of "things said" and "things shown." Timestamps are the glue that holds multi-modal analysis together.
+      </div>
+    </section>
+
+    <!-- Use Cases -->
+    <section>
+      <h2>Real-World Use Cases</h2>
+
+      <p>Video understanding AI is already being used in production across many industries. Here are the patterns you're most likely to encounter or build:</p>
+
+      <h3>Content Moderation</h3>
+      <p>Platforms like YouTube, TikTok, and Instagram process billions of video uploads. AI screens videos for policy violations: violence, nudity, hate speech, dangerous activities. The system samples frames, analyzes audio, and flags content for human review. Speed is critical &mdash; millions of videos are uploaded daily.</p>
+
+      <h3>Accessibility: Video Descriptions</h3>
+      <p>For visually impaired users, AI can generate audio descriptions of what's happening on screen. "A woman in a red jacket walks into a coffee shop. She waves at someone sitting by the window." This is multimodal AI at its most meaningful &mdash; making visual content accessible to people who can't see it.</p>
+
+      <h3>Security and Surveillance</h3>
+      <p>Anomaly detection in security footage: the AI watches thousands of hours of routine footage and alerts when something unusual happens &mdash; a person in a restricted area, an abandoned package, unusual crowd movement. This saves human operators from watching feeds 24/7.</p>
+
+      <h3>Sports Analytics</h3>
+      <p>Track every player's position and movement across a full match. Calculate distance run, speed, positioning patterns, pass accuracy. Coaches use this data to analyze tactics and player performance. Companies like Hudl and StatsBomb use video AI to automate what used to require hours of manual video review.</p>
+
+      <h3>Medical Imaging</h3>
+      <p>Surgical video analysis, endoscopy review, ultrasound interpretation &mdash; medical video AI helps doctors catch things they might miss and standardizes the review process. A model trained on thousands of procedures can flag unusual patterns for a physician's attention.</p>
+    </section>
+
+    <!-- Practical Tools -->
+    <section>
+      <h2>Your Video AI Toolkit</h2>
+
+      <p>Here are the tools you'll reach for most often when working with video:</p>
+
+      <div class="tool-card">
+        <div class="tool-icon">🎬</div>
+        <div class="tool-info">
+          <div class="tool-name">FFmpeg</div>
+          <div class="tool-desc">The Swiss Army knife of video processing. Extract frames, separate audio tracks, resize, convert formats, cut clips. If you work with video, FFmpeg is non-negotiable. It's free, open-source, and handles virtually any format. Learn the basics &mdash; you'll use it constantly.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🔍</div>
+        <div class="tool-info">
+          <div class="tool-name">PySceneDetect</div>
+          <div class="tool-desc">Python library for detecting scene changes in video. Outputs timestamps where significant visual transitions occur. Essential for intelligent frame sampling &mdash; instead of sampling blindly, sample at scene boundaries.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🎯</div>
+        <div class="tool-info">
+          <div class="tool-name">SAM 2 (Segment Anything Model 2)</div>
+          <div class="tool-desc">Meta's model for segmenting and tracking objects in video. Click on any object in one frame; SAM 2 tracks it through the entire video. Open source, state-of-the-art. The go-to for object tracking and video segmentation tasks.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">📊</div>
+        <div class="tool-info">
+          <div class="tool-name">Twelve Labs</div>
+          <div class="tool-desc">A dedicated video understanding API. Upload videos and search them with natural language ("find the moment where the CEO mentions revenue"), generate summaries, or classify content. Purpose-built for video &mdash; if video analysis is your core use case, this is worth exploring.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">🐍</div>
+        <div class="tool-info">
+          <div class="tool-name">OpenCV (cv2)</div>
+          <div class="tool-desc">The classic computer vision library. Read video frames, apply filters, detect faces and objects, compute optical flow (motion between frames). More low-level than LLM-based approaches but gives you fine-grained control when you need it.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tips and Common Pitfalls -->
+    <section>
+      <h2>Tips and Common Pitfalls</h2>
+
+      <div class="tip-box">
+        <strong>Always include context in your prompts.</strong> Tell the LLM what kind of video it's looking at: "These frames are from a 45-minute product demo" vs "These frames are from a 15-second TikTok." The model's analysis strategy should differ dramatically based on the video type, and it can't always tell from frames alone.
+      </div>
+
+      <div class="tip-box">
+        <strong>Include timestamps with frames.</strong> When sending extracted frames, label each one: "Frame at t=0:00," "Frame at t=0:05," etc. This lets the model reason about timing: "The error appeared around the 30-second mark" is far more useful than "the error appeared in frame 7."
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't over-sample slow videos.</strong> A 30-minute meeting where people sit and talk does not need 1 frame per second (that's 1,800 frames and a massive API bill). For talking-head content, 1 frame every 30-60 seconds is usually sufficient &mdash; the real information is in the audio transcript, not the visuals. Spend your token budget on transcription instead.
+      </div>
+
+      <div class="warning-box">
+        <strong>Video hallucinations are real.</strong> LLMs can confidently describe events that didn't happen, especially when filling gaps between sampled frames. If you sample a frame where someone is standing and the next frame they're sitting, the model might invent a detailed description of them sitting down gracefully. Always treat video analysis as "best-effort" and validate critical findings against the actual footage.
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Build a Video Analyzer</h3>
+        <p>Pick a short video clip (15-30 seconds) &mdash; a screen recording, a clip from your phone, or a short YouTube download. Then:</p>
+        <ol>
+          <li><strong>Extract frames:</strong> Use FFmpeg to pull frames at 1fps. How many frames do you get?</li>
+          <li><strong>Analyze with vision:</strong> Send 5-10 frames to Claude or GPT-4 with timestamps and ask: "What's happening in this video? Provide a timeline."</li>
+          <li><strong>Add audio:</strong> Extract the audio track, transcribe it with Whisper. Now combine the transcript with the frame analysis and ask the LLM for a unified summary.</li>
+          <li><strong>Compare:</strong> How much better is the combined (visual + audio) analysis compared to visual-only or audio-only?</li>
+          <li><strong>Bonus &mdash; Try Gemini:</strong> If you have access to the Gemini API, upload the same video directly. Compare Gemini's native video analysis to your frame-extraction approach. Which captures more detail? Which is easier to use?</li>
+        </ol>
+        <p><strong>Reflection:</strong> Think about videos your team or product deals with &mdash; customer support recordings, demo videos, user-submitted clips. How could automated video analysis save time or add value?</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>Video understanding is powerful, but everything we've covered so far has been about <em>batch processing</em> &mdash; you have a video file, you analyze it, you get results. What about processing video (and audio) <strong>in real-time</strong>?</p>
+
+      <p>In Chapter 10, we tackle <strong>Real-Time Multimodal Pipelines</strong>. You'll learn how to stream audio and video to AI models with low latency, build voice assistants that can see what you're looking at, and understand the architecture behind GPT-4o's Realtime API. We're going from "analyze this recording" to "have a live conversation with an AI that can see your screen and hear your voice &mdash; at the same time."</p>
+
+      <p>If video understanding is watching a movie, real-time multimodal is having a live video call with an AI. Let's go.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="08-text-to-speech.html" class="prev">
+      <span class="nav-direction">&larr; Previous</span>
+      <span class="nav-chapter">Text-to-Speech &amp; Voice Cloning</span>
+    </a>
+    <a href="10-realtime-pipelines.html" class="next">
+      <span class="nav-direction">Next &rarr;</span>
+      <span class="nav-chapter">Real-Time Multimodal Pipelines</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

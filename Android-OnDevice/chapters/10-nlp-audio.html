@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: NLP and Audio On-Device — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-computer-vision.html">&larr; Prev</a>
+      <a href="11-production-deployment.html">Next &rarr;</a>
+      <a href="maps/10-nlp-audio-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>NLP and Audio On-Device</h1>
+    <p class="subtitle">Text classification, sentiment analysis, speech-to-text, and keyword spotting — all on the phone</p>
+  </header>
+
+  <main>
+
+    <h2>Beyond Images — Understanding Words and Sounds</h2>
+
+    <p>Chapters 3-9 focused on what your phone can <em>see</em>. This chapter is about what it can <em>read</em> and <em>hear</em>. The inference pattern is identical — load model, preprocess input, run inference, postprocess output — but the input is text or audio instead of pixels.</p>
+
+    <p>On-device NLP and audio are already shipping in features you use daily: Gboard's next-word prediction, Google Assistant's offline voice commands, and spam call filtering. Now you'll build the same kind of features.</p>
+
+    <h2>What's Practical On-Device in 2026</h2>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Works great on-device</p>
+        <div class="prompt-text">Text classification (spam, category, intent)
+Sentiment analysis (positive/negative/neutral)
+Entity extraction (dates, phones, addresses)
+Language detection
+Keyword spotting / wake words
+Audio classification (sounds, events)
+Short speech-to-text (commands, dictation)
+Semantic similarity / search</div>
+        <p class="prompt-explanation">Focused tasks with clear inputs and outputs. Small models (2-25MB) handle these with &lt;15ms latency.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Still needs the cloud</p>
+        <div class="prompt-text">Multi-turn conversational AI
+Complex question answering
+Long-document summarization
+Code generation
+Multi-speaker transcription
+Real-time translation of live speech
+Nuanced tone / sarcasm detection</div>
+        <p class="prompt-explanation">These require large models with big context windows. Use Gemini Nano for simple generation (Chapter 6), cloud models for the rest.</p>
+      </div>
+    </div>
+
+    <h2>Text Classification with MobileBERT</h2>
+
+    <p>Text classification is the NLP equivalent of image classification — you give it text, it tells you which category it belongs to. Spam filter, support ticket router, content moderator, intent classifier — they're all the same pattern.</p>
+
+    <div class="model-pipeline">
+      <p><strong>Text classification pipeline — from raw text to category:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Raw Text</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Tokenize</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Token IDs + Mask</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">MobileBERT</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Category Scores</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Label</span>
+      </div>
+    </div>
+
+    <p>MobileBERT is the go-to model for on-device NLP. It's a compressed version of BERT — 25MB, ~12ms inference on NPU, and surprisingly capable for classification tasks.</p>
+
+    <h3>Tokenization — Turning Text into Numbers</h3>
+
+    <p>Models don't understand words — they understand numbers. <strong>Tokenization</strong> converts text into a sequence of integer IDs that the model can process. It's the NLP equivalent of resizing an image to 224&times;224.</p>
+
+<pre><code>// WordPiece tokenization (used by BERT / MobileBERT)
+// "I love this app" → ["[CLS]", "i", "love", "this", "app", "[SEP]"]
+// → [101, 1045, 2293, 2023, 10439, 102]
+
+class WordPieceTokenizer(context: Context) {
+    private val vocab: Map&lt;String, Int&gt;
+
+    init {
+        // Load vocabulary file (30,522 tokens for BERT)
+        val vocabText = context.assets.open("vocab.txt").bufferedReader().readLines()
+        vocab = vocabText.withIndex().associate { (i, word) -> word to i }
+    }
+
+    fun tokenize(text: String, maxLength: Int = 128): IntArray {
+        val tokens = mutableListOf(101) // [CLS] token
+        text.lowercase().split(" ").forEach { word ->
+            tokens.add(vocab[word] ?: vocab["[UNK]"]!!)
+        }
+        tokens.add(102) // [SEP] token
+
+        // Pad or truncate to fixed length
+        return IntArray(maxLength) { i ->
+            if (i < tokens.size) tokens[i] else 0
+        }
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>The tokenizer must match the model.</strong> BERT uses WordPiece. GPT-style models use BPE (Byte Pair Encoding). SentencePiece is used by many multilingual models. Using the wrong tokenizer produces garbage input IDs and meaningless output. Always use the tokenizer that shipped with your model.
+    </div>
+
+    <h3>Running Text Classification</h3>
+
+<pre><code>class TextClassifier(context: Context) {
+
+    private val interpreter: Interpreter
+    private val tokenizer: WordPieceTokenizer
+    private val labels = listOf("urgent", "informational", "social", "spam")
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "text_classifier.tflite")
+        interpreter = Interpreter(model, Interpreter.Options().apply {
+            addDelegate(NnApiDelegate())
+        })
+        tokenizer = WordPieceTokenizer(context)
+    }
+
+    fun classify(text: String): Pair&lt;String, Float&gt; {
+        val inputIds = tokenizer.tokenize(text)
+        val attentionMask = IntArray(128) { if (inputIds[it] != 0) 1 else 0 }
+
+        val output = Array(1) { FloatArray(labels.size) }
+        interpreter.runForMultipleInputsOutputs(
+            arrayOf(inputIds, attentionMask), mapOf(0 to output)
+        )
+
+        val maxIdx = output[0].indices.maxByOrNull { output[0][it] } ?: 0
+        return labels[maxIdx] to output[0][maxIdx]
+    }
+}</code></pre>
+
+    <h2>Sentiment Analysis</h2>
+
+    <p>Sentiment analysis is just text classification with three (or five) classes: positive, negative, neutral. You can use the same MobileBERT architecture, fine-tuned on sentiment data:</p>
+
+<pre><code>val sentimentLabels = listOf("negative", "neutral", "positive")
+
+fun analyzeSentiment(text: String): String {
+    val (label, confidence) = sentimentClassifier.classify(text)
+    return when {
+        label == "positive" && confidence > 0.7f -> "Positive 😊"
+        label == "negative" && confidence > 0.7f -> "Negative 😞"
+        else -> "Neutral 😐"
+    }
+}
+
+// Use case: real-time sentiment in a messaging app
+// As user types, show sentiment indicator that updates per keystroke</code></pre>
+
+    <div class="device-benchmark">
+      <p><strong>On-device NLP and audio model performance (Pixel 9 Pro, NNAPI):</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Task</th>
+            <th>Size</th>
+            <th>Inference</th>
+            <th>Accuracy</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>MobileBERT</td>
+            <td>Text classification</td>
+            <td>25 MB</td>
+            <td>~12 ms</td>
+            <td>~90% (4-class)</td>
+          </tr>
+          <tr>
+            <td>MobileBERT</td>
+            <td>Sentiment analysis</td>
+            <td>25 MB</td>
+            <td>~12 ms</td>
+            <td>~88% (3-class)</td>
+          </tr>
+          <tr>
+            <td>all-MiniLM-L6</td>
+            <td>Text embeddings</td>
+            <td>22 MB</td>
+            <td>~15 ms</td>
+            <td>N/A (similarity)</td>
+          </tr>
+          <tr>
+            <td>Keyword spotting (custom)</td>
+            <td>Wake word detection</td>
+            <td>0.8 MB</td>
+            <td>~1 ms</td>
+            <td>~95%</td>
+          </tr>
+          <tr>
+            <td>YAMNet</td>
+            <td>Audio classification</td>
+            <td>3.7 MB</td>
+            <td>~5 ms</td>
+            <td>~85% (521 classes)</td>
+          </tr>
+          <tr>
+            <td>Whisper tiny</td>
+            <td>Speech-to-text</td>
+            <td>39 MB</td>
+            <td>~200 ms/sec</td>
+            <td>~85% WER</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.5rem; color: var(--color-text-light);">NLP models are heavier than vision models (25MB vs 3-7MB) because language requires larger vocabularies and more parameters. But they're still fast enough for real-time use.</p>
+    </div>
+
+    <h2>On-Device Speech-to-Text</h2>
+
+    <p>Three approaches, from easiest to most flexible:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">A</div>
+      <div class="tool-info">
+        <div class="tool-name">Android SpeechRecognizer (Offline)</div>
+        <div class="tool-desc">Built-in Android API. Download offline language packs in Settings &rarr; Languages. Zero code for basic use. Limited customization, but works on almost all devices. <strong>Best for: voice commands, simple dictation.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">V</div>
+      <div class="tool-info">
+        <div class="tool-name">Vosk</div>
+        <div class="tool-desc">Lightweight open-source speech recognition. Models are 50-200MB per language. Runs as a library in your app — no system dependency. Supports streaming recognition. <strong>Best for: always-on recognition, custom vocabularies.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">W</div>
+      <div class="tool-info">
+        <div class="tool-name">Whisper.cpp</div>
+        <div class="tool-desc">OpenAI's Whisper model compiled for mobile via C++. Highest accuracy. Whisper-tiny is 39MB, processes ~1 second of audio in ~200ms. <strong>Best for: high-accuracy transcription where latency isn't critical.</strong></div>
+      </div>
+    </div>
+
+    <h3>Android SpeechRecognizer — The Quick Path</h3>
+
+<pre><code>// Check for offline recognition support
+val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+
+val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+}
+
+recognizer.setRecognitionListener(object : RecognitionListener {
+    override fun onResults(results: Bundle) {
+        val matches = results.getStringArrayList(
+            SpeechRecognizer.RESULTS_RECOGNITION
+        )
+        val transcription = matches?.firstOrNull() ?: ""
+        updateUI(transcription)
+    }
+    override fun onPartialResults(partialResults: Bundle) {
+        val partial = partialResults.getStringArrayList(
+            SpeechRecognizer.RESULTS_RECOGNITION
+        )?.firstOrNull() ?: ""
+        updateUI(partial) // Show text as user speaks
+    }
+    // ... other callbacks
+})
+recognizer.startListening(intent)</code></pre>
+
+    <div class="tip-box">
+      <strong><code>createOnDeviceSpeechRecognizer()</code> requires Android 12+ (API 31).</strong> On older devices, use <code>createSpeechRecognizer()</code> which may fall back to cloud recognition. Always check <code>SpeechRecognizer.isOnDeviceRecognitionAvailable(context)</code> at runtime.
+    </div>
+
+    <h2>Keyword Spotting — Always-On Wake Word Detection</h2>
+
+    <p>Keyword spotting uses a tiny model (&lt; 1MB) that listens for specific phrases — like "Hey Google" or your app's custom wake word. The model is so small it can run continuously in a background service with minimal battery impact.</p>
+
+<pre><code>class KeywordSpotter(context: Context) {
+
+    private val interpreter: Interpreter
+    private val keywords = listOf("hey_app", "stop", "next", "unknown")
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "keyword_model.tflite")
+        interpreter = Interpreter(model) // CPU is fine for < 1ms inference
+    }
+
+    fun detectKeyword(audioFrame: FloatArray): String? {
+        // audioFrame: 1 second of audio at 16kHz = 16,000 floats
+        // Extract mel spectrogram features
+        val features = extractMelSpectrogram(audioFrame)
+
+        val output = Array(1) { FloatArray(keywords.size) }
+        interpreter.run(features, output)
+
+        val maxIdx = output[0].indices.maxByOrNull { output[0][it] } ?: 0
+        val confidence = output[0][maxIdx]
+
+        return if (confidence > 0.85f && keywords[maxIdx] != "unknown") {
+            keywords[maxIdx]
+        } else null
+    }
+}</code></pre>
+
+    <div class="hardware-note">
+      <p><strong>Battery impact of always-on audio processing:</strong></p>
+      <ul>
+        <li><strong>Keyword spotting model (&lt; 1MB, ~1ms inference)</strong> — negligible battery impact. Can run continuously for days. This is how "Hey Google" works without draining your battery.</li>
+        <li><strong>Full speech recognition (~50MB, ~200ms/sec)</strong> — significant battery drain. Only activate after a keyword is detected. Never run continuously.</li>
+        <li><strong>Audio classification (YAMNet, ~4MB, ~5ms)</strong> — moderate impact. Suitable for short sessions (fitness app listening for rep sounds) but not 24/7 monitoring.</li>
+      </ul>
+      <p>The pattern: use a <strong>tiny keyword spotter</strong> as a gate, then activate the <strong>heavy model</strong> only when triggered.</p>
+    </div>
+
+    <h2>Audio Classification with YAMNet</h2>
+
+    <p>YAMNet classifies sounds into 521 categories — speech, music, dog barking, siren, cough, applause, and hundreds more. It's useful for accessibility features (alerting deaf users to sounds), smart home triggers, and content analysis.</p>
+
+<pre><code>class SoundClassifier(context: Context) {
+
+    private val interpreter: Interpreter
+    private val labels: List&lt;String&gt; // 521 sound classes
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "yamnet.tflite")
+        interpreter = Interpreter(model)
+        labels = FileUtil.loadLabels(context, "yamnet_labels.txt")
+    }
+
+    fun classify(audioWaveform: FloatArray): List&lt;SoundResult&gt; {
+        // YAMNet expects: 0.975 seconds of audio at 16kHz (15,600 samples)
+        val output = Array(1) { FloatArray(521) }
+        interpreter.run(audioWaveform, output)
+
+        return output[0].mapIndexed { i, score -> SoundResult(labels[i], score) }
+            .sortedByDescending { it.score }
+            .take(5)
+    }
+}
+
+data class SoundResult(val label: String, val score: Float)</code></pre>
+
+    <h2>Text Embeddings — On-Device Semantic Search</h2>
+
+    <p>Text embeddings convert text into numerical vectors that capture meaning. Similar texts produce similar vectors. This enables powerful features without a server: semantic search ("find messages about meetings"), duplicate detection, and recommendation.</p>
+
+<pre><code>class TextEmbedder(context: Context) {
+
+    private val interpreter: Interpreter
+    private val tokenizer: WordPieceTokenizer
+
+    init {
+        val model = FileUtil.loadMappedFile(context, "all_minilm_l6.tflite")
+        interpreter = Interpreter(model, Interpreter.Options().apply {
+            addDelegate(NnApiDelegate())
+        })
+        tokenizer = WordPieceTokenizer(context)
+    }
+
+    fun embed(text: String): FloatArray {
+        val inputIds = tokenizer.tokenize(text, maxLength = 64)
+        val attentionMask = IntArray(64) { if (inputIds[it] != 0) 1 else 0 }
+        val embedding = Array(1) { FloatArray(384) } // 384-dim embedding
+
+        interpreter.runForMultipleInputsOutputs(
+            arrayOf(inputIds, attentionMask), mapOf(0 to embedding)
+        )
+        return embedding[0]
+    }
+
+    fun similarity(a: FloatArray, b: FloatArray): Float {
+        val dot = a.zip(b).sumOf { (x, y) -> (x * y).toDouble() }.toFloat()
+        val normA = sqrt(a.sumOf { (it * it).toDouble() }).toFloat()
+        val normB = sqrt(b.sumOf { (it * it).toDouble() }).toFloat()
+        return dot / (normA * normB)  // cosine similarity: -1 to 1
+    }
+}
+
+// Usage: find the most relevant message
+val query = embedder.embed("when is the meeting?")
+val messages = listOf("Team standup at 3pm", "Great job on the PR!", "Lunch?")
+val scored = messages.map { it to embedder.similarity(query, embedder.embed(it)) }
+    .sortedByDescending { it.second }
+// scored[0] = ("Team standup at 3pm", 0.78)</code></pre>
+
+    <h2>Combining NLP with Generative AI</h2>
+
+    <p>Traditional NLP models and Gemini Nano (Chapter 6) serve different purposes. Use the right tool for each job:</p>
+
+    <div class="highlight-box">
+      <h3>When to Use What</h3>
+      <ul>
+        <li><strong>Classification / sentiment / detection</strong> &rarr; MobileBERT (25MB, ~12ms, deterministic, reliable)</li>
+        <li><strong>Summarization / rewriting / generation</strong> &rarr; Gemini Nano (system-managed, ~30 tok/sec, creative but variable)</li>
+        <li><strong>Entity extraction</strong> &rarr; ML Kit (Chapter 5) — no model management needed</li>
+        <li><strong>Wake word detection</strong> &rarr; Tiny custom model (&lt; 1MB, always-on)</li>
+        <li><strong>Full speech-to-text</strong> &rarr; Android SpeechRecognizer or Whisper</li>
+      </ul>
+      <p>Traditional NLP models are <strong>fast, cheap, and deterministic</strong> — same input always produces same output. Generative models are <strong>flexible but variable</strong> — great for creative tasks, unreliable for classification. Combine both in your app for the best experience.</p>
+    </div>
+
+    <h2>Multilingual Considerations</h2>
+
+    <p>If your app serves multiple languages, you have two strategies:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Approach</th>
+          <th>Pros</th>
+          <th>Cons</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>One multilingual model</strong></td>
+          <td>Simple deployment, one model for 100+ languages</td>
+          <td>Larger (50-100MB), slightly lower per-language accuracy</td>
+        </tr>
+        <tr>
+          <td><strong>Per-language specialist</strong></td>
+          <td>Smaller (15-25MB each), better accuracy per language</td>
+          <td>Multiple downloads to manage, storage adds up</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Start with a multilingual model</strong> (like multilingual MobileBERT) for broad coverage. If a specific language underperforms, add a specialist model for that language and download it on demand. This gives you instant global coverage with targeted improvements where needed.
+    </div>
+
+    <h2>Try It: Build a Smart Inbox Classifier</h2>
+
+    <div class="exercise-box">
+      <p><strong>Build a "smart inbox" that classifies messages and shows per-message sentiment.</strong></p>
+      <ol>
+        <li>Download a <strong>MobileBERT text classification</strong> model (pre-trained on a 4-category dataset or fine-tune your own in Colab)</li>
+        <li>Implement the <code>TextClassifier</code> with WordPiece tokenization</li>
+        <li>Implement a <code>SentimentAnalyzer</code> using a 3-class sentiment model</li>
+        <li>Create a Compose UI that shows a list of messages, each with:
+          <ul>
+            <li>The message text</li>
+            <li>A <strong>category badge</strong> (urgent/red, informational/blue, social/green, spam/gray)</li>
+            <li>A <strong>sentiment indicator</strong> (positive/neutral/negative emoji)</li>
+          </ul>
+        </li>
+        <li>Classify 20 sample messages and measure:
+          <ul>
+            <li>Classification accuracy (does the category make sense?)</li>
+            <li>Sentiment accuracy (does the emoji match the tone?)</li>
+            <li>Per-message inference time (both models combined)</li>
+          </ul>
+        </li>
+      </ol>
+      <p><strong>Bonus:</strong> Add a search bar that uses text embeddings (all-MiniLM) to find semantically similar messages — "find messages about deadlines" should surface messages about due dates, even if they don't contain the word "deadline."</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've now built features across every modality — vision, language, audio, and generative AI. But building a feature on your dev phone is very different from shipping it to millions of devices. What happens when the model download fails? When a budget phone runs out of memory? When a new model performs worse than the old one?</p>
+
+    <p>In <strong>Chapter 11: Model Management and Production Deployment</strong>, we'll tackle the production side: model packaging strategies, OTA updates via Firebase, A/B testing model versions, error handling, performance monitoring, and graceful degradation across the fragmented Android device landscape. It's the difference between "cool demo" and "shipped feature."</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="09-computer-vision.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Computer Vision Features</span>
+      </a>
+      <a href="11-production-deployment.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Model Management and Production Deployment</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

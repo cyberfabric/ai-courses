@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 3: Context Engineering for Real Projects | AI-Ready Engineering For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Ready Engineering For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="02-claude-md-mastery.html">&larr; Prev</a>
+      <a href="04-skills-at-scale.html">Next &rarr;</a>
+      <a href="maps/03-context-engineering-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 3</span>
+    <h1>Context Engineering for Real Projects</h1>
+    <p class="subtitle">Control what AI reads, how much, and in what format &mdash; at the project level</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>Your CLAUDE.md Is Only the Beginning</h2>
+
+      <p>In <a href="02-claude-md-mastery.html">Chapter 2</a>, you built a production-grade CLAUDE.md. That file is the single most important piece of your AI configuration. But it's not the only thing AI reads.</p>
+
+      <p>Every time you start a Claude Code session, the model assembles a context window from multiple sources: your CLAUDE.md, the files you reference, the conversation history, any documentation it discovers, and whatever it reads while exploring your project. That context window has a budget &mdash; and how you manage that budget determines whether AI gets the right information or drowns in noise.</p>
+
+      <p><strong>Context engineering</strong> isn't about writing better prompts. It's a project-level discipline: deciding what AI should read, in what format, and making sure irrelevant information stays out of the way.</p>
+
+      <div class="highlight-box">
+        <strong>The Principle:</strong> Context engineering is to AI what mise en place is to a chef. Before cooking starts, every ingredient is measured, prepped, and within reach. Before AI starts coding, every relevant rule, pattern, and reference should be available in the right format at the right size.
+      </div>
+    </section>
+
+    <section>
+      <h2>Context Budget Planning</h2>
+
+      <p>Every AI model has a context window &mdash; the total amount of text it can process in a single interaction. Claude's context window is large (200K tokens), but that doesn't mean you should fill it. More context isn't always better. The right question is: <strong>what's the minimum context AI needs to produce correct output?</strong></p>
+
+      <h3>The Token Math</h3>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">~750</div>
+          <div class="stat-label">Words per 1K tokens<br><small>(rough estimate for code + prose)</small></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~4x</div>
+          <div class="stat-label">Code is denser than prose<br><small>100 lines of code &asymp; 1-2K tokens</small></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">5 min</div>
+          <div class="stat-label">Prompt cache TTL<br><small>Stable context gets cached &amp; reused</small></div>
+        </div>
+      </div>
+
+      <p>Here's how context typically breaks down in a well-configured project:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Context Source</th>
+            <th>Typical Size</th>
+            <th>Caching?</th>
+            <th>Your Control</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CLAUDE.md (root)</td>
+            <td>500-2K tokens</td>
+            <td>Cached (stable)</td>
+            <td>Full</td>
+          </tr>
+          <tr>
+            <td>CLAUDE.md (directory)</td>
+            <td>200-500 tokens each</td>
+            <td>Cached (stable)</td>
+            <td>Full</td>
+          </tr>
+          <tr>
+            <td>Files AI reads during task</td>
+            <td>2-20K tokens</td>
+            <td>Partial</td>
+            <td>Indirect (project structure)</td>
+          </tr>
+          <tr>
+            <td>Conversation history</td>
+            <td>Grows over session</td>
+            <td>Partial</td>
+            <td>Limited</td>
+          </tr>
+          <tr>
+            <td><code>.claude/rules/&lt;topic&gt;.md</code></td>
+            <td>200-400 tokens each</td>
+            <td>Cached; path-scoped rules load with matching files</td>
+            <td>Full</td>
+          </tr>
+          <tr>
+            <td>Architecture docs</td>
+            <td>1-5K tokens</td>
+            <td>When stable</td>
+            <td>Full</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The key insight: <strong>CLAUDE.md and unscoped <code>.claude/rules/</code> files get cached</strong> because they don't change between interactions. This means they're essentially "free" after the first read in a session. Path-scoped rules (<code>paths:</code> frontmatter, covered in <a href="07-architecture-rules.html">Chapter 7</a>) cost zero context until Claude reads a matching file. Invest in making these files excellent &mdash; they're the highest-ROI context you can provide.</p>
+
+      <div class="tip-box">
+        <strong>Budget Rule of Thumb:</strong> Keep your total "always-loaded" context (project CLAUDE.md + unscoped rules) under 5K tokens. Path-scoped rules don't count against the always-loaded budget, since they only enter context when a matching file is read.
+      </div>
+    </section>
+
+    <section>
+      <h2>Context Window Anatomy: What Loads at Startup</h2>
+
+      <p>Before you ever type a prompt, Claude Code has already loaded a stack of automatic context. Knowing the order is the difference between optimizing the right thing and chasing phantom token costs.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Component</th>
+            <th>Typical tokens</th>
+            <th>What it is</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>System prompt</td><td>~4,200</td><td>Core behavior, tool-use rules, response format. You never see it.</td></tr>
+          <tr><td>2</td><td>Auto memory (<code>MEMORY.md</code>)</td><td>~680</td><td>Claude's notes from prior sessions; first 200 lines or 25KB.</td></tr>
+          <tr><td>3</td><td>Environment info</td><td>~280</td><td>cwd, platform, shell, OS, git status block.</td></tr>
+          <tr><td>4</td><td>MCP tool names (deferred)</td><td>~120</td><td>Names only; full schemas load on demand via tool search.</td></tr>
+          <tr><td>5</td><td>Skill descriptions</td><td>~450</td><td>One-liners so Claude knows what skills exist.</td></tr>
+          <tr><td>6</td><td>User CLAUDE.md (<code>~/.claude/CLAUDE.md</code>)</td><td>~320</td><td>Your global preferences across every project.</td></tr>
+          <tr><td>7</td><td>Project CLAUDE.md</td><td>~1,800</td><td>Team rules. The most important file you maintain.</td></tr>
+        </tbody>
+      </table>
+
+      <p>That's roughly <strong>8K tokens of context loaded before your first message</strong> — about 4% of a 200K window. Numbers vary with your setup (more MCP servers, longer CLAUDE.md, bigger MEMORY.md), but the order is fixed.</p>
+
+      <div class="tip-box">
+        <strong>Defer MCP tool schemas.</strong> By default, Claude Code lists MCP tool <em>names</em> at startup and pulls the full schema on demand via tool search. Set <code>ENABLE_TOOL_SEARCH=auto</code> to load schemas upfront only when they fit within 10% of the window, or <code>=false</code> to load everything (rarely the right call). As of Claude Code v2.1.69, even built-in tool schemas (Read, Edit, Bash, etc.) are deferred this way, dropping startup tool overhead from ~14K to under 1K tokens.
+      </div>
+    </section>
+
+    <section>
+      <h2>What Survives <code>/compact</code></h2>
+
+      <p>Long sessions eventually fill the context window. <code>/compact</code> summarizes the conversation so far and frees space for more work. <strong>Not every kind of context survives.</strong> Knowing what reloads automatically and what evaporates is essential when you architect rules across CLAUDE.md, <code>.claude/rules/</code>, skills, and hooks.</p>
+
+      <div class="config-block">
+        <div class="config-path">What happens to each mechanism after /compact</div>
+<pre><code>System prompt + output style       → Unchanged (not part of message history)
+Project-root CLAUDE.md             → Re-injected from disk
+Unscoped rules (no paths:)         → Re-injected from disk
+Auto memory                        → Re-injected from disk
+Path-scoped rules (paths:)         → LOST until matching file is read again
+Nested CLAUDE.md (subdirectories)  → LOST until file in that dir is read again
+Invoked skill bodies               → Re-injected, capped 5K tokens/skill,
+                                     25K total; oldest dropped first
+Skill descriptions (the index)     → NOT re-injected after compact
+Hooks                              → Not applicable (run as code, not context)</code></pre>
+      </div>
+
+      <p>This drives architecture: if a rule MUST survive compaction, drop the <code>paths:</code> frontmatter or move it into the project-root CLAUDE.md. If a skill MUST survive, keep it under 5K tokens and put the most critical instructions near the top of <code>SKILL.md</code> (truncation cuts from the bottom).</p>
+
+      <div class="warning-box">
+        <strong>The skill-index gotcha:</strong> after <code>/compact</code>, only skills you actually invoked stay in context. Skill <em>descriptions</em> are not re-injected. If your team relies on Claude auto-discovering a skill mid-session, it won't see un-invoked ones after the first compact.
+      </div>
+    </section>
+
+    <section>
+      <h2>Diagnostics: <code>/context</code>, <code>/memory</code>, and Subagents</h2>
+
+      <p>Three mechanisms let you observe and control context as it grows:</p>
+
+      <ul>
+        <li><strong><code>/context</code></strong> &mdash; live breakdown of what's in your window right now, by category (system, MCP, memory, conversation, autocompact buffer, free space). Run it before starting heavy work or when responses feel slow. Aim to start substantial tasks below 80% utilization.</li>
+        <li><strong><code>/memory</code></strong> &mdash; lists every CLAUDE.md, CLAUDE.local.md, and rules file that loaded at startup. Use it to confirm a file you expected is actually visible to Claude.</li>
+        <li><strong>Subagent context isolation</strong> &mdash; each subagent (Explore, Plan, custom) runs in its own separate context window. Files it reads don't touch yours; only the final summary returns. Built-in Explore and Plan agents skip CLAUDE.md for an even smaller starting context.</li>
+      </ul>
+
+      <div class="tip-box">
+        <strong>Subagents as a context budget tool:</strong> when you need to research a large codebase or read many files, delegate to a subagent. The 6,000+ tokens of file reads stay in the subagent's window; you get a 400-token summary back. <a href="../../AI-Harness/chapters/index.html">AI Harness Engineering</a> covers subagents in depth — for context engineering, the rule is: if a task involves reading more than ~10K tokens of files, do it in a subagent.
+      </div>
+    </section>
+
+    <section>
+      <h2>Documentation-as-Context</h2>
+
+      <p>Most project documentation is written for humans. It uses narrative prose, includes background history, explains "why" at length. That's great for onboarding &mdash; but terrible for AI context. AI needs structured, scannable, rule-based information.</p>
+
+      <p>The solution isn't to rewrite your docs. It's to maintain <strong>two formats</strong>: human-readable documentation and AI-readable context files.</p>
+
+      <div class="before-after-config">
+        <div class="before-config">
+          <strong>Human-Readable (README.md)</strong>
+<pre>## Architecture
+
+Our app follows Clean Architecture principles,
+which we adopted in Q2 2024 after the monolith
+became unmaintainable. The presentation layer
+uses Jetpack Compose with MVI pattern, which
+replaced our previous MVVM approach. The domain
+layer contains all business logic and is
+intentionally kept free of Android dependencies
+to ensure testability...</pre>
+        </div>
+        <div class="after-config">
+          <strong>AI-Readable (CLAUDE.md)</strong>
+<pre>## Architecture
+- Clean Architecture: presentation → domain → data
+- Presentation: Compose + MVI (StateFlow)
+- Domain: pure Kotlin, no Android imports
+- Data: Room + Retrofit, Repository pattern
+- NEVER reverse dependency direction
+- NEVER put business logic in Composables</pre>
+        </div>
+      </div>
+
+      <p>The human version tells a story. The AI version states constraints. Both are valuable &mdash; but for different audiences. Your CLAUDE.md should read like a rulebook, not a history book.</p>
+
+      <h3>ARCHITECTURE.md: The Bridge Document</h3>
+
+      <p>For larger projects, create an <code>ARCHITECTURE.md</code> that sits between the narrative README and the terse CLAUDE.md. It provides structured documentation that serves both humans and AI:</p>
+
+      <div class="config-block">
+        <div class="config-path">ARCHITECTURE.md (structured for both audiences)</div>
+<pre><code># Architecture Overview
+
+## Layer Diagram
+```
+┌─────────────────────────────────┐
+│  :app (Navigation, DI setup)    │
+├─────────────────────────────────┤
+│  :feature:*  (Compose + MVI)    │
+│  ┌──────────┐  ┌──────────┐    │
+│  │ recipes  │  │nutrition │    │
+│  └──────────┘  └──────────┘    │
+├─────────────────────────────────┤
+│  :core:ui    :core:domain       │
+│  :core:data  :core:testing      │
+└─────────────────────────────────┘
+```
+
+## Module Dependencies (allowed)
+- :feature:* → :core:domain, :core:ui
+- :core:data → :core:domain
+- :app → :feature:*, :core:*
+
+## Module Dependencies (forbidden)
+- :feature:A → :feature:B (features never depend on each other)
+- :core:domain → any Android library
+- :feature:* → :core:data (features access data through domain)
+
+## Key Decisions
+| Decision | Choice | Alternative Rejected |
+|----------|--------|---------------------|
+| UI framework | Compose | Views (legacy) |
+| State management | MVI + StateFlow | MVVM + LiveData |
+| DI | Hilt (constructor) | Koin, manual |
+| Async | Coroutines + Flow | RxJava |
+| Navigation | Compose Navigation | Fragment Navigation |</code></pre>
+      </div>
+
+      <p>This format works for both audiences: humans get the visual diagram and decision rationale, AI gets the structured dependency rules and decision table. Reference it from your CLAUDE.md: <code>See ARCHITECTURE.md for module dependency diagram.</code></p>
+    </section>
+
+    <section>
+      <h2>Auto Memory: Claude's Notes to Itself</h2>
+
+      <p>Everything we've covered so far is context <em>you</em> write. Auto memory is context Claude writes for itself, between sessions. When Claude notices a build command, a recurring debugging pattern, or a preference you've corrected twice, it can save a note to a per-project memory directory. Next session, the notes load automatically alongside your CLAUDE.md.</p>
+
+      <div class="config-block">
+        <div class="config-path">Auto memory layout (machine-local; one dir per git repo)</div>
+<pre><code>~/.claude/projects/&lt;project&gt;/memory/
+  MEMORY.md          ← concise index, loaded every session
+  debugging.md       ← detailed debugging notes
+  api-conventions.md ← API design decisions Claude observed
+  ...                ← any topic files Claude creates</code></pre>
+      </div>
+
+      <p>Three rules govern auto memory:</p>
+
+      <ul>
+        <li><strong>Only <code>MEMORY.md</code> auto-loads.</strong> The first 200 lines or 25KB (whichever comes first) load at session start. Topic files like <code>debugging.md</code> stay on disk and load only when Claude reads them.</li>
+        <li><strong>Machine-local, repo-scoped.</strong> All worktrees and subdirectories of the same git repo share one auto-memory directory. Memory is not synced across machines or cloud environments.</li>
+        <li><strong>Plain markdown.</strong> Run <code>/memory</code> to browse and edit; the files have no special format.</li>
+      </ul>
+
+      <div class="config-block">
+        <div class="config-path">.claude/settings.json — auto memory controls</div>
+<pre><code>{
+  "autoMemoryEnabled": true,                 // default; toggle in /memory
+  "autoMemoryDirectory": "~/.claude/memory"  // override storage location
+}</code></pre>
+      </div>
+
+      <p>You can also set <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code> as an environment variable to disable it entirely. Auto memory requires Claude Code v2.1.59 or later (<code>claude --version</code>).</p>
+
+      <div class="tip-box">
+        <strong>When to use which:</strong> CLAUDE.md = team-shared rules (in git). Auto memory = personal accumulated learnings (machine-local, gitignored by default location). If a rule must apply to every teammate, it goes in CLAUDE.md. If it's "Claude figured this out by working with you," let auto memory keep it.
+      </div>
+
+      <div class="warning-box">
+        <strong>Audit it.</strong> Auto memory accumulates silently. Run <code>/memory</code> periodically and skim <code>MEMORY.md</code> &mdash; outdated or misremembered notes turn into confidently wrong context. Treat them like CLAUDE.md: prune what's stale, especially after a major refactor.
+      </div>
+    </section>
+
+    <section>
+      <h2>The Condensed-Rules Pattern (Now Native)</h2>
+
+      <p>The most efficient way to deliver architectural rules to AI is in <strong>condensed form</strong> &mdash; one topic per file, ~25 lines, rule IDs you can reference. Claude Code now supports this natively through path-scoped rules in <code>.claude/rules/</code>. Each rule file uses YAML frontmatter to declare which paths it applies to, and the rule auto-loads when Claude reads a matching file. Zero manual referencing, zero context cost when the rule isn't relevant.</p>
+
+      <div class="highlight-box">
+        <strong>The Condensed-Rules Contract:</strong> Maximum ~25 lines. One topic per file. One-line summaries with rule IDs. No explanations, no prose, no history &mdash; just rules. If AI needs more detail, it reads the corresponding full checklist. <a href="07-architecture-rules.html">Chapter 7</a> covers the dual-format pattern in implementation depth; this section gives you the concept.
+      </div>
+
+      <div class="config-block">
+        <div class="config-path">.claude/rules/presentation-layer.md</div>
+<pre><code>---
+paths:
+  - "**/presentation/**/*.kt"
+  - "**/ui/**/*.kt"
+---
+
+# Presentation Layer — Condensed Rules
+
+P1: All screens are @Composable functions, never Activities/Fragments
+P2: Every screen takes a Modifier parameter as last param
+P3: ViewModels expose StateFlow&lt;UiState&gt; — never LiveData
+P4: UiState is a data class — never sealed class
+P5: Events are sealed interface — one per user action
+P6: Max 3 public functions per ViewModel
+P7: No business logic in Composables — delegate to ViewModel
+P8: No direct coroutine launches in Composables — use LaunchedEffect
+P9: String resources via stringResource() — never hardcoded
+P10: Preview functions for every screen with @Preview annotation
+P11: Navigation args via type-safe route objects
+P12: Loading/error/content states handled via UiState properties</code></pre>
+      </div>
+
+      <p>Twelve rules, twelve lines of body. That's roughly 200 tokens &mdash; a fraction of what a full documentation page would cost. And the <code>paths:</code> frontmatter means this rule contributes <strong>zero tokens</strong> to your startup context; it loads only when Claude reads a Kotlin file under <code>presentation/</code> or <code>ui/</code>.</p>
+
+      <h3>The Dual-Format Pattern</h3>
+
+      <p>Every condensed rule file has a longer companion: a review checklist with detailed explanations, examples, and severity levels. The condensed file is for everyday AI context (loaded automatically by path). The checklist is for thorough code review (loaded by an explicit skill or import).</p>
+
+      <div class="workflow-steps">
+        <div class="step"><code>.claude/rules/&lt;topic&gt;.md</code><br><small>~25 lines, loaded by paths</small></div>
+        <div class="step-arrow">&harr;</div>
+        <div class="step">Review Checklist<br><small>100+ lines, loaded for reviews</small></div>
+      </div>
+
+      <div class="config-block">
+        <div class="config-path">docs/architecture/presentation-layer-review-checklist.md</div>
+<pre><code># Presentation Layer — Review Checklist
+
+## P1: Compose-Only UI [MUST]
+- All screens MUST be @Composable functions
+- Activities are forbidden (single-Activity architecture)
+- Fragments are forbidden (Compose Navigation only)
+- **Check:** No new files extending Activity or Fragment
+
+## P2: Modifier Parameter [MUST]
+- Every screen Composable MUST accept Modifier as last parameter
+- Default value: Modifier (not Modifier.fillMaxSize())
+- **Why:** Enables parent-controlled sizing and testing
+- **Check:** grep for `fun.*Screen(` without `modifier: Modifier`
+
+## P3: StateFlow Exposure [MUST]
+- ViewModels MUST expose StateFlow&lt;UiState&gt;
+- LiveData is forbidden in new code
+- MutableStateFlow is private, exposed via .asStateFlow()
+- **Check:** No public MutableStateFlow or LiveData in ViewModels
+
+... (continues for all 12 rules)</code></pre>
+      </div>
+
+      <p>The condensed rule file tells AI the rules during development. The checklist tells AI (or a reviewer) how to verify compliance during review. Two files per topic, two purposes, minimal duplication.</p>
+
+      <div class="tip-box">
+        <strong>Deep Dive:</strong> <a href="07-architecture-rules.html">Chapter 7</a> covers the path-scoped rules pattern in implementation depth, with templates for all 10 architectural topic areas, frontmatter best practices, and the migration path if you currently inline rules in CLAUDE.md.
+      </div>
+    </section>
+
+    <section>
+      <h2>Organizing Your Context Files</h2>
+
+      <p>Here's the directory structure the recipes app uses, split between path-scoped rules (auto-loading) and review checklists (loaded on demand):</p>
+
+      <div class="config-block">
+        <div class="config-path">Project structure — context files</div>
+<pre><code>recipes-app/
+  CLAUDE.md                                  ← root rules (always loaded)
+  ARCHITECTURE.md                            ← structured overview
+  .claude/rules/                             ← path-scoped, auto-load
+    presentation-layer.md                    ← paths: **/presentation/**
+    domain-layer.md                          ← paths: **/domain/**
+    data-layer.md                            ← paths: **/data/**
+    error-handling.md                        ← paths: **/*.kt
+    testing.md                               ← paths: **/*Test.kt
+    di.md                                    ← paths: **/di/**
+    navigation.md                            ← paths: **/navigation/**
+    gradle.md                                ← paths: **/build.gradle.kts
+    network.md                               ← paths: **/network/**
+    package-structure.md                     ← unscoped (always loaded)
+  docs/architecture/                         ← review checklists (manual)
+    presentation-layer-review-checklist.md
+    ...-review-checklist.md  (×10)</code></pre>
+      </div>
+
+      <p>Ten topics, 20 files. Each rule file is ~25 lines (~200 tokens). Because the rules are path-scoped, your <strong>startup cost is near zero</strong> &mdash; rules enter context only when their paths match a file Claude reads. Reference the review checklists explicitly from CLAUDE.md so AI knows when to load them:</p>
+
+      <div class="config-block">
+        <div class="config-path">CLAUDE.md — Context References Section</div>
+<pre><code>## Context References
+- Architecture rules: .claude/rules/*.md (auto-load by paths frontmatter)
+- Review checklists: docs/architecture/*-review-checklist.md (load via /run-review)
+- Module overview: ARCHITECTURE.md (load when creating new modules)
+- API contracts: docs/api/*.yaml (load when modifying network layer)</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Avoiding Context Pollution</h2>
+
+      <p>Context pollution is when AI reads information that actively hurts its output. Watch for these five polluters:</p>
+
+      <ul>
+        <li><strong>Outdated Rules</strong> &mdash; CLAUDE.md says "use LiveData" but you migrated to StateFlow. AI follows the old rule with full confidence.</li>
+        <li><strong>Conflicting Rules</strong> &mdash; Root CLAUDE.md says "sealed class for state" but a rule in <code>.claude/rules/</code> says "data class." AI picks one randomly or merges both.</li>
+        <li><strong>Irrelevant Context</strong> &mdash; Backend API docs loaded for a UI-only task. Wastes tokens and causes over-engineering.</li>
+        <li><strong>Verbose Documentation</strong> &mdash; 5-page ADR loaded for a bug fix. Actual rules get buried under narrative.</li>
+        <li><strong>Legacy Patterns</strong> &mdash; Old code examples in docs using deprecated approaches. AI treats them as patterns to follow.</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Warning:</strong> Conflicting rules are the most dangerous polluter. AI will try to satisfy both rules simultaneously, producing Frankenstein code that follows neither pattern correctly. If you maintain both <code>.claude/rules/</code> files and CLAUDE.md rules, they must agree. One source of truth, multiple formats.
+      </div>
+
+      <h3>The Context Audit</h3>
+
+      <p>Run this audit quarterly (or after any major refactor):</p>
+
+      <div class="checklist">
+        <div>List every file AI reads automatically (CLAUDE.md, unscoped <code>.claude/rules/</code> files, auto memory <code>MEMORY.md</code>, ARCHITECTURE.md)</div>
+        <div>For each file, ask: "Is every statement still accurate?"</div>
+        <div>Check for conflicts between files (same topic, different rules)</div>
+        <div>Check for outdated references (files that no longer exist, renamed modules)</div>
+        <div>Check for verbose sections that could be condensed</div>
+        <div>Remove or update anything that fails the above checks</div>
+        <div>Run <code>/context</code> mid-session and confirm utilization is below 80% before starting heavy work</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Directory-Level CLAUDE.md Strategy</h2>
+
+      <p>As covered in <a href="02-claude-md-mastery.html">Chapter 2</a>, directory CLAUDE.md files add tokens every time AI works in that directory. The context engineering rule: <strong>only create directory CLAUDE.md files for modules that genuinely differ from root conventions.</strong> 3-4 override files total, never repeating what's in root.</p>
+
+      <div class="config-block">
+        <div class="config-path">build-logic/CLAUDE.md (example of a justified directory override)</div>
+<pre><code># Build Logic — CLAUDE.md
+
+## This directory contains Gradle convention plugins
+- Written in Kotlin DSL, NOT application code
+- No Clean Architecture here — these are build scripts
+- Follow Gradle plugin conventions, not app conventions
+- Test with `./gradlew :build-logic:test`
+- Files: convention plugins in src/main/kotlin/
+- Naming: {Purpose}ConventionPlugin.kt</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Structure Over Prose</h2>
+
+      <p>AI processes structured data (tables, lists, rules) much more reliably than narrative paragraphs. When writing any context file, prefer this hierarchy:</p>
+
+      <div class="workflow-steps">
+        <div class="step">Tables<br><small>Best for decisions</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Bullet Lists<br><small>Best for rules</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">ASCII Diagrams<br><small>Best for relationships</small></div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Prose<br><small>Last resort</small></div>
+      </div>
+
+      <div class="prompt-example good">
+        <div class="prompt-label">AI-Optimized Documentation</div>
+        <div class="prompt-text">| Layer | Error Type | Handling |
+|-------|-----------|----------|
+| Data | IOException | Wrap in Result.failure(), log |
+| Domain | DomainError | Pass through, never catch |
+| Presentation | Any failure | Map to UiState.error |
+
+- NEVER throw exceptions across layer boundaries
+- NEVER show raw exception messages to users</div>
+        <div class="prompt-explanation">Table for decisions, list for rules. AI extracts both reliably. No paragraphs needed.</div>
+      </div>
+
+      <div class="prompt-example bad">
+        <div class="prompt-label">Human-Only Documentation</div>
+        <div class="prompt-text">When errors occur, they need to be handled appropriately
+at each layer. In the data layer, we typically wrap
+IOException instances. It's important to note that we
+should never throw exceptions across boundaries...</div>
+        <div class="prompt-explanation">Narrative buries rules. AI may miss them based on "typically" and "should."</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The Recipes App Context Strategy</h2>
+
+      <p>Here's how the recipes app's context layer works as a complete system:</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">10</div>
+          <div class="stat-label">Architecture topics<br><small>covered by <code>.claude/rules/</code> files</small></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">~2K</div>
+          <div class="stat-label">Total tokens for all rule files<br><small>fits easily in any context window</small></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">20</div>
+          <div class="stat-label">Reference files (10 rules + 10 checklists)<br><small>dual-format coverage</small></div>
+        </div>
+      </div>
+
+      <p>The strategy works in layers:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Files</th>
+            <th>When Loaded</th>
+            <th>Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Always</strong></td>
+            <td>CLAUDE.md (root)</td>
+            <td>Every session, automatically</td>
+            <td>~800</td>
+          </tr>
+          <tr>
+            <td><strong>On Demand</strong></td>
+            <td>10 <code>.claude/rules/</code> files</td>
+            <td>Auto-load when <code>paths:</code> frontmatter matches</td>
+            <td>~200 each</td>
+          </tr>
+          <tr>
+            <td><strong>Review Only</strong></td>
+            <td>10 review checklists</td>
+            <td>Only during /run-review skill</td>
+            <td>~800 each</td>
+          </tr>
+          <tr>
+            <td><strong>Structural</strong></td>
+            <td>ARCHITECTURE.md</td>
+            <td>When creating modules or changing deps</td>
+            <td>~1,200</td>
+          </tr>
+          <tr>
+            <td><strong>Override</strong></td>
+            <td>3 directory CLAUDE.md files</td>
+            <td>When working in that directory</td>
+            <td>~300 each</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>For a typical development task, AI loads the root CLAUDE.md (~800 tokens) plus 1-2 relevant rule files (~400 tokens). Total overhead: ~1,200 tokens. That's less than 1% of the context window, yet it provides comprehensive architectural guidance.</p>
+
+      <p>For a code review task, the /run-review skill loads the full checklists (~8,000 tokens). Still manageable, and only when needed.</p>
+
+      <div class="team-tip">
+        <strong>For Tech Leads:</strong> Track context usage across your team. If everyone is manually pasting architectural rules into their prompts, that's a sign your context layer isn't working. The goal is zero manual context &mdash; everything AI needs should be discoverable from CLAUDE.md references and project structure.
+      </div>
+    </section>
+
+    <section>
+      <h2>Context Engineering Readiness Assessment</h2>
+
+      <div class="audit-box">
+        <strong>Pillar 2 Assessment: Context Engineering</strong>
+        <table>
+          <thead>
+            <tr>
+              <th>Score</th>
+              <th>Criteria</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>0 — Absent</strong></td>
+              <td>No documentation beyond a basic README. AI has no structured context.</td>
+            </tr>
+            <tr>
+              <td><strong>1 — Minimal</strong></td>
+              <td>README with some architecture notes. No AI-specific context files.</td>
+            </tr>
+            <tr>
+              <td><strong>2 — Basic</strong></td>
+              <td>CLAUDE.md with architecture rules. Maybe an ARCHITECTURE.md. No <code>.claude/rules/</code> files.</td>
+            </tr>
+            <tr>
+              <td><strong>3 — Solid</strong></td>
+              <td>CLAUDE.md + ARCHITECTURE.md + at least 3 path-scoped rules in <code>.claude/rules/</code> for key architectural areas. Context references in CLAUDE.md.</td>
+            </tr>
+            <tr>
+              <td><strong>4 — Excellent</strong></td>
+              <td>Full dual-format coverage (10 path-scoped rules + 10 checklists). Layered loading strategy. Context audit process. No pollution or conflicts. Auto memory reviewed. Directory CLAUDE.md only where justified.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Most projects jump from 0 to 2 just by completing Chapter 2's exercise. This chapter's exercise takes you from 2 to 3.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Your Chapter Exercise</h2>
+
+      <div class="exercise-box">
+        <strong>Exercise: Build Your Context Layer</strong>
+        <p>Create the first three path-scoped rules for your project. Pick the three architectural areas where AI makes the most mistakes.</p>
+        <ol>
+          <li><strong>Create the directory:</strong> <code>mkdir -p .claude/rules</code></li>
+          <li><strong>Pick your top 3 topics</strong> (e.g., presentation layer, data layer, error handling)</li>
+          <li><strong>For each topic, create a rule file</strong> following this template:</li>
+        </ol>
+<pre><code>---
+paths:
+  - "&lt;glob matching the files this rule applies to&gt;"
+---
+
+# [Topic] — Condensed Rules
+
+[ID1]: [One-line rule]
+[ID2]: [One-line rule]
+[ID3]: [One-line rule]
+... (max 25 lines, max 15 rules)</code></pre>
+        <ol start="4">
+          <li><strong>Update your CLAUDE.md</strong> to reference the rules directory and the review checklists:
+<pre><code>## Context References
+- Architecture rules: .claude/rules/*.md (auto-load by paths frontmatter)
+- Review checklists: docs/architecture/*-review-checklist.md</code></pre>
+          </li>
+          <li><strong>Create ARCHITECTURE.md</strong> with your module dependency diagram (use the ASCII art format from this chapter)</li>
+          <li><strong>Run the context audit:</strong> Does every file referenced in CLAUDE.md actually exist? Are there any conflicting rules? Run <code>/context</code> and confirm rules trigger when you read a matching file.</li>
+        </ol>
+        <p><strong>Acceptance criteria:</strong> 3 rule files in <code>.claude/rules/</code> (max 25 lines body each, valid <code>paths:</code> frontmatter), updated CLAUDE.md references, ARCHITECTURE.md with module diagram. No conflicting rules between files.</p>
+        <p>Commit everything and update your <code>AI_READINESS_BASELINE.md</code> with your new Pillar 2 score.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>You've built the foundation: a CLAUDE.md that encodes your decisions (Chapter 2) and a context layer that provides the right information at the right time (this chapter). Together, they handle Pillars 1 and 2 of the 5-pillar framework.</p>
+
+      <p>Now it's time to build the power tools. In <a href="04-skills-at-scale.html">Chapter 4: Skills That Scale</a>, you'll learn how to create a team-shared skill library &mdash; reusable commands that encode complex workflows into one-line invocations. If CLAUDE.md is the brain and context is the memory, skills are the muscle.</p>
+
+      <div class="tip-box">
+        <strong>Deep Dive:</strong> For more on context windows and how they work under the hood, see <a href="../../AI-Harness/chapters/index.html">AI Harness Engineering</a> Chapter 3. For context theory and advanced prompting patterns, see <a href="../../AI-Advanced/chapters/index.html">AI-Driven Development</a> Chapter 5. This chapter is about engineering your project's context layer &mdash; the others cover the underlying mechanics.
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="02-claude-md-mastery.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">CLAUDE.md: Your Project's AI Brain</span>
+    </a>
+    <a href="04-skills-at-scale.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Skills That Scale: Your Team's Command Library</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

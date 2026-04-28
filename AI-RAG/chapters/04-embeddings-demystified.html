@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Embeddings Demystified | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-your-first-rag.html">&larr; Prev</a>
+      <a href="05-vector-databases.html">Next &rarr;</a>
+      <a href="maps/04-embeddings-demystified-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Embeddings Demystified</h1>
+    <p class="subtitle">How text becomes numbers that capture meaning &mdash; the magic behind semantic search</p>
+  </header>
+
+  <main>
+
+    <h2>The Problem: Computers Don't Understand Words</h2>
+
+    <p>In Chapter 3, we called <code>get_embeddings()</code> and got back a list of 1536 numbers for each chunk of text. We used those numbers to find similar documents. It worked. But what <em>are</em> those numbers? Why does turning text into a list of floats let us find documents with similar meaning?</p>
+
+    <p>Here's the fundamental problem: computers are great with numbers and terrible with meaning. The string <code>"How do I get a refund?"</code> is just a sequence of bytes to a computer. It has no idea that it means the same thing as <code>"What's your return policy?"</code> or that it's completely unrelated to <code>"How do I get a raise?"</code> despite sharing most of the same words.</p>
+
+    <p>Embeddings solve this by converting text into numbers <em>that preserve meaning</em>. Similar meanings become similar numbers. That's the whole trick.</p>
+
+    <h2>The GPS Coordinates Analogy</h2>
+
+    <p>Here's the best intuition for embeddings: think of GPS coordinates.</p>
+
+    <p>Every place on Earth can be described by two numbers: latitude and longitude. Places that are physically close have similar coordinates. Tokyo (35.68, 139.69) is closer to Osaka (34.69, 135.50) than to London (51.51, -0.13). You don't need to understand Japanese geography &mdash; you can tell from the numbers alone that Tokyo and Osaka are near each other.</p>
+
+    <div class="highlight-box">
+      <h3>Embeddings Are GPS Coordinates for Meaning</h3>
+      <p>An embedding maps text to a point in <strong>"meaning space"</strong> &mdash; a high-dimensional coordinate system where proximity equals semantic similarity. Texts about refund policies cluster together, texts about pricing cluster nearby, and texts about the weather are far away from both. Instead of 2 dimensions (lat/long), embeddings use 768 to 3072 dimensions to capture the many facets of meaning.</p>
+    </div>
+
+    <p>Just as GPS coordinates let you answer "which restaurant is closest?" without visiting any of them, embeddings let you answer "which document is most relevant?" without reading any of them. The search is pure math &mdash; find the nearest points.</p>
+
+    <h2>From Words to Vectors</h2>
+
+    <p>A <strong>vector</strong> is just a list of numbers. When we say "embedding," we mean a vector that represents the meaning of some text. Here's what one looks like:</p>
+
+    <pre><code># A real embedding (first 10 of 1536 dimensions)
+embedding = [
+    0.0123, -0.0456, 0.0789, -0.0012, 0.0567,
+    -0.0890, 0.0234, -0.0678, 0.0345, -0.0901,
+    ... # 1526 more numbers
+]</code></pre>
+
+    <p>Each number represents <em>something</em> about the meaning of the text. We don't get to choose what each dimension represents &mdash; the embedding model learns that during training. But intuitively, you can think of each dimension as a slider for a different aspect of meaning:</p>
+
+    <ul>
+      <li>Dimension 47 might capture "how much is this about money?"</li>
+      <li>Dimension 203 might capture "is this a question or a statement?"</li>
+      <li>Dimension 891 might capture "how technical is this?"</li>
+    </ul>
+
+    <p>In reality, the dimensions don't map to clean, human-readable concepts. They're a tangled mess of features the model learned from billions of text examples. But the <em>effect</em> is that texts with similar meanings end up with similar numbers across all dimensions.</p>
+
+    <div class="embedding-box">
+      <strong>The key insight:</strong> You don't need to understand what each dimension means. You just need to know that the embedding model was trained so that <em>semantically similar texts produce geometrically close vectors</em>. "How do I get a refund?" and "What's your return policy?" will have vectors that are very close together in this 1536-dimensional space, even though they share almost no words.
+    </div>
+
+    <h2>How Embedding Models Learn (Intuition Only)</h2>
+
+    <p>You don't need to understand the math to use embeddings, but a rough intuition helps you debug problems later.</p>
+
+    <p>Embedding models are trained on billions of text pairs &mdash; sentences, paragraphs, and documents that are known to be related. The training process is essentially:</p>
+
+    <ol>
+      <li>Take a pair of texts that are <strong>related</strong> (e.g., a question and its answer)</li>
+      <li>Compute embeddings for both</li>
+      <li>Adjust the model's weights so that related texts produce <strong>closer</strong> vectors</li>
+      <li>Take a pair of texts that are <strong>unrelated</strong></li>
+      <li>Adjust the model's weights so that unrelated texts produce <strong>farther</strong> vectors</li>
+      <li>Repeat billions of times</li>
+    </ol>
+
+    <p>After training on enough examples, the model generalizes. It can produce meaningful embeddings for text it's never seen before &mdash; including your company's documents. It learned the <em>patterns</em> of what makes texts similar.</p>
+
+    <div class="tip-box">
+      Think of it like learning a language by reading millions of books. You don't memorize every sentence, but you develop an intuition for which sentences mean similar things. Embedding models do the same thing, except they express that intuition as numbers.
+    </div>
+
+    <h2>Cosine Similarity: Measuring "How Similar?"</h2>
+
+    <p>Once you have embeddings, you need a way to measure how close two vectors are. The most common measure is <strong>cosine similarity</strong>, and it's simpler than it sounds.</p>
+
+    <p>Imagine two arrows pointing from the center of a room. If they point in the <em>same direction</em>, the angle between them is 0 degrees &mdash; cosine similarity is 1.0 (maximum similarity). If they point in <em>perpendicular</em> directions, the angle is 90 degrees &mdash; cosine similarity is 0 (no relationship). If they point in <em>opposite</em> directions, the angle is 180 degrees &mdash; cosine similarity is -1.0 (opposite meaning).</p>
+
+    <pre><code>import numpy as np
+
+def cosine_similarity(a, b):
+    """The angle between two vectors, normalized to [-1, 1]."""
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# In practice, for RAG:
+# 0.85 - 1.0  = Very similar (almost certainly relevant)
+# 0.70 - 0.85 = Similar (likely relevant)
+# 0.50 - 0.70 = Somewhat related (maybe relevant)
+# Below 0.50  = Probably not relevant</code></pre>
+
+    <div class="retrieval-box">
+      <strong>Why cosine similarity and not Euclidean distance?</strong> Cosine similarity measures the <em>angle</em> between vectors, ignoring their length. This matters because embedding models sometimes produce longer vectors for longer texts. Cosine similarity says "do these vectors point in the same direction?" regardless of how long they are. For RAG retrieval, direction (meaning) matters more than magnitude (text length).
+    </div>
+
+    <p>Here's a practical example showing similarity scores for a set of real texts:</p>
+
+    <pre><code>from openai import OpenAI
+import numpy as np
+
+client = OpenAI()
+
+def embed(texts):
+    response = client.embeddings.create(
+        model="text-embedding-3-small", input=texts
+    )
+    return [item.embedding for item in response.data]
+
+def cos_sim(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Embed a query and several candidate texts
+query = "How do I get a refund?"
+candidates = [
+    "Our return policy allows refunds within 30 days.",
+    "To request a refund, go to Settings and click Billing.",
+    "Our pricing starts at $29 per month.",
+    "The weather in Tokyo is warm in summer.",
+]
+
+q_emb = embed([query])[0]
+c_embs = embed(candidates)
+
+for text, emb in zip(candidates, c_embs):
+    score = cos_sim(q_emb, emb)
+    print(f"{score:.3f}  {text}")
+
+# Output:
+# 0.841  Our return policy allows refunds within 30 days.
+# 0.823  To request a refund, go to Settings and click Billing.
+# 0.412  Our pricing starts at $29 per month.
+# 0.187  The weather in Tokyo is warm in summer.</code></pre>
+
+    <p>Look at those scores. The refund-related texts score 0.82+ despite using different words than the query. Pricing is somewhat related (0.41) &mdash; it's about the product but not about refunds. And weather is completely unrelated (0.19). The embedding model captured meaning, not just word overlap.</p>
+
+    <h2>Choosing an Embedding Model</h2>
+
+    <p>Not all embedding models are created equal. Your choice directly affects retrieval quality. Here's the current landscape in 2026:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Provider</th>
+          <th>Dimensions</th>
+          <th>Best For</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>text-embedding-3-small</strong></td>
+          <td>OpenAI</td>
+          <td>1,536</td>
+          <td>Great all-rounder, low cost ($0.02/1M tokens)</td>
+        </tr>
+        <tr>
+          <td><strong>text-embedding-3-large</strong></td>
+          <td>OpenAI</td>
+          <td>3,072</td>
+          <td>Higher quality, 3x cost ($0.13/1M tokens)</td>
+        </tr>
+        <tr>
+          <td><strong>embed-v4</strong></td>
+          <td>Cohere</td>
+          <td>1,024</td>
+          <td>Top MTEB score (65.2), multilingual, multimodal</td>
+        </tr>
+        <tr>
+          <td><strong>voyage-3</strong></td>
+          <td>Voyage AI</td>
+          <td>1,024</td>
+          <td>Excellent for code and technical docs</td>
+        </tr>
+        <tr>
+          <td><strong>BGE-M3</strong></td>
+          <td>BAAI (open source)</td>
+          <td>1,024</td>
+          <td>Free, multilingual, dense + sparse retrieval</td>
+        </tr>
+        <tr>
+          <td><strong>E5-Mistral-7B</strong></td>
+          <td>Microsoft (open source)</td>
+          <td>4,096</td>
+          <td>Highest quality open-source, runs on GPU</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Start with text-embedding-3-small.</strong> It's cheap, fast, and good enough for most use cases. Only switch if you have a specific problem it can't solve &mdash; like multilingual search (try Cohere embed-v4 or BGE-M3) or code search (try Voyage-3). Benchmark results show that for developer documentation, open-source models can beat OpenAI 73% of the time while running 8x faster &mdash; but they require you to host the model yourself.
+    </div>
+
+    <h2>The Rules of Embedding Space</h2>
+
+    <p>There are a few critical rules about embeddings that trip up beginners:</p>
+
+    <div class="gotcha-box">
+      <strong>Never mix embedding models.</strong> Embeddings from different models live in completely different spaces. A vector from <code>text-embedding-3-small</code> is meaningless when compared to a vector from <code>embed-v4</code>. If you indexed your documents with model A, you <em>must</em> query with model A. Switching models means re-embedding everything.
+    </div>
+
+    <div class="gotcha-box">
+      <strong>Query prefixes matter.</strong> Some models (like E5 and BGE) expect a prefix like <code>"query: "</code> or <code>"passage: "</code> before the text. Embedding the same text with and without the prefix produces <em>different</em> vectors. Always check the model documentation and be consistent between indexing and querying.
+    </div>
+
+    <div class="warning-box">
+      <strong>Dimension count is not quality.</strong> A 3072-dimension model is not automatically better than a 1024-dimension model. Dimensions affect storage size and search speed, but quality depends on training data and architecture. Cohere's embed-v4 at 1024 dimensions outscores OpenAI's text-embedding-3-large at 3072 dimensions on the MTEB benchmark.
+    </div>
+
+    <h2>Seeing Embeddings in Action</h2>
+
+    <p>Let's embed 10 sentences and see which ones cluster together. This exercise makes the abstract concept tangible:</p>
+
+    <pre><code>from openai import OpenAI
+import numpy as np
+
+client = OpenAI()
+
+sentences = [
+    # Cluster 1: Refund-related
+    "How do I get a refund?",
+    "I want my money back.",
+    "What is your return policy?",
+    # Cluster 2: Pricing-related
+    "How much does it cost?",
+    "What are your pricing plans?",
+    "Is there a free tier?",
+    # Cluster 3: Technical/features
+    "Does it integrate with Slack?",
+    "Can I use the API?",
+    # Outlier
+    "What is the meaning of life?",
+    "Best pizza in New York",
+]
+
+response = client.embeddings.create(
+    model="text-embedding-3-small", input=sentences
+)
+embeddings = [item.embedding for item in response.data]
+
+# Print similarity matrix
+print("Similarity matrix (x100 for readability):")
+print(f"{:>5}", end="")
+for i in range(len(sentences)):
+    print(f"{i:>5}", end="")
+print()
+
+for i in range(len(sentences)):
+    print(f"{i:>5}", end="")
+    for j in range(len(sentences)):
+        a_vec = np.array(embeddings[i])
+        b_vec = np.array(embeddings[j])
+        sim = np.dot(a_vec, b_vec) / (
+            np.linalg.norm(a_vec) * np.linalg.norm(b_vec)
+        )
+        print(f"{sim*100:>5.0f}", end="")
+    print(f"  {sentences[i][:35]}")</code></pre>
+
+    <p>When you run this, you'll see high similarity (70+) within clusters and low similarity (20-40) between unrelated sentences. The refund sentences form a tight cluster. The pricing sentences form another. And "best pizza in New York" is far from everything else.</p>
+
+    <h2>Dimension Flexibility: Smaller Vectors, Faster Search</h2>
+
+    <p>OpenAI's text-embedding-3 models support a powerful feature: you can request <em>fewer</em> dimensions than the default. This trades a small amount of quality for significant savings in storage and search speed.</p>
+
+    <pre><code># Request only 256 dimensions instead of 1536
+response = client.embeddings.create(
+    model="text-embedding-3-small",
+    input=["How do I get a refund?"],
+    dimensions=256  # Default is 1536
+)
+
+small_embedding = response.data[0].embedding
+print(f"Dimensions: {len(small_embedding)}")  # 256
+
+# Storage comparison:
+# 1536 dims x 4 bytes = 6,144 bytes per vector
+#  256 dims x 4 bytes = 1,024 bytes per vector
+# That is 6x less storage!</code></pre>
+
+    <p>For a million documents, dropping from 1536 to 256 dimensions saves about 5 GB of storage and makes search significantly faster. The quality drop is usually small (a few percentage points on benchmarks) &mdash; often a worthwhile tradeoff.</p>
+
+    <div class="pipeline-box">
+      <strong>Where embeddings fit in the RAG pipeline:</strong> Embeddings are the bridge between text and search. During <strong>indexing</strong>, every document chunk gets embedded once and stored. During <strong>querying</strong>, the user's question gets embedded with the same model, and similarity search finds the closest chunks. The quality of your embeddings directly determines the quality of your retrieval &mdash; a bad embedding model means the right documents won't be found, no matter how good your LLM is.
+    </div>
+
+    <h2>Practical Tips for Embeddings in RAG</h2>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Use the same model for indexing and querying</strong> &mdash; always, no exceptions</li>
+      <li class="checked"><strong>Batch your embedding calls</strong> &mdash; send 100 texts at once, not 100 separate API calls</li>
+      <li class="checked"><strong>Cache embeddings</strong> &mdash; store them once, don't re-embed unchanged documents</li>
+      <li class="checked"><strong>Check model-specific prefixes</strong> &mdash; some models need "query:" or "passage:" prefixes</li>
+      <li class="checked"><strong>Normalize vectors</strong> &mdash; most models return normalized vectors, but verify this for your model</li>
+      <li class="checked"><strong>Test before committing</strong> &mdash; embed 50 sample queries and check if the right docs rank highest</li>
+    </ul>
+
+    <pre><code># Batch embedding is much faster than one-at-a-time
+
+# Slow: 100 API calls
+for text in texts:
+    embedding = get_embeddings([text])  # One call per text
+
+# Fast: 1 API call
+all_embeddings = get_embeddings(texts)  # All at once
+
+# The API supports up to 2048 texts per call for
+# text-embedding-3-small. For larger batches, chunk them.
+BATCH_SIZE = 2048
+all_embeddings = []
+for i in range(0, len(texts), BATCH_SIZE):
+    batch = texts[i:i + BATCH_SIZE]
+    all_embeddings.extend(get_embeddings(batch))</code></pre>
+
+    <h2>Open-Source vs API: The Tradeoff</h2>
+
+    <p>One of the biggest decisions you'll face is whether to use an API-based embedding model (OpenAI, Cohere, Voyage) or an open-source model you host yourself (BGE, E5, Nomic). Here's the honest breakdown:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">API-based models</div>
+        <div class="prompt-text">Pros:
+- Zero infrastructure to manage
+- Always up-to-date
+- Easy to start (one API call)
+- Consistent performance
+
+Cons:
+- Ongoing cost per token
+- Data leaves your network
+- Vendor lock-in (re-embed to switch)
+- Latency depends on network</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Open-source models</div>
+        <div class="prompt-text">Pros:
+- Free after setup
+- Data stays on your machines
+- No vendor lock-in
+- Can fine-tune for your domain
+
+Cons:
+- Need GPU for fast embedding
+- You manage updates and hosting
+- More complex setup
+- Quality varies widely by model</div>
+      </div>
+    </div>
+
+    <p>For most teams starting out, API models are the right choice &mdash; they let you focus on building the RAG system instead of managing infrastructure. Switch to open-source when you have a specific reason: data privacy requirements, cost at scale, or the need for a domain-specific model.</p>
+
+    <h2>When Embeddings Fail: Debugging Tips</h2>
+
+    <p>Embeddings are powerful, but they have blind spots. Understanding these failure modes saves you hours of debugging later:</p>
+
+    <h3>Acronyms and jargon</h3>
+    <p>Embedding models are trained on general text. If your documents use domain-specific acronyms like "DPLL" or "WCET," the model may not embed them meaningfully. The fix: expand acronyms in your documents before embedding, or use a domain-specific model.</p>
+
+    <h3>Exact identifiers</h3>
+    <p>Product IDs, error codes, and version numbers (like "ERR-4021" or "v2.3.1") are nearly meaningless to embedding models. They don't capture that "ERR-4021" should match a document about "authentication timeout error." This is where hybrid search (Chapter 7) saves you &mdash; combining embeddings with keyword search.</p>
+
+    <h3>Negation</h3>
+    <p>"This product is great" and "This product is not great" may have surprisingly similar embeddings because most of the words are the same. Embedding models have gotten better at this, but negation is still a weak spot.</p>
+
+    <h3>Very short text</h3>
+    <p>One-word or two-word chunks embed poorly because there isn't enough context. If your chunks are too short, the embeddings become noisy and retrieval quality drops.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">768-3072</span>
+        <span class="stat-label">Typical embedding dimensions</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">8,191</span>
+        <span class="stat-label">Max tokens per input (OpenAI)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">$0.02</span>
+        <span class="stat-label">Cost per 1M tokens (small model)</span>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <strong>Build an embedding similarity explorer.</strong> Using the code from this chapter:
+      <ol>
+        <li>Embed 10 product descriptions from your work (or make up 10 items: "wireless noise-cancelling headphones", "USB-C charging cable", etc.)</li>
+        <li>Embed 3 user queries: one that should match one product, one that is vague, and one that is completely off-topic</li>
+        <li>Print the similarity score between each query and every product</li>
+        <li>Do the highest-scoring products match your expectations? Where does it surprise you?</li>
+      </ol>
+      <p>This exercise builds your intuition for what embedding similarity "feels like" &mdash; essential knowledge for debugging retrieval problems later.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now understand what embeddings are, how they capture meaning, how to compare them with cosine similarity, and how to choose an embedding model. In Chapter 3, we stored our embeddings in a plain Python list and searched with a for loop. That works for a hundred chunks, but what about a million?</p>
+
+    <p>In the next chapter, we'll explore <strong>vector databases</strong> &mdash; specialized databases designed to store millions of embeddings and search them in milliseconds. You'll learn about the major players (Pinecone, Weaviate, Qdrant, ChromaDB, pgvector), the algorithms that make fast search possible, and how to choose the right one for your project.</p>
+
+    <nav class="chapter-nav">
+      <a href="03-your-first-rag.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Your First RAG System in 30 Minutes</span>
+      </a>
+      <a href="05-vector-databases.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Vector Databases: Your AI's Memory</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

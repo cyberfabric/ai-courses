@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12: Building Your On-Device AI Toolkit — On-Device AI for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="11-production-deployment.html">&larr; Prev</a>
+      <a href="maps/12-ai-toolkit-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Building Your On-Device AI Toolkit</h1>
+    <p class="subtitle">Decision framework, reusable patterns, capstone architecture, and your 30-day action plan</p>
+  </header>
+
+  <main>
+
+    <h2>You Know More Than You Think</h2>
+
+    <p>Eleven chapters ago, you'd never loaded a TFLite model. Now you can build real-time image classifiers, hand gesture recognizers, smart document scanners, offline translators, on-device text generators, and production-hardened AI features with hardware acceleration and OTA model updates.</p>
+
+    <p>This final chapter consolidates everything into a reusable toolkit you'll reach for every time you add an AI feature to an Android app.</p>
+
+    <h2>The On-Device AI Decision Framework</h2>
+
+    <p>Given a new feature requirement, here's how to pick the right framework:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Question</th>
+          <th>Answer &rarr; Framework</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Is it OCR, barcode scanning, translation, or entity extraction?</td>
+          <td><strong>ML Kit</strong> (Chapter 5) — done in an hour, production-ready</td>
+        </tr>
+        <tr>
+          <td>Is it real-time face, hand, pose, or object tracking?</td>
+          <td><strong>MediaPipe</strong> (Chapter 4) — optimized pipelines, done in an afternoon</td>
+        </tr>
+        <tr>
+          <td>Is it text generation, summarization, or rewriting?</td>
+          <td><strong>Gemini Nano</strong> (Chapter 6) — on supported devices, cloud fallback for rest</td>
+        </tr>
+        <tr>
+          <td>Do you need a custom model trained on your own data?</td>
+          <td><strong>TFLite</strong> (Chapters 3, 8, 9) — maximum flexibility</td>
+        </tr>
+        <tr>
+          <td>Does the model come from PyTorch and not convert to TFLite?</td>
+          <td><strong>ONNX Runtime</strong> (Chapter 8) — PyTorch native, cross-platform</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="model-pipeline">
+      <p><strong>The decision flow in practice:</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Feature Requirement</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">ML Kit covers it?</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">MediaPipe covers it?</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Generative task?</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Custom TFLite/ONNX</span>
+      </div>
+      <p style="margin-top: 1rem; color: var(--color-text-light);">
+        Always start from the left. The further right you go, the more work you take on. Most features can be built with ML Kit or MediaPipe — only reach for raw TFLite when you genuinely need a custom model.
+      </p>
+    </div>
+
+    <h2>Building a Reusable Inference Wrapper</h2>
+
+    <p>Every on-device AI feature you build follows the same pattern. Abstract it into a reusable class:</p>
+
+<pre><code>abstract class OnDeviceModel&lt;I, O&gt;(
+    private val context: Context,
+    private val modelPath: String
+) {
+    private var interpreter: Interpreter? = null
+    private val delegateSelector = DelegateSelector(context)
+
+    fun initialize() {
+        val model = FileUtil.loadMappedFile(context, modelPath)
+        interpreter = delegateSelector.getBestInterpreter(model)
+        // Warm up
+        val dummy = createDummyInput()
+        repeat(3) { runInference(dummy) }
+    }
+
+    fun predict(input: I): Result&lt;O&gt; {
+        val interp = interpreter ?: return Result.failure(
+            IllegalStateException("Model not initialized")
+        )
+        return try {
+            val startTime = System.nanoTime()
+            val preprocessed = preprocess(input)
+            val rawOutput = runRawInference(interp, preprocessed)
+            val result = postprocess(rawOutput)
+            val latencyMs = (System.nanoTime() - startTime) / 1_000_000
+            logMetrics(latencyMs, true)
+            Result.success(result)
+        } catch (e: Exception) {
+            logMetrics(0, false)
+            Result.failure(e)
+        }
+    }
+
+    fun release() {
+        interpreter?.close()
+        interpreter = null
+    }
+
+    abstract fun preprocess(input: I): Any
+    abstract fun postprocess(output: Any): O
+    abstract fun createDummyInput(): I
+    abstract fun runRawInference(interpreter: Interpreter, input: Any): Any
+}</code></pre>
+
+    <p>Now every new model becomes a simple subclass:</p>
+
+<pre><code>class ImageClassifierModel(context: Context) : OnDeviceModel&lt;Bitmap, Classification&gt;(
+    context, "mobilenet_v3.tflite"
+) {
+    override fun preprocess(input: Bitmap): Any {
+        // Resize, normalize, create TensorImage
+    }
+    override fun postprocess(output: Any): Classification {
+        // Find top label, apply threshold
+    }
+    // ...
+}</code></pre>
+
+    <h2>The Model Evaluation Checklist</h2>
+
+    <p>Before shipping any on-device AI feature, measure these six metrics:</p>
+
+    <div class="device-benchmark">
+      <p><strong>The six metrics to measure before shipping:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>What to Measure</th>
+            <th>Target</th>
+            <th>How to Measure</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Accuracy</strong></td>
+            <td>Does it get the right answer?</td>
+            <td>&gt; 90% for your domain</td>
+            <td>Test set of 200+ labeled examples</td>
+          </tr>
+          <tr>
+            <td><strong>Latency</strong></td>
+            <td>Fast enough for real-time?</td>
+            <td>p95 &lt; 33ms (30fps)</td>
+            <td>100 runs, report p50/p95/p99</td>
+          </tr>
+          <tr>
+            <td><strong>Model Size</strong></td>
+            <td>Fits the APK budget?</td>
+            <td>&lt; 10MB bundled, &lt; 50MB downloaded</td>
+            <td>File size after quantization</td>
+          </tr>
+          <tr>
+            <td><strong>Memory</strong></td>
+            <td>Runs without OOM?</td>
+            <td>&lt; 50MB runtime on mid-range</td>
+            <td>Android Profiler during inference</td>
+          </tr>
+          <tr>
+            <td><strong>Power</strong></td>
+            <td>Drains battery?</td>
+            <td>&lt; 5% per hour of continuous use</td>
+            <td>Battery Historian during sustained test</td>
+          </tr>
+          <tr>
+            <td><strong>Device Coverage</strong></td>
+            <td>What % of users can run it?</td>
+            <td>&gt; 80% of your user base</td>
+            <td>Play Console device catalog + RAM/API checks</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tip-box">
+      <strong>A model that's 95% accurate but only runs on 30% of devices is worse than a model that's 88% accurate and runs on 95% of devices.</strong> Always evaluate accuracy and coverage together. The quantized, smaller model almost always wins for mobile.
+    </div>
+
+    <h2>Multi-Model Architectures</h2>
+
+    <p>Advanced features chain multiple models together in a pipeline. Each model handles one focused task:</p>
+
+    <div class="model-pipeline">
+      <p><strong>Example: emotion-aware response pipeline</strong></p>
+      <div class="workflow-steps">
+        <span class="step">Camera Frame</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Face Detector</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Crop Face</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Emotion Classifier</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Gemini Nano Response</span>
+      </div>
+    </div>
+
+<pre><code>class EmotionResponsePipeline(context: Context) {
+    private val faceDetector = MediaPipeFaceDetector(context)
+    private val emotionClassifier = EmotionModel(context) // custom TFLite
+    private val textGenerator = GeminiNanoWrapper(context)
+
+    suspend fun process(frame: Bitmap): String? {
+        // Step 1: Detect face
+        val faces = faceDetector.detect(frame)
+        val face = faces.firstOrNull() ?: return null
+
+        // Step 2: Crop and classify emotion
+        val cropped = cropFace(frame, face.boundingBox)
+        val emotion = emotionClassifier.predict(cropped).getOrNull() ?: return null
+
+        // Step 3: Generate contextual response
+        return if (emotion.label == "sad" && emotion.score > 0.7f) {
+            textGenerator.generate("Write a short encouraging message")
+        } else null
+    }
+}</code></pre>
+
+    <div class="warning-box">
+      <strong>Memory budget for multi-model pipelines:</strong> Each loaded model consumes 15-80MB of RAM. On a 4GB device with 2GB available, you can comfortably run 2-3 small models simultaneously. Load models on demand and release them when the pipeline step completes. Never keep all models loaded at once unless you're on a flagship device.
+    </div>
+
+    <h2>Edge Cases and Failure Modes</h2>
+
+    <p>Real-world inputs are messy. Your model trained on clean, well-lit, centered images will encounter:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Handling edge cases well</p>
+        <div class="prompt-text">Low confidence → show "Unable to identify"
+Unknown object → don't force a wrong label
+Blurry input → prompt user to hold steady
+No face detected → hide the face feature quietly
+Model timeout → show cached last-known result</div>
+        <p class="prompt-explanation">Graceful degradation. The feature works great when conditions are good and fails silently when they're not.</p>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Handling edge cases poorly</p>
+        <div class="prompt-text">Low confidence → show the guess anyway (wrong 40% of the time)
+Unknown object → label it as the closest known class
+Blurry input → show flickering results every frame
+No face → crash with NPE
+Model timeout → freeze the UI</div>
+        <p class="prompt-explanation">Users lose trust after one wrong confident answer. It's better to say nothing than to say the wrong thing confidently.</p>
+      </div>
+    </div>
+
+    <h2>The Capstone Architecture</h2>
+
+    <p>Here's how all the pieces from this course combine in a single app — a "smart assistant" that sees, reads, listens, and generates:</p>
+
+    <div class="highlight-box">
+      <h3>Capstone: Smart Document Assistant</h3>
+      <ul>
+        <li><strong>Vision (Chapter 9)</strong> — Camera detects documents via object detection, auto-crops to document bounds</li>
+        <li><strong>OCR (Chapter 5)</strong> — ML Kit extracts all text from the document image</li>
+        <li><strong>Classification (Chapter 10)</strong> — MobileBERT classifies the document type (receipt, invoice, contract, letter)</li>
+        <li><strong>Entity extraction (Chapter 5)</strong> — ML Kit pulls out dates, amounts, phone numbers, addresses</li>
+        <li><strong>Summarization (Chapter 6)</strong> — Gemini Nano generates a 3-bullet summary of the document</li>
+        <li><strong>Voice (Chapter 10)</strong> — Keyword spotter activates on "Hey Scanner" for hands-free operation</li>
+        <li><strong>Production (Chapter 11)</strong> — Device capability detection, delegate selection, error handling, telemetry</li>
+      </ul>
+      <p>All running on-device. No cloud. No API keys. No per-request cost. The user points their camera at a document and gets a classified, extracted, summarized result in under 2 seconds.</p>
+    </div>
+
+    <div class="hardware-note">
+      <p><strong>Capstone resource budget on a Pixel 9 Pro:</strong></p>
+      <ul>
+        <li><strong>Object detection</strong> (SSD-MobileNet int8) — 4.4MB model, ~6ms, ~20MB RAM</li>
+        <li><strong>Text recognition</strong> (ML Kit) — system-managed, ~35ms, ~30MB RAM</li>
+        <li><strong>Text classification</strong> (MobileBERT int8) — 6MB model, ~8ms, ~35MB RAM</li>
+        <li><strong>Entity extraction</strong> (ML Kit) — system-managed, ~15ms, ~10MB RAM</li>
+        <li><strong>Summarization</strong> (Gemini Nano) — system-managed, ~3sec, ~shared with OS</li>
+        <li><strong>Keyword spotter</strong> — 0.8MB model, ~1ms, ~5MB RAM</li>
+        <li><strong>Total pipeline</strong> — ~11MB bundled models, ~100MB peak RAM, ~2sec end-to-end</li>
+      </ul>
+      <p>On mid-range devices: drop summarization (no Gemini Nano), use CPU delegates, and accept slightly higher latency. On budget devices: use ML Kit OCR only with entity extraction — still a useful feature.</p>
+    </div>
+
+    <h2>Keeping Up with the Landscape</h2>
+
+    <p>On-device AI evolves fast. Here are the resources worth following:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">G</div>
+      <div class="tool-info">
+        <div class="tool-name">Google AI Edge</div>
+        <div class="tool-desc">Google's official on-device AI hub. New model releases, MediaPipe updates, TFLite improvements. The first place to check for new capabilities.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">A</div>
+      <div class="tool-info">
+        <div class="tool-name">Android Developers Blog</div>
+        <div class="tool-desc">ML Kit updates, NNAPI changes, new hardware acceleration features. Watch for Android Dev Summit talks on ML — they're the best deep dives.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">H</div>
+      <div class="tool-info">
+        <div class="tool-name">Hugging Face</div>
+        <div class="tool-desc">New mobile-optimized models appear here first. Filter by "tflite" or "onnx" and sort by downloads to find battle-tested models for your task.</div>
+      </div>
+    </div>
+
+    <h2>What's Coming Next</h2>
+
+    <p>The on-device AI landscape is moving fast. Here's what's on the horizon:</p>
+
+    <ul>
+      <li><strong>On-device multimodal models</strong> — image + text input on a single model (Gemini Nano is heading here). Point your camera at something and ask "what is this?" in natural language.</li>
+      <li><strong>LoRA adapters for personalization</strong> — small adapter layers that customize a base model to individual users, without retraining the full model. Your keyboard's autocomplete learns <em>your</em> writing style.</li>
+      <li><strong>Federated learning</strong> — improve models across millions of devices without collecting any data centrally. Each device trains locally, shares only anonymized gradients.</li>
+      <li><strong>Always-on ambient AI</strong> — models running continuously in the background, understanding context from sensors, audio, and camera without user interaction.</li>
+      <li><strong>On-device fine-tuning</strong> — adapting models directly on the phone using the user's own data. A photo classifier that learns to recognize <em>your</em> pet specifically.</li>
+    </ul>
+
+    <h2>Cross-Platform Considerations</h2>
+
+    <p>If your team also builds for iOS, good news: most of what you've learned transfers directly.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Technology</th>
+          <th>Android</th>
+          <th>iOS</th>
+          <th>Shared?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>TFLite</td>
+          <td>Native support</td>
+          <td>TFLite Swift/ObjC</td>
+          <td>Same .tflite model files</td>
+        </tr>
+        <tr>
+          <td>ONNX Runtime</td>
+          <td>Android SDK</td>
+          <td>iOS SDK</td>
+          <td>Same .onnx model files</td>
+        </tr>
+        <tr>
+          <td>MediaPipe</td>
+          <td>Tasks API</td>
+          <td>Tasks API</td>
+          <td>Same .task model bundles</td>
+        </tr>
+        <tr>
+          <td>ML Kit</td>
+          <td>Full support</td>
+          <td>Full support</td>
+          <td>Same features, similar APIs</td>
+        </tr>
+        <tr>
+          <td>Hardware accel.</td>
+          <td>NNAPI / GPU delegate</td>
+          <td>Core ML / Metal</td>
+          <td>Different APIs, same concept</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Share models, not code.</strong> The <code>.tflite</code> model file is identical on both platforms. The preprocessing/postprocessing code differs (Kotlin vs Swift). If using Kotlin Multiplatform, you can share the preprocessing logic — tensor manipulation, normalization, label mapping — in common code.
+    </div>
+
+    <h2>Your 30-Day Action Plan</h2>
+
+    <div class="highlight-box">
+      <h3>From Reading to Shipping in 30 Days</h3>
+      <ul>
+        <li><strong>Week 1: Prototype</strong> — Pick one feature from Chapter 1's exercise (the 3 features you identified). Build it with ML Kit or MediaPipe. Get it running on your phone. Don't optimize yet.</li>
+        <li><strong>Week 2: Optimize</strong> — Apply int8 quantization (Chapter 8). Add hardware acceleration (Chapter 7). Benchmark on 2-3 devices. Get inference under 15ms on your target device.</li>
+        <li><strong>Week 3: Harden</strong> — Add device capability detection, error handling, confidence thresholds, and graceful degradation (Chapter 11). Set up Firebase Analytics for performance telemetry.</li>
+        <li><strong>Week 4: Ship</strong> — Deploy to beta users. Monitor metrics for one week. Fix any device-specific issues. Roll out to all users. Celebrate.</li>
+      </ul>
+      <p>Four weeks from "I've never done on-device AI" to "I shipped an AI feature to production." You have all the knowledge. Now execute.</p>
+    </div>
+
+    <h2>Try It: Design Your On-Device AI Feature</h2>
+
+    <div class="exercise-box">
+      <p><strong>Design a complete on-device AI feature for your own app. Write a technical design document covering:</strong></p>
+      <ol>
+        <li><strong>Problem statement</strong> — what user problem does this feature solve? Why on-device instead of cloud?</li>
+        <li><strong>Model selection</strong> — which framework (ML Kit / MediaPipe / TFLite / Gemini Nano)? Which specific model? What's the rationale?</li>
+        <li><strong>Optimization strategy</strong> — quantization type, target model size, target inference time</li>
+        <li><strong>Hardware acceleration plan</strong> — which delegates? Fallback chain? Benchmark targets?</li>
+        <li><strong>Fallback behavior</strong> — what happens on unsupported devices? Cloud fallback? Feature disabled? Simplified version?</li>
+        <li><strong>Production monitoring</strong> — which metrics to track? Alert thresholds? A/B testing plan?</li>
+        <li><strong>Privacy impact</strong> — what data is processed? Does it stay on-device? GDPR implications?</li>
+        <li><strong>30-day timeline</strong> — week-by-week plan following the action plan above</li>
+      </ol>
+      <p>This is the document you'd present to your team before starting implementation. It forces you to think through every decision from model selection to production monitoring — exactly the skills this course taught you.</p>
+      <p><strong>Remember your Chapter 1 exercise?</strong> You identified 3 features that could benefit from on-device AI. Pick the most impactful one and design it for real. Then build it.</p>
+    </div>
+
+    <h2>You're Ready</h2>
+
+    <p>Twelve chapters. Four frameworks. Dozens of code examples. You've gone from "what's a tensor?" to designing multi-model architectures with hardware acceleration, quantization, and production monitoring.</p>
+
+    <p>The phone in your users' pockets is a powerful AI computer. Now you know how to use it. Go build something amazing.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="11-production-deployment.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">Model Management and Production Deployment</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to &rarr;</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

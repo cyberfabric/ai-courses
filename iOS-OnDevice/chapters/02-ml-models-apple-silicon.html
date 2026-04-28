@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: How ML Models Work on Apple Silicon — On-Device AI for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">On-Device AI for iOS</span>
+    <div class="nav-links">
+      <a href="01-on-device-revolution.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="03-first-core-ml-model.html">Next &rarr;</a>
+      <a href="maps/02-ml-models-apple-silicon-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>How ML Models Work on Apple Silicon</h1>
+    <p class="subtitle">Just enough theory to be dangerous &mdash; models, tensors, inference, and where to find them</p>
+  </header>
+
+  <main>
+
+    <h2>Opening the Black Box (Just a Crack)</h2>
+
+    <p>In Chapter 1, we said on-device AI runs a "model" on the Neural Engine. But what <em>is</em> a model? If you've ever thought of ML models as mysterious black boxes that magically turn images into labels, this chapter cracks that box open just enough for you to work with them confidently.</p>
+
+    <p>You won't become a machine learning researcher. You'll become an iOS developer who understands what's happening when you call <code>model.prediction()</code> &mdash; and that's exactly what you need.</p>
+
+    <h2>What Is an ML Model, Really?</h2>
+
+    <p>Think of an ML model as a <strong>compiled function you didn't write</strong>. It takes inputs and returns outputs. You can't read the source code because there isn't any &mdash; the "logic" is millions of numerical weights that were learned from data during training.</p>
+
+    <p>Here's an analogy every iOS dev will get: imagine a function with no <code>if</code> statements, no <code>switch</code> cases, no hand-written rules. Instead, it has millions of floating-point numbers arranged in layers. When you feed it an input (an image, a sentence, a sound), it multiplies, adds, and transforms those numbers through the layers until an output comes out the other end.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">Traditional code</div>
+<pre><code>func isHotdog(_ image: UIImage) -> Bool {
+    // Handwritten pixel rules?
+    // Color analysis?
+    // Shape matching?
+    // Good luck writing this.
+}</code></pre>
+        <div class="prompt-explanation">You'd need to hand-code rules for every possible hotdog photo. Lighting, angles, backgrounds, bun types &mdash; impossible to enumerate.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">ML model approach</div>
+<pre><code>let model = try HotdogClassifier()
+let prediction = try model.prediction(image: photo)
+// prediction.classLabel == "hotdog"
+// prediction.classProbability["hotdog"] == 0.97</code></pre>
+        <div class="prompt-explanation">The model learned from 10,000+ hotdog photos. It handles every angle, lighting, and background automatically. You never wrote a single rule.</div>
+      </div>
+    </div>
+
+    <p>The model file itself &mdash; the <code>.mlmodel</code> or <code>.mlpackage</code> you drag into Xcode &mdash; contains those millions of learned weights plus a description of the layer architecture. Core ML reads this file, compiles it for your specific chip, and runs it on the Neural Engine.</p>
+
+    <h2>The Inference Loop</h2>
+
+    <p>Remember the universal pattern from Chapter 1? Let's expand it with what actually happens at each step:</p>
+
+    <div class="model-pipeline">
+      <div class="workflow-steps">
+        <div class="step">
+          <h4>1. Load</h4>
+          <p>Core ML reads .mlmodel and compiles for the target chip</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>2. Preprocess</h4>
+          <p>Convert input to the exact format the model expects</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>3. Predict</h4>
+          <p>Neural Engine runs the forward pass through all layers</p>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">
+          <h4>4. Postprocess</h4>
+          <p>Convert raw numbers into human-readable results</p>
+        </div>
+      </div>
+    </div>
+
+    <p>In Swift, this loop looks like:</p>
+
+<pre><code>// 1. Load: Xcode auto-generates the MobileNetV2 class from .mlmodel
+let config = MLModelConfiguration()
+config.computeUnits = .all  // Let Core ML pick the best hardware
+let model = try MobileNetV2(configuration: config)
+
+// 2. Preprocess: resize image to 224x224, normalize pixels
+let pixelBuffer = try resizeAndConvert(image, to: CGSize(width: 224, height: 224))
+
+// 3. Predict: Neural Engine runs the forward pass
+let prediction = try model.prediction(image: pixelBuffer)
+
+// 4. Postprocess: read the result
+print("It's a \(prediction.classLabel)!")  // "golden retriever"
+print("Confidence: \(prediction.classProbability[prediction.classLabel]!)")</code></pre>
+
+    <p>That's the entire loop. Every on-device AI feature you build follows this pattern. The details of steps 2 and 4 change depending on the model, but the shape never does.</p>
+
+    <div class="tip-box">
+      <strong>Loading is the slow part.</strong> Compiling the model for your chip takes 100&ndash;500ms on first load. After that, each prediction runs in milliseconds. Load the model once at startup or when the view appears, then reuse it for every prediction.
+    </div>
+
+    <h2>Core ML Model Formats</h2>
+
+    <p>You'll encounter two model formats in the wild:</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <div class="prompt-label">.mlmodel (Legacy)</div>
+        <div class="prompt-text">Single file containing weights + architecture</div>
+        <div class="prompt-text">Smaller models, simpler distribution</div>
+        <div class="prompt-text">Uses the Neural Network spec (older)</div>
+        <div class="prompt-explanation">Still works fine for models under ~100MB. You'll see this format in many tutorials and Apple's model gallery.</div>
+      </div>
+      <div class="prompt-example bad">
+        <div class="prompt-label">.mlpackage (Modern)</div>
+        <div class="prompt-text">Directory bundle with separate weight files</div>
+        <div class="prompt-text">Supports larger models, ML Programs spec</div>
+        <div class="prompt-text">Better optimization, the default for coremltools conversions</div>
+        <div class="prompt-explanation">The current standard. Uses the ML Program representation, which supports more operations and compiles more efficiently on newer hardware.</div>
+      </div>
+    </div>
+
+    <p>When you drag either format into Xcode, the result is the same: Xcode compiles it into a <code>.mlmodelc</code> bundle and auto-generates a Swift class. You never interact with the raw format at runtime.</p>
+
+    <div class="apple-framework">
+      <strong>Core ML Model Compilation</strong>
+      <p><strong>At build time:</strong> Xcode compiles your .mlmodel/.mlpackage into .mlmodelc (an optimized binary). This is included in your app bundle.</p>
+      <p><strong>At runtime:</strong> Core ML loads the .mlmodelc and may further optimize it for the specific device (A17 Pro vs. A19, etc.). This is why the first load takes longer.</p>
+      <p><strong>Auto-generated class:</strong> Xcode creates a Swift class matching your model's name. A file called <code>MobileNetV2.mlmodel</code> generates a <code>MobileNetV2</code> class with typed <code>prediction()</code> methods.</p>
+    </div>
+
+    <h2>Tensors: The Language Models Speak</h2>
+
+    <p>Here's the concept that trips up most iOS devs: ML models don't understand images, text, or audio. They understand <strong>tensors</strong> &mdash; multi-dimensional arrays of numbers. Your job is to convert your input into a tensor and convert the output tensor back into something useful.</p>
+
+    <p>But you already know tensors. You just call them by different names:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>iOS Concept You Know</th>
+          <th>Tensor Shape</th>
+          <th>What It Represents</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A single number</td>
+          <td>Scalar (0D)</td>
+          <td>A confidence score: <code>0.97</code></td>
+        </tr>
+        <tr>
+          <td>An array</td>
+          <td>1D tensor</td>
+          <td>Probabilities for 1,000 classes: <code>[0.01, 0.02, ..., 0.97]</code></td>
+        </tr>
+        <tr>
+          <td>A grayscale image</td>
+          <td>2D tensor (H &times; W)</td>
+          <td>Each pixel is a brightness value: <code>224 &times; 224</code></td>
+        </tr>
+        <tr>
+          <td>A color image (UIImage)</td>
+          <td>3D tensor (H &times; W &times; C)</td>
+          <td>Height &times; Width &times; RGB channels: <code>224 &times; 224 &times; 3</code></td>
+        </tr>
+        <tr>
+          <td>A batch of images</td>
+          <td>4D tensor (N &times; H &times; W &times; C)</td>
+          <td>N images stacked together for batch inference</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>In Core ML, tensors are represented by two types:</p>
+
+    <ul>
+      <li><strong><code>MLMultiArray</code></strong> &mdash; The Foundation-era type. Works like a C-style multi-dimensional array. Verbose but universal.</li>
+      <li><strong><code>MLShapedArray</code></strong> &mdash; The modern Swift type. Generic, subscriptable, and fully compatible with MLMultiArray. Prefer this in new code.</li>
+    </ul>
+
+<pre><code>// Creating a tensor with MLShapedArray
+let probabilities = MLShapedArray&lt;Float&gt;(
+    scalars: [0.01, 0.02, 0.97],  // 3 class probabilities
+    shape: [3]                      // 1D tensor with 3 elements
+)
+
+// Accessing values — just like a Swift array
+let topScore = probabilities[2].scalar!  // 0.97
+
+// Converting from MLMultiArray (common in model outputs)
+let shaped = MLShapedArray&lt;Float&gt;(multiArray)</code></pre>
+
+    <div class="tip-box">
+      <strong>You rarely create tensors manually.</strong> For image models, Core ML and Vision handle tensor conversion automatically via <code>CVPixelBuffer</code> and <code>VNImageRequestHandler</code>. You'll mostly read output tensors, not create input ones.
+    </div>
+
+    <h2>Input Preprocessing: Why You Can't Just Throw a UIImage at a Model</h2>
+
+    <p>Models are picky about their input. A model trained on 224&times;224 pixel images will crash or produce garbage if you feed it a 4032&times;3024 iPhone photo. Preprocessing bridges the gap between your app's data and what the model expects.</p>
+
+    <p>For image models, preprocessing typically means:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>Resize</h4>
+        <p>Scale to the model's expected dimensions (e.g., 224&times;224)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Convert</h4>
+        <p>UIImage &rarr; CGImage &rarr; CVPixelBuffer</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Normalize</h4>
+        <p>Scale pixel values (0&ndash;255 &rarr; 0.0&ndash;1.0 or -1.0&ndash;1.0)</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>Orient</h4>
+        <p>Handle EXIF orientation so the image isn't rotated</p>
+      </div>
+    </div>
+
+    <p>The good news: when you use <code>VNCoreMLRequest</code> (from the Vision framework), most of this is handled automatically. Vision resizes, converts, and normalizes for you. That's why most Core ML tutorials use Vision as the front door:</p>
+
+<pre><code>// Vision handles preprocessing automatically
+let vnModel = try VNCoreMLModel(for: MobileNetV2().model)
+let request = VNCoreMLRequest(model: vnModel)
+
+// Feed any image — Vision resizes and normalizes it
+let handler = VNImageRequestHandler(cgImage: anyImage, orientation: .up)
+try handler.perform([request])</code></pre>
+
+    <div class="warning-box">
+      <strong>Orientation matters.</strong> iPhone photos have EXIF orientation metadata. If you skip orientation handling, your model might see a sideways or upside-down image. Always pass the correct <code>CGImagePropertyOrientation</code> to <code>VNImageRequestHandler</code>.
+    </div>
+
+    <h2>Output Postprocessing: Making Sense of Raw Numbers</h2>
+
+    <p>The model's raw output is just numbers. An image classifier doesn't return "golden retriever" &mdash; it returns an array of 1,000 floating-point probabilities. You need to interpret them:</p>
+
+<pre><code>// Raw model output: MLMultiArray of shape [1, 1000]
+// Index 207 = golden retriever, value = 0.97
+// Index 208 = Labrador retriever, value = 0.02
+// ... 998 other classes near 0.0
+
+// Vision wraps this for you as VNClassificationObservation:
+guard let results = request.results as? [VNClassificationObservation] else { return }
+
+// Already sorted by confidence, mapped to labels
+let top3 = results.prefix(3)
+for result in top3 {
+    print("\(result.identifier): \(result.confidence * 100)%")
+}
+// golden retriever: 97.1%
+// Labrador retriever: 2.3%
+// Irish setter: 0.4%</code></pre>
+
+    <p>Different model types produce different outputs:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Model Type</th>
+          <th>Raw Output</th>
+          <th>What You Extract</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Image classifier</td>
+          <td>Array of probabilities</td>
+          <td>Top class label + confidence</td>
+        </tr>
+        <tr>
+          <td>Object detector</td>
+          <td>Bounding boxes + class scores</td>
+          <td>CGRect coordinates + labels per object</td>
+        </tr>
+        <tr>
+          <td>Image segmenter</td>
+          <td>Pixel-level class map</td>
+          <td>Mask image for each segment</td>
+        </tr>
+        <tr>
+          <td>Text model</td>
+          <td>Token IDs or embeddings</td>
+          <td>Decoded text string</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Model Metadata: The Built-In README</h2>
+
+    <p>Every Core ML model carries metadata that tells you exactly how to use it. When you drag a model into Xcode and click on it, the model viewer shows you everything:</p>
+
+    <div class="highlight-box">
+      <h3>What Xcode's Model Viewer Shows</h3>
+      <ul>
+        <li><strong>Input spec:</strong> name, type, and shape (e.g., "image: Color 224&times;224")</li>
+        <li><strong>Output spec:</strong> name, type, and shape (e.g., "classLabel: String", "classProbability: Dictionary")</li>
+        <li><strong>Class labels:</strong> the list of categories the model can recognize</li>
+        <li><strong>Model class:</strong> the auto-generated Swift class name</li>
+        <li><strong>Size:</strong> file size on disk</li>
+        <li><strong>Author &amp; license:</strong> who created it and usage terms</li>
+        <li><strong>Compute units:</strong> which hardware backends are supported</li>
+      </ul>
+    </div>
+
+    <p>This metadata is your contract with the model. If it says the input is a 224&times;224 color image, that's what you must provide. If the output is a dictionary of class probabilities, that's what you'll get back. No guessing required.</p>
+
+    <h2>Common Model Architectures You'll Encounter</h2>
+
+    <p>You don't need to understand neural network internals, but knowing the major architecture families helps you pick the right model for your task:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">MobileNet</div>
+        <div class="stat-label">Image classification. Tiny (2&ndash;5 MB), fast (&lt;5 ms), designed for mobile. Your go-to for "what is this?"</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">YOLOv8</div>
+        <div class="stat-label">Object detection with bounding boxes. Finds multiple objects and draws rectangles around each. 6&ndash;30 MB.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">DeepLab</div>
+        <div class="stat-label">Image segmentation. Labels every pixel &mdash; background vs. person vs. object. Powers portrait mode effects.</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">BERT</div>
+        <div class="stat-label">Text understanding. Sentiment, entity extraction, question answering. Available in mobile-optimized variants (DistilBERT).</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">EfficientNet</div>
+        <div class="stat-label">Image classification, larger and more accurate than MobileNet. Good when accuracy trumps speed (20&ndash;80 MB).</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Whisper</div>
+        <div class="stat-label">Speech-to-text transcription. Multiple size variants. Convertible to Core ML with coremltools.</div>
+      </div>
+    </div>
+
+    <h2>The Size-Accuracy Tradeoff</h2>
+
+    <p>Here's the fundamental tension on mobile: bigger models are more accurate, but they use more storage, more memory, and more battery. The table below shows real tradeoffs for image classification:</p>
+
+    <div class="device-benchmark">
+      <strong>Image Classification Models: Size vs. Accuracy on iPhone 16 Pro</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Size</th>
+            <th>Top-1 Accuracy</th>
+            <th>Inference (ANE)</th>
+            <th>Memory</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>MobileNetV2</td>
+            <td>3.4 MB</td>
+            <td>71.8%</td>
+            <td>~3 ms</td>
+            <td>~15 MB</td>
+          </tr>
+          <tr>
+            <td>MobileNetV3-Large</td>
+            <td>5.4 MB</td>
+            <td>75.2%</td>
+            <td>~4 ms</td>
+            <td>~20 MB</td>
+          </tr>
+          <tr>
+            <td>EfficientNet-B0</td>
+            <td>20 MB</td>
+            <td>77.1%</td>
+            <td>~8 ms</td>
+            <td>~45 MB</td>
+          </tr>
+          <tr>
+            <td>EfficientNet-B4</td>
+            <td>74 MB</td>
+            <td>82.9%</td>
+            <td>~25 ms</td>
+            <td>~150 MB</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Notice: MobileNetV3-Large gives 75% accuracy in 5 MB and 4 ms. EfficientNet-B4 gives 83% accuracy but costs 74 MB and 25 ms. For most iOS features, MobileNet's speed and size win. Use larger models only when accuracy is critical and you can afford the resources.</p>
+    </div>
+
+    <div class="tip-box">
+      <strong>Start small, measure, then upgrade.</strong> Begin with MobileNetV3. If accuracy isn't good enough for your specific categories, move up to EfficientNet-B0. Only reach for B4+ if you've exhausted optimization options (Chapter 8 covers quantization and palettization to shrink larger models).
+    </div>
+
+    <h2>Where to Find Pre-Trained Models</h2>
+
+    <p>You don't have to train models from scratch. A rich ecosystem of pre-trained models is ready to use:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">&#127822;</div>
+      <div class="tool-info">
+        <div class="tool-name">Apple's Core ML Models Gallery</div>
+        <div class="tool-desc">Curated models in .mlmodel format, ready to drag into Xcode. MobileNetV2, FCRN-DepthPrediction, YOLOv3, and more. Tested and optimized for Apple hardware. <strong>Start here.</strong></div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">&#129303;</div>
+      <div class="tool-info">
+        <div class="tool-name">Hugging Face</div>
+        <div class="tool-desc">Thousands of models for every task. Many have Core ML exports available (look for the "Core ML" tag). Others can be converted using coremltools. The largest open-source model repository.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">&#128295;</div>
+      <div class="tool-info">
+        <div class="tool-name">coremltools</div>
+        <div class="tool-desc">Apple's Python library for converting PyTorch, TensorFlow, and ONNX models to Core ML format. The bridge between the ML research world and your Xcode project.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">&#127891;</div>
+      <div class="tool-info">
+        <div class="tool-name">Create ML</div>
+        <div class="tool-desc">Apple's no-code training tool. Drag in labeled data, pick a model type, train on your Mac, export .mlmodel. We cover this in depth in Chapter 9.</div>
+      </div>
+    </div>
+
+    <h2>Xcode's Model Viewer in Action</h2>
+
+    <p>When you add a Core ML model to your Xcode project, clicking on it opens the model viewer. Here's what you'll see for MobileNetV2:</p>
+
+    <div class="model-pipeline">
+      <strong>MobileNetV2 &mdash; Model Viewer Summary</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Type</strong></td>
+            <td>Neural Network Classifier</td>
+          </tr>
+          <tr>
+            <td><strong>Size</strong></td>
+            <td>3.4 MB</td>
+          </tr>
+          <tr>
+            <td><strong>Input</strong></td>
+            <td><code>image</code>: Color image, 224 &times; 224 pixels</td>
+          </tr>
+          <tr>
+            <td><strong>Output 1</strong></td>
+            <td><code>classLabel</code>: String (top prediction)</td>
+          </tr>
+          <tr>
+            <td><strong>Output 2</strong></td>
+            <td><code>classLabelProbs</code>: Dictionary&lt;String, Double&gt; (all 1,000 class probabilities)</td>
+          </tr>
+          <tr>
+            <td><strong>Classes</strong></td>
+            <td>1,000 ImageNet categories</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>This is your model's API documentation. The input spec tells you what to provide. The output spec tells you what you'll get back. The auto-generated Swift class wraps all of this in type-safe methods.</p>
+    </div>
+
+    <p>Xcode auto-generates a Swift class with typed <code>prediction()</code> methods and a typed output struct. If you pass the wrong type, the compiler catches it. No runtime surprises.</p>
+
+    <h2>How Apple Silicon Runs Your Model</h2>
+
+    <p>When you call <code>prediction()</code>, Core ML decides where to run the model based on your <code>MLModelConfiguration.computeUnits</code> setting:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Compute Units</th>
+          <th>Where It Runs</th>
+          <th>When to Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>.all</code> (default)</td>
+          <td>Core ML picks the best option per layer</td>
+          <td>Almost always. Let Core ML decide.</td>
+        </tr>
+        <tr>
+          <td><code>.cpuAndNeuralEngine</code></td>
+          <td>Neural Engine + CPU fallback</td>
+          <td>When you want to leave the GPU free for rendering</td>
+        </tr>
+        <tr>
+          <td><code>.cpuAndGPU</code></td>
+          <td>GPU via Metal + CPU fallback</td>
+          <td>When the Neural Engine doesn't support your model's ops</td>
+        </tr>
+        <tr>
+          <td><code>.cpuOnly</code></td>
+          <td>CPU only</td>
+          <td>Debugging, or when you need deterministic results</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <strong>Use <code>.all</code> and move on.</strong> Core ML's scheduler is remarkably good at splitting model layers across hardware. It can run some layers on the Neural Engine and fall back to GPU or CPU for unsupported operations &mdash; all automatically. Only override this when benchmarking (Chapter 7).
+    </div>
+
+    <h2>The Unified Memory Advantage</h2>
+
+    <p>On traditional PCs, the CPU, GPU, and ML accelerator each have separate memory. Moving data between them costs time. Apple Silicon is different: <strong>unified memory architecture</strong> means the CPU, GPU, and Neural Engine all share the same physical memory pool.</p>
+
+    <p>What this means for you: no expensive data copies between processors. The Neural Engine starts working immediately after the CPU prepares data. GPU rendering and ML inference share the same buffers. Core ML splits a model across CPU + GPU + Neural Engine with minimal overhead. This is why the same model runs faster on Apple Silicon than on competing chips with similar TOPS ratings.</p>
+
+    <h2>Try It: Explore a Real Core ML Model</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Inspect MobileNetV2 in Xcode</h3>
+      <ol>
+        <li><strong>Download MobileNetV2</strong> from Apple's Core ML Models page (developer.apple.com/machine-learning/models). It's about 3.4 MB.</li>
+        <li><strong>Create a new Xcode project</strong> (iOS App, SwiftUI). Name it "ModelExplorer."</li>
+        <li><strong>Drag MobileNetV2.mlmodel</strong> into the project navigator. Make sure "Copy items if needed" and your target are selected.</li>
+        <li><strong>Click the model file</strong> in the navigator. Xcode's model viewer opens. Write down:
+          <ul>
+            <li>Input name and shape</li>
+            <li>Output names and types</li>
+            <li>Number of class labels</li>
+            <li>File size</li>
+          </ul>
+        </li>
+        <li><strong>Open the Predictions tab</strong> in the model viewer. Drag a photo from your desktop onto the preview area. Xcode runs inference right there and shows the top predictions.</li>
+        <li><strong>Check the auto-generated code:</strong> build the project (Cmd+B), then Cmd-click on <code>MobileNetV2</code> in any Swift file to jump to the generated interface. Note the <code>prediction(image:)</code> method signature.</li>
+      </ol>
+      <p><strong>Bonus:</strong> Download a second model (like SqueezeNet or Resnet50) and compare their input/output specs, sizes, and prediction results on the same photo.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You now understand what ML models are, how the inference loop works, what tensors look like, and where to find pre-trained models. You've even inspected one in Xcode's model viewer.</p>
+
+    <p>In <strong>Chapter 3: Your First Core ML Model</strong>, we'll go from theory to practice. You'll convert a PyTorch model with coremltools, integrate it into a SwiftUI app, hook up the live camera, and run real-time image classification on your iPhone. Your first on-device AI feature, end to end.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="01-on-device-revolution.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">The On-Device AI Revolution</span>
+      </a>
+      <a href="03-first-core-ml-model.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Your First Core ML Model</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

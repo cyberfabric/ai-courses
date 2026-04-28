@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 17: Extending Claude Code &mdash; AI-Driven Development</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Development</span>
+    <div class="nav-links">
+      <a href="16-future-continuous-learning.html">&larr; Previous</a>
+      <a href="index.html">Contents</a>
+      <a href="maps/17-extending-claude-code-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 17</span>
+    <h1>Claude Skills, Subagents, Plugins &amp; MCP &mdash; Extending Claude Code</h1>
+    <p class="subtitle">The extension stack: file-based primitives that turn Claude Code from a coding assistant into a project-shaped collaborator</p>
+  </header>
+
+  <main>
+
+    <!-- The Extension Stack -->
+    <section>
+      <h2>The Extension Stack at a Glance</h2>
+
+      <p>Chapter 9 introduced "custom skills/commands" as one tool in the agentic toolbox. In the year since, that single bullet has grown into a coherent <em>extension stack</em>. Claude Code now ships five named, file-based primitives plus two runtime modes &mdash; and authoring each is a real skill of its own. If you only know about CLAUDE.md and slash commands, you're using maybe a third of the tool.</p>
+
+      <p>Here's the stack, in order of "weight" (from advisory hint to deterministic guardrail):</p>
+
+      <div class="comparison">
+        <div>
+          <h3>Five Primitives</h3>
+          <ul>
+            <li><strong>CLAUDE.md</strong> &mdash; ambient instructions loaded every session</li>
+            <li><strong>Skills</strong> &mdash; on-demand domain knowledge or repeatable workflows</li>
+            <li><strong>Subagents</strong> &mdash; isolated context with a scoped tool whitelist</li>
+            <li><strong>MCP servers</strong> &mdash; external integrations (Notion, Linear, Figma, databases)</li>
+            <li><strong>Hooks</strong> &mdash; deterministic scripts at lifecycle points</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Two Runtime Modes</h3>
+          <ul>
+            <li><strong>Auto Mode</strong> &mdash; classifier-gated permissions instead of click-through approvals</li>
+            <li><strong>Sandboxing</strong> &mdash; OS-level filesystem and network isolation</li>
+          </ul>
+          <p>Plus <strong>Plugins</strong> (installable bundles of all of the above) and <strong>Agent Teams</strong> (multi-session orchestration).</p>
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <h3>Choose by Question, Not by Vibe</h3>
+        <p>The official <a href="https://code.claude.com/docs/en/best-practices" target="_blank">best-practices doc</a> frames the choice as a single question: <em>what is this thing supposed to guarantee?</em> If it's <strong>persistent context</strong>, it's CLAUDE.md. If it's <strong>knowledge or a workflow you want available on demand</strong>, it's a Skill. If it's <strong>a focused task that should run in its own context window</strong>, it's a Subagent. If it's <strong>access to an external system</strong>, it's an MCP server. If it's <strong>an action that must happen every time, with zero exceptions</strong>, it's a Hook. Match the primitive to the guarantee and you'll rarely pick wrong.</p>
+      </div>
+    </section>
+
+    <!-- Skills -->
+    <section>
+      <h2>Skills: File-Based Domain Knowledge</h2>
+
+      <p>A Skill is a folder under <code>.claude/skills/&lt;name&gt;/</code> containing a <code>SKILL.md</code> with frontmatter. Claude loads the description into context at session start, then loads the body on demand when the description matches what you're doing &mdash; or you can invoke it manually with <code>/&lt;skill-name&gt;</code>. Files in <code>.claude/commands/</code> still work for backwards compatibility, but the unified, recommended path is <code>.claude/skills/</code>.</p>
+
+      <p>There are two flavors. <strong>Ambient skills</strong> describe how things work; Claude pulls them in when relevant. <strong>Side-effect skills</strong> describe a workflow you trigger explicitly; you set <code>disable-model-invocation: true</code> to keep Claude from running them on its own.</p>
+
+      <h3><span class="profession-tag">Backend</span> Ambient Skill</h3>
+      <pre><code>.claude/skills/api-conventions/SKILL.md
+---
+name: api-conventions
+description: REST API design conventions for our services
+---
+# API Conventions
+- Use kebab-case for URL paths
+- Use camelCase for JSON properties
+- Always include pagination for list endpoints (cursor-based, default limit 50)
+- Version APIs in the URL path (/v1/, /v2/)
+- Errors follow RFC 7807 problem+json
+- All timestamps are ISO 8601 in UTC
+</code></pre>
+
+      <p>This file lives next to the code. Anyone touching the API repo gets the same conventions. The CLAUDE.md doesn't need to know about them &mdash; the description in the frontmatter is enough for Claude to find the skill when the task is "add a new endpoint."</p>
+
+      <h3><span class="profession-tag">Full-Stack</span> Side-Effect Skill</h3>
+      <pre><code>.claude/skills/fix-issue/SKILL.md
+---
+name: fix-issue
+description: Fix a GitHub issue end-to-end
+disable-model-invocation: true
+---
+Analyze and fix the GitHub issue: $ARGUMENTS.
+
+1. Use `gh issue view` to get the issue details
+2. Understand the problem described in the issue
+3. Search the codebase for relevant files
+4. Implement the necessary changes to fix the issue
+5. Write and run tests to verify the fix
+6. Ensure code passes linting and type checking
+7. Create a descriptive commit message
+8. Push and create a PR linking the issue
+</code></pre>
+
+      <p>You run it as <code>/fix-issue 1234</code>. The <code>$ARGUMENTS</code> token is substituted with whatever you typed. The <code>disable-model-invocation</code> flag is what makes this safe &mdash; without it, Claude might decide to "fix issue 1234" on its own when you only meant to ask about it.</p>
+
+      <div class="tip-box">
+        <strong>The CLAUDE.md vs Skill test.</strong> Read the rule out loud. Does it apply to <em>every</em> conversation in this repo? Then it goes in CLAUDE.md. Does it apply only when a specific kind of task comes up? Then it's a Skill. Bloated CLAUDE.md files cause Claude to ignore your actual instructions &mdash; the doc says this in nearly the same words. Move conditional knowledge into Skills and let CLAUDE.md stay short.
+      </div>
+    </section>
+
+    <!-- Subagents -->
+    <section>
+      <h2>Subagents: Isolated Context, Scoped Tools</h2>
+
+      <p>A Subagent is a single Markdown file under <code>.claude/agents/&lt;name&gt;.md</code>. When Claude delegates to it, the subagent runs in <em>its own context window</em> with <em>its own tool whitelist</em> and reports back a summary. The main conversation never sees the dozens of files the subagent read &mdash; only the conclusion.</p>
+
+      <p>This is the single most powerful tool for managing context. The <a href="https://code.claude.com/docs/en/best-practices" target="_blank">best-practices doc</a> calls subagents "one of the most powerful tools available" precisely because context is the fundamental constraint, and subagents let you spend other people's context on research while keeping yours clean for implementation.</p>
+
+      <h3><span class="profession-tag">DevOps</span> Security Reviewer</h3>
+      <pre><code>.claude/agents/security-reviewer.md
+---
+name: security-reviewer
+description: Reviews code for security vulnerabilities
+tools: Read, Grep, Glob, Bash
+model: opus
+---
+You are a senior security engineer. Review code for:
+- Injection vulnerabilities (SQL, XSS, command injection)
+- Authentication and authorization flaws
+- Secrets or credentials in code
+- Insecure data handling and missing input validation
+- Insecure cryptographic primitives or key handling
+
+Provide specific line references and suggested fixes.
+</code></pre>
+
+      <p>Three things to notice. First, <code>tools: Read, Grep, Glob, Bash</code> &mdash; an explicit whitelist. The reviewer can read the codebase but can't <em>write</em> to it. Second, <code>model: opus</code> &mdash; this subagent will use Opus 4.7 even if the main session is on Sonnet, because security review is the kind of work that justifies the strongest model. Third, the prompt is concrete. Vague subagent prompts produce vague reviews.</p>
+
+      <p>Trigger it with: <em>"Use a subagent to review this code for security issues."</em> You'll get back five lines of summary instead of two thousand lines of file dumps. The <a href="https://code.claude.com/docs/en/sub-agents" target="_blank">subagents docs</a> list every frontmatter field, including <code>disallowedTools</code> as a denylist alternative when you want "everything except X."</p>
+
+      <div class="warning-box">
+        <strong>Subagents inherit MCP servers by default.</strong> If your main session has a database MCP server connected, your subagent has it too unless you scope tools explicitly. For anything that touches production, use <code>tools:</code> as an allowlist. "Trust by default" is the wrong default for delegation.
+      </div>
+    </section>
+
+    <!-- Plugins -->
+    <section>
+      <h2>The Plugin Marketplace</h2>
+
+      <p>A Plugin is an installable bundle of skills, hooks, subagents, and MCP servers, distributed through marketplaces. <code>/plugin</code> opens the browser. The official Anthropic-managed marketplace (<a href="https://github.com/anthropics/claude-plugins-official" target="_blank">claude-plugins-official</a>) is auto-available the moment you start Claude Code &mdash; no setup required.</p>
+
+      <p>Plugins matter for two reasons. They let teams package and distribute their conventions as a single install, and they let the community share workflows that would otherwise live in a thousand README gists. The <a href="https://code.claude.com/docs/en/discover-plugins" target="_blank">discover-plugins doc</a> highlights one category in particular: <strong>code-intelligence plugins</strong> for typed languages. If you work in TypeScript, Kotlin, Rust, or Go, install the relevant code-intelligence plugin so Claude has precise symbol navigation and automatic error detection after edits, instead of running grep over the codebase.</p>
+
+      <h3>Enterprise: Private Plugin Marketplaces</h3>
+      <p>In February 2026, Anthropic added <strong>private plugin marketplaces</strong> as part of the Claude Cowork enterprise update. Admins set up a private marketplace through the "Customize" menu, populate it with public plugins, partner-built plugins, or custom plugins built from templates, and then control who sees what via per-user provisioning and team-scoped visibility. If you're at a regulated company that can't pull random plugins from public marketplaces, this is the path: a curated internal catalog where your security team reviews each plugin before publishing.</p>
+
+      <h3><span class="profession-tag">Team Lead</span> Adoption Path</h3>
+      <p>Don't roll your own bundle on day one. Pattern that works:</p>
+      <ol>
+        <li>Browse the official marketplace with <code>/plugin</code>. Install the code-intelligence plugin for your language.</li>
+        <li>Adopt one or two community plugins your team agrees on (a test-runner plugin, a migration plugin).</li>
+        <li>After three months of using primitives directly, identify the three Skills/Hooks/Subagents your team copies between repos. <em>That</em> is your plugin's surface area.</li>
+        <li>Bundle, publish to your private marketplace, and onboard new repos with one install.</li>
+      </ol>
+    </section>
+
+    <!-- MCP -->
+    <section>
+      <h2>MCP Servers in Practice</h2>
+
+      <p>The Model Context Protocol (MCP) is the universal connector between Claude Code and external systems. You install a server with <code>claude mcp add &lt;name&gt;</code>, and from then on Claude can talk to that system inside any session. Notion for docs, Linear for tickets, Figma for design specs, your own database for schema-aware queries &mdash; pick the server, install once, use everywhere.</p>
+
+      <p>The Cowork update on 2026-02-24 added twelve new connectors at once: Google Calendar, Google Drive, Gmail, DocuSign, Apollo, Clay, Outreach, Similarweb, MSCI, LegalZoom, FactSet, WordPress, and Harvey. The fact that legal-tech, sales-ops, and financial-data servers all ship in the same release is the signal: MCP isn't an "engineering integration" anymore, it's the company-wide tool fabric.</p>
+
+      <h3><span class="profession-tag">Android Dev</span> The Same MCP Servers in Android Studio</h3>
+      <p>This is the part that surprises people. The MCP server you set up for Claude Code <em>also</em> works in Android Studio's Agent Mode. Google explicitly designed <a href="https://developer.android.com/studio/gemini/agent-mode" target="_blank">Agent Mode</a> to consume remote MCP servers, and the Android Studio team has gone on record about Notion, Figma, Canva, and Linear integrations specifically. That means your Linear MCP server gives Claude Code <em>and</em> Gemini-in-Android-Studio the same view of your sprint board. The investment compounds across tools.</p>
+
+      <div class="tip-box">
+        <strong>Start with one.</strong> Pick the system you reach for ten times a day &mdash; for most teams that's the issue tracker &mdash; and add it first. Once Claude can fetch ticket descriptions, paste reproduction steps, and update status without you tab-switching, you'll never go back. The other eleven connectors can wait.
+      </div>
+    </section>
+
+    <!-- Hooks vs Skills vs CLAUDE.md -->
+    <section>
+      <h2>Hooks vs Skills vs CLAUDE.md</h2>
+
+      <p>Hooks are scripts that run automatically at points in the agentic loop &mdash; before a tool call, after a file edit, before a commit. They live in <code>.claude/settings.json</code>, and they are <strong>deterministic</strong>: unlike CLAUDE.md (advisory) and Skills (advisory + on-demand), a Hook always runs. If you say "block writes to <code>migrations/</code>," writes to <code>migrations/</code> are blocked. No model interpretation, no negotiation, no "the rule got lost in a long context."</p>
+
+      <p>The single most useful test from the best-practices doc: <em>"For each rule, ask: would removing this cause Claude to make mistakes? If not, cut it. If yes, ask: should this be advisory (Skill) or guaranteed (Hook)?"</em></p>
+
+      <h3>The Three-Layer Defense</h3>
+      <table>
+        <thead>
+          <tr><th>Layer</th><th>Mechanism</th><th>What it guarantees</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1. Ambient context</td><td>CLAUDE.md</td><td>Claude <em>knows</em> the rule</td><td>"Use kebab-case for URL paths"</td></tr>
+          <tr><td>2. On-demand workflow</td><td>Skill</td><td>Claude <em>can apply</em> the rule when relevant</td><td><code>fix-issue</code> follows your team's PR template</td></tr>
+          <tr><td>3. Hard guardrail</td><td>Hook</td><td>The rule <em>is</em> applied, period</td><td>Pre-commit ESLint blocks commits with errors</td></tr>
+        </tbody>
+      </table>
+
+      <h3><span class="profession-tag">DevOps</span> Hook Examples</h3>
+      <ul>
+        <li><strong>Pre-edit lint:</strong> run ESLint on every file Claude touches; block the edit if it would introduce errors</li>
+        <li><strong>Pre-commit secret scan:</strong> reject commits where <code>git diff</code> contains an API key pattern</li>
+        <li><strong>Path block:</strong> deny writes to <code>migrations/</code>, <code>infra/prod/</code>, or <code>.github/workflows/</code> without explicit approval</li>
+        <li><strong>Post-tool log:</strong> append every Bash command to a session audit log for compliance</li>
+      </ul>
+
+      <p>Claude can write Hooks for you. Try: <em>"Write a hook that blocks writes to <code>migrations/</code> and runs <code>./scripts/typecheck.sh</code> after every edit. Edit <code>.claude/settings.json</code> to add it, and run <code>/hooks</code> to confirm it's active."</em> The doc lists this exact pattern as an idiomatic prompt.</p>
+    </section>
+
+    <!-- Auto Mode + Sandbox -->
+    <section>
+      <h2>Auto Mode and <code>/sandbox</code></h2>
+
+      <p>By default, Claude Code asks permission for every action that modifies your system: file writes, Bash commands, MCP tool calls. Safe but tedious &mdash; after the tenth approval you're not reviewing, you're clicking. Anthropic shipped two complementary mechanisms to fix this in 2026.</p>
+
+      <h3>Auto Mode (March 24, 2026)</h3>
+      <p><a href="https://www.anthropic.com/engineering/claude-code-auto-mode" target="_blank">Auto Mode</a> replaces click-through approvals with a classifier model. A separate Sonnet 4.6 instance reviews each action and decides whether to approve it. The classifier checks three risk categories:</p>
+
+      <ul>
+        <li><strong>Scope escalation</strong> &mdash; is Claude doing something beyond what you asked for?</li>
+        <li><strong>Untrusted infrastructure</strong> &mdash; is the action targeting systems the classifier doesn't recognize?</li>
+        <li><strong>Prompt injection</strong> &mdash; does the action look driven by hostile content Claude encountered in a file or web page?</li>
+      </ul>
+
+      <p>Implementation note: it's a two-stage filter. A fast single-token decision ("yes block / no allow") for the common case, then chain-of-thought reasoning only when the first stage flags the transcript. This keeps latency tolerable while preserving thoroughness on suspicious actions. Engage it with <code>--permission-mode auto</code>:</p>
+
+      <pre><code>$ claude --permission-mode auto -p "fix all lint errors"</code></pre>
+
+      <p>Between launch and 2026-04-16, Auto Mode rolled from research preview to GA on Max, Team, Enterprise, and the API. For non-interactive runs (the <code>-p</code> flag), there's no human to fall back to &mdash; if the classifier blocks an action repeatedly, Auto Mode aborts the session rather than hanging.</p>
+
+      <h3>Sandboxing</h3>
+      <p><a href="https://code.claude.com/docs/en/sandboxing" target="_blank">Sandboxing</a> is the OS-level companion: Claude runs inside a restricted environment with bounded filesystem and network access. Use <code>/sandbox</code> in an interactive session to enable it. Inside the sandbox, Bash commands are auto-allowed without prompts, because the sandbox <em>itself</em> is the boundary. This is materially different from Auto Mode: Auto Mode reasons about intent, the sandbox enforces capability.</p>
+
+      <h3>Combine Them</h3>
+      <p>The doc explicitly recommends combining the two: Auto Mode for "what is the agent trying to do?" and the sandbox for "what could it physically reach if it tried?" In production-adjacent environments, run Claude inside a container or VM <em>and</em> use Auto Mode. Anthropic's own guidance: <em>"Do not run it directly on production systems without a backup strategy."</em></p>
+
+      <div class="warning-box">
+        <strong>Auto Mode is not "yolo mode."</strong> The classifier blocks the most common destructive actions, but it's not infallible. Use it where the blast radius is bounded &mdash; a feature branch, a sandbox, a containerized dev env. Don't use it on a checkout that has uncommitted work you can't reproduce. Auto Mode + a fresh worktree + clean git status is the sweet spot.
+      </div>
+    </section>
+
+    <!-- Agent Teams -->
+    <section>
+      <h2>Agent Teams and Parallel Sessions</h2>
+
+      <p>Subagents are isolated workers reporting to a boss. <a href="https://code.claude.com/docs/en/agent-teams" target="_blank">Agent Teams</a> are something different: a <em>collaborative squad</em> where one Claude is the lead and others are teammates who can talk to each other directly, self-assign tasks from a shared list, and challenge each other's findings. Anthropic shipped Agent Teams alongside Opus 4.6 on 2026-02-05.</p>
+
+      <p>The default size is 3&ndash;5 teammates. Bigger teams produce more coordination overhead than parallelism gain. Smaller teams are usually just fine without Agent Teams &mdash; subagents work.</p>
+
+      <h3>The Writer/Reviewer Pattern</h3>
+      <p>The single most useful pattern, straight from the doc:</p>
+
+      <table>
+        <thead>
+          <tr><th>Session A (Writer)</th><th>Session B (Reviewer)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><em>"Implement a rate limiter for our API endpoints."</em></td>
+            <td>&nbsp;</td>
+          </tr>
+          <tr>
+            <td>&nbsp;</td>
+            <td><em>"Review the rate limiter in <code>@src/middleware/rateLimiter.ts</code>. Look for edge cases, race conditions, and consistency with our existing middleware patterns."</em></td>
+          </tr>
+          <tr>
+            <td><em>"Here's the review feedback: [Session B output]. Address these issues."</em></td>
+            <td>&nbsp;</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Why a separate session? <strong>Fresh context defeats author bias.</strong> A reviewer that didn't write the code spots problems the writer missed. The same trick works for testing: have one session write tests, then a second session write code to pass them. TDD, parallelized.</p>
+
+      <h3><span class="profession-tag">Backend</span> Fan-Out Across Files</h3>
+      <p>For large migrations, distribute work across many parallel <code>claude -p</code> invocations:</p>
+
+      <pre><code>$ for file in $(cat files.txt); do
+    claude -p "Migrate $file from React to Vue. Return OK or FAIL." \
+      --allowedTools "Edit,Bash(git commit *)"
+  done</code></pre>
+
+      <p><code>--allowedTools</code> is the safety belt. In a batch loop, no human is reviewing each step &mdash; you constrain the tool surface up front. Test the prompt on three files, refine, then run on two thousand. The doc walks through this pattern as the canonical migration example.</p>
+    </section>
+
+    <!-- Worked Example -->
+    <section>
+      <h2>Worked Example: An Android Repo with the Full Stack</h2>
+
+      <p>One <span class="profession-tag">Android Dev</span> project. Four primitives, one MCP server, working together.</p>
+
+      <h3>1. The <code>compose-migration</code> Skill</h3>
+      <pre><code>.claude/skills/compose-migration/SKILL.md
+---
+name: compose-migration
+description: Migrate an XML layout to Jetpack Compose, preserving behavior
+---
+When migrating an XML layout file:
+1. Read the XML and identify root layout type
+2. Map ConstraintLayout → Box with constraints, LinearLayout → Row/Column
+3. Preserve view IDs as testTags
+4. Migrate dimens/colors to MaterialTheme tokens
+5. Generate a Composable preview with sample data
+6. Add a screenshot test using Paparazzi
+</code></pre>
+
+      <h3>2. The <code>security-reviewer</code> Subagent</h3>
+      <p>The same one from earlier &mdash; tools scoped to <code>Read, Grep, Glob, Bash</code>, <code>model: opus</code>. After every Compose migration, the team lead manually triggers: <em>"Use the security-reviewer subagent on the migrated file."</em> Five lines of summary back; no context bloat.</p>
+
+      <h3>3. The Linear MCP Server</h3>
+      <p><code>claude mcp add linear</code> once at setup. Now Claude can read ticket descriptions, paste acceptance criteria into the spec, and update status when the migration ships. Same MCP server is available in Android Studio's Agent Mode &mdash; one integration, two tools.</p>
+
+      <h3>4. The Pre-Commit Hook</h3>
+      <p>In <code>.claude/settings.json</code>: a hook that runs <code>./gradlew detekt ktlintCheck</code> before every commit and blocks if either fails. Deterministic. The lint rules don't drift, the formatting doesn't drift, and Claude can't accidentally commit code that fails CI.</p>
+
+      <h3>The End-to-End Flow</h3>
+      <div class="workflow-steps">
+        <div class="step">Linear ticket</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">compose-migration Skill</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">security-reviewer Subagent</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">Pre-commit Hook</div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="step">PR + Linear status</div>
+      </div>
+
+      <p>Engineer types: <em>"Migrate the screen for LIN-4421 to Compose."</em> Claude pulls the ticket from the MCP server, runs the Skill, the subagent reviews, the hook lints, and the PR opens. Half an hour of XML migration, three lines of human input.</p>
+    </section>
+
+    <!-- Anti-Patterns -->
+    <section>
+      <h2>Anti-Patterns</h2>
+
+      <div class="comparison">
+        <div>
+          <h3>Don't</h3>
+          <ul>
+            <li>Stuff domain knowledge into CLAUDE.md when it only applies to a specific task</li>
+            <li>Reach for a Subagent when a Skill would do (subagents pay context cost on the round-trip)</li>
+            <li>Install every shiny plugin from the marketplace "just in case"</li>
+            <li>Run Auto Mode on a checkout with uncommitted experimental work you can't reproduce</li>
+            <li>Use Hooks for advisory rules that should be Skills</li>
+            <li>Spin up Agent Teams for tasks a single session would finish in five minutes</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Do</h3>
+          <ul>
+            <li>Keep CLAUDE.md short; move conditional knowledge to Skills</li>
+            <li>Use Subagents when context savings outweigh delegation overhead</li>
+            <li>Install plugins deliberately; uninstall ones you haven't used in a month</li>
+            <li>Combine Auto Mode with sandboxing or a worktree for blast-radius control</li>
+            <li>Reserve Hooks for invariants you'd write a CI check for anyway</li>
+            <li>Use Agent Teams for genuinely parallelizable work (cross-layer features, large migrations)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>Plugin sprawl is a real failure mode.</strong> A plugin that's installed but unused still loads its descriptions into context, still appears in <code>/plugin</code>, and still adds cognitive load when you're picking the right tool. Treat plugins like dependencies: audit them quarterly. <em>"Have I used this in the last 30 days?"</em> If no, uninstall.
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Exercise: Author the Stack</h2>
+
+      <div class="exercise-box">
+        <h3>Build the Three Primitives in Your Own Project</h3>
+
+        <p>In a real repository you work in, author the following and commit them:</p>
+
+        <ol>
+          <li><strong>One Skill.</strong> Pick a repeatable task you do in this codebase (release notes, dependency upgrade, schema migration). Write <code>.claude/skills/&lt;name&gt;/SKILL.md</code>. Decide whether it's ambient or side-effect; if side-effect, set <code>disable-model-invocation: true</code>.</li>
+          <li><strong>One Subagent.</strong> Define a focused reviewer or investigator. Whitelist tools narrowly. Pick the model deliberately (<code>opus</code> for hard work, <code>sonnet</code> for everything else).</li>
+          <li><strong>One Hook.</strong> Pick one invariant you wish your CI enforced &mdash; secrets in commits, lint pre-commit, blocked paths. Add it to <code>.claude/settings.json</code>. Run <code>/hooks</code> to verify.</li>
+        </ol>
+
+        <h4>Then run a task that exercises all three:</h4>
+        <ul>
+          <li>Invoke the Skill on a real input</li>
+          <li>Ask Claude to <em>"use the &lt;subagent-name&gt; subagent to review the change"</em></li>
+          <li>Commit and watch the Hook run</li>
+        </ul>
+
+        <h4>Reflection:</h4>
+        <ul class="checklist">
+          <li>Which primitive saved the most context? (Probably the Subagent.)</li>
+          <li>Which felt most "always on"? (Probably the Hook.)</li>
+          <li>Which would a new teammate reach for first? (Whichever you described best in its frontmatter.)</li>
+        </ul>
+
+        <p><strong>Bonus:</strong> Bundle them as a Plugin and publish to a private repo. Onboard a teammate's project with a single <code>/plugin install</code>. That's the moment the extension stack stops being a per-engineer trick and starts being team infrastructure.</p>
+      </div>
+    </section>
+
+    <!-- Closing -->
+    <section>
+      <h2>You Now Have the Stack</h2>
+
+      <p>This is the layer between "I use Claude Code" and "Claude Code is shaped like my project." Five primitives, two runtime modes, plugins for distribution, agent teams for parallelism. Nothing here is magic &mdash; each piece is a Markdown file or a JSON setting away. The leverage comes from using them in concert.</p>
+
+      <p>The companion course <a href="../../AI-Harness/chapters/index.html" target="_blank">AI Harness Engineering</a> goes deeper on the underlying harness mechanics &mdash; context management, compaction, checkpointing, retrieval. If you want to understand <em>why</em> Skills load lazily and <em>how</em> subagents protect your context budget, that's the next read.</p>
+
+      <p>And if you've worked through Chapter 9 (Agentic Workflows), Chapter 11 (Code Review), and now this, you have what you need to ship: the directing mindset, the review skills, and the toolkit to extend Claude Code to fit any project you'll touch in 2026.</p>
+
+      <p><strong>Now go author one Skill before you close this tab.</strong></p>
+    </section>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="16-future-continuous-learning.html" class="prev">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">Chapter 16: The Future and Continuous Learning</span>
+      </a>
+      <a href="index.html" class="next">
+        <span class="nav-direction">Back to</span>
+        <span class="nav-chapter">Table of Contents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

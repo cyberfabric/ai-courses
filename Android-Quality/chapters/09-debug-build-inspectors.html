@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9 &mdash; Debug-Build Inspectors | The Android Quality Stack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="08-leakcanary.html">&larr; Prev</a>
+      <a href="10-version-catalogs-and-deps.html">Next &rarr;</a>
+      <a href="maps/09-debug-build-inspectors-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>Debug-Build Inspectors</h1>
+    <p class="subtitle">Chucker for HTTP, a debug-menu pattern, debug-only feature flags &mdash; gated so none of it ships</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The "open the hood" problem</h2>
+
+      <p>StrictMode and LeakCanary watch your app from the outside. They yell when something is wrong. But there's a different category of bug-hunting where you don't want a yell &mdash; you want to <em>look inside the running app</em>: what request did it just send, what did the server send back, which feature flags are currently on, what build is this exactly, what would happen if I forced this screen into the error state.</p>
+
+      <p>For years, the answer was Logcat plus prayer. You'd add <code>Log.d("API", response.toString())</code> in three places, ship a debug build, navigate around, scroll through 80 KB of unrelated logs, and squint. By the time you found the request, you'd forgotten what you were looking for.</p>
+
+      <p>This chapter wires up the kit that experienced Android teams quietly take for granted: an in-app HTTP inspector (Chucker), a debug menu reachable from the running app, and a tiny pattern for overriding feature flags locally. None of it ships to users. All of it is gated through <code>debugImplementation</code> and <code>BuildConfig.DEBUG</code>, so the release APK stays exactly as small and exactly as locked-down as it was before.</p>
+
+      <div class="highlight-box">
+        <p><strong>The goal of this chapter:</strong> turn your debug build into a tool, not just a slower version of release. By the end you'll have HTTP requests one notification away, a hidden debug menu reachable from your app, and feature flags you can flip without redeploying remote config.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>The debug-only kit, in one box</h2>
+
+      <div class="tool-profile-box">
+        <h3>Meet the Debug-Build Kit</h3>
+        <p><strong>What it is:</strong> a curated bundle of three things &mdash; Chucker (HTTP inspector), a debug menu screen, and a debug-only feature-flag override layer &mdash; all delivered via <code>debugImplementation</code> and <code>BuildConfig.DEBUG</code> gates.</p>
+        <p><strong>What it catches that other tools don't:</strong> live API regressions, server-side bugs masquerading as client bugs, "works on staging breaks on prod" issues, feature-flag mismatches, "what build did the tester actually run" confusion, and any bug that needs <em>state inspection</em> rather than crash signals.</p>
+        <p><strong>Install (one-line summary):</strong> <code>debugImplementation("com.github.chuckerteam.chucker:library:VERSION")</code> + <code>releaseImplementation("...:library-no-op:VERSION")</code> + a Compose <code>DebugMenuScreen</code> guarded by <code>BuildConfig.DEBUG</code>.</p>
+        <p><strong>Runtime cost:</strong> Chucker adds an OkHttp interceptor (microseconds per request) and a small SQLite store of the last N transactions. Both vanish in release. Debug menu is one extra entry point in your nav graph, also gone in release.</p>
+        <p><strong>When to skip it:</strong> if your app makes no HTTP calls and has zero feature flags, you don't need Chucker. You probably still want a debug-menu pattern for build info.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Why the <code>debugImplementation</code> distinction matters</h2>
+
+      <p>Three Gradle dependency configurations carry this entire chapter:</p>
+
+      <div class="tool-card">
+        <h4><code>implementation</code></h4>
+        <p>Ships in every variant, including release. Anything you put here is in your APK. Treat as your default <em>only</em> for code users are meant to run.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4><code>debugImplementation</code></h4>
+        <p>Compiled into the <code>debug</code> build variant only. The release APK never sees it. This is where Chucker, your debug-menu library code, LeakCanary, and any in-app inspector go.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4><code>releaseImplementation</code></h4>
+        <p>Ships only in release. Useful for the <em>no-op</em> half of a debug/release pair (e.g. Chucker's no-op artifact) so call sites don't need <code>if (BuildConfig.DEBUG)</code> wrappers.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>The pattern:</strong> "real" library on <code>debugImplementation</code>, matching no-op library (same package, empty implementations) on <code>releaseImplementation</code>. Your app code calls the API unconditionally, and the no-op silently does nothing in release. Less branching, fewer mistakes, smaller release APK.
+      </div>
+    </section>
+
+    <section>
+      <h2>Chucker: HTTP requests in your notification shade</h2>
+
+      <p>Chucker is an OkHttp <code>Interceptor</code> that records every request and response your app makes &mdash; URL, method, status, headers, body, timing &mdash; and surfaces them in two places: a persistent notification (tap to open) and an in-app screen. You see what the network actually did, in plain English, without leaving the device.</p>
+
+      <p>It is the single most-installed dependency in any Android team that does API integration regularly, and the one that gets installed last. Don't be that team.</p>
+
+      <h3>Install &amp; wire it up</h3>
+
+      <div class="config-recipe">
+        <h4><code>app/build.gradle.kts</code></h4>
+<pre><code>dependencies {
+    // Chucker: real library in debug, no-op in release
+    debugImplementation("com.github.chuckerteam.chucker:library:4.0.0")
+    releaseImplementation("com.github.chuckerteam.chucker:library-no-op:4.0.0")
+}</code></pre>
+        <p class="recipe-note">The no-op artifact is the trick. It exposes the same <code>ChuckerInterceptor</code> class with empty methods, so the call sites below compile and run in release without an <code>if (BuildConfig.DEBUG)</code> wrapper.</p>
+      </div>
+
+      <div class="config-recipe">
+        <h4><code>NetworkModule.kt</code> &mdash; plug into your OkHttpClient</h4>
+<pre><code>import com.chuckerteam.chucker.api.ChuckerInterceptor
+import com.chuckerteam.chucker.api.RetentionManager
+
+@Provides
+@Singleton
+fun provideOkHttpClient(@ApplicationContext context: Context): OkHttpClient {
+    val chuckerInterceptor = ChuckerInterceptor.Builder(context)
+        .collector(ChuckerCollector(
+            context = context,
+            showNotification = true,
+            retentionPeriod = RetentionManager.Period.ONE_HOUR
+        ))
+        .maxContentLength(250_000L)              // truncate big bodies
+        .redactHeaders("Authorization", "Cookie") // never log secrets
+        .alwaysReadResponseBody(true)             // capture even on stream errors
+        .build()
+
+    return OkHttpClient.Builder()
+        .addInterceptor(chuckerInterceptor)       // last in chain = sees final request
+        .build()
+}</code></pre>
+        <p class="recipe-note"><code>redactHeaders</code> is non-negotiable: bearer tokens and session cookies must never be visible in your in-app inspector, even on a debug build that lives on a tester's phone.</p>
+      </div>
+
+      <h3>Reading Chucker output, fast</h3>
+
+      <div class="checklist">
+        <ul>
+          <li>Pull down the notification shade &mdash; Chucker shows the live count of recent requests.</li>
+          <li>Tap to open the in-app list &mdash; sorted newest-first, color-coded by status code.</li>
+          <li>Open a request &mdash; three tabs: <strong>Overview</strong>, <strong>Request</strong>, <strong>Response</strong>. Body is rendered with JSON pretty-printing.</li>
+          <li>Long-press the row to share &mdash; exports the transaction as text or as a curl command, perfect for pasting into a bug report.</li>
+        </ul>
+      </div>
+
+      <div class="warning-box">
+        <strong>Headers redaction is mandatory.</strong> Anyone with the debug APK on their phone can open Chucker and read every request body in plain text. If you ship debug builds to QA, beta testers, or contractors, scrub <code>Authorization</code>, <code>Cookie</code>, and any custom auth header at minimum. Treat the debug APK as a build that <em>could</em> be reverse-engineered &mdash; it won't, but build like it could.
+      </div>
+    </section>
+
+    <section>
+      <h2>The debug menu pattern</h2>
+
+      <p>Every shipping team eventually grows a "secret" screen that QA, support, and engineers use to inspect and override behavior. Most teams build it accidentally, one ad-hoc button at a time. The result is hostile and forgotten.</p>
+
+      <p>The right move: design the debug menu as a deliberate feature with a stable home. Reachable from a debug-only entry point (long-press your logo, settings &rarr; "Debug" link, a 5-tap version-number Easter egg if you're a traditionalist), gated on <code>BuildConfig.DEBUG</code>, and kept in source control so the whole team contributes to it.</p>
+
+      <h3>What goes inside</h3>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">📋</div>
+          <div class="stat-label">Build info: version name, version code, commit SHA, build time, build type, flavor, server URL</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">🚩</div>
+          <div class="stat-label">Feature flag overrides: every flag with a local toggle that beats remote config</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">💥</div>
+          <div class="stat-label">Force-crash, force-ANR, force-OOM buttons for crash-reporter testing</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">🧹</div>
+          <div class="stat-label">Clear app data, clear OkHttp cache, clear shared prefs &mdash; one-tap state reset</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">🚪</div>
+          <div class="stat-label">Deep-link launcher: jump to any screen by name without a real flow</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">📤</div>
+          <div class="stat-label">Log export: dump the last N seconds of Logcat to a shareable file</div>
+        </div>
+      </div>
+
+      <h3>A minimal Compose debug menu</h3>
+
+      <div class="config-recipe">
+        <h4><code>DebugMenuScreen.kt</code> (in <code>src/debug/java/...</code>)</h4>
+<pre><code>@Composable
+fun DebugMenuScreen(
+    flags: DebugFeatureFlagRepository,
+    onClearData: () -> Unit,
+    onForceCrash: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text("Build info", style = MaterialTheme.typography.titleMedium)
+        Text("Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        Text("Commit: ${BuildConfig.GIT_SHA}")
+        Text("Build time: ${BuildConfig.BUILD_TIME}")
+        Text("Server: ${BuildConfig.API_BASE_URL}")
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+        Text("Feature flags", style = MaterialTheme.typography.titleMedium)
+        flags.allFlags().forEach { flag ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(flag.key, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = flag.localOverride ?: flag.remoteValue,
+                    onCheckedChange = { flags.override(flag.key, it) }
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+        Button(onClick = onClearData) { Text("Clear app data") }
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onForceCrash) { Text("Force crash (test Crashlytics)") }
+    }
+}</code></pre>
+        <p class="recipe-note">Putting this file under <code>src/debug/java/</code> instead of <code>src/main/java/</code> means it literally does not exist in the release source set. Even if you accidentally <code>import</code> it from a release-shared file, the build will fail &mdash; a much better failure mode than silently shipping debug UI.</p>
+      </div>
+
+      <h3>Wiring <code>BuildConfig</code> with build info</h3>
+
+      <div class="config-recipe">
+        <h4><code>app/build.gradle.kts</code> &mdash; expose git SHA &amp; build time</h4>
+<pre><code>android {
+    defaultConfig {
+        // Resolve git SHA at configuration time
+        val gitSha = providers.exec {
+            commandLine("git", "rev-parse", "--short", "HEAD")
+        }.standardOutput.asText.get().trim()
+
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+        buildConfigField("long", "BUILD_TIME", "${System.currentTimeMillis()}L")
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField("String", "API_BASE_URL", "\"https://staging.example.com\"")
+        }
+        release {
+            buildConfigField("String", "API_BASE_URL", "\"https://api.example.com\"")
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true   // required to use buildConfigField in AGP 8+
+    }
+}</code></pre>
+        <p class="recipe-note"><code>buildFeatures.buildConfig = true</code> is required from AGP 8.0 onward &mdash; the default flipped to false. If your <code>BuildConfig</code> mysteriously stops compiling after a Gradle bump, this is the line you forgot.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Debug-only feature flag overrides</h2>
+
+      <p>You almost certainly already have a feature-flag system &mdash; Firebase Remote Config, LaunchDarkly, Statsig, an in-house wrapper, or a homegrown <code>SharedPreferences</code> map. The problem with all of them: they answer "what should this flag be for this user, on this device, right now?" without giving you a way to override locally during development.</p>
+
+      <p>The pattern is a thin wrapper that checks a debug-only override store first, then falls back to the real source.</p>
+
+      <div class="config-recipe">
+        <h4><code>DebugFeatureFlagRepository.kt</code> (debug source set only)</h4>
+<pre><code>class DebugFeatureFlagRepository @Inject constructor(
+    private val real: RemoteConfigRepository,
+    @ApplicationContext context: Context,
+) : FeatureFlagRepository {
+
+    private val overrides = context.getSharedPreferences(
+        "debug_flag_overrides", Context.MODE_PRIVATE
+    )
+
+    override fun isEnabled(key: String): Boolean {
+        // Debug override beats remote config
+        if (overrides.contains(key)) return overrides.getBoolean(key, false)
+        return real.isEnabled(key)
+    }
+
+    fun override(key: String, value: Boolean) {
+        overrides.edit().putBoolean(key, value).apply()
+    }
+
+    fun clear(key: String) = overrides.edit().remove(key).apply()
+}</code></pre>
+        <p class="recipe-note">Bind this implementation only in the debug Hilt module. The release Hilt module binds <code>RemoteConfigRepository</code> directly. Same interface, different implementation per variant &mdash; the call site doesn't change.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>Why this is leverage:</strong> testing a flag that gates a paywall used to mean editing remote config (visible to the entire team), waiting for cache TTL, restarting the app, and praying. Now: open debug menu, flip switch, hit back. 3 seconds. Repeat 50 times in a session without coordinating with PMs.
+      </div>
+    </section>
+
+    <section>
+      <h2>Verifying nothing leaked into release</h2>
+
+      <p>The single most important verification step in this whole chapter: <strong>your release APK must not contain any of the debug-only code.</strong> If Chucker, your debug menu, or the override repository ends up in a release build, you've shipped a free reverse-engineering kit to attackers and a confused experience to users.</p>
+
+      <h3>The 60-second sanity check</h3>
+
+      <div class="config-recipe">
+        <h4>Inspect the release APK</h4>
+<pre><code># Build the release APK
+./gradlew :app:assembleRelease
+
+# Inspect with apkanalyzer (ships with Android SDK)
+$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer dex packages \
+    app/build/outputs/apk/release/app-release.apk \
+    | grep -E "(chuckerteam|DebugMenuScreen|DebugFeatureFlag)"
+
+# Should print: nothing.</code></pre>
+        <p class="recipe-note">Wire this as a CI check &mdash; a single grep on the release APK that fails the build if debug symbols leak. Cheap, deterministic, runs in seconds.</p>
+      </div>
+
+      <h3>The Gradle-side belt-and-braces</h3>
+
+      <div class="config-recipe">
+        <h4><code>app/build.gradle.kts</code> &mdash; force build to fail on misuse</h4>
+<pre><code>dependencies {
+    // Compile-time check: anything in :app:debug source set
+    // CANNOT be referenced from :app:main or :app:release.
+    // Putting DebugMenuScreen.kt under src/debug/ enforces this for free.
+}
+
+android {
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+}</code></pre>
+        <p class="recipe-note">R8 in release will <em>also</em> catch dead-code references to debug classes &mdash; they'd be unused after stripping the wrapper, which gets stripped, and so on. The source-set boundary catches it earlier and clearer.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Other debug-only inspectors worth knowing</h2>
+
+      <p>Chucker is the workhorse but not the only option. Quick mentions, not deep dives:</p>
+
+      <div class="tool-card">
+        <h4>Flipper (deprecated, but you'll see it)</h4>
+        <p>Meta's desktop-app inspector. Powerful, but Meta wound it down in 2024. If you inherit a project using it, plan a migration to Chucker + a debug menu rather than reviving Flipper.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4>Beagle</h4>
+        <p>An in-app debug-menu library that pre-bundles many of the patterns in this chapter (build info, feature toggles, force-crash, log viewer). If you'd rather not roll your own, Beagle gets you 80% of a debug menu in 20 minutes.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4>Rebugger / Compose recomposition counters</h4>
+        <p>Compose-specific. Logs which composable recomposed and why &mdash; helpful when chasing performance issues. Pair with the Layout Inspector's recomposition-count overlay.</p>
+      </div>
+
+      <div class="tool-card">
+        <h4>Hyperion</h4>
+        <p>A Willowtree-built debug menu shaped like a drawer. Older but still maintained. Comparable to Beagle in scope.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>Pick one debug-menu library or roll your own &mdash; not both.</strong> Two competing debug menus in the same project is a smell that nobody owns the developer-experience layer. Make it one person's responsibility, even part-time.
+      </div>
+    </section>
+
+    <section>
+      <h2>AI-Assisted Setup: <code>/draft-debug-menu</code></h2>
+
+      <p>The debug menu is the kind of code you write once per project, then keep extending forever. Each new feature gets one new toggle, one new shortcut, one new override. Writing the initial scaffolding by hand is busywork. Hand it to Claude.</p>
+
+      <div class="prompt-example good">
+        <h4>Good prompt</h4>
+        <p>"I'm adding a Compose-based debug menu to my Android app. Tech stack: Hilt, Compose, Coil, Retrofit + OkHttp, Firebase Remote Config. I want sections for: build info (version, commit, build time, API base URL), feature-flag overrides (read from Firebase, toggle locally), force-crash button, clear-app-data button, deep-link launcher with hardcoded routes [home, profile, paywall, settings]. Place the file under <code>app/src/debug/java/com/example/debug/</code>. Use <code>BuildConfig</code> fields where possible. The route into this screen is from a long-press on the app logo in the home screen, gated on <code>BuildConfig.DEBUG</code>. Output one Composable file plus the route registration code."</p>
+      </div>
+
+      <div class="prompt-example bad">
+        <h4>Bad prompt</h4>
+        <p>"Make me a debug menu."</p>
+        <p><em>Why it fails:</em> no tech-stack signal, no list of what goes in it, no source-set instruction, no hint about which screens to deep-link to. You'll get a generic <code>Toast.makeText</code> example from a 2018 blog post.</p>
+      </div>
+
+      <h3>Save it as a reusable skill</h3>
+
+      <div class="config-recipe">
+        <h4><code>.claude/commands/draft-debug-menu.md</code></h4>
+<pre><code># /draft-debug-menu
+
+Draft a Compose-based debug-menu screen for this project.
+
+Steps:
+1. Read app/build.gradle.kts to detect: Compose, Hilt, OkHttp, Coil, Retrofit usage.
+2. Read any existing FeatureFlagRepository or RemoteConfig wrapper to match its API.
+3. Generate a single DebugMenuScreen.kt under app/src/debug/java/.../debug/.
+4. Include sections: build info, feature-flag overrides, force-crash, clear-data,
+   deep-link launcher.
+5. Wire BuildConfig fields (GIT_SHA, BUILD_TIME, API_BASE_URL) — add them to
+   build.gradle.kts if missing.
+6. Output the Compose file + the nav-graph route registration + the entry-point
+   gesture (long-press on logo, BuildConfig.DEBUG-gated).
+
+Constraints:
+- All code goes in src/debug/, never src/main/.
+- No hardcoded server URLs — always read from BuildConfig.
+- Force-crash uses `throw RuntimeException(...)` so Crashlytics catches it.
+- Feature-flag toggles persist in SharedPreferences "debug_flag_overrides".</code></pre>
+      </div>
+
+      <p>Run <code>/draft-debug-menu</code> on a new project, get the scaffold in under a minute, then spend your time on the parts that are actually project-specific &mdash; which screens to deep-link to, which flags exist, which buttons your QA team has been begging for.</p>
+    </section>
+
+    <section>
+      <h2>Adoption ladder</h2>
+
+      <p>This is one of the easier ladders in the course &mdash; the install is two lines, the gating is automatic, and the value is immediate.</p>
+
+      <div class="adoption-ladder">
+
+        <div class="rung">
+          <h4>Day 1</h4>
+          <p>Add Chucker to <code>debugImplementation</code> + matching no-op to <code>releaseImplementation</code>. Plug the interceptor into your <code>OkHttpClient</code>. Redact <code>Authorization</code> and <code>Cookie</code>. Ship a debug build to one tester &mdash; verify the notification appears and a request is captured. Total: 30 minutes, zero config files touched outside <code>build.gradle.kts</code>.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Week 1</h4>
+          <p>Add a minimal <code>DebugMenuScreen</code> under <code>src/debug/java/</code> with three sections: build info (commit, build time, API URL), one force-crash button, and a clear-app-data button. Wire one debug-only entry point (long-press logo or settings link). Add a CI grep step that fails the release APK build if it contains <code>chuckerteam</code> or <code>DebugMenu</code> classes.</p>
+        </div>
+
+        <div class="rung">
+          <h4>Month 1</h4>
+          <p>Layer in feature-flag overrides via a debug-source-set <code>DebugFeatureFlagRepository</code> bound in a debug Hilt module. Add a deep-link launcher to your top 5 screens. Document the debug-menu contract in <code>CONTRIBUTING.md</code>: every new feature flag PR adds a toggle here. Optionally adopt Beagle if rolling-your-own is taking too long.</p>
+        </div>
+
+      </div>
+    </section>
+
+    <section>
+      <h2>The before/after</h2>
+
+      <div class="comparison">
+        <div class="prompt-example bad">
+          <h4>Before</h4>
+          <p>QA reports "the avatar isn't loading on the profile screen." You ask: which build? Tester pastes a screenshot of the version banner. You ask: was the new image-CDN flag on? Tester doesn't know. You ask for the request URL and headers. Tester opens an emulator, can't reproduce, files an incomplete bug. 90 minutes lost.</p>
+        </div>
+        <div class="prompt-example good">
+          <h4>After</h4>
+          <p>QA opens the debug menu, sees commit SHA + flag state, notes the avatar flag is off, taps the avatar request in Chucker, long-presses to share as curl, pastes the curl + flag state into the bug report. Engineer reproduces it in 2 minutes. Total triage time: 10 minutes.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>The pitfalls</h2>
+
+      <div class="warning-box">
+        <strong>Do not gate via runtime flag, gate via source set.</strong> An <code>if (isDebug)</code> check at runtime still ships the gated code in the release APK. Use <code>debugImplementation</code> dependencies and <code>src/debug/</code> source sets so the code <em>literally is not in</em> the release artifact.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't ship Chucker without redacted headers.</strong> Beta testers' phones get plugged into chargers in coffee shops. A debug build with bearer tokens visible in a notification is one stolen phone away from credential leakage. Redact headers <em>before</em> the first build.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't let the debug menu rot.</strong> Without ownership it becomes archeology &mdash; six obsolete buttons, two broken deep links, one crashing flag. Add a "debug menu spring cleaning" task to your quarterly tech-debt sprint. Or, as a forcing function: the QA lead owns the menu's roadmap.
+      </div>
+    </section>
+
+    <section>
+      <h2>Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Wire up the debug-build kit on your real project</h3>
+        <ol>
+          <li>Add Chucker (real + no-op) to <code>app/build.gradle.kts</code> with redacted <code>Authorization</code> and <code>Cookie</code> headers. Build a debug APK and a release APK. Diff their sizes &mdash; the release should be unchanged within 1 KB.</li>
+          <li>Run <code>apkanalyzer dex packages</code> on the release APK and grep for <code>chuckerteam</code>. It must return nothing. If it does, your no-op artifact isn't wired correctly.</li>
+          <li>Create <code>app/src/debug/java/.../debug/DebugMenuScreen.kt</code> with at minimum: version name, version code, git SHA (via <code>buildConfigField</code>), API base URL, and a force-crash button.</li>
+          <li>Wire one debug-only entry point in your nav graph or main screen, gated on <code>BuildConfig.DEBUG</code>.</li>
+          <li>Hand a fresh debug APK to one teammate. Ask them to find the build's commit SHA without using Logcat. Time it. Aim for under 30 seconds.</li>
+        </ol>
+        <p><strong>Deliverable:</strong> a PR adding Chucker, a debug-menu screen, and a CI step that fails the build if release contains debug-only packages. Bonus: a <code>/draft-debug-menu</code> command in <code>.claude/commands/</code> for next time.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+
+      <p>The debug-build kit closes out Part III &mdash; runtime safety nets, all installed. You've got static analysis catching code smells before commit (Part II), and runtime tooling catching crashes, leaks, main-thread offenders, and live state bugs in dev (Part III).</p>
+
+      <p>Part IV moves to the build-time foundation: the dependency graph itself. Chapter 10 introduces Gradle version catalogs (<code>libs.versions.toml</code>) &mdash; the modern way to manage dependencies &mdash; plus tooling that flags unused, outdated, and risky dependencies. The mess that's been building in your <code>build.gradle.kts</code> files finally gets a clean home.</p>
+
+    </section>
+
+    <footer class="chapter-nav">
+      <a href="08-leakcanary.html">
+        <span class="nav-direction">&larr; Previous</span>
+        <span class="nav-chapter">LeakCanary</span>
+      </a>
+      <a href="10-version-catalogs-and-deps.html" class="next">
+        <span class="nav-direction">Next &rarr;</span>
+        <span class="nav-chapter">Version Catalogs &amp; Dependency Health</span>
+      </a>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

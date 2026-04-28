@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 13: Claude Managed Agents | Claude Power User For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💪</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Claude Power User</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="12-playbook.html">&larr; Prev</a>
+      <a href="14-subagents.html">Next &rarr;</a>
+      <a href="maps/13-managed-agents-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 13</span>
+    <h1>Claude Managed Agents</h1>
+    <p class="subtitle">Offload long-running tasks to cloud-hosted Claude instances &mdash; the &ldquo;set it and forget it&rdquo; power move</p>
+  </header>
+
+  <main>
+
+    <p>You built your playbook. You have skills, hooks, memory, and a daily routine that compounds. You're a power user. So what's left?</p>
+
+    <p>Here's the thing: everything you've done so far requires <em>you</em> to be present. You start Claude Code, you watch it work, you approve tool calls, you wait for results. That's great for interactive coding. But what about the 30-minute analysis task? The overnight code review of a massive PR? The weekly report that someone has to remember to generate?</p>
+
+    <p>That's where <strong>Managed Agents</strong> come in. Instead of running Claude on your laptop and babysitting the process, you send the task to Anthropic's cloud infrastructure and walk away. Claude runs in a secure container with its own filesystem, tools, and network access. You get results when it's done. No laptop required. No terminal open. No watching a cursor blink.</p>
+
+    <div class="highlight-box">
+      <p><strong>The one-sentence version:</strong> Managed Agents are Claude instances that run on Anthropic's servers instead of your machine. You define <em>what</em> to do and <em>what tools</em> to use, then fire and forget.</p>
+    </div>
+
+    <h2>Why Should You Care?</h2>
+
+    <p>If you're already using Claude Code effectively (and after 12 chapters, you are), Managed Agents unlock a new category of tasks:</p>
+
+    <ul>
+      <li><strong>Long-running work</strong> &mdash; tasks that take 30 minutes to several hours. Your laptop doesn't need to stay open.</li>
+      <li><strong>Scheduled tasks</strong> &mdash; daily code quality reports, weekly dependency audits, nightly test suite analysis.</li>
+      <li><strong>Parallel workloads</strong> &mdash; spin up 10 agents to review 10 repos simultaneously.</li>
+      <li><strong>CI/CD integration</strong> &mdash; trigger an agent from your pipeline for automated review, documentation, or migration checks.</li>
+    </ul>
+
+    <p>Think of it this way: Claude Code is like having a brilliant colleague sitting next to you. Managed Agents are like having that colleague work from their own office, on their own computer, and sending you a report when they're done.</p>
+
+    <h2>When to Use What: The Decision Framework</h2>
+
+    <p>You now have three ways to use Claude programmatically. Here's when each one shines:</p>
+
+    <div class="comparison">
+      <div>
+        <h4>Claude Code (CLI / IDE)</h4>
+        <ul>
+          <li>Interactive coding sessions</li>
+          <li>You're at your desk, working alongside Claude</li>
+          <li>Quick tasks: &lt; 5 minutes</li>
+          <li>You want to review each step</li>
+          <li>Local file access is essential</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Claude API (Direct)</h4>
+        <ul>
+          <li>Building Claude into your own app</li>
+          <li>Custom UI or workflow</li>
+          <li>You manage the agent loop yourself</li>
+          <li>Fine-grained control over every call</li>
+          <li>Token-level cost optimization</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Managed Agents</h4>
+        <ul>
+          <li>Fire-and-forget tasks</li>
+          <li>Long-running analysis (30min+)</li>
+          <li>Scheduled / recurring jobs</li>
+          <li>No infrastructure to manage</li>
+          <li>Built-in sandboxing and tools</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <h4>Rule of Thumb</h4>
+      <p>If you need to <em>watch</em> Claude work &rarr; use Claude Code. If you need to <em>embed</em> Claude in your product &rarr; use the API. If you need to <em>send Claude off to do a job</em> &rarr; use Managed Agents.</p>
+    </div>
+
+    <h2>The Four Core Concepts</h2>
+
+    <p>Managed Agents are built on four objects. Understand these and everything else falls into place:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Agent</h4>
+        <p>The <em>definition</em> of what Claude should do. You specify the model, system prompt, available tools, and MCP servers. Create it once, reuse it across many sessions.</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Environment</h4>
+        <p>The <em>workspace</em> where Claude runs. A cloud container with pre-installed packages, network rules, and optional mounted files. Think of it as Claude's office.</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. Session</h4>
+        <p>A <em>running instance</em> of work. You combine an Agent + Environment, give it a task, and the session executes. Each session is independent and isolated.</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Events</h4>
+        <p>The <em>communication channel</em>. Events stream from the session via SSE (Server-Sent Events), telling you what Claude is doing, what tools it's calling, and what results it produces.</p>
+      </div>
+    </div>
+
+    <p>Here's the mental model: you create an Agent (the "who"), set up an Environment (the "where"), start a Session (the "go"), and listen to Events (the "status updates").</p>
+
+    <h2>Creating Your First Managed Agent</h2>
+
+    <p>Let's build a real example. We'll create an agent that can analyze code, run commands, and search the web &mdash; then send it a task.</p>
+
+    <div class="claude-example">
+      <div class="user-msg">
+        <strong>Step 1: Install and configure the SDK</strong>
+        <pre><code>pip install anthropic
+
+# Set your API key
+export ANTHROPIC_API_KEY="sk-ant-..."</code></pre>
+      </div>
+      <div class="claude-msg">
+        <strong>Step 2: Create the Agent and Environment</strong>
+        <pre><code>from anthropic import Anthropic
+
+client = Anthropic()
+
+# Create the agent definition
+agent = client.beta.agents.create(
+    name="Code Analyst",
+    model="claude-sonnet-4-6",
+    system="""You are a senior code analyst. When given a
+repository or codebase, you:
+1. Analyze architecture and patterns
+2. Identify potential bugs and security issues
+3. Suggest improvements with specific examples
+4. Produce a structured markdown report""",
+    tools=[
+        {"type": "agent_toolset_20260401"},
+    ],
+)
+print(f"Agent ID: {agent.id}")
+
+# Create the environment
+environment = client.beta.environments.create(
+    name="analysis-env",
+    config={
+        "type": "cloud",
+        "networking": {"type": "unrestricted"},
+    },
+)
+print(f"Environment ID: {environment.id}")</code></pre>
+      </div>
+      <div class="user-msg">
+        <strong>Step 3: Start a session with a task</strong>
+        <pre><code># Start the session
+session = client.beta.sessions.create(
+    agent=agent.id,
+    environment_id=environment.id,
+    title="Analyze my-app repository",
+)
+print(f"Session ID: {session.id}")
+
+# Send the task
+client.beta.sessions.send_event(
+    session_id=session.id,
+    event={
+        "type": "user_message",
+        "content": """Clone https://github.com/myorg/my-app
+and produce a full code quality report.
+Focus on: architecture, error handling,
+test coverage gaps, and security.""",
+    },
+)</code></pre>
+      </div>
+      <div class="claude-msg">
+        <strong>Step 4: Stream the results</strong>
+        <pre><code># Watch the agent work in real-time
+with client.beta.sessions.stream(
+    session_id=session.id
+) as stream:
+    for event in stream:
+        if event.type == "agent_message":
+            print(event.content)
+        elif event.type == "tool_use":
+            print(f"[Tool: {event.name}]")
+        elif event.type == "session_complete":
+            print("Done!")
+            break</code></pre>
+      </div>
+    </div>
+
+    <p>That's it. Four API calls: create agent, create environment, start session, stream events. The agent runs on Anthropic's infrastructure, clones the repo, analyzes the code, runs commands, and produces a report &mdash; all without your laptop being involved.</p>
+
+    <div class="warning-box">
+      <h4>Beta Notice</h4>
+      <p>Managed Agents launched in beta on April 8, 2026. All API endpoints require the <code>managed-agents-2026-04-01</code> beta header. The Python and TypeScript SDKs set this automatically when you use <code>client.beta.agents</code>. Expect the API to evolve &mdash; check the <a href="https://platform.claude.com/docs/en/managed-agents/overview">official docs</a> for the latest.</p>
+    </div>
+
+    <h2>Environments: Your Agent's Workspace</h2>
+
+    <p>The environment is where your agent actually runs. It's a cloud container that you configure with:</p>
+
+    <ul>
+      <li><strong>Pre-installed packages</strong> &mdash; Python, Node.js, Go, and standard dev tools come ready to use</li>
+      <li><strong>Network access</strong> &mdash; control whether the agent can reach the internet (unrestricted, restricted, or no network)</li>
+      <li><strong>Mounted files</strong> &mdash; upload files the agent needs (config files, datasets, reference docs)</li>
+    </ul>
+
+    <pre><code># Environment with specific configuration
+environment = client.beta.environments.create(
+    name="secure-analysis-env",
+    config={
+        "type": "cloud",
+        "networking": {"type": "restricted",
+                        "allowed_domains": [
+                            "github.com",
+                            "api.github.com",
+                            "pypi.org",
+                        ]},
+    },
+)</code></pre>
+
+    <div class="tip-box">
+      <h4>Environment Reuse</h4>
+      <p>You create an environment once and reference it by ID in every session. Think of it like a Docker image: define it, then spin up as many containers (sessions) as you need. Don't create a new environment for every task &mdash; reuse them.</p>
+    </div>
+
+    <h2>Sessions and Events: The Lifecycle of Work</h2>
+
+    <p>A session is a single unit of work. Here's the lifecycle:</p>
+
+    <ol>
+      <li><strong>Create</strong> &mdash; combine an Agent ID + Environment ID, give it a title</li>
+      <li><strong>Send a message</strong> &mdash; tell the agent what to do via a user event</li>
+      <li><strong>Stream events</strong> &mdash; watch progress via SSE (or poll for status)</li>
+      <li><strong>Complete</strong> &mdash; the agent finishes and the session enters a terminal state</li>
+    </ol>
+
+    <p>Events flow in two directions:</p>
+
+    <ul>
+      <li><strong>You &rarr; Agent:</strong> <code>user_message</code> events to send tasks and follow-up instructions</li>
+      <li><strong>Agent &rarr; You:</strong> <code>agent_message</code>, <code>tool_use</code>, <code>tool_result</code>, and <code>session_complete</code> events</li>
+    </ul>
+
+    <p>The key insight: sessions persist even if your connection drops. You can start a session, close your laptop, come back an hour later, and retrieve all the events that happened while you were away.</p>
+
+    <div class="shortcut-box">
+      <h4>Managed Agents API Quick Reference</h4>
+      <table>
+        <tr><td><code>POST /v1/agents</code></td><td>Create an agent definition</td></tr>
+        <tr><td><code>POST /v1/environments</code></td><td>Create an environment</td></tr>
+        <tr><td><code>POST /v1/sessions</code></td><td>Start a new session</td></tr>
+        <tr><td><code>POST /v1/sessions/{id}/events</code></td><td>Send a user event</td></tr>
+        <tr><td><code>GET /v1/sessions/{id}/stream</code></td><td>Stream events via SSE</td></tr>
+        <tr><td><code>GET /v1/sessions/{id}/events</code></td><td>Retrieve all events (for debugging)</td></tr>
+        <tr><td><code>GET /v1/sessions/{id}</code></td><td>Check session status</td></tr>
+      </table>
+    </div>
+
+    <h2>Built-in Tools: What Your Agent Can Do</h2>
+
+    <p>When you pass <code>{"type": "agent_toolset_20260401"}</code> as a tool, your agent gets access to a full suite of pre-built capabilities:</p>
+
+    <div class="tool-card">
+      <span class="tool-icon">&#128187;</span>
+      <h4>Bash</h4>
+      <p>Run shell commands in the container. Install packages, clone repos, run scripts, process data.</p>
+    </div>
+
+    <div class="tool-card">
+      <span class="tool-icon">&#128193;</span>
+      <h4>File Operations</h4>
+      <p>Read, write, edit, and search files. Full filesystem access within the sandboxed environment.</p>
+    </div>
+
+    <div class="tool-card">
+      <span class="tool-icon">&#128269;</span>
+      <h4>Web Search</h4>
+      <p>Search the web for documentation, Stack Overflow answers, or any reference material the agent needs.</p>
+    </div>
+
+    <div class="tool-card">
+      <span class="tool-icon">&#127760;</span>
+      <h4>Web Fetch</h4>
+      <p>Download files, fetch API responses, or read web pages directly.</p>
+    </div>
+
+    <div class="tool-card">
+      <span class="tool-icon">&#128268;</span>
+      <h4>MCP Servers</h4>
+      <p>Connect to any MCP-compatible server for integrations: databases, APIs, Slack, GitHub, and more.</p>
+    </div>
+
+    <p>The <code>agent_toolset_20260401</code> bundles all of these into a single tool type. You don't need to configure each one individually &mdash; just enable the toolset and the agent picks the right tool for each step.</p>
+
+    <h2>Before / After: The Power of Fire-and-Forget</h2>
+
+    <p>Let's make this concrete. Here's a real task: reviewing a large PR with 47 changed files across 12 modules.</p>
+
+    <div class="before-after">
+      <div class="before">
+        <h4>Before: Manual Review</h4>
+        <ol>
+          <li>Open Claude Code in your terminal</li>
+          <li>Paste the PR diff (hope it fits in context)</li>
+          <li>Wait 5-10 minutes for analysis</li>
+          <li>Ask follow-up questions</li>
+          <li>Wait again for each response</li>
+          <li>Manually copy results into PR comments</li>
+          <li>Your laptop is busy the whole time</li>
+          <li><strong>Total: ~30 minutes of your time</strong></li>
+        </ol>
+      </div>
+      <div class="after">
+        <h4>After: Managed Agent</h4>
+        <ol>
+          <li>Trigger agent via API (or CI/CD hook)</li>
+          <li>Agent clones the repo, checks out the branch</li>
+          <li>Runs tests, analyzes diff, checks for issues</li>
+          <li>Produces a structured review report</li>
+          <li>Posts comments directly to the PR via MCP</li>
+          <li>You get a notification when it's done</li>
+          <li>Your laptop is free the whole time</li>
+          <li><strong>Total: ~2 minutes of your time</strong></li>
+        </ol>
+      </div>
+    </div>
+
+    <p>The agent does the same quality of work. The difference is that <em>you're not waiting around for it</em>. You kicked it off and went to lunch. Or started another task. Or went home for the day.</p>
+
+    <h2>Practical Use Cases for Power Users</h2>
+
+    <p>Here are the patterns that get the most value from Managed Agents:</p>
+
+    <h3>1. Automated Code Review</h3>
+    <p>Trigger an agent on every PR. It clones the repo, runs the test suite, analyzes the diff for bugs, security issues, and style violations, then posts a review comment. Your team gets instant, thorough feedback on every PR without anyone spending time on the first pass.</p>
+
+    <h3>2. Scheduled Reports</h3>
+    <p>Set up a daily agent that analyzes your codebase: test coverage trends, dependency freshness, TODO count, dead code detection. The report lands in Slack every morning before standup.</p>
+
+    <h3>3. Research Tasks</h3>
+    <p>Need to evaluate 5 different logging libraries for your project? Spin up an agent with web access. It researches each library, tests compatibility with your stack, and delivers a comparison matrix.</p>
+
+    <h3>4. Data Processing Pipelines</h3>
+    <p>Got 500 CSV files that need cleaning, transforming, and loading? An agent can bash-script its way through the batch while you focus on the business logic.</p>
+
+    <div class="power-tip">
+      <h4>Power Move: Chain Agents Together</h4>
+      <p>Don't limit yourself to one agent per task. Use a "coordinator" script that launches multiple agents in parallel &mdash; one to analyze backend code, one for frontend, one for infrastructure &mdash; and aggregates their reports. You're not just delegating to one colleague; you're managing a whole team of specialists. Each agent gets its own session, its own context, and its own tools. The coordinator waits for all sessions to complete, then merges the results.</p>
+    </div>
+
+    <h2>Cost and Billing</h2>
+
+    <p>Managed Agents pricing has two components:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">$0.08</div>
+        <div class="stat-label">Per session-hour (active runtime only &mdash; idle time is free)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Standard</div>
+        <div class="stat-label">Token pricing for the model you choose (same as API rates)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">$10</div>
+        <div class="stat-label">Per 1,000 web searches (only if your agent uses web search)</div>
+      </div>
+    </div>
+
+    <p>Let's do some real math:</p>
+
+    <ul>
+      <li><strong>A 30-minute code review</strong> with moderate token usage: ~$0.04 runtime + ~$0.30 tokens = <strong>~$0.34 total</strong></li>
+      <li><strong>A daily automated report</strong> running 15 minutes: ~$0.02 runtime + ~$0.15 tokens = <strong>~$5/month</strong></li>
+      <li><strong>A deep 2-hour analysis</strong> with heavy token usage: ~$0.16 runtime + ~$2.00 tokens = <strong>~$2.16 total</strong></li>
+    </ul>
+
+    <p>For context, the $0.08/hour runtime fee is essentially free compared to the token costs. The real expense is tokens, just like the regular API. The runtime fee is Anthropic's charge for hosting the container, filesystem, and tools.</p>
+
+    <div class="tip-box">
+      <h4>Cost Optimization Tips</h4>
+      <ul>
+        <li>Default to <strong>Sonnet 4.6</strong> for most agent tasks &mdash; fast, capable, and 5&times; cheaper than Opus per token</li>
+        <li>Reach for <strong>Opus 4.7</strong> when the loop is long-horizon, deeply agentic, or hits failure modes Sonnet can't recover from &mdash; Anthropic recommends starting at <code>high</code> or <code>xhigh</code> effort for these</li>
+        <li>Write focused system prompts so the agent doesn't waste tokens on irrelevant analysis</li>
+        <li>Use restricted networking to prevent the agent from wandering into unnecessary web searches</li>
+        <li>Reuse agent and environment definitions &mdash; don't recreate them for every session</li>
+      </ul>
+    </div>
+
+    <h2>Connecting MCP Servers</h2>
+
+    <p>One of the most powerful features is connecting MCP servers to your agent. This lets it interact with external services &mdash; GitHub, Slack, databases, your internal tools &mdash; without you building custom integrations.</p>
+
+    <pre><code># Agent with MCP server for GitHub integration
+agent = client.beta.agents.create(
+    name="PR Reviewer",
+    model="claude-sonnet-4-6",
+    system="You review PRs and post comments directly.",
+    tools=[
+        {"type": "agent_toolset_20260401"},
+    ],
+    mcp_servers=[
+        {
+            "type": "url",
+            "url": "https://mcp.github.com/sse",
+            "token": "ghp_your_token_here",
+        }
+    ],
+)</code></pre>
+
+    <p>With GitHub MCP connected, your agent can read PRs, post review comments, check CI status, and even merge &mdash; all autonomously. Combine this with a CI/CD trigger and you have a fully automated review pipeline.</p>
+
+    <h2>What's Coming: Research Previews</h2>
+
+    <p>Two features are already shipping in <strong>research preview</strong> &mdash; you can request access via the form linked from the Managed Agents overview page and start using them today:</p>
+
+    <ul>
+      <li><strong>Multi-agent coordination</strong> &mdash; agents that spawn and direct sub-agents to parallelize complex work across separate execution environments</li>
+      <li><strong>Outcomes</strong> &mdash; you define success criteria up front, and Claude self-evaluates and iterates until it gets there</li>
+    </ul>
+
+    <p>Memory across sessions is also part of the research preview track, often paired with multi-agent coordination so child agents can share state with the parent. Expect this list to grow as the beta matures.</p>
+
+    <div class="warning-box">
+      <h4>Beta Means Beta</h4>
+      <p>Managed Agents is a beta product. The API may change, features may be added or removed, and pricing could adjust. Don't build mission-critical production systems on it yet &mdash; but absolutely start experimenting. The core concepts (Agent, Environment, Session, Events) are stable, and hands-on experience now will pay off when the GA release lands.</p>
+    </div>
+
+    <h2>Real-World Pattern: The Nightly Audit Agent</h2>
+
+    <p>Let's put it all together with a practical example. Here's a script that runs a nightly code quality audit:</p>
+
+    <pre><code>#!/usr/bin/env python3
+"""Nightly code audit agent - run via cron or CI scheduler."""
+
+from anthropic import Anthropic
+
+client = Anthropic()
+
+# Reuse existing agent and environment (create once, use forever)
+AGENT_ID = "agent_01J..."   # your saved agent ID
+ENV_ID = "env_01J..."       # your saved environment ID
+
+# Start the audit session
+session = client.beta.sessions.create(
+    agent=AGENT_ID,
+    environment_id=ENV_ID,
+    title=f"Nightly audit",
+)
+
+# Send the task
+client.beta.sessions.send_event(
+    session_id=session.id,
+    event={
+        "type": "user_message",
+        "content": """
+        Clone https://github.com/myorg/my-app (main branch).
+        Run the full test suite and record results.
+        Analyze: code coverage, lint warnings, TODO/FIXME count,
+        dependencies with known vulnerabilities (npm audit),
+        and files changed in the last 24 hours.
+        Output a markdown report to /workspace/audit-report.md.
+        """,
+    },
+)
+
+print(f"Audit started: session {session.id}")
+print("Results will be available when the session completes.")</code></pre>
+
+    <p>Schedule this with cron, GitHub Actions, or any task scheduler. The agent runs, produces the report, and you check results in the morning. Zero babysitting required.</p>
+
+    <div class="exercise-box">
+      <h4>Try It Yourself: Build a Code Quality Agent</h4>
+      <p>Create a Managed Agent that analyzes a GitHub repository and produces a code quality report. Here's your step-by-step plan:</p>
+      <ol>
+        <li><strong>Set up:</strong> Install the Anthropic Python SDK (<code>pip install anthropic</code>) and set your <code>ANTHROPIC_API_KEY</code></li>
+        <li><strong>Create the agent:</strong> Use the code from "Creating Your First Agent" above. Customize the system prompt for the type of analysis you want.</li>
+        <li><strong>Create the environment:</strong> Use <code>"networking": {"type": "unrestricted"}</code> so the agent can clone from GitHub.</li>
+        <li><strong>Start a session:</strong> Point it at a public GitHub repository you maintain (or any open-source repo).</li>
+        <li><strong>Stream the events:</strong> Watch the agent clone, analyze, and report in real-time.</li>
+        <li><strong>Review the report:</strong> Check the agent's output. How does it compare to your own manual review?</li>
+      </ol>
+      <p><strong>Bonus challenge:</strong> Modify the script to post the report as a GitHub issue or Slack message using an MCP server.</p>
+    </div>
+
+    <h2>The Journey So Far</h2>
+
+    <p>You started Chapter 1 mapping the Claude universe &mdash; figuring out which product to use for what. You mastered Claude.ai's hidden features, became a CLI power user, configured CLAUDE.md and memory systems, built custom skills and hooks, learned the API, and developed workflows for code review, documentation, and debugging. You scaled those practices to your team and built a personal playbook.</p>
+
+    <p>Now, with Managed Agents, you've graduated from "power user who works <em>with</em> Claude" to "power user who <em>deploys</em> Claude." You're not just using a tool anymore &mdash; you're building systems where Claude works for you autonomously.</p>
+
+    <div class="highlight-box">
+      <p><strong>That's the real power user move.</strong> Not just knowing every feature &mdash; but building a system where Claude handles the work you shouldn't be doing manually. Your playbook runs your daily workflow. Your skills automate your common tasks. Your Managed Agents handle the rest, running in the cloud while you focus on the problems that actually need a human brain.</p>
+      <p>Go build something. You have everything you need.</p>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="12-playbook.html">
+        <span class="nav-direction">&larr; Previous chapter</span>
+        <span class="nav-chapter">Building Your Claude Playbook</span>
+      </a>
+      <a href="14-subagents.html" class="next">
+        <span class="nav-direction">Next chapter &rarr;</span>
+        <span class="nav-chapter">Subagents</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

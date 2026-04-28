@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 12 Memory Map &mdash; Convention Plugins &amp; The CI Quality Gate</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The Android Quality Stack</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../12-convention-plugins-and-ci-gate.html">Chapter</a>
+      <a href="11-r8-minification-map.html">&larr; Prev Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 12</span>
+    <h1>Convention Plugins &amp; The CI Quality Gate</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <div class="map-big-idea">
+      <span class="big-idea-icon">🏛️</span>
+      <h3>The Big Idea</h3>
+      <p>Package the whole stack into one Gradle plugin every module applies in one line. Wire a CI workflow that runs it on every PR. Turn on branch protection. The standard stops being something engineers must <em>remember</em> and becomes something the system <em>enforces</em>.</p>
+    </div>
+
+    <h2>🔁 The Two Mechanisms (Pick One)</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th><code>buildSrc/</code> (old)</th><th><code>build-logic/</code> (current)</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Compiles when</td>
+          <td>Every Gradle sync</td>
+          <td>On demand only</td>
+        </tr>
+        <tr>
+          <td>Configuration cache</td>
+          <td>Invalidates on every edit</td>
+          <td>Plays nicely</td>
+        </tr>
+        <tr>
+          <td>Verdict</td>
+          <td>Avoid for new work</td>
+          <td>✅ Best practice</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>📂 The <code>build-logic/</code> Skeleton</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">⚙️ Root <code>settings.gradle.kts</code><br><code>includeBuild("build-logic")</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">📦 <code>build-logic/settings.gradle.kts</code><br>shares the version catalog</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🔌 <code>convention/build.gradle.kts</code><br><code>kotlin-dsl</code> + plugin registry</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">🧩 Plugin classes<br><code>*ConventionPlugin.kt</code></div>
+    </div>
+
+    <h2>🧩 The Three Convention Plugins</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📱</span>
+        <div class="map-card-title"><code>my.app.android.application</code></div>
+        <div class="map-card-desc">AGP application plugin + Kotlin + compileSdk + Java 17 + R8 + applies the quality plugin.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📚</span>
+        <div class="map-card-title"><code>my.app.android.library</code></div>
+        <div class="map-card-desc">Same as application but for library modules &mdash; <code>com.android.library</code>, no <code>buildTypes</code> R8.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🛡️</span>
+        <div class="map-card-title"><code>my.app.quality</code></div>
+        <div class="map-card-desc">The payoff: lint + detekt + ktlint, all configured from <code>config/</code> root files. Per-module baselines stay per-module.</div>
+      </div>
+    </div>
+
+    <h2>📉 What Modules Shrink To</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr><th>Aspect</th><th>Before</th><th>After</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Lines per module's <code>build.gradle.kts</code></td>
+          <td>60-80</td>
+          <td>15-20</td>
+        </tr>
+        <tr>
+          <td>Plugin block</td>
+          <td>5+ <code>id()</code> + version</td>
+          <td>One <code>alias()</code></td>
+        </tr>
+        <tr>
+          <td>Adding a new module</td>
+          <td>Copy 60 lines, edit 4</td>
+          <td>30 seconds, 2 strings</td>
+        </tr>
+        <tr>
+          <td>Forget to copy lint block?</td>
+          <td>Possible &mdash; silently green</td>
+          <td>Impossible &mdash; convention applies it</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>🚦 The CI Quality Gate &mdash; 3 Jobs</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">🔍 static-analysis<br>ktlint + detekt + lint</div>
+      <div class="map-rel-node">🧪 tests<br><code>testReleaseUnitTest</code></div>
+      <div class="map-rel-center">PR-blocking gate</div>
+      <div class="map-rel-node">📊 build-health<br><code>buildHealth</code> (advisory)</div>
+      <div class="map-rel-node">💬 reviewdog<br>inline ktlint comments</div>
+    </div>
+
+    <h2>🔐 Branch Protection &mdash; Making it Real</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Require PR &amp; approvals</h4>
+        <p>1+ reviewer; dismiss stale approvals on push.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Require status checks</h4>
+        <p><code>Static Analysis</code> + <code>Unit tests</code> required. <code>build-health</code> stays advisory at first.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Require up-to-date branches</h4>
+        <p>Forces rebase before merge &mdash; checks always run on the merged state.</p>
+      </li>
+      <li class="map-timeline-item" data-step="4">
+        <h4>"Do not allow bypassing"</h4>
+        <p>The toggle that turns guideline into rule. Without it, admins can override and the gate becomes theater.</p>
+      </li>
+    </ol>
+
+    <h2>⏱️ The 30-Day Rollout</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📅</span>
+        <div class="map-card-title">Week 1</div>
+        <div class="map-card-desc"><code>build-logic/</code> stood up. Application + Library plugins. Migrate one leaf module.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📆</span>
+        <div class="map-card-title">Week 2</div>
+        <div class="map-card-desc">Quality plugin consolidates lint+detekt+ktlint. Migrate every module. Move shared configs to <code>config/</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚦</span>
+        <div class="map-card-title">Week 3</div>
+        <div class="map-card-desc">GitHub Actions workflow with 3 jobs. <code>--continue</code> for full visibility per PR. Advisory only.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔒</span>
+        <div class="map-card-title">Week 4</div>
+        <div class="map-card-desc">Branch protection: required checks, no bypassing for non-admins. Reviewdog inline comments.</div>
+      </div>
+    </div>
+
+    <h2>🎯 The 12-Chapter Journey: The Numbers</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">⏰</span>
+        <div class="map-card-title">PR review time</div>
+        <div class="map-card-desc">40 min &rarr; 12 min</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🐛</span>
+        <div class="map-card-title">Crashes per release</div>
+        <div class="map-card-desc">14 &rarr; 3</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📦</span>
+        <div class="map-card-title">APK size</div>
+        <div class="map-card-desc">-32% via R8 + resource shrink</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚪</span>
+        <div class="map-card-title">Bypass paths</div>
+        <div class="map-card-desc">Possible &rarr; structurally impossible</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🆕</span>
+        <div class="map-card-title">New module setup</div>
+        <div class="map-card-desc">Copy-paste &rarr; one alias</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🤖</span>
+        <div class="map-card-title">Reusable AI skills built</div>
+        <div class="map-card-desc">12 <code>/commands</code> across the course</div>
+      </div>
+    </div>
+
+    <h2>🤖 The Reusable Skill: <code>/draft-quality-convention-plugin</code></h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📥</span>
+        <div class="map-card-title">Inputs</div>
+        <div class="map-card-desc">Every module's <code>build.gradle.kts</code>, <code>settings.gradle.kts</code>, the version catalog, any <code>buildSrc/</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📤</span>
+        <div class="map-card-title">Outputs</div>
+        <div class="map-card-desc">Full <code>build-logic/</code> skeleton + 3 plugin classes + per-module diffs that shrink build files.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">Constraints</div>
+        <div class="map-card-desc">Use included build (not <code>buildSrc/</code>). Preserve module-specific overrides as inline. Java 17.</div>
+      </div>
+    </div>
+
+    <h2>📚 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Convention plugin</dt>
+      <dd>A Gradle plugin that consolidates shared build logic so every module applies it in one line.</dd>
+
+      <dt>Included build</dt>
+      <dd>A separate Gradle build registered via <code>includeBuild()</code> &mdash; the modern alternative to <code>buildSrc/</code>.</dd>
+
+      <dt><code>kotlin-dsl</code></dt>
+      <dd>The Gradle plugin that lets you write convention plugins in idiomatic Kotlin.</dd>
+
+      <dt>Plugin ID</dt>
+      <dd>The string used in <code>plugins {}</code> blocks (e.g. <code>my.app.android.application</code>) &mdash; registered in <code>gradlePlugin {}</code>.</dd>
+
+      <dt>CI quality gate</dt>
+      <dd>A CI workflow whose checks must pass before a PR can merge &mdash; enforced via branch protection.</dd>
+
+      <dt>Branch protection</dt>
+      <dd>GitHub repo settings that enforce required reviewers, required status checks, and disallow bypassing.</dd>
+
+      <dt>Reviewdog</dt>
+      <dd>A tool that surfaces ktlint/detekt/lint findings as inline PR comments instead of buried CI logs.</dd>
+
+      <dt><code>--continue</code></dt>
+      <dd>Gradle flag that runs all checks even after one fails &mdash; surfaces every violation in a single CI run.</dd>
+    </dl>
+
+    <h2>🚫 Pitfalls</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📅</span>
+        <div class="map-card-title">12 chapters in 30 days</div>
+        <div class="map-card-desc">The course is months-long. Adopt one tool at a time. Convention plugins consolidate what you've already added &mdash; not what you wish you had.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⛔</span>
+        <div class="map-card-title">Migration + new rules in one PR</div>
+        <div class="map-card-desc">Two concerns. Two PRs. Two diffs.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔒</span>
+        <div class="map-card-title">Branch protection on day 1</div>
+        <div class="map-card-desc">Run advisory for a sprint. Engineers learn to read failures, then flip required.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">✨</span>
+        <div class="map-card-title">"Perfect" plugin first</div>
+        <div class="map-card-desc">Ship 60%-good. Migrate 2 modules. Iterate. Convention plugins are normal code.</div>
+      </div>
+    </div>
+
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Why use <code>build-logic/</code> instead of <code>buildSrc/</code>?</summary>
+        <p class="quiz-answer"><code>buildSrc/</code> compiles every Gradle sync and invalidates the configuration cache on every edit. <code>build-logic/</code> as an included build compiles on demand and plays nicely with the cache.</p>
+      </details>
+      <details>
+        <summary>How do you share the version catalog with the included build?</summary>
+        <p class="quiz-answer">In <code>build-logic/settings.gradle.kts</code>: <code>versionCatalogs { create("libs") { from(files("../gradle/libs.versions.toml")) } }</code>.</p>
+      </details>
+      <details>
+        <summary>What's the one critical branch-protection toggle?</summary>
+        <p class="quiz-answer">"Do not allow bypassing the above settings (for non-admins)." Without it, admins can override and the gate becomes theater.</p>
+      </details>
+      <details>
+        <summary>Why use <code>--continue</code> in CI Gradle calls?</summary>
+        <p class="quiz-answer">It runs all the checks even after one fails &mdash; engineers see every violation per PR instead of a one-at-a-time fix-rerun loop.</p>
+      </details>
+      <details>
+        <summary>Why register <code>my.app.quality</code> separately and have the application plugin apply it?</summary>
+        <p class="quiz-answer">Composition. Tests-only Kotlin modules can apply just <code>my.app.quality</code> without the Android plugin. Application/library plugins layer Android-specific config on top.</p>
+      </details>
+    </div>
+
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Use <code>build-logic/</code> as an included build &mdash; not <code>buildSrc/</code>. Faster, cache-friendly, scalable.</li>
+        <li class="map-summary-item">Three plugins minimum: <code>my.app.android.application</code>, <code>my.app.android.library</code>, <code>my.app.quality</code>.</li>
+        <li class="map-summary-item">Share the version catalog with the included build: one TOML, everything in lockstep.</li>
+        <li class="map-summary-item">Module build files shrink from 60-80 lines to 15-20 lines (namespace + applicationId + dependencies).</li>
+        <li class="map-summary-item">CI workflow: 3 jobs (static-analysis, tests, build-health). <code>--continue</code> for visibility. Cancel old PR runs.</li>
+        <li class="map-summary-item">Branch protection: required checks + required reviewers + dismiss stale + <strong>no bypassing</strong>.</li>
+        <li class="map-summary-item">Roll out advisory first. Sprint of soft-running. <em>Then</em> flip required.</li>
+        <li class="map-summary-item">Reviewdog or Danger for inline PR comments &mdash; engagement skyrockets when findings appear at the diff line.</li>
+        <li class="map-summary-item">The 12-chapter journey ends here: every PR runs the full stack, every standard is enforced, "we don't have time" becomes structurally impossible.</li>
+      </ul>
+    </div>
+
+    <nav class="chapter-nav">
+      <a href="11-r8-minification-map.html">
+        <span class="nav-direction">&larr; Previous Map</span>
+        <span class="nav-chapter">Chapter 11</span>
+      </a>
+      <a href="../12-convention-plugins-and-ci-gate.html" class="next">
+        <span class="nav-direction">Read the chapter</span>
+        <span class="nav-chapter">Chapter 12</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

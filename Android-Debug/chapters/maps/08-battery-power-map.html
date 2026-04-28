@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Map: Battery and Power Optimization | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="../index.html">Contents</a>
+      <a href="../08-battery-power.html">Chapter</a>
+      <a href="07-gradle-build-performance-map.html">&#8592; Prev Map</a>
+      <a href="09-ai-assisted-profiling-map.html">Next Map &#8594;</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="map-header">
+    <span class="chapter-number">Chapter 8</span>
+    <h1>Battery and Power Optimization</h1>
+    <span class="map-badge">Memory Map</span>
+  </header>
+
+  <main>
+
+    <!-- ====== BIG IDEA ====== -->
+    <div class="map-big-idea">
+      <span class="big-idea-icon">💡</span>
+      <h3>The Big Idea</h3>
+      <p>Every time your code wakes the CPU, activates the radio, or requests a GPS fix, ask: <strong>"Is the user getting visible value from this work right now?"</strong> If not, defer it, batch it, or eliminate it. Users don't see your sync. They <em>do</em> see "24% battery used by ShopApp."</p>
+    </div>
+
+    <!-- ====== BATTERY AUDIT FLOW ====== -->
+    <h2>🔋 The Battery Audit Flow</h2>
+
+    <div class="map-flow">
+      <div class="map-flow-step">Reset batterystats</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Use app 30 min (on battery)</div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step"><code>dumpsys batterystats</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step"><code>/analyze-battery</code></div>
+      <span class="map-flow-arrow">→</span>
+      <div class="map-flow-step">Fix top 3 drains</div>
+    </div>
+
+    <p style="text-align:center; color: var(--color-text-muted); margin-top: 0.5rem;">46% of users check battery stats weekly. Your app showing up as a top consumer = uninstall risk.</p>
+
+    <!-- ====== TOP BATTERY DRAINS ====== -->
+    <h2>🔥 The Battery Drain Hall of Fame</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📍</span>
+        <div class="map-card-title">GPS Overuse</div>
+        <div class="map-card-desc"><code>PRIORITY_HIGH_ACCURACY</code> at 1-second intervals keeps GPS radio on continuously. ~15%/hour. Switch to <code>BALANCED_POWER_ACCURACY</code> (~0.5%/hour).</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔓</span>
+        <div class="map-card-title">Wake Lock Leaks</div>
+        <div class="map-card-desc"><code>acquire()</code> without timeout + exception = CPU stays awake forever. <strong>Always</strong> use <code>acquire(timeoutMs)</code> and <code>release()</code> in a <code>finally</code> block.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔄</span>
+        <div class="map-card-title">Over-Frequent Sync</div>
+        <div class="map-card-desc">Syncing a daily-changing catalog every 2 minutes = 720 syncs/day. Match sync frequency to <em>actual data change rate</em> + add battery/network constraints.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📡</span>
+        <div class="map-card-title">Radio Tail</div>
+        <div class="map-card-desc">Each network request keeps the cellular radio active ~20 seconds. 10 small requests in 10 min = radio on almost continuously. <strong>Batch them.</strong></div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🔔</span>
+        <div class="map-card-title">Polling Instead of Push</div>
+        <div class="map-card-desc">Polling every 30 seconds for new messages drains battery. Use <strong>FCM push notifications</strong> &mdash; the radio only activates when there's actual data.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⚙️</span>
+        <div class="map-card-title">Wrong Scheduling API</div>
+        <div class="map-card-desc">Using <code>AlarmManager</code> (exact) for deferrable work wakes the device from Doze. Use <strong>WorkManager</strong> for anything that can wait.</div>
+      </div>
+    </div>
+
+    <!-- ====== SCHEDULING API DECISION TABLE ====== -->
+    <h2>📋 Which Scheduling API?</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>API</th>
+          <th>Use When</th>
+          <th>Battery Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>WorkManager</strong></td>
+          <td>Any deferrable background work (default choice)</td>
+          <td>🟢 Low &mdash; respects Doze, batches intelligently</td>
+        </tr>
+        <tr>
+          <td><strong>AlarmManager (inexact)</strong></td>
+          <td>Periodic triggers, timing not critical</td>
+          <td>🟡 Medium &mdash; system batches with other alarms</td>
+        </tr>
+        <tr>
+          <td><strong>AlarmManager (exact)</strong></td>
+          <td>User-facing alarms only (medication, meetings)</td>
+          <td>🔴 High &mdash; wakes from Doze, needs permission</td>
+        </tr>
+        <tr>
+          <td><strong>Foreground Service</strong></td>
+          <td>User-initiated ongoing tasks (music, navigation)</td>
+          <td>🟡 Varies &mdash; shows notification, user aware</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== LOCATION PRIORITY COMPARISON ====== -->
+    <h2>📍 Location Priority: GPS vs. Cell/WiFi</h2>
+
+    <div class="map-relationships">
+      <div class="map-rel-node">HIGH_ACCURACY<br>GPS radio on<br>~15%/hour 🔴</div>
+      <div class="map-rel-node">BALANCED_POWER<br>Cell + WiFi<br>~0.5%/hour 🟢</div>
+      <div class="map-rel-center">Location<br>Priority</div>
+      <div class="map-rel-node">LOW_POWER<br>Cell towers only<br>~0.1%/hour 🟢</div>
+      <div class="map-rel-node">PASSIVE<br>Piggyback others<br>~0%/hour 🟢</div>
+    </div>
+
+    <div class="tip-box" style="margin-top: 1rem;">
+      For proximity detection (e.g., "near a store"), use <strong>Geofences</strong> instead of continuous location. They're hardware-accelerated and nearly free on battery. Use continuous GPS <em>only</em> for turn-by-turn navigation.
+    </div>
+
+    <!-- ====== WAKE LOCK SAFETY PATTERN ====== -->
+    <h2>🔐 The Safe Wake Lock Pattern</h2>
+
+    <ol class="map-timeline">
+      <li class="map-timeline-item" data-step="1">
+        <h4>Acquire with timeout</h4>
+        <p><code>wakeLock.acquire(10 * 60 * 1000L)</code> &mdash; auto-release after 10 minutes even if your code crashes.</p>
+      </li>
+      <li class="map-timeline-item" data-step="2">
+        <h4>Wrap work in try/finally</h4>
+        <p><code>try { doWork() } finally { if (wakeLock.isHeld) wakeLock.release() }</code> &mdash; guaranteed cleanup.</p>
+      </li>
+      <li class="map-timeline-item" data-step="3">
+        <h4>Prefer WorkManager</h4>
+        <p>WorkManager handles wake locks automatically. Only manage them yourself if you truly need custom wake lock behavior.</p>
+      </li>
+    </ol>
+
+    <!-- ====== BEFORE / AFTER ====== -->
+    <h2>📊 Before vs. After (Shopping App)</h2>
+
+    <table class="map-compare">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Before</th>
+          <th>After</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Battery usage (1 hour)</td>
+          <td>8.7% 🔴</td>
+          <td>1.2% 🟢</td>
+        </tr>
+        <tr>
+          <td>Wake locks held</td>
+          <td>42 min</td>
+          <td>3 min</td>
+        </tr>
+        <tr>
+          <td>GPS active</td>
+          <td>38 min</td>
+          <td>0 min (cell/WiFi)</td>
+        </tr>
+        <tr>
+          <td>Sync operations</td>
+          <td>847/session</td>
+          <td>1/day</td>
+        </tr>
+        <tr>
+          <td>User complaints</td>
+          <td>"Your app kills my battery"</td>
+          <td>None ✅</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ====== KEY TERMS ====== -->
+    <h2>📖 Key Terms</h2>
+
+    <dl class="map-terms">
+      <dt>Doze Mode</dt>
+      <dd>System-level power saver that defers alarms, jobs, syncs, and network when device is idle with screen off.</dd>
+
+      <dt>App Standby Buckets</dt>
+      <dd>5 tiers (Active → Restricted) that throttle your app's background work based on how recently the user interacted with it.</dd>
+
+      <dt>Wake Lock</dt>
+      <dd>Keeps the CPU running when the screen is off. Background partial wake locks count against the new Play Console quality metric. Always use a timeout.</dd>
+
+      <dt>Excessive Wake Locks Metric</dt>
+      <dd>Play Console quality bar (enforced March 1, 2026): &gt;2h cumulative non-exempt wake locks in 24h, in &gt;5% of sessions over 28 days = derank + battery-drain warning.</dd>
+
+      <dt>FGS Timeout (Android 15)</dt>
+      <dd><code>dataSync</code> and <code>mediaProcessing</code> foreground services get 6h per 24h period. <code>Service.onTimeout()</code> fires at the limit &mdash; call <code>stopSelf()</code> within seconds.</dd>
+
+      <dt>Radio Tail</dt>
+      <dd>The ~20 seconds the cellular radio stays active after each network request. Batching requests eliminates redundant tail time.</dd>
+
+      <dt>Geofence</dt>
+      <dd>Hardware-accelerated location trigger that fires when the user enters/exits an area. Nearly zero battery cost vs. continuous location polling.</dd>
+
+      <dt>Battery Historian</dt>
+      <dd>Google's tool for visualizing battery usage timelines from a bug report. Shows wake locks, jobs, GPS, and network activity.</dd>
+
+      <dt>PRIORITY_BALANCED_POWER_ACCURACY</dt>
+      <dd>Location priority that uses cell towers and WiFi instead of GPS. ~30x less battery drain than HIGH_ACCURACY for most use cases.</dd>
+    </dl>
+
+    <!-- ====== 2026 BATTERY RESTRICTIONS ====== -->
+    <h2>⚡ The 2026 Battery Bar</h2>
+
+    <div class="map-grid">
+      <div class="map-card">
+        <span class="map-card-icon">📉</span>
+        <div class="map-card-title">Excessive Wake Locks (Mar 1, 2026)</div>
+        <div class="map-card-desc">&gt;2h cumulative background wake locks in 24h across &gt;5% of sessions (28-day window) = Play Store derank + store-listing battery warning. Investigate any tag with P90/P99 &gt; 60 min.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">⏰</span>
+        <div class="map-card-title">FGS 6-Hour Timeout (Android 15)</div>
+        <div class="map-card-desc"><code>dataSync</code> + <code>mediaProcessing</code> capped at 6h per 24h. Implement <code>Service.onTimeout()</code> &amp; call <code>stopSelf()</code>. Test: <code>adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS</code>.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">🚫</span>
+        <div class="map-card-title">No FGS from BOOT_COMPLETED</div>
+        <div class="map-card-desc">Starting an FGS from a <code>BOOT_COMPLETED</code> receiver throws <code>ForegroundServiceStartNotAllowedException</code>. Use <code>WorkManager</code> with <code>setInitialDelay</code> instead.</div>
+      </div>
+      <div class="map-card">
+        <span class="map-card-icon">📊</span>
+        <div class="map-card-title">Android 16 Job Quotas</div>
+        <div class="map-card-desc">Jobs running concurrent with an FGS now have runtime quotas. The &ldquo;hide everything behind an FGS&rdquo; pattern no longer buys unlimited compute. Design for interruption.</div>
+      </div>
+    </div>
+
+    <!-- ====== SKILL BUILT ====== -->
+    <h2>🤖 Skill Built This Chapter</h2>
+
+    <div class="map-card" style="max-width: 500px; margin: 0 auto;">
+      <span class="map-card-icon">🔋</span>
+      <div class="map-card-title"><code>/analyze-battery</code></div>
+      <div class="map-card-desc">Feed <code>dumpsys batterystats</code> output. Returns: top drains ranked by severity, wake lock audit, location/sync frequency review, and code fixes with expected battery savings.</div>
+    </div>
+
+    <!-- ====== QUICK QUIZ ====== -->
+    <h2>🧪 Quick Quiz</h2>
+
+    <div class="map-quiz">
+      <details>
+        <summary>Why should you always call <code>acquire(timeoutMs)</code> instead of bare <code>acquire()</code>?</summary>
+        <p class="quiz-answer">Bare <code>acquire()</code> has no safety net &mdash; if your code throws an exception or hangs before <code>release()</code>, the CPU stays awake indefinitely, draining the battery. The timeout overload auto-releases even if your code fails.</p>
+      </details>
+      <details>
+        <summary>Your shopping app checks for new products every 2 minutes via AlarmManager. What's wrong?</summary>
+        <p class="quiz-answer">Two problems: (1) Product catalogs change daily, not every 2 minutes &mdash; use a 24-hour <code>WorkManager</code> periodic task instead. (2) <code>AlarmManager</code> can wake the device from Doze; <code>WorkManager</code> respects Doze and adds battery/network constraints.</p>
+      </details>
+      <details>
+        <summary>What's the "radio tail" and how do you avoid it?</summary>
+        <p class="quiz-answer">The cellular radio stays active ~20 seconds after each request. Many small requests keep it on almost continuously. Fix: <strong>batch network requests</strong> (e.g., collect analytics events and send them all in one call via WorkManager).</p>
+      </details>
+      <details>
+        <summary>When should you use <code>PRIORITY_HIGH_ACCURACY</code> for location?</summary>
+        <p class="quiz-answer"><strong>Only for turn-by-turn navigation</strong> or features that genuinely need meter-level GPS accuracy. For store finders, delivery tracking, or weather apps, <code>PRIORITY_BALANCED_POWER_ACCURACY</code> (cell/WiFi) is sufficient and uses ~30x less battery.</p>
+      </details>
+    </div>
+
+    <!-- ====== SUMMARY STRIP ====== -->
+    <div class="map-summary">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li class="map-summary-item">Location is the #1 battery drain after screen &mdash; use <code>BALANCED_POWER_ACCURACY</code> and geofences instead of continuous GPS tracking.</li>
+        <li class="map-summary-item">Always use <code>wakeLock.acquire(timeoutMs)</code> with a <code>try/finally</code> release &mdash; never bare <code>acquire()</code>.</li>
+        <li class="map-summary-item">Default to WorkManager for all background work. Reserve exact alarms for user-facing reminders and foreground services for user-initiated tasks.</li>
+        <li class="map-summary-item">Batch network requests to avoid the ~20-second radio tail per call. Use FCM push instead of polling.</li>
+        <li class="map-summary-item">Audit regularly with <code>adb shell dumpsys batterystats --charged [package]</code> &mdash; target under 2% battery per hour for non-navigation apps.</li>
+        <li class="map-summary-item">Battery is now a Play Store quality bar (March 2026): keep background wake locks below 2h/24h in &gt;95% of sessions; <code>dataSync</code>/<code>mediaProcessing</code> FGS run at most 6h/24h.</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="07-gradle-build-performance-map.html">
+        <span class="nav-direction">Previous Map</span>
+        <span class="nav-chapter">Gradle Build Performance</span>
+      </a>
+      <a href="../08-battery-power.html" class="next">
+        <span class="nav-direction">Back to Chapter</span>
+        <span class="nav-chapter">Battery and Power Optimization</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

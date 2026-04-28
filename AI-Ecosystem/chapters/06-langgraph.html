@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: LangGraph — Smarter Workflows | The AI Developer's Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">The AI Developer's Toolkit</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-langchain.html">&larr; Previous</a>
+      <a href="07-multi-agent.html">Next &rarr;</a>
+      <a href="maps/06-langgraph-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>LangGraph: Smarter Workflows</h1>
+    <p class="subtitle">When chains aren't enough &mdash; graphs with loops, branches, and state for AI that can think in circles</p>
+  </header>
+
+  <main>
+
+    <h2>The Limitation of Chains</h2>
+
+    <p>In Chapter 5, you learned about LangChain's chains: prompt &rarr; LLM &rarr; parser &rarr; done. Clean, simple, one direction. But real-world AI applications aren't always that tidy.</p>
+
+    <p>Imagine you're building an AI research assistant. It needs to:</p>
+
+    <ol>
+      <li>Take a user's question</li>
+      <li>Search for relevant information</li>
+      <li>Read the results and decide if they're good enough</li>
+      <li>If not, refine the search query and <strong>try again</strong></li>
+      <li>Once the results are good, write a summary</li>
+      <li>Review the summary for accuracy</li>
+      <li>If the summary has issues, <strong>go back and fix them</strong></li>
+    </ol>
+
+    <p>See the problem? Steps 4 and 7 go <em>backwards</em>. A chain can't do that. Chains are like a one-way street &mdash; they flow in one direction and they're done. What you need is a <strong>graph</strong> &mdash; a workflow that can loop, branch, and make decisions about where to go next.</p>
+
+    <p>That's LangGraph.</p>
+
+    <h2>The One-Sentence Version</h2>
+
+    <p><strong>LangGraph is a framework for building stateful, graph-based AI workflows where steps can loop, branch, and make decisions about what to do next.</strong></p>
+
+    <p>If LangChain chains are like a recipe (step 1, step 2, step 3, serve), LangGraph is like a flowchart &mdash; with diamonds for decisions, arrows that go backwards, and loops that repeat until a condition is met.</p>
+
+    <div class="why-care-box">
+      Most AI applications start as simple chains and then hit a wall when they need to do something smarter: retry on failure, validate their own output, take multi-step actions with feedback loops, or let humans approve intermediate steps. LangGraph gives you a structured way to build these complex workflows instead of hacking together ad-hoc retry logic and if-statements. If you're building anything more sophisticated than "prompt in, answer out," LangGraph is worth knowing about.
+    </div>
+
+    <h2>The Key Concepts</h2>
+
+    <h3>1. State &mdash; The Memory of Your Workflow</h3>
+
+    <p>Every LangGraph workflow has a <strong>state</strong> &mdash; a Python object (usually a TypedDict) that holds all the information being passed between steps. Think of it as the "working memory" of your graph.</p>
+
+    <pre><code>from typing import TypedDict, Annotated
+from operator import add
+
+class ResearchState(TypedDict):
+    question: str                          # The user's original question
+    search_queries: list[str]              # Queries we've tried
+    results: Annotated[list[str], add]     # Search results (accumulated)
+    summary: str                           # The final summary
+    is_good_enough: bool                   # Quality check flag</code></pre>
+
+    <p>Every node in the graph can read the current state, do work, and return an updated state. This is fundamentally different from chains, where data flows through but there's no persistent "memory" between steps.</p>
+
+    <h3>2. Nodes &mdash; The Workers</h3>
+
+    <p>A node is just a Python function that takes the current state, does something, and returns state updates. That's it.</p>
+
+    <pre><code>def search_node(state: ResearchState) -> dict:
+    """Search for information based on the current query."""
+    query = state["search_queries"][-1]
+    results = web_search(query)  # your search logic
+    return {"results": results}
+
+def evaluate_node(state: ResearchState) -> dict:
+    """Check if results are good enough."""
+    # Ask an LLM to evaluate quality
+    is_good = llm_evaluate(state["results"], state["question"])
+    return {"is_good_enough": is_good}</code></pre>
+
+    <p>If you've done Android development, nodes are like individual ViewModel functions or UseCase classes &mdash; each one has a single job.</p>
+
+    <h3>3. Edges &mdash; The Connections</h3>
+
+    <p>Edges define the flow between nodes. There are two types:</p>
+
+    <ul>
+      <li><strong>Normal edges:</strong> always go from A to B (like chain links)</li>
+      <li><strong>Conditional edges:</strong> look at the state and decide where to go next</li>
+    </ul>
+
+    <p>Conditional edges are the magic. They're what make loops and branching possible:</p>
+
+    <pre><code>def should_continue(state: ResearchState) -> str:
+    """Decide: try again or move on?"""
+    if state["is_good_enough"]:
+        return "write_summary"    # Good results → move forward
+    if len(state["search_queries"]) >= 3:
+        return "write_summary"    # Tried 3 times → give up, use what we have
+    return "refine_search"        # Bad results → loop back and try again</code></pre>
+
+    <p>This is a routing function. After the evaluate node runs, LangGraph calls this function to decide which node to visit next. It can go forward, backward, or anywhere in the graph.</p>
+
+    <h3>Putting It Together</h3>
+
+    <p>Here's how you wire nodes and edges into a graph:</p>
+
+    <pre><code>from langgraph.graph import StateGraph, END
+
+graph = StateGraph(ResearchState)
+
+# Add nodes
+graph.add_node("search", search_node)
+graph.add_node("evaluate", evaluate_node)
+graph.add_node("refine_search", refine_node)
+graph.add_node("write_summary", summary_node)
+
+# Add edges
+graph.set_entry_point("search")
+graph.add_edge("search", "evaluate")
+graph.add_conditional_edges("evaluate", should_continue)
+graph.add_edge("refine_search", "search")   # Loop back!
+graph.add_edge("write_summary", END)
+
+app = graph.compile()</code></pre>
+
+    <p>And the flow looks like this:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Search</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Evaluate</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Good enough?</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Write Summary</span>
+    </div>
+
+    <p style="text-align: center; color: var(--color-text-muted); margin-top: -1rem; margin-bottom: 2rem;">&uarr; If not good enough, loop back to Search via Refine &uarr;</p>
+
+    <p>That loop &mdash; evaluate, decide, maybe go back &mdash; is impossible with a simple chain. It's the core reason LangGraph exists.</p>
+
+    <h2>Why Cycles Matter</h2>
+
+    <p>The ability to loop changes what's possible with AI applications. Here are patterns that require cycles:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Pattern</th>
+          <th>What Happens</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Self-correction</strong></td>
+          <td>LLM checks its own output and retries if it's wrong</td>
+          <td>Code generator that runs tests and fixes errors</td>
+        </tr>
+        <tr>
+          <td><strong>Iterative refinement</strong></td>
+          <td>Each pass improves the output</td>
+          <td>Research assistant that deepens its search</td>
+        </tr>
+        <tr>
+          <td><strong>Tool retry</strong></td>
+          <td>If a tool call fails, try a different approach</td>
+          <td>Search with different keywords when first query fails</td>
+        </tr>
+        <tr>
+          <td><strong>Multi-step planning</strong></td>
+          <td>Plan, execute, evaluate, replan</td>
+          <td>Trip planner that adjusts based on availability</td>
+        </tr>
+        <tr>
+          <td><strong>Validation loops</strong></td>
+          <td>Output must meet criteria before proceeding</td>
+          <td>JSON output validated against a schema</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      The most common use of LangGraph in practice is the <strong>self-correcting agent</strong>: an LLM that tries something, checks if it worked, and retries with adjustments if it didn't. This pattern alone justifies learning LangGraph.
+    </div>
+
+    <h2>Agent Architectures</h2>
+
+    <p>LangGraph makes it practical to implement well-known AI agent patterns. Here are the three you'll encounter most:</p>
+
+    <h3>ReAct (Reason + Act)</h3>
+
+    <p>The agent thinks about what to do, takes an action (calls a tool), observes the result, and repeats until it has an answer. This is a loop: think &rarr; act &rarr; observe &rarr; think &rarr; act &rarr; observe &rarr; ... &rarr; answer.</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">ReAct in Action</p>
+      <p class="prompt-text">Thought: I need to find the user's order status.
+Action: call search_orders(user_id="123")
+Observation: Order #456, shipped 2 days ago, tracking: XYZ
+Thought: I have the info. Let me respond.
+Answer: Your order #456 shipped 2 days ago. Tracking: XYZ</p>
+      <p class="prompt-explanation">The LLM decides which tool to call, reads the result, and decides what to do next. This loop is a graph cycle.</p>
+    </div>
+
+    <h3>Plan-and-Execute</h3>
+
+    <p>A planning step creates a list of tasks, then an execution step works through them one by one. After each task, the plan can be revised. Good for complex, multi-step problems.</p>
+
+    <h3>Tool-Calling Agent</h3>
+
+    <p>The simplest agent pattern: the LLM has access to tools and calls them as needed. Modern LLMs (GPT-4, Claude, Llama 3.1) natively support "tool calling" &mdash; they can output structured tool-call requests that your code executes.</p>
+
+    <div class="warning-box">
+      Agent architectures are powerful but expensive. A ReAct loop might call the LLM 5-10 times for a single user query. At cloud API prices, that adds up quickly. Always consider whether a simpler approach (a single chain, a direct tool call) would work before reaching for an agent.
+    </div>
+
+    <h2>Human-in-the-Loop</h2>
+
+    <p>One of LangGraph's most practical features: you can pause the graph at any point and wait for human approval before continuing.</p>
+
+    <p>Imagine a workflow that drafts an email response to a customer. Before sending, it pauses and shows the draft to a human agent. The human approves, edits, or rejects it. The graph resumes based on the human's decision.</p>
+
+    <pre><code>from langgraph.checkpoint.memory import MemorySaver
+
+# Compile with checkpointing (needed for interrupt)
+app = graph.compile(
+    checkpointer=MemorySaver(),
+    interrupt_before=["send_email"]  # Pause before this node
+)
+
+# Run until the interrupt point
+result = app.invoke(initial_state, config={"configurable": {"thread_id": "1"}})
+# → Graph pauses. Show draft to human. Get approval.
+
+# Resume after human approves
+app.invoke(None, config={"configurable": {"thread_id": "1"}})</code></pre>
+
+    <p>This is crucial for production AI applications. You rarely want AI to take irreversible actions (sending emails, making purchases, updating databases) without human oversight. LangGraph makes this a first-class feature rather than something you hack together.</p>
+
+    <h2>Checkpointing: Save and Resume</h2>
+
+    <p>LangGraph can save the complete state of a running graph at every step. This gives you:</p>
+
+    <ul>
+      <li><strong>Fault tolerance:</strong> if the process crashes, resume from the last checkpoint</li>
+      <li><strong>Time travel:</strong> replay the graph from any previous state (great for debugging)</li>
+      <li><strong>Human-in-the-loop:</strong> pause for hours or days, then resume exactly where you left off</li>
+      <li><strong>Branching:</strong> fork from a checkpoint to try different approaches</li>
+    </ul>
+
+    <p>Checkpoints are stored in a backend of your choice (memory for development, SQLite or Postgres for production). Think of it like git for your workflow's state.</p>
+
+    <h2>LangGraph vs LangChain: When to Use Which</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Use LangChain</th>
+          <th>Use LangGraph</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Simple RAG pipeline</td>
+          <td>Yes &mdash; retrieve, prompt, answer</td>
+          <td>Overkill</td>
+        </tr>
+        <tr>
+          <td>Chatbot with memory</td>
+          <td>Yes &mdash; chain + memory</td>
+          <td>Only if it needs complex routing</td>
+        </tr>
+        <tr>
+          <td>Agent with tools</td>
+          <td>Simple cases</td>
+          <td>Yes &mdash; tool loops, error recovery</td>
+        </tr>
+        <tr>
+          <td>Self-correcting workflow</td>
+          <td>Can't &mdash; no loops</td>
+          <td>Yes &mdash; this is its sweet spot</td>
+        </tr>
+        <tr>
+          <td>Multi-step with human approval</td>
+          <td>Not built-in</td>
+          <td>Yes &mdash; interrupt/resume is native</td>
+        </tr>
+        <tr>
+          <td>Complex branching logic</td>
+          <td>Awkward</td>
+          <td>Yes &mdash; conditional edges are clean</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <h3>The Simple Rule</h3>
+      <p><strong>If your workflow is a straight line</strong> (A &rarr; B &rarr; C), use LangChain chains. They're simpler, more transparent, and easier to debug.</p>
+      <p><strong>If your workflow has decisions, loops, or human checkpoints</strong>, use LangGraph. The graph structure makes these patterns clean instead of hacky.</p>
+      <p>Most AI applications start as chains and graduate to graphs when they need to get smarter. That's a perfectly normal evolution.</p>
+    </div>
+
+    <h2>When LangGraph Is Overkill</h2>
+
+    <p>Let's be honest: most AI applications don't need LangGraph. If you're building:</p>
+
+    <ul>
+      <li>A chatbot that answers questions from docs &rarr; a LangChain chain is fine</li>
+      <li>A text classifier &rarr; a single LLM call is fine</li>
+      <li>A summarizer &rarr; a single LLM call is fine</li>
+      <li>A translation feature &rarr; a single LLM call is fine</li>
+    </ul>
+
+    <p>LangGraph adds complexity. If you don't need cycles, state management, or human-in-the-loop, that complexity buys you nothing. <strong>Don't use a graph when a straight line works.</strong></p>
+
+    <div class="tip-box">
+      A good heuristic: sketch your workflow on paper. If you draw any arrows that go backwards (loops) or diamonds for decisions, consider LangGraph. If it's all arrows going forward, stick with LangChain or raw Python.
+    </div>
+
+    <h2>Connection to Android Development</h2>
+
+    <p>LangGraph workflows run on your backend. From the Android side, you're just calling an API. But the <em>kind</em> of features LangGraph enables are interesting for mobile:</p>
+
+    <ul>
+      <li><strong>Trip planner:</strong> search flights &rarr; check availability &rarr; adjust dates if needed &rarr; search hotels &rarr; create itinerary &rarr; let user approve &rarr; book. Multiple loops and a human-in-the-loop step.</li>
+      <li><strong>Smart form filling:</strong> extract info from a document &rarr; validate &rarr; ask user to confirm missing fields &rarr; submit. The graph handles missing data gracefully.</li>
+      <li><strong>Research assistant:</strong> user asks a question &rarr; search multiple sources &rarr; evaluate quality &rarr; synthesize answer. The iterative refinement produces much better results than a single-shot chain.</li>
+      <li><strong>Multi-step onboarding:</strong> analyze user's profile &rarr; recommend settings &rarr; let user adjust &rarr; configure app. The graph adapts to user choices.</li>
+    </ul>
+
+    <p>The key pattern: any feature where the AI needs to <em>try, evaluate, and adjust</em> benefits from LangGraph. Your Android app sees a streaming response or a series of status updates; the complexity lives in the backend graph.</p>
+
+    <h2>Learning Curve: Honest Assessment</h2>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Understanding the concept (1 hour):</strong> If you understand flowcharts, you understand LangGraph's model.</li>
+      <li class="checked"><strong>Simple graph with 3-4 nodes (half a day):</strong> The StateGraph API is straightforward once you see a few examples.</li>
+      <li><strong>Conditional edges and loops (1 day):</strong> Getting routing functions right takes some trial and error.</li>
+      <li><strong>Human-in-the-loop and checkpointing (1-2 days):</strong> The interrupt/resume pattern requires understanding thread IDs and state serialization.</li>
+      <li><strong>Production patterns (ongoing):</strong> Error handling, streaming, subgraphs, complex state management.</li>
+    </ul>
+
+    <p>LangGraph is easier to learn if you already understand LangChain, because it builds on the same concepts (LLMs, tools, prompts). The new concepts &mdash; state, nodes, edges, conditional routing &mdash; are intuitive if you've ever drawn a flowchart.</p>
+
+    <div class="use-skip-box">
+      <div class="use-it">
+        <ul>
+          <li>Your AI workflow needs loops (retry, self-correction, iterative refinement)</li>
+          <li>You need human-in-the-loop approval before the AI takes action</li>
+          <li>You're building an agent that uses tools and makes multi-step decisions</li>
+          <li>You need fault tolerance (crash recovery, long-running workflows)</li>
+          <li>Your workflow has complex branching logic based on intermediate results</li>
+        </ul>
+      </div>
+      <div class="skip-it">
+        <ul>
+          <li>Your workflow is a straight line (retrieve &rarr; prompt &rarr; answer)</li>
+          <li>You're making single LLM calls (classification, summarization, translation)</li>
+          <li>You don't need loops or branching &mdash; a chain works fine</li>
+          <li>You're just getting started with AI apps &mdash; learn chains first</li>
+          <li>The added complexity isn't justified by your use case</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="exercise-box">
+      <strong>Sketch a Graph</strong>
+      <p>Grab a piece of paper (or a whiteboard app) and design a graph for one of these scenarios:</p>
+      <ol>
+        <li><strong>Code review assistant:</strong> Takes a code diff, analyzes it for bugs, suggests fixes, checks if fixes are valid, and produces a review summary. If a fix creates new issues, loop back.</li>
+        <li><strong>Customer support agent:</strong> Classifies the issue, searches the knowledge base, drafts a response, checks if the response addresses the issue, and routes to a human if confidence is low.</li>
+        <li><strong>Content writer:</strong> Takes a topic, researches it, writes a draft, evaluates the draft against criteria, revises if needed, and produces a final version.</li>
+      </ol>
+      <p>For your chosen scenario, identify:</p>
+      <ul>
+        <li>What is the <strong>state</strong>? (What data is passed between nodes?)</li>
+        <li>What are the <strong>nodes</strong>? (What does each step do?)</li>
+        <li>Where are the <strong>conditional edges</strong>? (Where does the graph decide what to do next?)</li>
+        <li>Where would you add a <strong>human-in-the-loop</strong> checkpoint?</li>
+      </ul>
+      <p>If your diagram has arrows going backwards, you've just designed a LangGraph workflow.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>LangGraph lets one AI agent make decisions and loop through tasks. But what if you had <em>multiple</em> AI agents working together &mdash; one that writes code, another that reviews it, and a third that tests it? What if they could debate and collaborate like a team?</p>
+
+    <p>In <strong>Chapter 7: Multi-Agent Systems</strong>, we'll explore AutoGen and CrewAI &mdash; frameworks that let you build teams of AI agents. It's the most hyped area of AI development right now, and we'll be honest about when it's genuinely useful versus when it's just expensive complexity.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-langchain.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">&larr; LangChain: Connecting the Pieces</span>
+      </a>
+      <a href="07-multi-agent.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Multi-Agent Systems: AutoGen &amp; CrewAI &rarr;</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

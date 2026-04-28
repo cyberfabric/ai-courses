@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: SwiftUI Rendering Performance | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="04-memory-leaks.html">&larr; Prev</a>
+      <a href="06-network-urlsession.html">Next &rarr;</a>
+      <a href="maps/05-swiftui-rendering-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>SwiftUI Rendering Performance</h1>
+    <p class="subtitle">Diagnose and fix excessive view re-evaluation using AI, <code>_printChanges()</code>, and the SwiftUI Instrument</p>
+  </header>
+
+  <main>
+
+    <p>In Chapter 4, we hunted memory leaks &mdash; objects that refuse to die. Now we&rsquo;re hunting ghosts of a different kind: <strong>view bodies that re-evaluate for no good reason</strong>. A SwiftUI view that evaluates its body 47 times during a single scroll is the performance equivalent of repainting your house every time someone opens the front door.</p>
+
+    <p>SwiftUI&rsquo;s declarative magic comes at a cost: if you don&rsquo;t understand <em>what triggers re-evaluation</em>, you can accidentally create an app that&rsquo;s doing 10x more work than necessary &mdash; and you won&rsquo;t see a crash or an error. Just a subtle stutter that users feel but can&rsquo;t articulate.</p>
+
+    <!-- The Mental Model -->
+    <h2>The SwiftUI Rendering Pipeline</h2>
+
+    <p>Before we debug, we need the mental model. SwiftUI rendering has three distinct phases:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Evaluate</strong><br>
+        SwiftUI calls your view&rsquo;s <code>body</code> property. This produces a new description of what the UI should look like.
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step">
+        <strong>2. Diff</strong><br>
+        SwiftUI compares the new description against the previous one. Only differences move forward.
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step">
+        <strong>3. Render</strong><br>
+        Only the changed parts get rendered to screen. This is cheap &mdash; Core Animation handles it.
+      </div>
+    </div>
+
+    <p>Here&rsquo;s the key insight: <strong>step 1 is what you control, and step 1 is where performance dies</strong>. If your <code>body</code> is called 50 times but nothing changed, steps 2 and 3 are fast (diff says &ldquo;nothing new&rdquo;), but you still paid the cost of evaluating <code>body</code> 50 times. And if <code>body</code> creates formatters, does math, or allocates objects &mdash; that cost adds up fast.</p>
+
+    <div class="tip-box">
+      <strong>The Restaurant Analogy:</strong> Think of <code>body</code> as a waiter writing down the full order. The kitchen (renderer) only cooks what changed. But if the waiter rewrites the entire menu every time a customer asks for more water, you&rsquo;ve got a staffing problem &mdash; even if the kitchen is efficient.
+    </div>
+
+    <!-- _printChanges() -->
+    <h2>Your #1 Debugging Tool: <code>Self._printChanges()</code></h2>
+
+    <p>This one method will save you more SwiftUI debugging time than any other tool. Add it to any view&rsquo;s <code>body</code> to see exactly what triggered the re-evaluation:</p>
+
+    <pre><code>struct ProductRow: View {
+    let product: Product
+    @EnvironmentObject var cart: CartViewModel
+
+    var body: some View {
+        let _ = Self._printChanges()  // <-- Add this line
+        HStack {
+            Text(product.name)
+            Spacer()
+            Text(product.formattedPrice)
+        }
+    }
+}</code></pre>
+
+    <p>When the view re-evaluates, you&rsquo;ll see output like this in the console:</p>
+
+    <div class="debug-trace">
+      <h4>Console Output &mdash; <code>_printChanges()</code> Diagnostics</h4>
+<pre>ProductRow: @self changed.
+ProductRow: @identity changed.
+ProductRow: _cart changed.
+ProductRow: @self, @identity, _cart changed.</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>What each message means:</strong></p>
+      <ul>
+        <li><code>@self changed</code> &mdash; The view&rsquo;s value itself changed (a property of the struct differs from last evaluation). This is normal when parent rebuilds.</li>
+        <li><code>@identity changed</code> &mdash; SwiftUI thinks this is a <em>new</em> view, not an update to the existing one. The view loses its state. This is almost always a bug.</li>
+        <li><code>_cart changed</code> &mdash; The <code>@EnvironmentObject</code> named <code>cart</code> published a change. Every view reading <code>cart</code> re-evaluates &mdash; even if it only reads <code>cart.itemCount</code> and what changed was <code>cart.promoCode</code>.</li>
+      </ul>
+      <p><strong>The <code>_cart changed</code> line is the smoking gun.</strong> If <code>CartViewModel</code> uses <code>ObservableObject</code>, any <code>@Published</code> property change triggers all observers. With <code>@Observable</code>, only views reading the changed property re-evaluate.</p>
+    </div>
+
+    <div class="warning-box">
+      <strong>Development only!</strong> <code>_printChanges()</code> is an undocumented internal API. It&rsquo;s invaluable for debugging but must be removed before shipping. Never commit it to your main branch. Use a <code>#if DEBUG</code> guard or a Git pre-commit hook.
+    </div>
+
+    <!-- Instruments SwiftUI Track -->
+    <h2>The SwiftUI Instrument (Xcode 26)</h2>
+
+    <p>WWDC25 introduced a dedicated <strong>SwiftUI instrument</strong> in Instruments 26. This is a game-changer &mdash; no more guessing which views are hot. The instrument provides three tracking lanes:</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">🔴</span>
+        <h4>Long View Body Updates</h4>
+        <p>Flags <code>body</code> evaluations that take too long. Shows you exactly which view and how many milliseconds it consumed.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🟠</span>
+        <h4>Long Representable Updates</h4>
+        <p>Catches slow <code>UIViewRepresentable</code> and <code>UIViewControllerRepresentable</code> updates &mdash; the bridge between UIKit and SwiftUI.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🟡</span>
+        <h4>Other Long Updates</h4>
+        <p>All other SwiftUI work that&rsquo;s taking too long: environment propagation, preference key aggregation, layout passes.</p>
+      </div>
+    </div>
+
+    <p>But the real star is the <strong>Cause &amp; Effect Graph</strong>. This visualizes <em>why</em> a view updated: which state change caused which view body to re-evaluate. It turns &ldquo;something triggered a re-render&rdquo; into &ldquo;changing <code>cart.promoCode</code> caused <code>ProductRow</code> to re-evaluate because it reads <code>cart</code>.&rdquo;</p>
+
+    <div class="tip-box">
+      <strong>Xcode AI + SwiftUI Instrument:</strong> In Xcode 26, you can ask Swift Assist to explain what the Cause &amp; Effect Graph is showing. Select a slow view body update in the timeline, right-click, and choose &ldquo;Explain with Swift Assist.&rdquo; The AI reads the graph and tells you in plain English why the update happened and how to fix it.
+    </div>
+
+    <!-- @Observable vs @ObservedObject -->
+    <h2>The Biggest Win: <code>@Observable</code> vs <code>ObservableObject</code></h2>
+
+    <p>If you take one action from this chapter, migrate your view models from <code>ObservableObject</code> to <code>@Observable</code>. The performance difference is dramatic and the reason is simple: <strong>granularity</strong>.</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th><code>ObservableObject</code> (Legacy)</th>
+            <th><code>@Observable</code> (Modern)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Tracking</td>
+            <td>Object-level: <em>any</em> <code>@Published</code> change notifies <em>all</em> observers</td>
+            <td>Property-level: only views reading the changed property re-evaluate</td>
+          </tr>
+          <tr>
+            <td>List of 1000 items</td>
+            <td>Changing item #42 re-evaluates all 1000 rows</td>
+            <td>Changing item #42 re-evaluates only that row</td>
+          </tr>
+          <tr>
+            <td>View wrappers</td>
+            <td><code>@StateObject</code>, <code>@ObservedObject</code>, <code>@EnvironmentObject</code></td>
+            <td><code>@State</code>, plain property, <code>@Environment</code></td>
+          </tr>
+          <tr>
+            <td>Boilerplate</td>
+            <td><code>@Published</code> on every property</td>
+            <td>None &mdash; all stored properties tracked automatically</td>
+          </tr>
+          <tr>
+            <td>Min deployment</td>
+            <td>iOS 13+</td>
+            <td>iOS 17+</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="performance-metric">
+      <h4>Before/After: ObservableObject → @Observable Migration</h4>
+      <div class="metric-before">
+        <strong>Before (@ObservedObject + ObservableObject)</strong><br>
+        List with 500 items, changing one item&rsquo;s favorite status<br>
+        View body evaluations: <strong>501</strong> (parent + all rows)<br>
+        Frame time: <strong>24ms</strong> (dropped frame on 120Hz)
+      </div>
+      <div class="metric-after">
+        <strong>After (@Observable + @State)</strong><br>
+        Same list, same change<br>
+        View body evaluations: <strong>1</strong> (only the changed row)<br>
+        Frame time: <strong>1.2ms</strong> (smooth at 120Hz)
+      </div>
+    </div>
+
+    <!-- Common Performance Traps -->
+    <h2>The 6 SwiftUI Performance Traps AI Catches</h2>
+
+    <p>Feed your <code>_printChanges()</code> output or SwiftUI Instrument data to Claude Code, and it will spot these patterns instantly:</p>
+
+    <h3>Trap 1: Creating Objects Inside <code>body</code></h3>
+
+    <div class="prompt-example bad">
+      <h4>Bad &mdash; DateFormatter Created Every Evaluation</h4>
+<pre><code>var body: some View {
+    let formatter = DateFormatter()       // Allocated EVERY body call
+    formatter.dateStyle = .medium
+    Text(formatter.string(from: date))
+}</code></pre>
+    </div>
+
+    <div class="prompt-example good">
+      <h4>Good &mdash; Static Formatter</h4>
+<pre><code>private static let formatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateStyle = .medium
+    return f
+}()
+
+var body: some View {
+    Text(Self.formatter.string(from: date))
+}</code></pre>
+    </div>
+
+    <h3>Trap 2: Reading Too Many Properties from an Observable</h3>
+
+    <p>Even with <code>@Observable</code>, if your view reads 5 properties, it re-evaluates when <em>any</em> of those 5 change. The fix: split into focused child views that each read only what they need.</p>
+
+    <h3>Trap 3: Unstable View Identity</h3>
+
+    <p>When <code>_printChanges()</code> shows <code>@identity changed</code>, your view is being destroyed and recreated instead of updated. Common cause: using <code>.id(UUID())</code> or an unstable identifier in a <code>ForEach</code>.</p>
+
+    <div class="root-cause">
+      <h4>Root Cause: Unstable Identity</h4>
+      <p><strong>Symptom:</strong> <code>_printChanges()</code> prints <code>@identity changed</code> on every parent rebuild. Animations break. <code>@State</code> resets unexpectedly.</p>
+      <p><strong>Cause:</strong> The view&rsquo;s identity changes every evaluation &mdash; usually a random <code>.id()</code> or a <code>ForEach</code> over items without stable IDs. SwiftUI treats it as a new view each time.</p>
+      <p><strong>Fix:</strong> Use stable, unique identifiers. Model objects should have a persistent <code>id</code> property. Never use <code>.id(UUID())</code> unless you intentionally want to reset the view.</p>
+    </div>
+
+    <h3>Trap 4: Heavy Computation in <code>body</code></h3>
+
+    <p>Sorting, filtering, or mapping large collections inside <code>body</code> means that work runs on every re-evaluation. Move it to a computed property backed by cached state, or use <code>.task</code> for async computation.</p>
+
+    <h3>Trap 5: Missing <code>@State</code> for Local State</h3>
+
+    <p>Using a plain <code>var</code> for state that should be <code>@State</code> means SwiftUI can&rsquo;t track it, leading to either missing updates or parent-triggered rebuilds resetting your local value.</p>
+
+    <h3>Trap 6: <code>EquatableView</code> Neglect</h3>
+
+    <p>For views with expensive bodies that receive complex data, conforming to <code>Equatable</code> and wrapping in <code>EquatableView</code> lets SwiftUI skip body evaluation entirely when inputs haven&rsquo;t changed.</p>
+
+    <!-- Building the /analyze-rendering skill -->
+    <h2>Build It: The <code>/analyze-rendering</code> Skill</h2>
+
+    <p>Let&rsquo;s create a reusable Claude Code command that diagnoses SwiftUI rendering issues:</p>
+
+    <div class="fix-pattern">
+      <h4>/analyze-rendering &mdash; Claude Code Skill</h4>
+      <p>Create <code>.claude/commands/analyze-rendering.md</code>:</p>
+<pre><code># /analyze-rendering
+
+Analyze SwiftUI rendering performance data. The user will provide
+one or more of: _printChanges() console output, SwiftUI Instrument
+data, or Swift source code of a slow view.
+
+## Analysis Steps
+
+1. **Identify hot views** — which views re-evaluate most frequently?
+2. **Classify the trigger** — @self (parent rebuild), @identity (unstable ID),
+   or named property (state/environment change)?
+3. **Check for known traps**:
+   - Objects created inside body (DateFormatter, NumberFormatter, etc.)
+   - ObservableObject with multiple @Published properties read broadly
+   - ForEach without stable identifiers
+   - Heavy computation (sort/filter/map) inside body
+   - Missing @State for local mutable values
+4. **Suggest targeted fix** — minimize body evaluations while keeping
+   the same visual behavior.
+
+## Output Format
+
+For each issue found:
+- **View:** [name]
+- **Trigger:** [what causes the re-evaluation]
+- **Impact:** [evaluations per second or per interaction]
+- **Fix:** [specific code change]
+- **Estimated improvement:** [expected reduction in body evaluations]</code></pre>
+    </div>
+
+    <!-- LazyVStack/LazyHStack -->
+    <h2>Lazy Stacks: Not a Silver Bullet</h2>
+
+    <p><code>LazyVStack</code> and <code>LazyHStack</code> only create views when they scroll into the visible area. But &ldquo;lazy&rdquo; doesn&rsquo;t mean &ldquo;free&rdquo;:</p>
+
+    <ul>
+      <li><strong>Missing explicit <code>id</code>:</strong> Without stable IDs in <code>ForEach</code>, SwiftUI may recreate views instead of reusing them during scroll.</li>
+      <li><strong>Heavy row views:</strong> Each row is still evaluated when it appears. If row <code>body</code> takes 8ms and 10 rows appear at once, that&rsquo;s 80ms &mdash; a dropped frame.</li>
+      <li><strong>Prefetching:</strong> <code>LazyVStack</code> in a <code>ScrollView</code> has no native prefetch API like <code>UICollectionView</code>. For image-heavy lists, load thumbnails in <code>.task</code> and show placeholders.</li>
+      <li><strong>Pinned headers:</strong> <code>Section</code> headers inside lazy stacks can trigger unexpected re-evaluations of the entire section.</li>
+    </ul>
+
+    <div class="tip-box">
+      <strong>When to use <code>List</code> vs <code>LazyVStack</code>:</strong> <code>List</code> uses <code>UITableView</code> under the hood with cell reuse &mdash; it&rsquo;s more memory-efficient for very long lists (10,000+ rows). <code>LazyVStack</code> in a <code>ScrollView</code> gives you more layout control but no cell reuse. For most apps, <code>List</code> is the better default.
+    </div>
+
+    <!-- Structural vs Explicit Identity -->
+    <h2>Identity: The Hidden Performance Lever</h2>
+
+    <p>SwiftUI uses <strong>identity</strong> to track views across updates. There are two kinds:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>How It Works</th>
+            <th>Performance Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Structural</strong></td>
+            <td>Position in the view tree. <code>if/else</code> branches create different identities.</td>
+            <td>Switching branches destroys and recreates the view &mdash; state resets.</td>
+          </tr>
+          <tr>
+            <td><strong>Explicit</strong></td>
+            <td><code>.id()</code> modifier or <code>ForEach</code> with <code>Identifiable</code> items.</td>
+            <td>Changing the ID destroys the old view and creates a new one. Stable IDs = stable views = smooth animations.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The performance rule: <strong>keep identity stable</strong>. Every time identity changes, SwiftUI throws away the view&rsquo;s state, transitions, and animation context, then rebuilds from scratch. This is the most common cause of janky list scrolling and broken animations.</p>
+
+    <!-- Xcode 26 AI for SwiftUI -->
+    <h2>Xcode 26 AI for SwiftUI Performance</h2>
+
+    <p>Xcode 26&rsquo;s Swift Assist understands SwiftUI rendering patterns natively. Here&rsquo;s when to use each tool:</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">🍎</span>
+        <h4>Xcode 26 Swift Assist</h4>
+        <p><strong>Best for:</strong> Quick inline fixes. Select a slow view, ask &ldquo;Why does this re-render?&rdquo; Swift Assist reads the view&rsquo;s dependencies and suggests targeted changes. Also explains Cause &amp; Effect Graph results directly in Instruments.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🤖</span>
+        <h4>Claude Code /analyze-rendering</h4>
+        <p><strong>Best for:</strong> Cross-file analysis. When the problem spans a view model, multiple views, and environment objects, Claude Code can read all the files and trace the dependency chain across your architecture. Feed it <code>_printChanges()</code> output plus the source files.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🔧</span>
+        <h4>XcodeBuildMCP</h4>
+        <p><strong>Best for:</strong> Automated profiling. Use XcodeBuildMCP to build, launch in simulator, run a scripted interaction, capture Instruments data, and feed it directly to Claude Code &mdash; all from a single AI agent workflow.</p>
+      </div>
+    </div>
+
+    <!-- Feeding data to Claude Code -->
+    <h2>Feeding SwiftUI Data to Claude Code</h2>
+
+    <p>The best results come from giving Claude Code <strong>both the data and the code</strong>:</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt &mdash; Data + Code Context</h4>
+<pre><code>/analyze-rendering
+
+## _printChanges() output during scroll:
+ProductRow: _cart changed.  (fires 47 times in 2 seconds)
+ProductRow: @self changed.   (fires 47 times in 2 seconds)
+CartBadge: _cart changed.    (fires 47 times in 2 seconds)
+
+## View source:
+[paste ProductRow.swift]
+[paste CartViewModel.swift]
+
+## Question: Why does ProductRow re-evaluate 47 times during scroll
+when nothing about the product changes?</code></pre>
+    </div>
+
+    <div class="prompt-example bad">
+      <h4>Bad Prompt &mdash; Vague and Missing Context</h4>
+<pre><code>My SwiftUI list is slow. How do I fix it?</code></pre>
+    </div>
+
+    <p>With the good prompt, Claude Code will trace the chain: <code>CartViewModel</code> is an <code>ObservableObject</code> with a <code>@Published var items</code> array, <code>ProductRow</code> injects it via <code>@EnvironmentObject</code>, and any cart change (even unrelated ones like promo code validation) triggers all 47 visible rows to re-evaluate.</p>
+
+    <!-- @State Optimization Pattern -->
+    <h2>The Derived State Pattern</h2>
+
+    <p>When a view only needs one computed value from a complex model, don&rsquo;t read the model directly. Derive the value in the parent and pass it down:</p>
+
+    <div class="fix-pattern">
+      <h4>Pattern: Derived State to Minimize Re-evaluation</h4>
+<pre><code>// BEFORE: ProductRow reads entire cart
+struct ProductRow: View {
+    let product: Product
+    @EnvironmentObject var cart: CartViewModel  // Re-evaluates on ANY cart change
+
+    var body: some View {
+        HStack {
+            Text(product.name)
+            if cart.contains(product) {     // Only needs this one boolean
+                Image(systemName: "cart.fill")
+            }
+        }
+    }
+}
+
+// AFTER: Parent derives the boolean, row is decoupled
+struct ProductRow: View {
+    let product: Product
+    let isInCart: Bool                        // Simple value — no observation
+
+    var body: some View {
+        HStack {
+            Text(product.name)
+            if isInCart {
+                Image(systemName: "cart.fill")
+            }
+        }
+    }
+}
+
+// Parent (the only view that observes the cart):
+ForEach(products) { product in
+    ProductRow(
+        product: product,
+        isInCart: cart.contains(product)
+    )
+}</code></pre>
+    </div>
+
+    <p>Now <code>ProductRow</code> only re-evaluates when <code>isInCart</code> actually changes for <em>that</em> product, not when any cart property changes.</p>
+
+    <!-- When AI is Wrong About SwiftUI -->
+    <h2>When AI Gets SwiftUI Wrong</h2>
+
+    <div class="warning-box">
+      <strong>Common AI hallucinations for SwiftUI performance:</strong>
+      <ul>
+        <li><strong>&ldquo;Use <code>.drawingGroup()</code> to fix slow lists&rdquo;</strong> &mdash; <code>drawingGroup()</code> rasterizes to a bitmap. It helps with complex drawing (gradients, masks) but does nothing for view body evaluation cost.</li>
+        <li><strong>&ldquo;Add <code>.animation(nil)</code> to prevent re-renders&rdquo;</strong> &mdash; This disables animation, it doesn&rsquo;t prevent body evaluation. The view still re-evaluates.</li>
+        <li><strong>&ldquo;Use <code>@ObservedObject</code> instead of <code>@StateObject</code> for better performance&rdquo;</strong> &mdash; The opposite is often true. <code>@ObservedObject</code> doesn&rsquo;t own the object, so it can be recreated. The observation cost is the same.</li>
+        <li><strong>&ldquo;Wrap everything in <code>EquatableView</code>&rdquo;</strong> &mdash; Only helps if the equality check is cheaper than the body evaluation. For simple views, the overhead of <code>Equatable</code> conformance isn&rsquo;t worth it.</li>
+      </ul>
+      <p>Always verify with <code>_printChanges()</code> after applying any AI suggestion. If the evaluation count doesn&rsquo;t drop, the suggestion didn&rsquo;t work.</p>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Find and Fix the Rendering Bug</h3>
+      <p><strong>Setup:</strong> Create a SwiftUI app with this deliberately inefficient pattern:</p>
+      <ol>
+        <li>Create a <code>SettingsViewModel: ObservableObject</code> with 5 <code>@Published</code> properties (theme, fontSize, notifications, language, autoSave)</li>
+        <li>Create a <code>ContentView</code> with a <code>List</code> of 100 <code>SettingsRow</code> views</li>
+        <li>Each <code>SettingsRow</code> receives <code>@EnvironmentObject var settings: SettingsViewModel</code> but only reads <code>settings.theme</code></li>
+        <li>Add a toggle that changes <code>settings.autoSave</code></li>
+      </ol>
+      <p><strong>Steps:</strong></p>
+      <ol>
+        <li>Add <code>Self._printChanges()</code> to <code>SettingsRow.body</code></li>
+        <li>Toggle <code>autoSave</code> and count the console output lines</li>
+        <li>Feed the <code>_printChanges()</code> output + source code to Claude Code with <code>/analyze-rendering</code></li>
+        <li>Apply the suggested fix (migrate to <code>@Observable</code>, or derive state, or split views)</li>
+        <li>Verify: toggle <code>autoSave</code> again &mdash; <code>_printChanges()</code> should show zero <code>SettingsRow</code> re-evaluations</li>
+      </ol>
+      <p><strong>Expected result:</strong> From 100 unnecessary body evaluations to 0 when changing an unrelated property.</p>
+    </div>
+
+    <!-- Highlight Box: Key Takeaways -->
+    <div class="highlight-box">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li><code>_printChanges()</code> is your first tool &mdash; always start here before reaching for Instruments</li>
+        <li>The SwiftUI Instrument in Xcode 26 shows <strong>Cause &amp; Effect</strong> graphs &mdash; use Swift Assist to explain them</li>
+        <li>Migrate from <code>ObservableObject</code> to <code>@Observable</code> for property-level tracking &mdash; the single biggest performance win</li>
+        <li>Keep view identity stable: no <code>.id(UUID())</code>, no unstable <code>ForEach</code> identifiers</li>
+        <li>Don&rsquo;t create objects in <code>body</code> &mdash; formatters, date components, sort operations all belong outside</li>
+        <li>Use the <strong>derived state pattern</strong> to decouple child views from broad observables</li>
+        <li>Always verify AI suggestions with <code>_printChanges()</code> &mdash; if the count doesn&rsquo;t drop, the fix didn&rsquo;t work</li>
+      </ul>
+    </div>
+
+    <!-- Next Chapter Preview -->
+    <h2>Coming Up Next</h2>
+
+    <p>Your views are rendering efficiently &mdash; but what about the data feeding them? In <strong>Chapter 6: Network &amp; URLSession Debugging</strong>, we&rsquo;ll use AI to diagnose network-layer issues: SSL failures, timeout storms, async/await threading pitfalls, and building a <code>/analyze-network</code> skill that reads your URLSession logs and tells you exactly what&rsquo;s going wrong. Because the fastest view in the world is useless if it&rsquo;s waiting 10 seconds for a JSON response.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="04-memory-leaks.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Memory Leak Detection with AI</span>
+      </a>
+      <a href="06-network-urlsession.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Network &amp; URLSession Debugging</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

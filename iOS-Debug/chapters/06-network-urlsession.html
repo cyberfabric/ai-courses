@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 6: Network &amp; URLSession Debugging | AI-Driven Debugging &amp; Performance for iOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance for iOS</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="05-swiftui-rendering.html">&larr; Prev</a>
+      <a href="07-xcode-build-performance.html">Next &rarr;</a>
+      <a href="maps/06-network-urlsession-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 6</span>
+    <h1>Network &amp; URLSession Debugging</h1>
+    <p class="subtitle">Use AI to diagnose SSL failures, timeout storms, async/await pitfalls, and the invisible network bugs that ruin your app</p>
+  </header>
+
+  <main>
+
+    <p>In Chapter 5, we made our SwiftUI views render efficiently. But the fastest view in the world is useless if it&rsquo;s waiting 10 seconds for a JSON response that never arrives. Network debugging on iOS is uniquely painful: SSL, App Transport Security, Codable serialization failures, retry storms, and the new async/await threading model all conspire to make &ldquo;it works on my Mac&rdquo; the most dangerous sentence in mobile development.</p>
+
+    <p>The good news? Network issues produce <strong>structured data</strong> &mdash; request/response pairs, timing metrics, error codes &mdash; and structured data is exactly what AI analyzes best.</p>
+
+    <!-- Why Network Debugging Is Hard -->
+    <h2>Why Network Debugging Is Uniquely Hard on iOS</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">SSL/TLS</div>
+        <div class="stat-label">Encrypted by default &mdash; you can&rsquo;t see what&rsquo;s in the request without a proxy</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">ATS</div>
+        <div class="stat-label">App Transport Security blocks non-HTTPS &mdash; silent failures if misconfigured</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">Codable</div>
+        <div class="stat-label">Type-safe decoding means one missing JSON key = crash or silent nil</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">async/await</div>
+        <div class="stat-label">New concurrency model changes where errors surface and how cancellation propagates</div>
+      </div>
+    </div>
+
+    <!-- URLSession Logging -->
+    <h2>Step 1: Make Your Network Talk</h2>
+
+    <p>Before you can debug, you need data. URLSession is remarkably quiet by default. Here are three ways to make it talk:</p>
+
+    <h3>Option A: URLSessionTaskMetrics</h3>
+
+    <p>Apple&rsquo;s built-in performance data. Every request generates metrics with DNS lookup time, TLS handshake duration, request/response sizes, and connection reuse status:</p>
+
+    <pre><code>func urlSession(_ session: URLSession, task: URLSessionTask,
+                 didFinishCollecting metrics: URLSessionTaskMetrics) {
+    for tx in metrics.transactionMetrics {
+        let dns = tx.domainLookupEndDate?.timeIntervalSince(
+            tx.domainLookupStartDate ?? .now) ?? 0
+        let tls = tx.secureConnectionEndDate?.timeIntervalSince(
+            tx.secureConnectionStartDate ?? .now) ?? 0
+        let total = tx.responseEndDate?.timeIntervalSince(
+            tx.fetchStartDate ?? .now) ?? 0
+
+        logger.info("""
+            \(tx.request.url?.path ?? "?") | \
+            DNS: \(dns * 1000, format: .fixed(precision: 0))ms | \
+            TLS: \(tls * 1000, format: .fixed(precision: 0))ms | \
+            Total: \(total * 1000, format: .fixed(precision: 0))ms | \
+            Reused: \(tx.isReusedConnection)
+            """)
+    }
+}</code></pre>
+
+    <h3>Option B: os_log with Network Subsystem</h3>
+
+    <pre><code>import OSLog
+
+let networkLogger = Logger(subsystem: "com.myapp", category: "network")
+
+// Before request
+networkLogger.info("→ \(request.httpMethod ?? "?") \(request.url?.absoluteString ?? "?")")
+
+// After response
+networkLogger.info("← \(statusCode) \(url) [\(duration)ms] \(bodySize)B")</code></pre>
+
+    <h3>Option C: Proxyman or Charles Proxy</h3>
+
+    <p>For full request/response inspection including headers and bodies:</p>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">🦊</span>
+        <h4>Proxyman</h4>
+        <p>Native macOS/iOS app. Auto-configures simulator proxy. JSON syntax highlighting. iOS app uses local VPN for on-device capture. Easier setup than Charles. Export sessions as HAR files for AI analysis.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🔵</span>
+        <h4>Charles Proxy</h4>
+        <p>Industry standard. Java-based. Requires manual proxy configuration on device. Powerful SSL proxying with root cert install. Map Local/Remote for mocking. Throttle to simulate slow networks.</p>
+      </div>
+    </div>
+
+    <div class="tip-box">
+      <strong>Simulator shortcut:</strong> Proxyman auto-detects the iOS Simulator and captures traffic without any proxy configuration. For real devices on iOS 26, you install the Proxyman CA certificate under Settings &gt; General &gt; VPN &amp; Device Management, then enable it in Certificate Trust Settings.
+    </div>
+
+    <!-- Debug Trace: Network Failure -->
+    <h2>AI Reads Your Network Logs</h2>
+
+    <p>Here&rsquo;s a real debugging session. The app shows a blank screen on launch &mdash; the API call is failing silently:</p>
+
+    <div class="debug-trace">
+      <h4>os_log Output &mdash; Network Failure</h4>
+<pre>2026-04-15 09:14:02.331 [network] → GET https://api.myapp.com/v2/feed
+2026-04-15 09:14:02.332 [network] URLSession config: timeout=10s, cache=useProtocolCachePolicy
+2026-04-15 09:14:12.334 [network] ← ERROR: The request timed out. (NSURLErrorTimedOut -1001)
+2026-04-15 09:14:12.335 [network] → GET https://api.myapp.com/v2/feed (retry 1/3)
+2026-04-15 09:14:22.337 [network] ← ERROR: The request timed out. (NSURLErrorTimedOut -1001)
+2026-04-15 09:14:22.338 [network] → GET https://api.myapp.com/v2/feed (retry 2/3)
+2026-04-15 09:14:32.340 [network] ← ERROR: The request timed out. (NSURLErrorTimedOut -1001)
+2026-04-15 09:14:32.341 [network] → GET https://api.myapp.com/v2/feed (retry 3/3)
+2026-04-15 09:14:42.343 [network] ← ERROR: The request timed out. (NSURLErrorTimedOut -1001)
+2026-04-15 09:14:42.344 [network] Feed load failed after 4 attempts (40s total)</pre>
+      <h4>AI Analysis</h4>
+      <p><strong>Pattern recognized:</strong> Timeout retry storm.</p>
+      <ul>
+        <li><strong>Problem:</strong> 10-second timeout &times; 4 attempts = 40 seconds of blocked loading. The user sees a blank screen for 40 seconds before getting an error.</li>
+        <li><strong>No exponential backoff:</strong> Retries fire immediately after timeout. If the server is overloaded, this makes it worse.</li>
+        <li><strong>Missing cancellation:</strong> If the user navigates away, the retries keep firing in the background.</li>
+        <li><strong>Root cause hypothesis:</strong> DNS resolution failing (check if the domain resolves from device network) or server-side issue. The <code>URLSessionTaskMetrics</code> would tell us if DNS or TLS is where the time is spent.</li>
+      </ul>
+    </div>
+
+    <!-- Common NSURLError Codes -->
+    <h2>NSURLError Cheat Sheet</h2>
+
+    <p>These error codes are your first clue. AI recognizes them instantly:</p>
+
+    <div class="comparison">
+      <table>
+        <thead>
+          <tr>
+            <th>Error Code</th>
+            <th>Name</th>
+            <th>Common Cause</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>-1001</code></td>
+            <td>NSURLErrorTimedOut</td>
+            <td>Server not responding, DNS failure, too-short timeout</td>
+          </tr>
+          <tr>
+            <td><code>-1003</code></td>
+            <td>NSURLErrorCannotFindHost</td>
+            <td>DNS resolution failed. Typo in hostname or no network.</td>
+          </tr>
+          <tr>
+            <td><code>-1009</code></td>
+            <td>NSURLErrorNotConnectedToInternet</td>
+            <td>Device is offline. Check reachability before retrying.</td>
+          </tr>
+          <tr>
+            <td><code>-1200</code></td>
+            <td>NSURLErrorSecureConnectionFailed</td>
+            <td>SSL/TLS handshake failed. Certificate issue or ATS violation.</td>
+          </tr>
+          <tr>
+            <td><code>-1202</code></td>
+            <td>NSURLErrorServerCertificateUntrusted</td>
+            <td>Server cert not trusted. Expired cert, wrong domain, or missing intermediate.</td>
+          </tr>
+          <tr>
+            <td><code>-999</code></td>
+            <td>NSURLErrorCancelled</td>
+            <td>Task was cancelled. Often expected &mdash; but if unexpected, check Task lifecycle.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- SSL Pinning -->
+    <h2>SSL Pinning Failures: The Silent App Killer</h2>
+
+    <p>SSL pinning is security that verifies the server&rsquo;s certificate matches what your app expects. When it fails, the connection is silently refused &mdash; no helpful error dialog, just &ldquo;network error.&rdquo;</p>
+
+    <div class="root-cause">
+      <h4>Root Cause: SSL Pinning Failure After Certificate Rotation</h4>
+      <p><strong>Symptom:</strong> App works fine in development, fails in production for 30% of users. Error: <code>NSURLErrorSecureConnectionFailed (-1200)</code>.</p>
+      <p><strong>Cause:</strong> The server&rsquo;s SSL certificate was rotated to a new Certificate Authority. The app pins to the old CA&rsquo;s public key. Users who got the new certificate from CDN edge servers get failures; users hitting cached old cert still work.</p>
+      <p><strong>Fix:</strong> Pin to the <strong>public key hash</strong> (SPKI), not the full certificate. Include both the current and next CA&rsquo;s key hashes. Always have a backup pin. Implement a kill-switch URL that disables pinning in emergencies.</p>
+      <p><strong>Prevention:</strong> Claude Code&rsquo;s <code>/analyze-network</code> skill flags single-pin configurations as a risk during code review.</p>
+    </div>
+
+    <div class="warning-box">
+      <strong>SSL Pinning + Debug Proxies:</strong> If your app uses SSL pinning, Proxyman and Charles Proxy won&rsquo;t work out of the box &mdash; the proxy&rsquo;s certificate won&rsquo;t match your pins. You need a <code>#if DEBUG</code> flag to disable pinning during development, or use Proxyman&rsquo;s built-in SSL Pinning bypass for the iOS simulator.
+    </div>
+
+    <!-- async/await Networking -->
+    <h2>async/await Networking Pitfalls</h2>
+
+    <p>Swift concurrency changed how we write network code. It also introduced new categories of bugs:</p>
+
+    <h3>Pitfall 1: Forgotten Cancellation</h3>
+
+    <pre><code>// This Task lives forever even if the view disappears
+Task {
+    let (data, _) = try await URLSession.shared.data(from: feedURL)
+    let feed = try JSONDecoder().decode(Feed.self, from: data)
+    self.items = feed.items  // May update a deallocated view
+}</code></pre>
+
+    <div class="fix-pattern">
+      <h4>Fix: Use <code>.task</code> Modifier for View-Scoped Network Calls</h4>
+<pre><code>// .task is automatically cancelled when the view disappears
+.task {
+    do {
+        let (data, _) = try await URLSession.shared.data(from: feedURL)
+        let feed = try JSONDecoder().decode(Feed.self, from: data)
+        self.items = feed.items
+    } catch is CancellationError {
+        // Expected — view disappeared. Do nothing.
+    } catch {
+        self.errorMessage = error.localizedDescription
+    }
+}</code></pre>
+      <p><strong>Why this matters:</strong> Unscoped <code>Task { }</code> blocks don&rsquo;t cancel when the view disappears. The request completes, the decode runs, and the result tries to update state on a view that no longer exists. With <code>.task</code>, SwiftUI cancels the task automatically.</p>
+    </div>
+
+    <h3>Pitfall 2: Serial Requests That Should Be Parallel</h3>
+
+    <pre><code>// BAD: These run one after another — 3 network round trips
+let user = try await fetchUser()
+let posts = try await fetchPosts(for: user.id)
+let notifications = try await fetchNotifications()
+// Total time: fetchUser + fetchPosts + fetchNotifications
+
+// GOOD: Parallel where possible
+let user = try await fetchUser()
+async let posts = fetchPosts(for: user.id)
+async let notifications = fetchNotifications()
+// posts and notifications run in parallel after user completes
+let (p, n) = try await (posts, notifications)
+// Total time: fetchUser + max(fetchPosts, fetchNotifications)</code></pre>
+
+    <h3>Pitfall 3: Codable Decoding on the Main Thread</h3>
+
+    <p>By default, <code>URLSession.shared.data(from:)</code> returns on an arbitrary thread, but if you&rsquo;re in a <code>@MainActor</code> context, the decoding happens on the main thread. Large JSON payloads can cause a noticeable hitch:</p>
+
+    <div class="fix-pattern">
+      <h4>Fix: Decode Off the Main Actor</h4>
+<pre><code>// Move heavy decoding off MainActor
+func loadFeed() async throws -> Feed {
+    let (data, _) = try await URLSession.shared.data(from: feedURL)
+
+    // Decode on a background thread
+    return try await Task.detached(priority: .userInitiated) {
+        try JSONDecoder().decode(Feed.self, from: data)
+    }.value
+}</code></pre>
+    </div>
+
+    <!-- Build the /analyze-network skill -->
+    <h2>Build It: The <code>/analyze-network</code> Skill</h2>
+
+    <div class="fix-pattern">
+      <h4>/analyze-network &mdash; Claude Code Skill</h4>
+      <p>Create <code>.claude/commands/analyze-network.md</code>:</p>
+<pre><code># /analyze-network
+
+Analyze iOS network debugging data. The user will provide one or more of:
+URLSession logs, Proxyman/Charles exports, URLSessionTaskMetrics output,
+NSURLError codes, or Swift networking source code.
+
+## Analysis Steps
+
+1. **Identify failing requests** — which URLs fail, with what error codes?
+2. **Classify the failure** — timeout, SSL, DNS, server error (4xx/5xx),
+   Codable decoding, cancellation?
+3. **Check timing patterns** — retry storms, serial-when-should-be-parallel,
+   missing timeout configuration?
+4. **Review SSL/ATS config** — pinning issues, missing ATS exceptions,
+   insecure transport?
+5. **Audit async/await patterns** — unscoped Tasks, missing cancellation
+   handling, main-thread decoding?
+
+## Output Format
+
+For each issue found:
+- **Request:** [method + URL]
+- **Error:** [code + description]
+- **Root cause:** [specific diagnosis]
+- **Fix:** [code change with example]
+- **Risk if unfixed:** [user impact]</code></pre>
+    </div>
+
+    <!-- URLSessionConfiguration -->
+    <h2>URLSessionConfiguration: The Hidden Settings Panel</h2>
+
+    <p>Most iOS developers use <code>URLSession.shared</code> and never think about configuration. That&rsquo;s like driving a car without adjusting the mirrors. Key settings AI audits:</p>
+
+    <div class="checklist">
+      <ul>
+        <li><strong><code>timeoutIntervalForRequest</code></strong> &mdash; Default is 60 seconds. Too long for mobile. Set to 15-30 seconds for API calls.</li>
+        <li><strong><code>timeoutIntervalForResource</code></strong> &mdash; Default is 7 days (!). The total time allowed for a resource transfer. Set this for file downloads.</li>
+        <li><strong><code>waitsForConnectivity</code></strong> &mdash; Default is false. When true, URLSession waits for network instead of failing immediately. Great for offline-to-online transitions.</li>
+        <li><strong><code>httpMaximumConnectionsPerHost</code></strong> &mdash; Default is 6. Reduce if your server has connection limits. Increase for CDN-backed APIs.</li>
+        <li><strong><code>requestCachePolicy</code></strong> &mdash; Default is <code>.useProtocolCachePolicy</code>. Audit this if stale data is a problem.</li>
+        <li><strong><code>multipathServiceType</code></strong> &mdash; Set to <code>.handover</code> for apps that need seamless WiFi-to-cellular transitions.</li>
+      </ul>
+    </div>
+
+    <!-- Performance Metrics -->
+    <h2>Measuring Network Performance</h2>
+
+    <div class="performance-metric">
+      <h4>Before/After: Network Optimization</h4>
+      <div class="metric-before">
+        <strong>Before (No optimization)</strong><br>
+        3 serial API calls: user + posts + notifications<br>
+        Average total time: <strong>2,400ms</strong><br>
+        No connection reuse (new TCP+TLS per request)<br>
+        60s default timeout &times; 3 retries = <strong>3 min worst case</strong>
+      </div>
+      <div class="metric-after">
+        <strong>After (AI-suggested optimizations)</strong><br>
+        1 serial (user) + 2 parallel (posts, notifications)<br>
+        Average total time: <strong>1,100ms</strong> (-54%)<br>
+        HTTP/2 connection reuse: TLS handshake once<br>
+        15s timeout + exponential backoff = <strong>45s worst case</strong>
+      </div>
+    </div>
+
+    <!-- Xcode 26 AI + Claude Code -->
+    <h2>Xcode 26 AI vs Claude Code for Network Debugging</h2>
+
+    <div class="comparison">
+      <div class="tool-card">
+        <span class="tool-icon">🍎</span>
+        <h4>Xcode 26 Swift Assist</h4>
+        <p><strong>Best for:</strong> Quick fixes inline. Select a failing <code>URLSession</code> call, ask &ldquo;Why is this timing out?&rdquo; or &ldquo;Add proper error handling.&rdquo; Swift Assist generates the <code>do/catch</code> with specific <code>URLError</code> cases. Also good for converting completion-handler code to async/await.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🤖</span>
+        <h4>Claude Code /analyze-network</h4>
+        <p><strong>Best for:</strong> Bulk log analysis. Paste 50 lines of network logs, a Proxyman HAR export, or <code>URLSessionTaskMetrics</code> output. Claude Code spots patterns across requests: retry storms, DNS outliers, slow TLS handshakes, unnecessary sequential calls. Also audits your <code>URLSessionConfiguration</code> and caching strategy.</p>
+      </div>
+      <div class="tool-card">
+        <span class="tool-icon">🔧</span>
+        <h4>XcodeBuildMCP</h4>
+        <p><strong>Best for:</strong> Automated network testing. Build the app, launch in simulator with a specific network configuration, run a test scenario, capture network logs, and feed them to Claude Code &mdash; all in one agent workflow. Useful for regression testing network behavior across iOS versions.</p>
+      </div>
+    </div>
+
+    <!-- Caching Strategy -->
+    <h2>Caching: The Performance Multiplier</h2>
+
+    <p>The fastest network request is one you never make. AI can audit your caching strategy:</p>
+
+    <div class="prompt-example good">
+      <h4>Good Prompt &mdash; Caching Audit</h4>
+<pre><code>/analyze-network
+
+## URLSession configuration:
+let config = URLSessionConfiguration.default
+config.requestCachePolicy = .useProtocolCachePolicy
+config.urlCache = URLCache(
+    memoryCapacity: 10_485_760,   // 10 MB
+    diskCapacity: 52_428_800,      // 50 MB
+    diskPath: "network_cache"
+)
+
+## Server response headers for /api/v2/feed:
+Cache-Control: no-store
+Content-Type: application/json
+
+## Question: The feed endpoint returns the same data for ~5 minutes
+but the server sends no-store. We're making 12 requests/minute
+to the same endpoint. What should we do?</code></pre>
+    </div>
+
+    <p>Claude Code will identify that the server&rsquo;s <code>Cache-Control: no-store</code> header prevents URLCache from caching, and suggest either: (1) asking the backend team to change to <code>Cache-Control: max-age=300</code>, or (2) implementing a client-side response cache with TTL if you can&rsquo;t change the server.</p>
+
+    <!-- Combine Networking -->
+    <h2>Combine Networking Pitfalls</h2>
+
+    <p>If your codebase still uses Combine for networking (pre-async/await), AI catches these patterns:</p>
+
+    <pre><code>// Common Combine pitfall: retry without delay
+URLSession.shared.dataTaskPublisher(for: request)
+    .retry(3)                    // Retries IMMEDIATELY on failure
+    .decode(type: Feed.self, decoder: JSONDecoder())
+    .receive(on: DispatchQueue.main)
+    .sink(receiveCompletion: { _ in }, receiveValue: { feed in
+        self.items = feed.items  // Strong self capture — potential leak
+    })
+    .store(in: &amp;cancellables)</code></pre>
+
+    <p>AI identifies three issues: (1) <code>.retry(3)</code> fires immediately &mdash; add <code>.delay</code> for backoff, (2) strong <code>self</code> capture in <code>sink</code> &mdash; use <code>[weak self]</code>, (3) <code>receiveCompletion</code> ignores errors &mdash; handle <code>.failure</code> case.</p>
+
+    <div class="tip-box">
+      <strong>Migration tip:</strong> Ask Claude Code to convert Combine networking chains to async/await. Feed it the publisher chain and say <code>/refactor to async/await with proper cancellation and error handling</code>. It handles the <code>sink</code>→<code>try await</code>, <code>retry</code>→backoff loop, and <code>[weak self]</code>→structured concurrency conversions.</p>
+    </div>
+
+    <!-- Exercise -->
+    <div class="exercise-box">
+      <h3>Exercise: Diagnose a Failing API Flow</h3>
+      <p><strong>Setup:</strong></p>
+      <ol>
+        <li>Set up Proxyman (or Charles Proxy) to capture simulator traffic</li>
+        <li>In your app, trigger a flow that makes at least 3 API calls (e.g., login → fetch profile → fetch feed)</li>
+        <li>Introduce a failure: set the device to Airplane Mode after the first request succeeds</li>
+      </ol>
+      <p><strong>Steps:</strong></p>
+      <ol>
+        <li>Capture the full request/response log in Proxyman (or use your os_log network logging)</li>
+        <li>Export the session data (Proxyman: File &gt; Export &gt; HAR format)</li>
+        <li>Paste the exported data into Claude Code with <code>/analyze-network</code></li>
+        <li>Review the AI analysis: Does it correctly identify which requests succeeded and failed?</li>
+        <li>Apply the suggested fixes: proper error handling, retry with backoff, <code>waitsForConnectivity</code></li>
+        <li>Re-test: toggle Airplane Mode during the flow and verify graceful degradation</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add <code>URLSessionTaskMetrics</code> logging and compare DNS, TLS, and total timing between WiFi and cellular connections.</p>
+    </div>
+
+    <!-- Key Takeaways -->
+    <div class="highlight-box">
+      <h3>Key Takeaways</h3>
+      <ul>
+        <li><strong>Make your network talk</strong> &mdash; URLSessionTaskMetrics, os_log, or Proxyman. You can&rsquo;t debug what you can&rsquo;t see.</li>
+        <li><strong>NSURLError codes</strong> are your first diagnostic clue &mdash; AI classifies them instantly</li>
+        <li><strong>SSL pinning failures</strong> are silent killers &mdash; always pin to SPKI hash with backup pins</li>
+        <li><strong>Use <code>.task</code></strong> for view-scoped network calls &mdash; automatic cancellation when views disappear</li>
+        <li><strong>Parallelize</strong> independent requests with <code>async let</code> &mdash; don&rsquo;t pay serial round-trip costs</li>
+        <li><strong>Audit URLSessionConfiguration</strong> &mdash; the defaults (60s timeout, 7-day resource timeout) are rarely what you want</li>
+        <li>Build the <strong>/analyze-network</strong> skill for bulk log analysis and configuration audits</li>
+      </ul>
+    </div>
+
+    <!-- Coming Up -->
+    <h2>Coming Up Next</h2>
+
+    <p>Your network calls are fast and resilient &mdash; but every debug-build-test cycle still takes 90 seconds because Xcode is compiling 200 Swift files. In <strong>Chapter 7: Xcode Build Performance</strong>, we&rsquo;ll use AI to analyze build timelines, find slow-to-compile expressions, optimize SPM resolution, and build a <code>/analyze-build</code> skill that tells you exactly where your build time is going.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="05-swiftui-rendering.html" class="prev">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">SwiftUI Rendering Performance</span>
+      </a>
+      <a href="07-xcode-build-performance.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Xcode Build Performance</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

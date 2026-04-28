@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 11: Orchestrating Multi-Step Workflows | Automating Your Dev Workflow with AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Automating Your Dev Workflow with AI</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="10-mcp-servers.html">&larr; Prev</a>
+      <a href="12-automation-playbook.html">Next &rarr;</a>
+      <a href="maps/11-orchestrating-workflows-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 11</span>
+    <h1>Orchestrating Multi-Step Workflows</h1>
+    <p class="subtitle">Chain your automations into end-to-end pipelines that handle complex tasks in one shot</p>
+  </header>
+
+  <main>
+
+    <h2>From Pieces to Pipelines</h2>
+
+    <p>Over the last ten chapters, you&rsquo;ve built an impressive arsenal: skills for code generation and review, hooks for automatic linting and testing, CI/CD workflows for changelogs and deployment checks, productivity agents for standups and digests, and MCP servers for connecting to internal tools.</p>
+
+    <p>Each automation is powerful on its own. But the real transformation happens when you <strong>chain them together</strong> into multi-step workflows that handle entire processes end-to-end.</p>
+
+    <p>Think of it like cooking. You&rsquo;ve learned to chop, saut&eacute;, and season. Now it&rsquo;s time to follow a recipe that turns all those techniques into a complete meal.</p>
+
+    <h2>The Feature-to-PR Pipeline</h2>
+
+    <p>This is the crown jewel &mdash; a single command that takes you from a ticket to a ready-for-review PR:</p>
+
+    <div class="recipe-box">
+      <h3>Building the /feature-pipeline Skill</h3>
+      <ol>
+        <li>Create: <code>.claude/commands/feature-pipeline.md</code></li>
+        <li>Add this content:</li>
+      </ol>
+      <pre><code># Feature Pipeline
+
+Execute the full feature workflow for: **$ARGUMENTS**
+
+This is a multi-step pipeline. Execute each step in order.
+If any step fails, stop and report the failure.
+
+## Step 1: Understand the Task
+- If $ARGUMENTS looks like a ticket ID (e.g., PROJ-1234),
+  fetch the ticket details using the Jira MCP tool
+- If it's a description, use it directly
+- Summarize: what needs to be built?
+
+## Step 2: Create the Branch
+- Derive a branch name from the task: `feature/{ticket-id}-{short-description}`
+- Run `git checkout -b {branch-name}` from the latest main
+
+## Step 3: Scaffold the Code
+- Read CLAUDE.md for architecture patterns
+- Create the necessary files (ViewModel, Repository, UI, etc.)
+- Follow existing patterns in the codebase
+
+## Step 4: Implement the Feature
+- Write the actual implementation based on the task description
+- Follow all rules in CLAUDE.md
+
+## Step 5: Generate Tests
+- Create unit tests for all new classes
+- Use the project's testing patterns (JUnit 5, MockK, Turbine)
+- Run the tests and fix any failures
+
+## Step 6: Lint and Format
+- Run the project linter on all changed files
+- Fix any issues
+
+## Step 7: Create the PR
+- Commit all changes with a conventional commit message
+- Push the branch
+- Generate a PR description from the diff
+- Create the PR using `gh pr create`
+
+## Output
+Report the result of each step.
+End with the PR URL.</code></pre>
+      <ol start="3">
+        <li>Test it: <code>/feature-pipeline PROJ-1234</code> or <code>/feature-pipeline &quot;Add user profile caching&quot;</code></li>
+      </ol>
+    </div>
+
+    <div class="before-after-box">
+      <div class="before">
+        <h4>Feature Development Manually</h4>
+        <ol>
+          <li>Read the Jira ticket (5 min)</li>
+          <li>Create a branch (1 min)</li>
+          <li>Scaffold files manually (15 min)</li>
+          <li>Implement the feature (30+ min)</li>
+          <li>Write tests (20 min)</li>
+          <li>Run linter, fix issues (5 min)</li>
+          <li>Write PR description (5 min)</li>
+          <li>Push and create PR (2 min)</li>
+        </ol>
+        <p><strong>Overhead (excluding implementation): ~50 minutes</strong></p>
+      </div>
+      <div class="after">
+        <h4>With /feature-pipeline</h4>
+        <ol>
+          <li>Run <code>/feature-pipeline PROJ-1234</code></li>
+          <li>Review the generated code and tests</li>
+          <li>Adjust implementation details</li>
+          <li>PR is already created and ready</li>
+        </ol>
+        <p><strong>Overhead: ~5 minutes of review. Pipeline handles the rest.</strong></p>
+      </div>
+    </div>
+
+    <div class="warning-box">
+      <p><strong>Review the output.</strong> A pipeline that generates code, tests, and a PR in one shot is powerful &mdash; and dangerous if you don&rsquo;t review it. Always check the generated code before approving the PR. The pipeline handles the mechanical work; you provide the judgment.</p>
+    </div>
+
+    <h2>Composing Skills into Workflows</h2>
+
+    <p>The feature pipeline works because it calls multiple automations in sequence. You can build the same pattern for any multi-step process:</p>
+
+    <h3>The release workflow</h3>
+
+    <pre><code># File: .claude/commands/release.md
+
+Execute the full release workflow for version: **$ARGUMENTS**
+
+## Steps (in order)
+1. **Version bump**: Update version in build.gradle.kts and version.txt
+2. **Changelog**: Generate changelog entry from commits since last tag
+3. **Release notes**: Generate user-facing release notes for the Play Store
+4. **Validation**: Run full test suite, lint, and deployment pre-checks
+5. **Tag**: Create a git tag for the version
+6. **Commit and push**: Commit version bump + changelog, push with tag
+
+## Error handling
+- If tests fail: STOP. Report failures. Do not tag or push.
+- If lint fails: auto-fix and re-run. If still failing, STOP.
+- If pre-checks fail: STOP. Report what's not ready.
+
+## Output
+Report each step's result. End with:
+- The git tag created
+- A summary of what's in this release
+- The Play Store release notes (ready to paste)</code></pre>
+
+    <h3>The tech debt sprint workflow</h3>
+
+    <pre><code># File: .claude/commands/debt-sprint.md
+
+Run a focused tech debt reduction session.
+
+## Steps
+1. Run the tech debt scan to find current items
+2. Filter to "quick fix" items (< 30 min each)
+3. Pick the top 5 by severity
+4. For each item:
+   a. Create a fix on the current branch
+   b. Run relevant tests to verify the fix
+   c. Commit with message: "chore: fix {description}"
+5. Generate a summary of all fixes
+
+## Rules
+- Only fix items that are clearly safe (no behavioral changes)
+- Skip anything that requires design decisions
+- Run tests after each fix, revert if tests break
+- Stop after 5 items or 30 minutes of work</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Skill chains vs. subagents.</strong> A composed skill (like the ones above) runs every step inside your main conversation &mdash; great for sequential pipelines you want to watch. When a step would flood your context with logs or search results, or when you want a step to use its own tool allowlist and even its own model, use a <strong>subagent</strong> instead. Subagents live in <code>.claude/agents/&lt;name&gt;.md</code> (project-shared) or <code>~/.claude/agents/&lt;name&gt;.md</code> (personal), with frontmatter for <code>name</code>, <code>description</code>, <code>tools</code>, and <code>model</code>. Claude delegates to them automatically based on the description, or you can invoke one directly with <code>@agent-name</code>. They&rsquo;re the natural next layer above skill chains for jobs like code review, security audits, or test generation that benefit from context isolation.</p>
+    </div>
+
+    <h2>Scheduled Agents for Maintenance</h2>
+
+    <p>Some workflows should run on their own, on a schedule. You set them up once and they keep your project healthy without any input:</p>
+
+    <pre><code>#!/bin/bash
+# scripts/weekly-maintenance.sh — Run every Monday via cron
+
+echo "=== Weekly Maintenance: $(date) ===" >> maintenance.log
+
+# 1. Dependency check
+claude -p "Check for outdated or vulnerable dependencies in this project.
+Report any that need updating." --allowedTools "Read,Bash(./gradlew*),Bash(cat*)" \
+  >> maintenance.log 2>&1
+
+# 2. Documentation freshness
+claude -p "Check if documentation files (README.md, docs/*) are still
+accurate compared to the current code. Report any stale sections." \
+  --allowedTools "Read,Bash(git log*)" \
+  >> maintenance.log 2>&1
+
+# 3. Test coverage gaps
+claude -p "Find source files that have no corresponding test files.
+List the top 5 most critical untested files." \
+  --allowedTools "Read,Bash(find*)" \
+  >> maintenance.log 2>&1
+
+# 4. Tech debt scan
+claude -p "Count TODO, FIXME, and HACK comments in the codebase.
+Compare with last week's count if available in maintenance.log." \
+  --allowedTools "Read,Bash(grep*)" \
+  >> maintenance.log 2>&1
+
+echo "=== Maintenance Complete ===" >> maintenance.log</code></pre>
+
+    <pre><code># Add to crontab: crontab -e
+# Run every Monday at 8 AM
+0 8 * * 1 cd /home/user/projects/myapp && bash scripts/weekly-maintenance.sh</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Flag cheat-sheet for one-off automations.</strong> <code>--allowedTools</code> auto-approves tools you list (skipping the permission prompt). <code>--tools</code> restricts <em>which</em> tools are even available. <code>--disallowedTools</code> is an explicit blocklist. For headless scripts running in cron, prefer <code>--tools</code> for a tight allowlist over an empty <code>--allowedTools ""</code>.</p>
+    </div>
+
+    <h2>Remote Triggers: Event-Driven Workflows</h2>
+
+    <p>Scheduled agents run on a clock. Remote triggers run on <em>events</em> &mdash; a Slack message, a Jira ticket transition, a webhook from your monitoring system.</p>
+
+    <pre><code># .github/workflows/on-issue-created.yml
+name: Auto-Triage New Issues
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Triage with Claude Code
+        id: triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: '--tools "Read,Bash(git log*)"'
+          prompt: |
+            Triage this GitHub issue:
+              Title: ${{ github.event.issue.title }}
+              Body: ${{ github.event.issue.body }}
+
+              1. Categorize: bug / feature request / question / documentation
+              2. Estimate severity: critical / high / medium / low
+              3. Suggest labels
+              4. If it's a bug, suggest which area of code to investigate
+              5. If it's a feature, note if similar features exist
+
+              Save the result to triage.md as a concise comment.
+
+      - name: Post triage comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const triage = fs.readFileSync('triage.md', 'utf8');
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## Auto-Triage\n\n${triage}\n\n---\n*Automated by Claude Code*`
+            });</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The official action vs. the manual install.</strong> <code>anthropics/claude-code-action@v1</code> bundles install + run + auth into a single step and accepts <code>prompt</code> and <code>claude_args</code> inputs. Use <code>claude_args</code> to pass any CLI flag &mdash; <code>--tools</code> to restrict tool availability, <code>--disallowedTools</code> for an explicit blocklist, <code>--max-turns</code>, <code>--model</code>, etc. <code>--allowedTools</code> still works (it controls auto-approval), but <code>--tools</code> is the modern flag for limiting <em>which</em> tools the agent can invoke at all.</p>
+    </div>
+
+    <div class="automation-box">
+      <p><strong>The best workflows are invisible.</strong> When an issue is created, it&rsquo;s automatically triaged. When a PR is merged, the changelog updates itself. When a dependency has a CVE, an issue is created with the fix. You don&rsquo;t run these workflows &mdash; they run themselves. That&rsquo;s the goal of orchestration: a project that maintains itself while you focus on building features.</p>
+    </div>
+
+    <h2>Error Recovery Patterns</h2>
+
+    <p>Multi-step workflows will fail. A test breaks, a push is rejected, a network call times out. Good orchestration handles failure gracefully:</p>
+
+    <h3>Pattern 1: Stop and report</h3>
+
+    <pre><code># In your skill: the safest default
+If any step fails:
+- Stop execution immediately
+- Report which step failed and why
+- List what was completed successfully
+- Suggest how to fix the failure and resume</code></pre>
+
+    <h3>Pattern 2: Retry with backoff</h3>
+
+    <pre><code>#!/bin/bash
+# Retry a flaky step up to 3 times
+retry() {
+  local max_attempts=3
+  local attempt=1
+  while [ $attempt -le $max_attempts ]; do
+    if "$@"; then
+      return 0
+    fi
+    echo "Attempt $attempt failed. Retrying in $((attempt * 5))s..."
+    sleep $((attempt * 5))
+    attempt=$((attempt + 1))
+  done
+  echo "Failed after $max_attempts attempts"
+  return 1
+}
+
+# Usage
+retry ./gradlew test --tests "*UserViewModelTest"</code></pre>
+
+    <h3>Pattern 3: Fallback</h3>
+
+    <pre><code># In your skill
+If the full test suite times out:
+- Fall back to running only the tests for changed files
+- Note in the PR description that full suite was not run
+- Add a CI check that runs the full suite asynchronously</code></pre>
+
+    <div class="tip-box">
+      <p><strong>Default to &ldquo;stop and report.&rdquo;</strong> Automatic retries and fallbacks are useful for known-flaky operations (network calls, CI runners), but for most failures, you want to know about them immediately. A pipeline that silently retries a broken test three times is hiding a real problem.</p>
+    </div>
+
+    <h2>Multi-Repo Automation</h2>
+
+    <p>Some changes span multiple repositories &mdash; updating an SDK and all the apps that consume it, or changing an API and its clients simultaneously:</p>
+
+    <pre><code># File: .claude/commands/multi-repo-update.md
+
+Coordinate a change across multiple repositories.
+
+## Context
+$ARGUMENTS describes the change that needs to happen across repos.
+
+## Steps
+1. Read the change description
+2. Identify which repos are affected (check the repos listed below)
+3. For each affected repo:
+   a. Clone or navigate to it
+   b. Create a feature branch with the same name
+   c. Make the required changes
+   d. Run tests
+   e. Create a PR with a description that links to the other PRs
+4. Create a tracking issue that links all PRs together
+
+## Our repositories
+- `myapp-android` — Android client
+- `myapp-backend` — API server
+- `myapp-shared` — Shared models and utilities
+
+## Rules
+- All PRs should have the same branch name for traceability
+- Each PR description links to the tracking issue
+- Note any deployment ordering requirements</code></pre>
+
+    <h2>Monitoring Your Automations</h2>
+
+    <p>As you build more workflows, you need to know when they succeed and when they fail. Build a simple monitoring layer:</p>
+
+    <pre><code>#!/bin/bash
+# scripts/automation-monitor.sh — Log automation results
+# Source this in your automation scripts
+
+log_automation() {
+  local name="$1"
+  local status="$2"  # success or failure
+  local details="$3"
+
+  echo "$(date +%Y-%m-%d\ %H:%M) | $name | $status | $details" \
+    >> ~/.claude/automation.log
+}
+
+# Usage in your scripts:
+# source scripts/automation-monitor.sh
+# log_automation "weekly-maintenance" "success" "4 items checked"
+# log_automation "feature-pipeline" "failure" "Tests failed at step 5"</code></pre>
+
+    <pre><code># File: ~/.claude/commands/automation-status.md
+
+Review the automation health dashboard.
+
+## Steps
+1. Read ~/.claude/automation.log
+2. Summarize the last 7 days of automation runs
+
+## Report
+- **Total runs**: X automations executed
+- **Success rate**: X%
+- **Failures**: list each with timestamp, name, and reason
+- **Most used**: top 3 automations by frequency
+- **Suggestions**: any automations that fail frequently and need attention</code></pre>
+
+    <h2>When NOT to Automate</h2>
+
+    <p>Not everything should be a pipeline. Automation adds value when it eliminates repetitive, well-defined work. It adds complexity when the process is still evolving or requires human judgment at every step.</p>
+
+    <div class="highlight-box">
+      <h3>Don&rsquo;t Automate When...</h3>
+      <p><strong>The process changes weekly.</strong> If you&rsquo;re still figuring out the right workflow, automating it locks in a process that&rsquo;s not ready to be locked in.</p>
+      <p><strong>Every case is unique.</strong> If the task requires different judgment calls each time, a pipeline will either be too rigid or too complex.</p>
+      <p><strong>The setup cost exceeds the lifetime savings.</strong> A workflow you run once a quarter doesn&rsquo;t need a pipeline. A one-liner with <code>claude -p</code> is fine.</p>
+      <p><strong>Failure is catastrophic.</strong> Automated deployments to production need extensive guardrails. If you&rsquo;re not ready to build those guardrails, keep a human in the loop.</p>
+    </div>
+
+    <h2>The Orchestration Maturity Model</h2>
+
+    <div class="workflow-steps">
+      <div class="step">Manual</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Single Skills</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Chained Workflows</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Event-Driven</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Self-Maintaining</div>
+    </div>
+
+    <ul>
+      <li><strong>Manual:</strong> You do each step by hand</li>
+      <li><strong>Single skills:</strong> Each step is a /command, but you invoke them individually</li>
+      <li><strong>Chained workflows:</strong> A master skill executes multiple steps in sequence</li>
+      <li><strong>Event-driven:</strong> Workflows trigger on events (PRs, issues, schedules) without human initiation</li>
+      <li><strong>Self-maintaining:</strong> Automations monitor each other, report health, and flag when they need updating</li>
+    </ul>
+
+    <p>You don&rsquo;t have to reach the top of this ladder for everything. Most workflows should live at &ldquo;chained&rdquo; or &ldquo;event-driven.&rdquo; Self-maintaining is for your most critical, most stable processes.</p>
+
+    <h2>Exercise: Build an End-to-End Workflow</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Create Your Feature-to-PR Pipeline</h3>
+      <p>Build a multi-step workflow that matches your actual development process. About 20 minutes.</p>
+
+      <h4>Step 1: Design your pipeline</h4>
+      <ol>
+        <li>Write down the steps you follow from &ldquo;start feature&rdquo; to &ldquo;PR ready for review&rdquo;</li>
+        <li>Mark which steps are mechanical (automate) vs. judgment-heavy (keep manual)</li>
+        <li>Identify which existing skills from this course each step maps to</li>
+      </ol>
+
+      <h4>Step 2: Build the pipeline skill</h4>
+      <ol>
+        <li>Create <code>.claude/commands/feature-pipeline.md</code></li>
+        <li>List each automated step in order</li>
+        <li>Add error handling: what happens if tests fail? If linting fails?</li>
+        <li>Add a summary output at the end</li>
+      </ol>
+
+      <h4>Step 3: Test it</h4>
+      <ol>
+        <li>Pick a small, well-defined task</li>
+        <li>Run <code>/feature-pipeline &quot;Add a loading indicator to the profile screen&quot;</code></li>
+        <li>Review every generated file</li>
+        <li>Note what the pipeline got right and what needs manual adjustment</li>
+        <li>Iterate on the skill based on what you learned</li>
+      </ol>
+
+      <p><strong>Bonus:</strong> Add a monitoring step &mdash; log each pipeline run to <code>~/.claude/automation.log</code> with the task name, duration, and outcome. Run <code>/automation-status</code> after a week to see your pipeline health.</p>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>You&rsquo;ve now built the complete automation stack &mdash; from simple skills to multi-step pipelines to event-driven workflows. You have the tools, the patterns, and the experience.</p>
+
+    <p>In <strong>Chapter 12: Your Automation Playbook</strong>, we tie everything together into a personal strategy. How to audit your workflow for new automation opportunities. How to prioritize what to build next. How to introduce automation to your team. How to measure ROI. And a 30-day challenge that puts it all into practice.</p>
+
+    <p>Let&rsquo;s write your playbook.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="10-mcp-servers.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">MCP Servers for Your Team</span>
+      </a>
+      <a href="12-automation-playbook.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">Your Automation Playbook</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

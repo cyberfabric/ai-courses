@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 9: AI-Assisted Profiling | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="08-battery-power.html">&larr; Prev</a>
+      <a href="10-flaky-tests.html">Next &rarr;</a>
+      <a href="maps/09-ai-assisted-profiling-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 9</span>
+    <h1>AI-Assisted Profiling</h1>
+    <p class="subtitle">Android Studio shows the graphs &mdash; AI explains what they actually mean</p>
+  </header>
+
+  <main>
+
+    <h2>The Profiler Data Gap</h2>
+
+    <p>Chapters 1&ndash;8 tackled specific problems: crashes, ANRs, memory leaks, battery drain. But sometimes the bug report is just &ldquo;the app feels slow.&rdquo; No stacktrace. No crash. Just&hellip; jank. That&rsquo;s when you reach for the profiler.</p>
+
+    <p>Android Studio&rsquo;s profiler is powerful. It shows CPU flame charts, memory allocation timelines, network request waterfalls, and system-level traces. The problem? <strong>Reading profiler output is a skill unto itself.</strong> Most developers open the profiler, see a wall of colored bars, and close it again.</p>
+
+    <p>This is where AI shines. You extract the key data from the profiler, feed it to Claude Code, and get a plain-English explanation of what&rsquo;s consuming your CPU, why your memory is spiking, and which frames are being dropped.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">67%</span>
+        <span class="stat-label">of Android devs have the profiler but rarely use it effectively</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">3 types</span>
+        <span class="stat-label">of profiling: CPU, Memory, and System Trace (Perfetto)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">16 ms</span>
+        <span class="stat-label">per frame budget &mdash; anything over this causes visible jank</span>
+      </div>
+    </div>
+
+    <h2>CPU Profiling: Method Traces</h2>
+
+    <p>A CPU method trace records which methods your app calls, how long each takes, and how many times each is called. It&rsquo;s a snapshot of where your CPU time goes.</p>
+
+    <h3>Capturing a Method Trace</h3>
+
+    <pre><code># From Android Studio:
+# 1. Open Profiler (View → Tool Windows → Profiler)
+# 2. Select your app process
+# 3. Click the CPU section
+# 4. Click "Record" → choose "Sample Java/Kotlin Methods"
+# 5. Interact with the app (scroll, navigate, etc.)
+# 6. Click "Stop" to end recording
+# 7. Right-click the recording → "Export Trace"
+
+# From command line (for CI or scripted captures):
+# Start recording:
+adb shell am profile start com.example.myapp /data/local/tmp/cpu.trace
+# Use the app...
+# Stop recording:
+adb shell am profile stop com.example.myapp
+adb pull /data/local/tmp/cpu.trace</code></pre>
+
+    <h3>Reading the Data for AI</h3>
+
+    <p>The profiler shows a flame chart and a &ldquo;Top Down&rdquo; / &ldquo;Bottom Up&rdquo; method list. For Claude Code, extract the &ldquo;Top Down&rdquo; view &mdash; it shows the hot methods with call counts and wall-clock time.</p>
+
+    <div class="debug-trace">
+      <h4>CPU Profile: Hot Methods During Product List Scroll</h4>
+<pre><code>Top methods by wall-clock time (5-second capture during scroll):
+
+Method                                          Self Time   Total Time  Count
+──────────────────────────────────────────────────────────────────────────
+ProductAdapter.onBindViewHolder()                   2ms       847ms      48
+  ├─ ProductImageLoader.loadImage()                12ms       612ms      48
+  │    ├─ BitmapFactory.decodeStream()            389ms       389ms      48
+  │    └─ ImageUtils.roundCorners()               198ms       198ms      48
+  ├─ PriceFormatter.format()                        8ms       142ms      48
+  │    └─ NumberFormat.getInstance()               127ms       127ms      48
+  └─ ProductAdapter.calculateDiscount()             83ms        83ms      48
+RenderThread.draw()                                 -         234ms     312
+  └─ CanvasContext.draw()                         234ms       234ms     312
+GC (concurrent mark-sweep)                        156ms       156ms      12</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) <code>BitmapFactory.decodeStream()</code></strong> is the biggest single consumer at 389ms &mdash; decoding images on every <code>onBindViewHolder</code> call means no image caching. Each scroll recycles views and re-decodes bitmaps from scratch. <strong>(2) <code>NumberFormat.getInstance()</code></strong> is called 48 times at 127ms total &mdash; it&rsquo;s creating a new <code>NumberFormat</code> instance for every item instead of reusing one. <strong>(3) 12 GC pauses</strong> in 5 seconds indicates heavy allocation pressure, likely from the bitmap decoding. <strong>(4) <code>ImageUtils.roundCorners()</code></strong> creates a new bitmap per item &mdash; should use rounded corner clipping in the ImageView or Compose instead.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: No Image Caching + Object Allocation in Bind</h4>
+      <p>Every call to <code>onBindViewHolder</code> decodes a full bitmap from disk, rounds its corners (creating another bitmap), and instantiates a new <code>NumberFormat</code>. For a list of 48 visible items, this means 96 bitmap allocations and 48 <code>NumberFormat</code> instances per scroll gesture. The GC can&rsquo;t keep up, causing 156ms of GC pauses that directly produce janky frames.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Use Coil/Glide for Image Caching + Reuse Formatters</h4>
+<pre><code>// BEFORE: Manual bitmap loading in onBindViewHolder
+override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+    val product = products[position]
+    val bitmap = BitmapFactory.decodeStream(openImage(product.imageUrl))
+    val rounded = ImageUtils.roundCorners(bitmap, 12f)
+    holder.imageView.setImageBitmap(rounded)
+    holder.price.text = PriceFormatter.format(product.price)
+}
+
+// AFTER: Coil for images, cached formatter
+class ProductAdapter : ListAdapter&lt;Product, ViewHolder&gt;(...) {
+    // Create once, reuse across all binds
+    private val priceFormat = NumberFormat.getCurrencyInstance()
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val product = products[position]
+
+        // Coil handles caching, decoding, and memory management
+        holder.imageView.load(product.imageUrl) {
+            crossfade(true)
+            transformations(RoundedCornersTransformation(12f))
+            memoryCachePolicy(CachePolicy.ENABLED)
+        }
+
+        holder.price.text = priceFormat.format(product.price)
+    }
+}</code></pre>
+      <p><strong>Key changes:</strong> (1) Coil (or Glide) handles bitmap decoding, memory caching, disk caching, and recycling. No manual <code>BitmapFactory</code> calls. (2) Rounded corners via Coil transformation instead of creating a new bitmap. (3) Single <code>NumberFormat</code> instance reused across all binds.</p>
+    </div>
+
+    <h2>Building a <code>/profile-cpu</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/profile-cpu.md</code>:</p>
+
+    <pre><code># /profile-cpu — CPU Profile Analysis
+
+Analyze CPU profiling data from Android Studio method traces.
+
+## Input
+The user will paste a "Top Down" or "Bottom Up" method summary from
+the Android Studio CPU profiler, including method names, self time,
+total time, and call counts.
+
+## Analysis Steps
+
+1. **Identify the top 5 methods by total time** — these are the
+   hottest code paths.
+
+2. **Look for allocation-heavy patterns:**
+   - Object creation inside loops or RecyclerView.onBindViewHolder
+   - New instances where a cached instance should be reused
+   - Bitmap operations without image loading library
+
+3. **Check for main-thread violations:**
+   - IO operations (disk, network) on the main thread
+   - JSON parsing or heavy computation during UI rendering
+
+4. **Analyze GC pressure:**
+   - Frequent GC pauses indicate allocation pressure
+   - Each GC pause directly causes dropped frames
+
+5. **Correlate with frame timing:**
+   - RenderThread time > 16ms = dropped frames
+   - Identify which user-code methods push over budget
+
+## Output Format
+
+### Top CPU Consumers
+[Ranked list with time, count, and impact]
+
+### Allocation Issues
+[Objects being created where they shouldn't be]
+
+### Main Thread Violations
+[IO or heavy work on the main thread]
+
+### Frame Budget Analysis
+[Which methods push frames over 16ms]
+
+### Optimization Suggestions
+```kotlin
+[Specific code changes, ranked by impact]
+```</code></pre>
+
+    <h2>Memory Profiling: Allocation Tracking</h2>
+
+    <p>CPU profiling tells you <em>what&rsquo;s slow</em>. Memory profiling tells you <em>what&rsquo;s allocating too much</em>. Together, they paint a complete picture.</p>
+
+    <h3>Capturing Allocation Data</h3>
+
+    <pre><code># In Android Studio Profiler:
+# 1. Select the Memory section
+# 2. Click "Record Java/Kotlin Allocations"
+# 3. Perform the slow action (scroll, navigate, etc.)
+# 4. Click "Stop"
+# 5. Sort by "Shallow Size" or "Allocation Count"</code></pre>
+
+    <p>Extract the top allocators for Claude Code:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here are the top allocations during a 5-second scroll of our product list:
+
+Class                   Alloc Count   Shallow Size
+Bitmap                  96            24.3 MB
+byte[]                  1,847         8.2 MB
+String                  3,421         1.8 MB
+ProductViewState        192           0.4 MB
+NumberFormat             48            0.1 MB
+
+Total allocations: 8,247 objects in 5 seconds
+GC pauses: 12 (total 156ms)
+
+Why are there 96 Bitmap allocations for a list with 48 visible items?</div>
+      <div class="prompt-explanation">The specific question "why 96 for 48 items" tells AI to look for double-allocation patterns — likely original decode + rounded copy.</div>
+    </div>
+
+    <h2>System Trace (Perfetto) Analysis</h2>
+
+    <p>CPU and memory profilers show your app&rsquo;s code. System traces (Perfetto) show <em>everything</em>: your app, the system framework, the GPU, the scheduler, and thread interactions. This is the nuclear option for &ldquo;where are my frames going?&rdquo;</p>
+
+    <h3>Capturing a System Trace</h3>
+
+    <pre><code># From Android Studio:
+# Profiler → CPU → Record → "System Trace"
+
+# From command line (Perfetto):
+adb shell perfetto \
+    -c - --txt \
+    -o /data/misc/perfetto-traces/trace.perfetto-trace \
+    &lt;&lt;EOF
+buffers: {
+    size_kb: 63488
+    fill_policy: RING_BUFFER
+}
+data_sources: {
+    config {
+        name: "linux.ftrace"
+        ftrace_config {
+            ftrace_events: "sched/sched_switch"
+            ftrace_events: "power/suspend_resume"
+            ftrace_events: "sched/sched_wakeup"
+            atrace_categories: "view"
+            atrace_categories: "gfx"
+            atrace_categories: "am"
+            atrace_apps: "com.example.myapp"
+        }
+    }
+}
+duration_ms: 10000
+EOF
+
+adb pull /data/misc/perfetto-traces/trace.perfetto-trace</code></pre>
+
+    <p>Open the trace at <code>ui.perfetto.dev</code> or in Android Studio. The timeline shows each frame as a colored block. Green = on time, yellow = slightly late, red = janky.</p>
+
+    <h3>Extracting Perfetto Data for AI</h3>
+
+    <p>You can&rsquo;t paste a Perfetto trace file into Claude Code, but you can extract the frame timing summary:</p>
+
+    <pre><code># In Perfetto UI, look for:
+# - "Choreographer#doFrame" durations
+# - Any frame > 16ms (60 FPS) or > 8ms (120 FPS)
+# - "RenderThread" durations
+
+# Extract the janky frames:
+Frame 1: Choreographer doFrame 8.2ms ✓
+Frame 2: Choreographer doFrame 7.1ms ✓
+Frame 3: Choreographer doFrame 42.8ms ✗ JANK
+  └─ inflate: 18.3ms
+  └─ measure: 12.4ms
+  └─ layout: 8.7ms
+  └─ draw: 3.4ms
+Frame 4: Choreographer doFrame 6.9ms ✓
+Frame 5: Choreographer doFrame 38.1ms ✗ JANK
+  └─ bindViewHolder: 31.2ms</code></pre>
+
+    <div class="tip-box">
+      When feeding frame timing to Claude Code, include the breakdown for <strong>janky frames only</strong>. Don&rsquo;t paste 300 frames that are fine &mdash; focus on the ones that exceeded the budget. AI can diagnose the root cause from the breakdown of the slow frames.
+    </div>
+
+    <h2>Frame Rendering Analysis</h2>
+
+    <p>Dropped frames are what users <em>feel</em> as jank. Here&rsquo;s how to systematically identify the cause:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Capture trace</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Find janky frames</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Extract breakdown</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Feed to AI</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Fix hotspot</span>
+    </div>
+
+    <p>The frame breakdown tells you <em>which phase</em> of rendering is over budget:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Phase</th>
+          <th>What It Does</th>
+          <th>Common Cause If Slow</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Input</strong></td>
+          <td>Process touch events</td>
+          <td>Heavy work in onClick, onTouch handlers</td>
+        </tr>
+        <tr>
+          <td><strong>Animation</strong></td>
+          <td>Update animation values</td>
+          <td>Too many concurrent animations, complex interpolators</td>
+        </tr>
+        <tr>
+          <td><strong>Measure/Layout</strong></td>
+          <td>Calculate view sizes and positions</td>
+          <td>Deep view hierarchy, nested weights, repeated measure passes</td>
+        </tr>
+        <tr>
+          <td><strong>Draw</strong></td>
+          <td>Record draw commands</td>
+          <td>Complex custom drawing, large bitmap operations</td>
+        </tr>
+        <tr>
+          <td><strong>Sync/Upload</strong></td>
+          <td>Send textures to GPU</td>
+          <td>Large/uncompressed bitmaps, too many layers</td>
+        </tr>
+        <tr>
+          <td><strong>GPU/Render</strong></td>
+          <td>Execute draw commands on GPU</td>
+          <td>Overdraw, complex shaders, large surface area</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Combining Profiler Data with Code Context</h2>
+
+    <p>The most powerful technique: feed both profiler output <em>and</em> the source code to Claude Code. This lets AI connect the performance data to specific implementation choices.</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">This composable renders a product card in our LazyColumn. During scroll, each card takes 28ms to compose (should be < 8ms). Here's the CPU profile hot methods:
+
+onBindViewHolder: 28ms total
+  ├─ ProductCard composition: 22ms
+  │    ├─ calculateShippingEstimate(): 14ms (network lookup!)
+  │    └─ formatRelativeDate(): 5ms
+  └─ image decode: 6ms
+
+And here's the composable code:
+
+@Composable
+fun ProductCard(product: Product) {
+    val shipping = calculateShippingEstimate(product.warehouse)
+    val dateText = formatRelativeDate(product.createdAt)
+    // ... UI code
+}</div>
+      <div class="prompt-explanation">AI immediately spots: calculateShippingEstimate() should not be called during composition — it's a synchronous function that takes 14ms. Move it to the ViewModel and pass the result as a parameter.</div>
+    </div>
+
+    <h2>Measuring Profiling-Driven Optimization</h2>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: Unoptimized Product List</h4>
+        <p><strong>Frame time (P50):</strong> 22 ms</p>
+        <p><strong>Frame time (P95):</strong> 47 ms</p>
+        <p><strong>Dropped frames per scroll:</strong> 31%</p>
+        <p><strong>GC pauses (5s window):</strong> 12</p>
+        <p><strong>Memory allocated (5s scroll):</strong> 34 MB</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: Coil + Cached Formatters + ViewModel</h4>
+        <p><strong>Frame time (P50):</strong> 6 ms</p>
+        <p><strong>Frame time (P95):</strong> 11 ms</p>
+        <p><strong>Dropped frames per scroll:</strong> 0.8%</p>
+        <p><strong>GC pauses (5s window):</strong> 1</p>
+        <p><strong>Memory allocated (5s scroll):</strong> 4 MB</p>
+      </div>
+    </div>
+
+    <h2>Your Profiling Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Profile the <em>specific interaction</em> that feels slow, not the whole app session</li>
+      <li class="checked">Extract top-down method summaries from CPU traces for Claude Code</li>
+      <li class="checked">Check allocation counts in memory profiler for GC pressure</li>
+      <li class="checked">Use System Trace (Perfetto) to see frame-level timing breakdown</li>
+      <li class="checked">Focus on janky frames only &mdash; don&rsquo;t analyze frames that are already fast</li>
+      <li class="checked">Combine profiler output with source code when prompting AI</li>
+      <li class="checked">Reuse objects instead of allocating in <code>onBindViewHolder</code> or composable bodies</li>
+      <li class="checked">Never do network, disk IO, or heavy computation during rendering</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Profiling Workflow</h3>
+      <p>Don&rsquo;t profile and optimize blindly. Follow this cycle: <strong>(1)</strong> Identify the interaction that feels slow. <strong>(2)</strong> Capture a focused trace of that interaction (5&ndash;10 seconds). <strong>(3)</strong> Extract the hot methods and janky frame breakdowns. <strong>(4)</strong> Feed them to Claude Code with the relevant source code. <strong>(5)</strong> Apply the fix. <strong>(6)</strong> Profile again to verify the improvement. Every optimization should be measurable.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Profile a Screen Transition</h4>
+      <ol>
+        <li><strong>Pick a slow interaction:</strong> Find a screen transition, list scroll, or animation that feels janky in your app. If everything is smooth, intentionally add <code>Thread.sleep(20)</code> inside a <code>LazyColumn</code> item to simulate jank.</li>
+        <li><strong>Capture a CPU trace:</strong> Open the Profiler, start a &ldquo;Sample Java/Kotlin Methods&rdquo; recording, perform the interaction, and stop recording.</li>
+        <li><strong>Extract hot methods:</strong> Switch to &ldquo;Top Down&rdquo; view, sort by total time, and copy the top 10 methods with their self time, total time, and call counts.</li>
+        <li><strong>Run <code>/profile-cpu</code>:</strong> Paste the data into Claude Code. Ask it to identify the top 3 bottlenecks and suggest fixes.</li>
+        <li><strong>Apply and re-measure:</strong> Fix the top issue, re-profile the same interaction, and compare frame times.</li>
+        <li><strong>Bonus:</strong> Capture a System Trace of the same interaction. Extract the janky frames and their phase breakdowns (measure, layout, draw). Feed to Claude Code for a frame-level diagnosis.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>We&rsquo;ve profiled runtime performance. But there&rsquo;s a different kind of performance problem that&rsquo;s just as costly: <strong>flaky tests</strong>. They pass locally, fail on CI, pass again on retry, and slowly erode your team&rsquo;s trust in the test suite until everyone just hits &ldquo;retry&rdquo; and ignores failures.</p>
+
+    <p>In <strong>Chapter 10: Flaky Test Diagnosis</strong>, we&rsquo;ll use Claude Code to systematically categorize and fix flaky tests &mdash; timing issues, shared state, Compose synchronization, and the CI-specific gotchas that make tests behave differently on different machines.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="08-battery-power.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Battery and Power Optimization</span>
+      </a>
+      <a href="10-flaky-tests.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Flaky Test Diagnosis</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

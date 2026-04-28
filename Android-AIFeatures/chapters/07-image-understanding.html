@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Image Understanding &amp; Visual Search | Building AI-Powered Features for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Building AI-Powered Features for Android</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-chat-conversational.html">&larr; Prev</a>
+      <a href="08-smart-camera.html">Next &rarr;</a>
+      <a href="maps/07-image-understanding-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Image Understanding &amp; Visual Search</h1>
+    <p class="subtitle">Give your app eyes &mdash; categorize photos, search visually, describe scenes, and extract structured data from images</p>
+  </header>
+
+  <main>
+
+    <h2>Your App Can See Now</h2>
+
+    <p>Up through Chapter 6, every AI feature we built worked with text. Search, summarization, chat &mdash; all words. But users don't live in a text-only world. They take photos, scan documents, browse product images, and expect your app to understand what's <em>in</em> those images, not just that an image file exists.</p>
+
+    <p>Image understanding is one of the most mature areas of AI on mobile. Google Photos has been doing it for years. ML Kit makes the basics trivial. And multimodal models like Gemini Vision can describe, analyze, and extract structured data from any image you throw at them.</p>
+
+    <p>This chapter covers the full spectrum: from simple on-device classification to powerful cloud-based image analysis.</p>
+
+    <h2>Image Understanding Use Cases</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Use Case</th>
+          <th>What It Does</th>
+          <th>Example App</th>
+          <th>Approach</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Photo organization</td>
+          <td>Auto-tag photos by content</td>
+          <td>Google Photos</td>
+          <td>On-device (ML Kit)</td>
+        </tr>
+        <tr>
+          <td>Visual search</td>
+          <td>"Find photos like this one"</td>
+          <td>Pinterest, Google Lens</td>
+          <td>On-device (CLIP embeddings)</td>
+        </tr>
+        <tr>
+          <td>Accessibility</td>
+          <td>Describe images for screen readers</td>
+          <td>Any app with images</td>
+          <td>Cloud (Gemini Vision)</td>
+        </tr>
+        <tr>
+          <td>Content moderation</td>
+          <td>Flag inappropriate images</td>
+          <td>Social media, marketplace</td>
+          <td>Cloud (safety classifiers)</td>
+        </tr>
+        <tr>
+          <td>Document digitization</td>
+          <td>OCR + structured extraction</td>
+          <td>Expense tracker, scanner</td>
+          <td>Hybrid (ML Kit + LLM)</td>
+        </tr>
+        <tr>
+          <td>Product identification</td>
+          <td>"What product is this?"</td>
+          <td>Shopping, inventory</td>
+          <td>Cloud (Gemini Vision)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>On-Device Image Classification with ML Kit</h2>
+
+    <p>The fastest way to add image understanding: ML Kit's Image Labeling API. It runs on-device, needs no internet, and identifies objects, scenes, and activities in photos.</p>
+
+    <div class="api-recipe">
+      <h3>Recipe: Auto-Tag Photos with ML Kit</h3>
+      <p><strong>Goal:</strong> Automatically categorize photos as "food," "nature," "people," "document," etc.</p>
+      <p><strong>Step 1:</strong> Add ML Kit to your project:</p>
+<pre><code>implementation("com.google.mlkit:image-labeling:17.0.9")</code></pre>
+      <p><strong>Step 2:</strong> Create the labeling helper:</p>
+<pre><code>class ImageLabeler {
+    private val labeler = ImageLabeling.getClient(
+        ImageLabelerOptions.Builder()
+            .setConfidenceThreshold(0.7f) // only return labels with 70%+ confidence
+            .build()
+    )
+
+    suspend fun labelImage(bitmap: Bitmap): List&lt;String&gt; {
+        val image = InputImage.fromBitmap(bitmap, 0)
+        return suspendCoroutine { cont -&gt;
+            labeler.process(image)
+                .addOnSuccessListener { labels -&gt;
+                    cont.resume(labels.map { it.text })
+                }
+                .addOnFailureListener { cont.resume(emptyList()) }
+        }
+    }
+}</code></pre>
+      <p><strong>Step 3:</strong> Use it when photos are added:</p>
+<pre><code>// When user adds a photo to the gallery
+val labels = imageLabeler.labelImage(photoBitmap)
+// labels = ["Food", "Dessert", "Baked goods", "Cake"]
+photoDao.update(photo.copy(tags = labels))</code></pre>
+      <p><strong>Step 4:</strong> Display tags in the UI:</p>
+<pre><code>@Composable
+fun PhotoTags(tags: List&lt;String&gt;) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        tags.forEach { tag -&gt;
+            AssistChip(onClick = { /* filter by tag */ },
+                label = { Text(tag, style = MaterialTheme.typography.labelSmall) })
+        }
+    }
+}</code></pre>
+      <p>That's it &mdash; on-device, instant, free, private. ML Kit recognizes 400+ label categories out of the box.</p>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">400+</span>
+        <span class="stat-label">Label categories ML Kit recognizes out of the box</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">&lt;100ms</span>
+        <span class="stat-label">Average labeling time per image on a modern phone</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">$0</span>
+        <span class="stat-label">Cost per image &mdash; runs entirely on-device</span>
+      </div>
+    </div>
+
+    <h2>Multimodal AI for Deep Image Understanding</h2>
+
+    <p>ML Kit tells you "there's a cat in this photo." Gemini Vision tells you "there's an orange tabby cat sleeping on a blue couch next to a half-read book about gardening." When you need <em>understanding</em>, not just labels, you need a multimodal model.</p>
+
+    <div class="user-story-box">
+      <p><strong>Scenario:</strong> Tomasz is building an inventory management app for a small bookstore. The owner photographs each new shipment of books. Tomasz's app uses Gemini Vision to analyze each photo: it identifies the book titles, authors, ISBNs (from the barcode), and even the condition ("slight wear on the spine"). All from a single photo, extracted into structured data that auto-populates the inventory form.</p>
+      <p>The bookstore owner saves 2 hours per shipment. That's the power of multimodal &mdash; the AI sees the image the way a human would, and can answer questions about it.</p>
+    </div>
+
+<pre><code>val model = GenerativeModel(
+    modelName = "gemini-2.0-flash",
+    apiKey = BuildConfig.GEMINI_API_KEY
+)
+
+suspend fun analyzeImage(bitmap: Bitmap, question: String): String {
+    val response = model.generateContent(
+        content {
+            image(bitmap)
+            text(question)
+        }
+    )
+    return response.text ?: "Could not analyze the image"
+}
+
+// Usage examples:
+// analyzeImage(photo, "Describe this image in one sentence")
+// analyzeImage(photo, "What product is this? Return: name, brand, color")
+// analyzeImage(receipt, "Extract: merchant, date, total, line items as JSON")</code></pre>
+
+    <div class="tip-box">
+      <p><strong>The prompt matters as much as the image.</strong> "Describe this image" gives you a paragraph. "List the 3 main objects in this image" gives you a focused list. "Extract the text and return it as JSON with fields: merchant, date, total" gives you structured data. Be specific about what you want back.</p>
+    </div>
+
+    <h2>Building Visual Search</h2>
+
+    <p>Visual search is the image equivalent of semantic text search from Chapter 4. Instead of embedding text into vectors, you embed <em>images</em> into vectors. Similar images have similar vectors.</p>
+
+    <div class="product-pattern">
+      <h3>The "Find More Like This" Pattern</h3>
+      <p>Visual search unlocks a powerful product pattern: the user points at an image and says "find more like this." No typing, no describing, no keyword guessing.</p>
+      <ol>
+        <li><strong>User taps a photo</strong> in their gallery, a product in a catalog, or snaps a picture</li>
+        <li><strong>App embeds the image</strong> into a vector using CLIP or a similar model</li>
+        <li><strong>App searches for nearest vectors</strong> in the content database</li>
+        <li><strong>Results appear</strong> &mdash; visually similar images, ranked by similarity</li>
+      </ol>
+      <p><strong>Real-world example:</strong> Pinterest's "Visual Search" lets you draw a box around part of an image and find similar items. Google Lens identifies objects and finds products, places, and information. Both use image embeddings under the hood.</p>
+    </div>
+
+    <p>The architecture mirrors text semantic search, but with image embeddings:</p>
+
+<pre><code>class VisualSearchEngine(private val clipModel: Interpreter) {
+    // Embed an image into a 512-dimension vector
+    fun embedImage(bitmap: Bitmap): FloatArray {
+        val resized = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
+        val input = preprocessForClip(resized)
+        val output = Array(1) { FloatArray(512) }
+        clipModel.run(input, output)
+        return output[0]
+    }
+
+    // Find visually similar images
+    fun findSimilar(query: Bitmap, library: List&lt;ImageEntry&gt;): List&lt;ImageEntry&gt; {
+        val queryVec = embedImage(query)
+        return library
+            .map { it to cosineSimilarity(queryVec, it.embedding) }
+            .sortedByDescending { it.second }
+            .take(10)
+            .map { it.first }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      <p><strong>CLIP models</strong> (Contrastive Language-Image Pre-Training) are special &mdash; they can embed both images and text into the <em>same</em> vector space. This means you can search images using text queries ("sunset at the beach") or image queries (a photo of a sunset). Same engine, two input types.</p>
+    </div>
+
+    <h2>Scene Description for Accessibility</h2>
+
+    <p>One of the most impactful uses of image AI: generating descriptions for visually impaired users. Every image in your app should have meaningful alt text, and AI can generate it automatically.</p>
+
+    <h3>Two-Tier Accessibility</h3>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">Tier 1: ML Kit (On-Device, Basic)</p>
+        <p class="prompt-text">Labels: "Food, Dessert, Cake, Plate"
+Alt text: "Image contains: food, dessert, cake"
+
+Fast, free, works offline. Good enough for basic context.</p>
+      </div>
+      <div class="prompt-example good">
+        <p class="prompt-label">Tier 2: Gemini Vision (Cloud, Rich)</p>
+        <p class="prompt-text">Prompt: "Describe this image for a visually impaired user in one sentence."
+Alt text: "A slice of chocolate layer cake on a white plate, topped with fresh strawberries and dusted with powdered sugar."
+
+Slower, costs money, but gives a meaningful description.</p>
+      </div>
+    </div>
+
+    <p>Use Tier 1 as the default (immediate, free). Offer Tier 2 as a "Get detailed description" option, or pre-generate Tier 2 descriptions in the background with WorkManager.</p>
+
+    <h2>Smart OCR: Beyond Raw Text</h2>
+
+    <p>ML Kit's text recognition extracts text from images. That's useful but limited &mdash; you get a blob of strings with no structure. The real power comes from combining OCR with an LLM to <em>understand</em> the text.</p>
+
+    <div class="workflow-steps">
+      <div class="step">Photo</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">ML Kit OCR</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Raw Text</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">LLM Parse</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Structured Data</div>
+    </div>
+
+<pre><code>// Step 1: Extract raw text with ML Kit (on-device, free)
+val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+val rawText = suspendCoroutine { cont -&gt;
+    recognizer.process(InputImage.fromBitmap(bitmap, 0))
+        .addOnSuccessListener { cont.resume(it.text) }
+        .addOnFailureListener { cont.resume("") }
+}
+
+// Step 2: Parse with LLM (cloud, structured output)
+val structured = model.generateContent("""
+    Extract structured data from this receipt text.
+    Return JSON: {"merchant": "", "date": "", "total": "", "items": []}
+    Receipt text: $rawText
+""".trimIndent())
+
+// Result: {"merchant": "Starbucks", "date": "2026-03-28", "total": "8.45",
+//          "items": [{"name": "Latte", "price": "5.95"}, ...]}</code></pre>
+
+    <p>The OCR is free and on-device. The LLM parsing costs a fraction of a cent. Together, they turn a photo of a receipt into structured data your app can use.</p>
+
+    <h2>Image Preprocessing</h2>
+
+    <p>Before sending an image to any AI model, you need to prepare it. Android's image format zoo (JPEG, PNG, HEIC, WebP, different orientations, different sizes) can cause issues.</p>
+
+    <ul class="checklist">
+      <li class="checked"><strong>Resize:</strong> Cloud APIs accept large images but charge by size. Resize to 1024px max dimension for most tasks</li>
+      <li class="checked"><strong>Orientation:</strong> Read EXIF data and rotate before processing. A sideways photo gives sideways results</li>
+      <li class="checked"><strong>Format:</strong> Convert HEIC to JPEG before sending to APIs that don't support HEIC</li>
+      <li class="checked"><strong>Compression:</strong> Compress to 80% JPEG quality &mdash; minimal quality loss, significant size reduction</li>
+      <li class="checked"><strong>Strip metadata:</strong> Remove EXIF GPS data before sending to cloud APIs (privacy)</li>
+    </ul>
+
+<pre><code>fun prepareImageForApi(context: Context, uri: Uri): Bitmap {
+    val source = ImageDecoder.createSource(context.contentResolver, uri)
+    val bitmap = ImageDecoder.decodeBitmap(source)
+
+    // Fix orientation from EXIF
+    val rotated = fixOrientation(context, uri, bitmap)
+
+    // Resize if too large
+    val maxDim = 1024
+    val scale = minOf(maxDim.toFloat() / rotated.width, maxDim.toFloat() / rotated.height, 1f)
+    return Bitmap.createScaledBitmap(rotated,
+        (rotated.width * scale).toInt(),
+        (rotated.height * scale).toInt(), true)
+}</code></pre>
+
+    <h2>Building a "Point and Search" Feature</h2>
+
+    <p>The Google Lens experience: user takes a photo, the app identifies what's in it and searches for related information. Here's the architecture:</p>
+
+    <div class="workflow-steps">
+      <div class="step">Capture Photo</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Identify Object</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Search App Content</div>
+      <span class="step-arrow">&rarr;</span>
+      <div class="step">Show Results</div>
+    </div>
+
+<pre><code>suspend fun pointAndSearch(photo: Bitmap): List&lt;SearchResult&gt; {
+    // Step 1: Identify the object with Gemini Vision
+    val identification = model.generateContent(content {
+        image(photo)
+        text("Identify the main object. Return: name, category, key attributes (color, brand, type)")
+    }).text ?: return emptyList()
+
+    // Step 2: Search your app's content database
+    val results = searchRepository.semanticSearch(identification)
+
+    return results
+}</code></pre>
+
+    <p>The AI does the hard work of understanding the image. Your existing search infrastructure (from Chapter 4) handles finding related content. Two features working together.</p>
+
+    <h2>Batch Processing with WorkManager</h2>
+
+    <p>Analyzing photos one at a time is fine for user-triggered actions. But for background tasks (categorizing an entire photo library, pre-generating alt text), use WorkManager:</p>
+
+<pre><code>class PhotoAnalysisWorker(
+    context: Context, params: WorkerParameters
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val untaggedPhotos = photoDao.getUntagged(limit = 20) // batch of 20
+        for (photo in untaggedPhotos) {
+            val bitmap = loadBitmap(photo.uri)
+            val labels = imageLabeler.labelImage(bitmap)
+            photoDao.update(photo.copy(tags = labels))
+        }
+        return if (photoDao.hasUntagged()) Result.retry() else Result.success()
+    }
+}
+
+// Schedule with constraints
+val request = PeriodicWorkRequestBuilder&lt;PhotoAnalysisWorker&gt;(1, TimeUnit.HOURS)
+    .setConstraints(Constraints.Builder()
+        .setRequiresBatteryNotLow(true) // don't drain the battery
+        .build())
+    .build()
+WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+    "photo-analysis", ExistingPeriodicWorkPolicy.KEEP, request
+)</code></pre>
+
+    <div class="warning-box">
+      <p><strong>Batch processing + memory = trouble.</strong> Loading 100 full-resolution bitmaps will crash your app. Process one image at a time, recycle the bitmap after each one, and use <code>limit</code> to process in small batches. Monitor memory with <code>Runtime.getRuntime().freeMemory()</code>.</p>
+    </div>
+
+    <h2>Privacy Considerations</h2>
+
+    <p>Photos are the most personal data on someone's phone. Treat them accordingly.</p>
+
+    <div class="highlight-box">
+      <h3>The Photo Privacy Checklist</h3>
+      <p><strong>On-device first:</strong> Use ML Kit for categorization and basic labeling &mdash; photos never leave the device.</p>
+      <p><strong>Explicit consent for cloud:</strong> Before sending any photo to a cloud API, tell the user: "This photo will be sent to [provider] for analysis." Let them opt in, not opt out.</p>
+      <p><strong>Strip metadata:</strong> Remove GPS coordinates and EXIF data before cloud upload. Nobody's AI analysis needs to know where a photo was taken.</p>
+      <p><strong>Don't store remotely:</strong> Send the image for analysis, get the result, and don't keep a copy on the server. Implement transient processing.</p>
+    </div>
+
+    <h2>Cost of Image APIs</h2>
+
+    <p>Image analysis is more expensive than text. Budget accordingly:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Operation</th>
+          <th>Approx. Cost</th>
+          <th>Strategy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>ML Kit labeling</td>
+          <td>$0 (on-device)</td>
+          <td>Use for all basic classification</td>
+        </tr>
+        <tr>
+          <td>Gemini Flash (image input)</td>
+          <td>~$0.002 per image</td>
+          <td>Use for detailed analysis, OCR parsing</td>
+        </tr>
+        <tr>
+          <td>GPT-4o Vision</td>
+          <td>~$0.01-0.03 per image</td>
+          <td>Use only when Gemini quality isn't enough</td>
+        </tr>
+        <tr>
+          <td>Cloud embedding (CLIP)</td>
+          <td>~$0.001 per image</td>
+          <td>Embed once at upload, search is free after</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <p><strong>The cost-saving stack:</strong> Use ML Kit (free) for everything it can handle. Use Gemini Flash for detailed analysis. Use GPT-4o Vision only as a fallback for complex cases. Cache every result. This keeps your average cost per image under $0.005.</p>
+    </div>
+
+    <h2>Your Turn: Build a Photo Organizer</h2>
+
+    <div class="exercise-box">
+      <h3>Exercise: Auto-Categorizing Photo Gallery</h3>
+      <p>Build a photo organizer that automatically categorizes photos from the gallery into groups. Here's your plan:</p>
+      <ol>
+        <li><strong>Load photos:</strong> Use the <code>MediaStore</code> API to fetch the user's recent photos (last 50)</li>
+        <li><strong>Classify with ML Kit:</strong> Run Image Labeling on each photo to get tags ("Food," "Nature," "People," "Document," "Screenshot")</li>
+        <li><strong>Group by category:</strong> Map ML Kit labels to your app's categories (e.g., "Baked goods" + "Dessert" + "Food" → "Food" category)</li>
+        <li><strong>Build the UI:</strong> A Compose grid showing category headers with photo counts, expandable to show the photos in each group</li>
+        <li><strong>Background processing:</strong> Use WorkManager to analyze new photos automatically, with battery-not-low constraint</li>
+      </ol>
+      <p><strong>Bonus:</strong> Add a "Describe" button on each photo that uses Gemini Vision to generate a one-sentence natural language description, displayed as a caption below the photo.</p>
+    </div>
+
+    <h2>What's Next</h2>
+
+    <p>You've given your app the ability to understand images &mdash; classifying, searching, describing, and extracting data. All of these features work with photos the user already has.</p>
+
+    <p>But what about the live camera? <strong>Chapter 8: Smart Camera &amp; Real-Time Processing</strong> takes you into live video &mdash; object detection overlays, document scanning with edge detection, barcode scanning, and AR-style annotations. This is where AI meets the camera feed in real time.</p>
+
+    <footer>
+      <nav class="chapter-nav">
+        <a href="06-chat-conversational.html" class="prev">
+          <span class="nav-direction">&larr; Previous Chapter</span>
+          <span class="nav-chapter">In-App Chat &amp; Conversational UI</span>
+        </a>
+        <a href="08-smart-camera.html" class="next">
+          <span class="nav-direction">Next Chapter &rarr;</span>
+          <span class="nav-chapter">Smart Camera &amp; Real-Time Processing</span>
+        </a>
+      </nav>
+    </footer>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

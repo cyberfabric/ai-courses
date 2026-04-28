@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 5: Extracting the Domain Layer | Rewriting Apps With AI For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x267B;&#xFE0F;</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Rewriting Apps With AI For Dummies</span>
+    <div class="nav-links">
+      <a href="../../index.html">Home</a>
+      <a href="index.html">Contents</a>
+      <a href="04-monolith-to-multimodule.html">&larr; Prev</a>
+      <a href="06-data-layer.html">Next &rarr;</a>
+      <a href="maps/05-domain-layer-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 5</span>
+    <h1>Extracting the Domain Layer</h1>
+    <p class="subtitle">Pure Kotlin models, repository interfaces, use cases, and the Result pattern</p>
+  </header>
+
+  <main>
+
+    <section>
+      <h2>The Heart of the House</h2>
+
+      <p>In renovation terms, the domain layer is the load-bearing structure &mdash; the beams and columns that everything else attaches to. You don't install drywall before the framing is solid. You don't wire plumbing before the walls are framed.</p>
+
+      <p>That's why <code>:core:domain</code> is the first module you fill. Everything depends on it. Nothing depends on anything else yet. It's the lowest-risk, highest-value migration target.</p>
+
+      <p>In Chapter 4, you built 10 empty rooms. Now you're installing the structural beams in the most important one.</p>
+
+      <div class="tip-box">
+        <h4>Why Domain First?</h4>
+        <p><code>:core:domain</code> depends on <strong>nothing</strong>. Every other module depends on it. That means you can extract, test, and validate domain code in complete isolation &mdash; no Android, no Room, no Hilt, no Compose. Pure Kotlin. If you get this layer right, every subsequent extraction has a stable foundation to build on.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Code Archaeology: Finding Domain Concepts</h2>
+
+      <p>Your monolith has domain logic. It's just buried. Business rules live inside Activities, data classes share files with UI code, and validation logic hides in onClick handlers. AI is excellent at excavating these buried concepts &mdash; if you give it the right prompt.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: The Code Archaeology Prompt</h4>
+        <pre>Analyze these legacy files to identify domain concepts for extraction:
+- RecipeListActivity.kt, RecipeDetailActivity.kt, RecipeEditActivity.kt
+- DatabaseHelper.kt, RecipeAdapter.kt
+
+For each file, identify:
+1. Data classes or data structures (explicit or implicit)
+2. Business rules (validation, calculation, transformation)
+3. Repository-like operations (CRUD, queries, filters)
+4. Enums or sealed types (status, category, filter type)
+
+Output: domain models, repository interfaces, use cases, and inline
+business rules to extract. Everything must be pure Kotlin — no Android types.</pre>
+      </div>
+
+      <div class="prompt-example bad">
+        <h4>Bad: Vague Extraction Prompt</h4>
+        <pre>Extract the domain layer from my app.</pre>
+        <p>No file references, no output format, no constraints. AI will guess your architecture and probably leak Android types into domain.</p>
+      </div>
+
+      <p>The archaeology prompt produces a map like this for the recipes app:</p>
+
+      <div class="highlight-box">
+        <h4>Discovered Domain Concepts</h4>
+        <ul>
+          <li><strong>Models:</strong> Recipe, Ingredient, CookBook, GroceryItem, NutritionalInfo</li>
+          <li><strong>Enums:</strong> DifficultyLevel, MealType, UnitOfMeasure</li>
+          <li><strong>Repository interfaces:</strong> RecipeRepository, CookBookRepository, GroceryRepository</li>
+          <li><strong>Use cases:</strong> GetRecipes, GetRecipeById, SaveRecipe, DeleteRecipe, SearchRecipes, ToggleFavorite, GetGroceryListForRecipes, AddToCookBook</li>
+          <li><strong>Business rules:</strong> Recipe validation (non-empty title, at least 1 ingredient), serving size scaling, nutritional calculation</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>The Domain Layer Rules as AI Constraints</h2>
+
+      <p>Before AI writes a single line of domain code, load the domain rules from Chapter 2. These aren't suggestions &mdash; they're compile-time constraints for the AI.</p>
+
+      <div class="rule-callout">
+        <h4>Rule DOM-001: Pure Kotlin Only</h4>
+        <p><code>:core:domain</code> MUST contain only pure Kotlin. No Android imports, no Room annotations, no Hilt annotations, no Compose types. If <code>import android.*</code> appears anywhere in this module, the extraction has failed.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DOM-002: Result Sealed Class</h4>
+        <p>All repository interface methods MUST return <code>Result&lt;T&gt;</code> (custom sealed class). No raw exceptions crossing the domain boundary. No nullable returns for error cases.</p>
+      </div>
+
+      <div class="rule-callout">
+        <h4>Rule DOM-003: Use Case Pattern</h4>
+        <p>Each use case MUST have exactly one public method: <code>operator fun invoke()</code>. Constructor injection for dependencies. No state. No side effects beyond the return value.</p>
+      </div>
+
+      <p>Load these into the prompt context alongside the code archaeology results:</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Rules-Constrained Domain Generation</h4>
+        <pre>Generate :core:domain following these rules:
+- Pure Kotlin only. Zero Android imports. Zero framework annotations.
+- All repository methods return Result&lt;T&gt; (sealed class with Success/Error)
+- Use cases: ONE public method (operator fun invoke), stateless, constructor injection
+- Data classes are immutable (val only). Enums for fixed sets.
+
+MODELS TO CREATE: [paste archaeology results]
+
+Generate in order: 1) Result sealed class, 2) domain models,
+3) repository interfaces, 4) use cases.
+Package: com.example.recipes.domain.*</pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Extracting Models: Before and After</h2>
+
+      <p>In the monolith, "models" are scattered everywhere. A Recipe might be a Cursor row in one place, a Bundle extra in another, and a HashMap in a third. AI needs to see the mess to produce the clean version.</p>
+
+      <div class="migration-step">
+        <h4>Migration: Scattered Data &rarr; Domain Models</h4>
+
+        <div class="before-code">
+          <h5>Before: Recipe data scattered across the monolith</h5>
+          <pre><code>// In RecipeDetailActivity.kt — Recipe is a Cursor row
+fun loadRecipe(id: Long) {
+    val cursor = db.rawQuery("SELECT * FROM recipes WHERE id = ?", arrayOf(id.toString()))
+    cursor.moveToFirst()
+    titleView.text = cursor.getString(cursor.getColumnIndex("title"))
+    descView.text = cursor.getString(cursor.getColumnIndex("description"))
+    val difficulty = cursor.getInt(cursor.getColumnIndex("difficulty"))
+    difficultyView.text = when (difficulty) { 0 -> "Easy"; 1 -> "Medium"; 2 -> "Hard"; else -> "Unknown" }
+    servingsView.text = cursor.getInt(cursor.getColumnIndex("servings")).toString()
+    cursor.close()
+}
+
+// In RecipeEditActivity.kt — Recipe is a Bundle
+val bundle = Bundle().apply {
+    putString("title", titleInput.text.toString())
+    putInt("difficulty", difficultySpinner.selectedItemPosition)
+    putInt("servings", servingsInput.text.toString().toInt())
+    putBoolean("favorite", favoriteCheck.isChecked)
+}</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: Clean domain models in :core:domain</h5>
+          <pre><code>// com.example.recipes.domain.model.Recipe
+data class Recipe(
+    val id: Long = 0,
+    val title: String,
+    val description: String,
+    val difficulty: DifficultyLevel,
+    val servings: Int,
+    val isFavorite: Boolean = false,
+    val ingredients: List&lt;Ingredient&gt; = emptyList(),
+    val cookBookId: Long? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+// com.example.recipes.domain.model.DifficultyLevel
+enum class DifficultyLevel {
+    EASY, MEDIUM, HARD
+}
+
+// com.example.recipes.domain.model.Ingredient
+data class Ingredient(
+    val id: Long = 0,
+    val name: String,
+    val amount: Double,
+    val unit: UnitOfMeasure
+)
+
+// com.example.recipes.domain.model.UnitOfMeasure
+enum class UnitOfMeasure {
+    GRAM, KILOGRAM, MILLILITER, LITER,
+    TEASPOON, TABLESPOON, CUP, PIECE, PINCH
+}</code></pre>
+        </div>
+      </div>
+
+      <p>Notice what changed: magic integers became enums, scattered fields became a single immutable data class, and the implicit "recipe" concept became an explicit, typed model. AI does this transformation well because the rules constrain the output format.</p>
+    </section>
+
+    <section>
+      <h2>The Result Sealed Class</h2>
+
+      <p>Before defining any repository interfaces, you need the error handling contract. The Result pattern standardizes how errors flow through the domain layer.</p>
+
+      <div class="highlight-box">
+        <h4>The Domain Result Type</h4>
+        <pre><code>// com.example.recipes.domain.model.Result
+sealed class Result&lt;out T&gt; {
+    data class Success&lt;T&gt;(val data: T) : Result&lt;T&gt;()
+    data class Error(val message: String, val cause: Throwable? = null) : Result&lt;Nothing&gt;()
+}
+
+// Extension functions for ergonomic usage
+inline fun &lt;T&gt; Result&lt;T&gt;.onSuccess(action: (T) -&gt; Unit): Result&lt;T&gt; {
+    if (this is Result.Success) action(data); return this
+}
+inline fun &lt;T&gt; Result&lt;T&gt;.onError(action: (String, Throwable?) -&gt; Unit): Result&lt;T&gt; {
+    if (this is Result.Error) action(message, cause); return this
+}</code></pre>
+      </div>
+
+      <p>Why custom instead of Kotlin's built-in <code>kotlin.Result</code>? The built-in type can't be used as a normal return type (compiler restriction). A custom sealed class gives you full control over the error model and extension functions.</p>
+    </section>
+
+    <section>
+      <h2>Repository Interfaces: The Domain's Contract</h2>
+
+      <p>Repository interfaces live in <code>:core:domain</code>. Implementations live in <code>:data:repository</code>. This is the dependency inversion that makes the whole architecture work &mdash; and the boundary AI gets wrong most often.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Repository Interface Prompt</h4>
+        <pre>Generate repository interfaces for :core:domain. Operations found in monolith:
+- RecipeListActivity: loadAll, search, delete, toggleFavorite
+- RecipeDetailActivity: loadById, loadIngredients
+- RecipeEditActivity: save, update
+
+RULES: Interfaces ONLY (no implementations). All methods: suspend,
+return Result&lt;T&gt;, use domain types (not Room/Android).
+Package: com.example.recipes.domain.repository. Group by aggregate root.</pre>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Generated Repository Interface</h4>
+        <pre><code>// com.example.recipes.domain.repository.RecipeRepository
+interface RecipeRepository {
+    suspend fun getAll(): Result&lt;List&lt;Recipe&gt;&gt;
+    suspend fun getById(id: Long): Result&lt;Recipe&gt;
+    suspend fun search(query: String): Result&lt;List&lt;Recipe&gt;&gt;
+    suspend fun save(recipe: Recipe): Result&lt;Long&gt;
+    suspend fun update(recipe: Recipe): Result&lt;Unit&gt;
+    suspend fun delete(id: Long): Result&lt;Unit&gt;
+    suspend fun toggleFavorite(id: Long): Result&lt;Recipe&gt;
+    suspend fun getByDifficulty(
+        level: DifficultyLevel
+    ): Result&lt;List&lt;Recipe&gt;&gt;
+}</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <h4>Watch: AI Leaking Implementation Details</h4>
+        <p>AI frequently adds Room-specific methods to domain interfaces: <code>fun getRecipeWithIngredients()</code> (a Room @Relation concept) or <code>fun observeAll(): Flow&lt;List&lt;RecipeEntity&gt;&gt;</code> (Room entity type). If you see <code>Entity</code>, <code>Dao</code>, <code>@Query</code>, or any Android import in <code>:core:domain</code>, reject immediately. The domain interface defines <em>what</em> the app needs, not <em>how</em> Room provides it.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Creating Use Cases</h2>
+
+      <p>Use cases are the verbs of your domain. Each one represents a single action the app can perform. The pattern is deliberately rigid: one class, one public method, injected dependencies.</p>
+
+      <div class="migration-step">
+        <h4>Migration: Inline Logic &rarr; Use Cases</h4>
+
+        <div class="before-code">
+          <h5>Before: Business logic in RecipeListActivity</h5>
+          <pre><code>// In RecipeListActivity.kt
+fun onSearchTextChanged(query: String) {
+    val trimmed = query.trim()
+    if (trimmed.length < 2) {
+        loadAllRecipes()  // Too short, show all
+        return
+    }
+    val cursor = db.rawQuery(
+        "SELECT * FROM recipes WHERE title LIKE ? OR description LIKE ?",
+        arrayOf("%$trimmed%", "%$trimmed%")
+    )
+    val results = mutableListOf&lt;Map&lt;String, Any&gt;&gt;()
+    while (cursor.moveToNext()) {
+        results.add(mapOf(
+            "id" to cursor.getLong(0),
+            "title" to cursor.getString(1),
+            // ... more fields
+        ))
+    }
+    cursor.close()
+    adapter.updateData(results)
+}</code></pre>
+        </div>
+
+        <div class="after-code">
+          <h5>After: SearchRecipesUseCase in :core:domain</h5>
+          <pre><code>// com.example.recipes.domain.usecase.SearchRecipesUseCase
+class SearchRecipesUseCase(
+    private val recipeRepository: RecipeRepository
+) {
+    suspend operator fun invoke(
+        query: String
+    ): Result&lt;List&lt;Recipe&gt;&gt; {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) {
+            return recipeRepository.getAll()
+        }
+        return recipeRepository.search(trimmed)
+    }
+}</code></pre>
+        </div>
+      </div>
+
+      <p>The use case captured the business rule (minimum 2 characters for search) that was buried in an Activity. The database mechanics moved to the repository. The UI update moved to the presentation layer. Each layer handles exactly its concern.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Use Case Generation Prompt</h4>
+        <pre>Generate use cases for :core:domain using the repository interfaces.
+
+RULES (DOM-003): Single class, single public method (operator fun invoke),
+constructor injection, return Result&lt;T&gt;, stateless, no Android imports.
+Naming: {Action}{Entity}UseCase. Package: .domain.usecase
+
+USE CASES: GetRecipes, GetRecipeById, SearchRecipes (min 2 chars),
+SaveRecipe (validate: non-empty title, ≥1 ingredient), DeleteRecipe,
+ToggleFavorite, GetGroceryListForRecipes, AddRecipeToCookBook.
+Include validation logic where business rules exist.</pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Validation in the Domain</h2>
+
+      <p>The monolith validates in the UI &mdash; checking <code>editText.text.isNotEmpty()</code> in an onClick handler. The clean version validates in the domain, where the rules actually belong.</p>
+
+      <div class="highlight-box">
+        <h4>Domain Validation in Use Cases</h4>
+        <pre><code>class SaveRecipeUseCase(
+    private val recipeRepository: RecipeRepository
+) {
+    suspend operator fun invoke(
+        recipe: Recipe
+    ): Result&lt;Long&gt; {
+        // Business rules live HERE, not in the UI
+        if (recipe.title.isBlank()) {
+            return Result.Error("Recipe title cannot be empty")
+        }
+        if (recipe.ingredients.isEmpty()) {
+            return Result.Error("Recipe must have at least one ingredient")
+        }
+        if (recipe.servings < 1) {
+            return Result.Error("Servings must be at least 1")
+        }
+        return recipeRepository.save(recipe)
+    }
+}</code></pre>
+      </div>
+
+      <p>This is a pattern AI handles well &mdash; <em>if</em> you tell it where validation lives. Without the domain rules as context, AI will put validation in the ViewModel, the Composable, or both. With rules loaded, it consistently places validation in the use case.</p>
+    </section>
+
+    <section>
+      <h2>AI Review: Checking Domain Output</h2>
+
+      <p>After AI generates the domain layer, run a compliance check. This is the review prompt from Chapter 2, focused on domain-specific rules.</p>
+
+      <div class="ai-review-box">
+        <h4>AI Domain Review Checklist</h4>
+        <pre>Review generated domain code:
+
+✅ PASS: Zero Android imports | All repos return Result&lt;T&gt; | All repos
+suspend | Use cases: single operator fun invoke | Data classes: val only
+| Correct packages (.model, .repository, .usecase)
+
+❌ FAIL (reject): android.* imports | androidx.* imports | Room annotations
+(@Entity, @Dao) | Hilt annotations (@Inject, @Module) | Mutable
+collections | Nullable returns instead of Result.Error</pre>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">12</div>
+          <div class="stat-label">Domain models</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">3</div>
+          <div class="stat-label">Repository interfaces</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">8</div>
+          <div class="stat-label">Use cases</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">0</div>
+          <div class="stat-label">Android imports</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Testing the Domain Layer</h2>
+
+      <p>Domain tests are the easiest to write &mdash; everything is pure Kotlin, no Android test runners needed. AI generates these well because the inputs and outputs are completely predictable.</p>
+
+      <div class="prompt-example good">
+        <h4>Good: Domain Test Generation Prompt</h4>
+        <pre>Generate unit tests for :core:domain use cases.
+
+RULES: JUnit 5, fakes over mocks (FakeRecipeRepository), test behavior
+not implementation. Naming: {UseCase}Test. Package: .domain.usecase (test).
+
+For each use case test: 1) happy path (Success), 2) edge cases (empty,
+zero, negative), 3) error propagation (repo Error → use case Error),
+4) business rule validation (correct error message).
+
+CONTEXT: [paste use case code + repository interface]</pre>
+      </div>
+
+      <div class="highlight-box">
+        <h4>Generated Test: SearchRecipesUseCase</h4>
+        <pre><code>class SearchRecipesUseCaseTest {
+    private val fakeRepository = FakeRecipeRepository()
+    private val useCase = SearchRecipesUseCase(fakeRepository)
+
+    @Test
+    fun `search with valid query returns matching recipes`() = runTest {
+        fakeRepository.addRecipe(Recipe(id = 1, title = "Pasta Carbonara", ...))
+        fakeRepository.addRecipe(Recipe(id = 2, title = "Greek Salad", ...))
+        val result = useCase("Pasta")
+        assertIs&lt;Result.Success&lt;List&lt;Recipe&gt;&gt;&gt;(result)
+        assertEquals(1, result.data.size)
+    }
+
+    @Test
+    fun `search with short query returns all recipes`() = runTest {
+        fakeRepository.addRecipe(Recipe(id = 1, title = "Pasta", ...))
+        fakeRepository.addRecipe(Recipe(id = 2, title = "Salad", ...))
+        val result = useCase("P")  // Less than 2 chars
+        assertIs&lt;Result.Success&lt;List&lt;Recipe&gt;&gt;&gt;(result)
+        assertEquals(2, result.data.size)  // Returns all, not filtered
+    }
+
+    @Test
+    fun `search propagates repository error`() = runTest {
+        fakeRepository.shouldReturnError = true
+        val result = useCase("Pasta")
+        assertIs&lt;Result.Error&gt;(result)
+    }
+}</code></pre>
+      </div>
+
+      <p>The <code>FakeRecipeRepository</code> implements <code>RecipeRepository</code> with in-memory storage and lives in <code>:core:testing</code>. It's deterministic, fast, and requires zero Android infrastructure. For more on fakes vs mocks, see <em>AI-Advanced</em> Chapter 8.</p>
+    </section>
+
+    <section>
+      <h2>Common AI Mistakes in Domain Extraction</h2>
+
+      <table class="comparison">
+        <thead>
+          <tr>
+            <th>Mistake</th>
+            <th>What AI Does</th>
+            <th>How to Catch &amp; Fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Android leak</td>
+            <td>Adds <code>import android.os.Parcelable</code> or <code>@Parcelize</code></td>
+            <td>DOM-001 review: grep for <code>android.*</code> imports. Move Parcelable to :feature or :core:common</td>
+          </tr>
+          <tr>
+            <td>Anemic use cases</td>
+            <td>Creates <code>GetRecipesUseCase</code> that just calls <code>repository.getAll()</code></td>
+            <td>Ask: does this use case add business logic? If it's just a pass-through, consider whether you need it</td>
+          </tr>
+          <tr>
+            <td>Room types in domain</td>
+            <td>Uses <code>RecipeEntity</code> as domain model</td>
+            <td>DOM-001: domain models are NOT Room entities. Mappers live in :data:repository</td>
+          </tr>
+          <tr>
+            <td>Missing Result wrapping</td>
+            <td>Returns <code>Recipe?</code> instead of <code>Result&lt;Recipe&gt;</code></td>
+            <td>DOM-002: all repository methods return Result&lt;T&gt;. No nullable returns for errors</td>
+          </tr>
+          <tr>
+            <td>Stateful use cases</td>
+            <td>Adds <code>private var lastQuery = ""</code> to a use case</td>
+            <td>DOM-003: use cases are stateless. State belongs in ViewModel</td>
+          </tr>
+          <tr>
+            <td>Multiple public methods</td>
+            <td>Adds <code>validate()</code> alongside <code>invoke()</code></td>
+            <td>DOM-003: one public method only. Validation is internal to invoke()</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>The Package Structure</h2>
+
+      <p>After extraction, <code>:core:domain</code> should have this structure. Share this with AI as a constraint so it creates files in the right packages.</p>
+
+      <div class="module-map">
+        <h4>:core:domain Package Structure</h4>
+        <pre>domain/
+├── model/          Recipe, Ingredient, CookBook, GroceryItem,
+│                   NutritionalInfo, DifficultyLevel, MealType,
+│                   UnitOfMeasure, Result  (9 files)
+├── repository/     RecipeRepository, CookBookRepository,
+│                   GroceryRepository  (3 files)
+└── usecase/        GetRecipes, GetRecipeById, SearchRecipes,
+                    SaveRecipe, DeleteRecipe, ToggleFavorite,
+                    GetGroceryListForRecipes, AddRecipeToCookBook  (8 files)</pre>
+      </div>
+
+      <p>20 files. Zero Android dependencies. Pure Kotlin, testable without an emulator, and the stable foundation everything else builds on.</p>
+    </section>
+
+    <section>
+      <h2>Updating the Migration Tracker</h2>
+
+      <p>After extraction, update the tracker from Chapter 3. Every domain concept that moved out of the monolith gets marked.</p>
+
+      <div class="highlight-box">
+        <h4>Migration Tracker Update</h4>
+        <pre>| Legacy Source              | Target Module  | Status    | New Path                         |
+|---------------------------|----------------|-----------|----------------------------------|
+| RecipeListActivity.kt     | :feature:recipe| REMAINING | —                                |
+| DatabaseHelper.kt         | :data:local    | REMAINING | —                                |
+| (inline recipe data)      | :core:domain   | MIGRATED  | domain/model/Recipe.kt           |
+| (inline search logic)     | :core:domain   | MIGRATED  | domain/usecase/SearchRecipes...  |
+| (inline validation)       | :core:domain   | MIGRATED  | domain/usecase/SaveRecipe...     |</pre>
+      </div>
+
+      <p>Legacy files aren't deleted yet &mdash; the Activities still REMAIN. Domain <em>concepts</em> are extracted, but you'll replace the files in Chapters 6-7 when data and presentation layers are ready.</p>
+    </section>
+
+    <section>
+      <h2>Try It: Extract Your Domain Layer</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: From Monolith to :core:domain</h3>
+
+        <ol>
+          <li><strong>Run the archaeology prompt:</strong> Feed your monolith's key files to AI. Get the list of domain concepts to extract.</li>
+          <li><strong>Generate the Result type:</strong> Create your custom Result sealed class with Success/Error variants and extension functions.</li>
+          <li><strong>Generate domain models:</strong> Convert implicit data structures to explicit data classes and enums. Verify: zero Android imports.</li>
+          <li><strong>Generate repository interfaces:</strong> Define the contracts. Verify: all methods are <code>suspend</code>, all return <code>Result&lt;T&gt;</code>.</li>
+          <li><strong>Generate use cases:</strong> Extract business logic into single-method classes. Verify: stateless, single <code>operator fun invoke()</code>.</li>
+          <li><strong>Run the AI review:</strong> Use the domain review checklist. Fix any violations.</li>
+          <li><strong>Generate tests:</strong> Use fakes, not mocks. Cover happy path, edge cases, and error propagation.</li>
+          <li><strong>Update the migration tracker:</strong> Mark all extracted domain concepts as MIGRATED.</li>
+        </ol>
+
+        <p><strong>Deliverable:</strong> A <code>:core:domain</code> module with models, repository interfaces, use cases, and tests. Zero Android dependencies. All tests passing.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What's Next</h2>
+
+      <p>The beams are in. The load-bearing structure of your architecture &mdash; models, interfaces, use cases &mdash; is solid, tested, and pure Kotlin. The monolith still runs unchanged, but now there's a clean foundation to build against.</p>
+
+      <p>In <a href="06-data-layer.html">Chapter 6: Building the Data Layer With AI</a>, you'll implement the repository interfaces you just defined. AI will generate Room entities, DAOs, mappers, and repository implementations in <code>:data:local</code> and <code>:data:repository</code>. The domain told the data layer <em>what</em> it needs &mdash; now you'll tell it <em>how</em>.</p>
+
+      <p>The foundation is poured. Time to run the plumbing.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="04-monolith-to-multimodule.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">From Monolith to Multi-Module</span>
+    </a>
+    <a href="06-data-layer.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Building the Data Layer With AI</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

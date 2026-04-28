@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Reasoning Models &mdash; Thinking Out Loud | AI in 2026</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Frontier 2026</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-frontier-snapshot.html">&larr; Prev</a>
+      <a href="03-open-vs-closed.html">Next &rarr;</a>
+      <a href="maps/02-reasoning-models-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Reasoning Models: Thinking Out Loud</h1>
+    <p class="subtitle">Test-time compute, extended thinking, and the strange paradox where reasoning makes hallucinations <em>worse</em></p>
+  </header>
+
+  <main>
+
+    <section>
+      <div class="frontier-box">
+        <p>As of <strong>April 2026</strong>, every frontier lab ships a &ldquo;reasoning&rdquo; variant of its flagship. OpenAI&rsquo;s <code>GPT-5.4 Thinking</code> shipped March 5, 2026 and lands at <code>~99%</code> on AIME and <code>50.0%</code> on FrontierMath. Anthropic&rsquo;s <code>Claude Opus 4.7</code> exposes an explicit <em>thinking budget</em> knob &mdash; you choose 100ms or 5+ seconds of internal deliberation per query. Google&rsquo;s <code>Gemini 3.1 Pro</code> ships a <code>Deep Think</code> mode that hits <code>44.7%</code> on Humanity&rsquo;s Last Exam. <code>DeepSeek-R1</code>, the model that broke the spell in early 2025, generates <strong>10&ndash;100&times; more tokens per query</strong> than its base sibling. And <code>GLM-5.1</code> (Zhipu, March 27, 2026, 744B&#x2011;parameter MoE trained on Huawei Ascend chips) is the strongest open-weights reasoning model in history. <strong>And yet:</strong> on grounded summarization, <code>Grok-4-fast-reasoning</code> hallucinates at <code>20.2%</code> &mdash; <em>six times worse</em> than non-reasoning <code>Gemini 2.0 Flash</code> at <code>3.3%</code> <a href="https://suprmind.ai/hub/ai-hallucination-rates-and-benchmarks/">[Suprmind benchmark, 2026]</a>. Welcome to the strangest trade-off in modern AI.</p>
+      </div>
+
+      <p>Last chapter we surveyed the frontier. Six labs, dozens of model names, a vivid pricing spread, and a leaderboard that shatters every 6 weeks. We ended with five durable patterns. One of them &mdash; the <strong>reasoning/base split</strong> &mdash; is what this chapter is about.</p>
+
+      <p>The split is real, growing, and it changes how you choose models for production. Pick the wrong side and you&rsquo;ll either pay 50&times; too much or summarize a contract incorrectly because the model started &ldquo;thinking&rdquo; and added details that weren&rsquo;t in the source.</p>
+
+      <div class="tip-box">
+        <strong>Companion:</strong> This chapter builds on <a href="../../AI-DeepDive/chapters/09-sampling-and-decoding.html">AI-DeepDive Ch 9 (Sampling &amp; Decoding)</a> and <a href="../../AI-Intro/chapters/06-text-generation.html">AI-Intro Ch 6 (Text Generation)</a>. If &ldquo;next-token prediction&rdquo; or &ldquo;temperature&rdquo; isn&rsquo;t in your bones, start there.
+      </div>
+    </section>
+
+    <section>
+      <h2>Quick recap: how a base model thinks</h2>
+
+      <p>A standard LLM predicts the next token, then the next, then the next, until it stops. There is no &ldquo;deliberation,&rdquo; no scratchpad, no double-check. If the right answer happens to fall out of the autoregressive process, great. If not &mdash; <em>also great</em>, from the model&rsquo;s perspective &mdash; because the loss function only rewards the next token being plausible, not the final answer being correct.</p>
+
+      <p>For roughly the first decade of LLMs, &ldquo;making the model smarter&rdquo; meant <strong>making the model bigger</strong>: more parameters, more data, more pre-training compute. That worked beautifully &mdash; until ~2024, when the scaling curve started to bend. Each doubling of training compute bought less and less capability gain. The party didn&rsquo;t end. It just slowed down.</p>
+
+      <p>Then someone tried something different: <strong>spend the extra compute at inference time, not training time.</strong></p>
+    </section>
+
+    <section>
+      <h2>The reasoning idea, in one paragraph</h2>
+
+      <p>Before answering, generate a long internal chain-of-thought. Let the model break the problem down, try alternatives, double-check arithmetic, walk through subgoals &mdash; out loud, in tokens, on its own internal scratchpad. Only after that scratchpad is filled does the model emit its <em>actual</em> answer. The reasoning tokens are usually hidden from the user. The user just sees a slightly slower response that&rsquo;s often dramatically more correct on hard problems.</p>
+
+      <p>That&rsquo;s it. The whole &ldquo;reasoning model&rdquo; revolution is &ldquo;the model talks to itself before answering.&rdquo;</p>
+
+      <p>The economic surprise is that this talking-to-itself works <em>spectacularly well</em> on certain task types &mdash; math, code, multi-step logic, scientific reasoning &mdash; and that the gains keep coming as you give the model more thinking budget. That gives the field a brand-new scaling axis.</p>
+    </section>
+
+    <section>
+      <h2>The April 2026 reasoning roster</h2>
+
+      <p>Here are the production-grade reasoning models that ship today, the API knob that controls the thinking budget, and the headline benchmark each is famous for.</p>
+
+      <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Lab</th>
+            <th>Released</th>
+            <th>Reasoning feature</th>
+            <th>Headline benchmark</th>
+            <th>API knob</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GPT-5.4 Thinking</code></td>
+            <td>OpenAI</td>
+            <td>Mar 5, 2026</td>
+            <td>Hidden CoT + tool use</td>
+            <td><code>~99%</code> AIME, <code>50.0%</code> FrontierMath (Pro xhigh)</td>
+            <td><code>reasoning_effort</code></td>
+          </tr>
+          <tr>
+            <td><code>Claude Opus 4.7</code></td>
+            <td>Anthropic</td>
+            <td>Apr 16, 2026</td>
+            <td>Extended thinking</td>
+            <td><code>97.8%</code> OTIS Mock AIME, <code>94.2%</code> GPQA Diamond</td>
+            <td>Explicit thinking budget (100ms&ndash;5s+)</td>
+          </tr>
+          <tr>
+            <td><code>Gemini 3.1 Pro Deep Think</code></td>
+            <td>Google DeepMind</td>
+            <td>Q1 2026</td>
+            <td>Deep Think variant</td>
+            <td><code>94.1%</code> GPQA Diamond, <code>44.7%</code> Humanity&rsquo;s Last Exam</td>
+            <td><code>deep_think</code> mode flag</td>
+          </tr>
+          <tr>
+            <td><code>DeepSeek-R1</code></td>
+            <td>DeepSeek</td>
+            <td>Jan 2025 (mature)</td>
+            <td>Open-weights CoT</td>
+            <td>Matched o1 quality at <code>~70%</code> lower cost</td>
+            <td>Standard API</td>
+          </tr>
+          <tr>
+            <td><code>GLM-5.1</code></td>
+            <td>Zhipu AI</td>
+            <td>Mar 27, 2026</td>
+            <td>Post-training reasoning</td>
+            <td><code>92.7%</code> AIME 2025, <code>86.0%</code> GPQA Diamond</td>
+            <td>Open weights (744B MoE)</td>
+          </tr>
+          <tr>
+            <td><code>o3 / o3-mini</code></td>
+            <td>OpenAI</td>
+            <td>Early 2026</td>
+            <td>High-budget reasoning</td>
+            <td>Top ARC-AGI, competitive programming</td>
+            <td>Internal / Pro tier</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>Numbers above come from <a href="https://artificialanalysis.ai/evaluations/gpqa-diamond">Artificial Analysis</a>, <a href="https://lmcouncil.ai/benchmarks">LM Council</a>, and the <a href="https://wavespeed.ai/blog/posts/glm-5-1-vs-claude-gpt-gemini-deepseek-llm-comparison/">WaveSpeed AI roundup of GLM-5.1</a>. Treat the exact percentages as &ldquo;will rot fast.&rdquo; Treat the <em>ranking</em> within graduate science (everyone clustered above 86%) as a saturated benchmark in disguise.</p>
+    </section>
+
+    <section>
+      <h2>Test-time compute: the scaling axis that&rsquo;s still alive</h2>
+
+      <p>For most of LLM history there was one scaling lever: pre-training compute. Train a bigger model on more tokens. Watch capability go up. The Chinchilla papers from 2022 told us the optimal ratio of parameters to training tokens. Every lab ran the playbook.</p>
+
+      <p>By late 2024, the curve flattened. New trillion-parameter models gave only marginal wins on benchmarks the previous generation had nearly solved. Pre-training scaling was hitting diminishing returns &mdash; not <em>dead</em>, but no longer the only game.</p>
+
+      <p>Then OpenAI shipped o1, and the field discovered a second scaling axis: <strong>test-time compute</strong>. You don&rsquo;t need a bigger model. You need to <em>let the model think longer</em>. The longer it thinks, the better its answer on hard problems &mdash; and the curve is much steeper than what pre-training could buy you in 2024.</p>
+
+      <p>How much steeper? <a href="https://introl.com/blog/inference-time-scaling-research-reasoning-models-december-2025">Industry analysis from December 2025</a> projects that <strong>inference compute will exceed training compute demand by 118&times; by 2026</strong>. By 2030, <strong>~75% of total AI compute will be inference</strong>. That&rsquo;s a tectonic shift. The whole supply chain is repricing around it.</p>
+
+      <h3>Two dimensions of test-time compute</h3>
+
+      <p>It&rsquo;s helpful to think of test-time compute as <em>two-dimensional</em> <a href="https://www.adaptive-ml.com/post/test-time-compute-is-2-dimensional">[Adaptive ML, Feb 2025]</a>:</p>
+
+      <ul>
+        <li><strong>Depth-wise:</strong> the model writes a longer chain-of-thought for a single answer. More tokens, deeper reasoning, one trajectory.</li>
+        <li><strong>Breadth-wise:</strong> the model generates multiple parallel solutions, then a scoring function picks the best. Multiple trajectories, one final answer.</li>
+      </ul>
+
+      <p>OpenAI&rsquo;s o3 famously combines both, and that combination is what cracked ARC-AGI &mdash; a benchmark designed to defeat memorization. The lesson: <em>no single test-time scaling strategy universally dominates</em> <a href="https://arxiv.org/abs/2512.02008">[arXiv:2512.02008]</a>. You allocate your compute budget per-prompt, adaptively.</p>
+    </section>
+
+    <section>
+      <h2>How much thinking is &ldquo;a lot&rdquo;? (numbers)</h2>
+
+      <p>People underestimate how many tokens a reasoning model actually generates internally. The numbers are wild.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">32,768</div>
+          <div class="stat-label">Max internal reasoning tokens for o1-preview, per query</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">10&ndash;100&times;</div>
+          <div class="stat-label">DeepSeek-R1 reasoning tokens vs base V3 output</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">5&ndash;10s</div>
+          <div class="stat-label">Typical extended-thinking latency vs 1&ndash;3s for base</div>
+        </div>
+      </div>
+
+      <p>Sources: <a href="https://www.emerge.haus/blog/test-time-compute-generative-ai">Emerge.haus</a>, <a href="https://introl.com/blog/inference-time-scaling-research-reasoning-models-december-2025">Introl</a>. The 32,768 cap is real &mdash; that&rsquo;s a <em>32K-token internal monologue</em> for a single user query. Most queries don&rsquo;t hit the cap, but on hard math or multi-step coding tasks, models routinely burn 4K&ndash;16K tokens of hidden chain-of-thought before emitting their first user-visible token.</p>
+
+      <p>For an engineer pricing this out, it means three things:</p>
+
+      <ul>
+        <li><strong>Reasoning queries cost real money.</strong> If your hosted model bills per output token and the reasoning tokens count, you pay for every one of those 32K hidden tokens. Some APIs (Anthropic) bill them as output. Others (OpenAI o-series) charge them as separate &ldquo;reasoning tokens.&rdquo; Read the pricing page carefully.</li>
+        <li><strong>Latency is qualitatively different.</strong> The user is waiting 5&ndash;60 seconds, not 500&ndash;2000ms. Your UX has to account for that &mdash; streaming a thinking spinner is now table stakes.</li>
+        <li><strong>The thinking budget is a real product knob.</strong> Anthropic exposes it as 100ms to 5+ seconds. OpenAI exposes <code>reasoning_effort</code>. Both let you trade quality for latency at runtime, per request.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Where reasoning wins</h2>
+
+      <p>If your task is one of these, a reasoning model is almost always worth its slower latency and higher cost:</p>
+
+      <ul>
+        <li><strong>Competition math.</strong> AIME, MATH-500, FrontierMath. <code>GPT-5.4 Thinking</code> at <code>~99%</code> AIME and <code>50.0%</code> FrontierMath simply cannot be matched by any base model.</li>
+        <li><strong>Graduate-level science.</strong> GPQA Diamond was designed to defeat Google &mdash; the questions are intentionally not searchable. Reasoning models clear <code>86%</code> (GLM-5.1) to <code>94.2%</code> (Opus 4.7).</li>
+        <li><strong>Multi-step coding.</strong> Anything where the model has to plan, write, test, debug, and revise. Opus 4.7 at <code>83.5%</code> SWE-bench Verified does this. Base Sonnet does not.</li>
+        <li><strong>Symbolic logic and proofs.</strong> Anything where chains of inferences need to be checked. The depth-wise reasoning channel exists for exactly this shape of problem.</li>
+        <li><strong>Strategy / open-ended planning.</strong> Long-horizon tasks where multiple subgoals interact. Reasoning models make fewer dumb mistakes when the planning surface is large.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Where reasoning loses</h2>
+
+      <p>Now the part the marketing decks leave out.</p>
+
+      <div class="contrarian-box">
+        <p><strong>Reasoning models hallucinate <em>more</em> on grounded tasks than base models do.</strong> On Vectara&rsquo;s extended-document summarization benchmark, <a href="https://suprmind.ai/hub/ai-hallucination-rates-and-benchmarks/">DeepSeek-R1 hallucinates at 14.3% &mdash; 3.7&times; worse than base DeepSeek-V3 at 3.9%</a>. <code>Grok-4-fast-reasoning</code> hits <code>20.2%</code>. The best non-reasoning baseline, <code>Gemini 2.0 Flash</code>, sits at <code>3.3%</code>. The mechanism is simple: when a reasoning model summarizes, it doesn&rsquo;t just <em>extract</em> &mdash; it <em>thinks through</em> the source, draws connections beyond it, adds inferences. Faithful summarization scores those additions as hallucinations. Duke University Libraries put it succinctly in <a href="https://blogs.library.duke.edu/blog/2026/01/05/its-2026-why-are-llms-still-hallucinating/">a January 2026 post</a>: &ldquo;It&rsquo;s 2026. Why are LLMs still hallucinating?&rdquo; The answer for reasoning models is &mdash; in part &mdash; that they&rsquo;re hallucinating <em>because</em> they&rsquo;re reasoning.</p>
+      </div>
+
+      <p>That&rsquo;s the centerpiece contrarian fact of this chapter. Sit with it for a second. The model gets <em>smarter</em> at math problems and <em>worse</em> at faithfully summarizing a court ruling. Both can be true. They are.</p>
+
+      <p>Beyond the hallucination paradox, reasoning models lose on these too:</p>
+
+      <ul>
+        <li><strong>Latency-sensitive UX.</strong> Anything user-facing under 1 second &mdash; chat autocomplete, real-time translation, search-as-you-type &mdash; reasoning models simply can&rsquo;t fit. Even Anthropic&rsquo;s 100ms thinking budget is hard to hit reliably.</li>
+        <li><strong>Cost-sensitive scale.</strong> If you&rsquo;re running 10M queries/day, paying for 32K hidden tokens per query is the difference between a $200/day bill and a $20K/day bill.</li>
+        <li><strong>Simple lookups.</strong> Most queries don&rsquo;t need deliberation. &ldquo;What&rsquo;s the capital of France&rdquo; through an o3-style reasoning model is theatrical and slow. Base models are calibrated for this kind of work.</li>
+        <li><strong>Faithful extraction.</strong> Anything where the answer must come <em>from</em> the source, not <em>about</em> the source. Legal, medical, compliance &mdash; this is where reasoning&rsquo;s tendency to add inferences becomes dangerous.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Why does reasoning cause hallucinations?</h2>
+
+      <p>The intuitive version: <strong>every extra reasoning step is another chance to hallucinate.</strong></p>
+
+      <p>A 30-token base model answer has to be wrong in those 30 tokens. A 30,000-token reasoning chain has 1,000&times; more surface area where a small misstep can cascade. If the model says &ldquo;the article mentions X&rdquo; somewhere on token 4,217, then references &ldquo;X&rdquo; in a derivation 800 tokens later, then bases its final answer on that derivation &mdash; congratulations, you&rsquo;ve invented something. The chain-of-thought drift is real, mechanical, and well-documented.</p>
+
+      <p>Two contributing factors:</p>
+
+      <ul>
+        <li><strong>The reasoning is not faithful by default.</strong> The model&rsquo;s emitted chain-of-thought is sometimes a post-hoc rationalization, not the actual computation that produced the answer. Recent <a href="https://arxiv.org/pdf/2601.09929">hallucination-detection research from January 2026</a> highlights how unreliable a chain-of-thought is as evidence of correctness.</li>
+        <li><strong>Optimization pressure rewards confidence.</strong> Reasoning models are trained to produce confident, detailed reasoning &mdash; even when their underlying knowledge is shaky. Hedging is penalized; verbosity is rewarded. That&rsquo;s a recipe for confidently-wrong answers on grounded tasks.</li>
+      </ul>
+
+      <p>We&rsquo;ll come back to the deeper hallucination question in <a href="10-hallucination-wall.html">Chapter 10 (The Hallucination Wall)</a>, where we deal with the 2025 mathematical proof that hallucinations are statistically unavoidable under standard training. For now: <strong>reasoning is not a fix for hallucination &mdash; it&rsquo;s often a multiplier.</strong></p>
+    </section>
+
+    <section>
+      <h2>Practical advice: when to use which</h2>
+
+      <p>Here&rsquo;s the production playbook in April 2026.</p>
+
+      <div class="comparison">
+        <div>
+          <h3>Use a reasoning model when:</h3>
+          <ul>
+            <li>The task has a verifiable correct answer (math, code, logic puzzles).</li>
+            <li>The user is okay waiting 5&ndash;60 seconds.</li>
+            <li>You can afford 5&ndash;25&times; the per-query token cost.</li>
+            <li>Mistakes are expensive and double-checking is helpful.</li>
+            <li>The task requires multi-step planning or symbolic manipulation.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Use a base (non-reasoning) model when:</h3>
+          <ul>
+            <li>The task is summarization, extraction, or any &ldquo;faithful to source&rdquo; work.</li>
+            <li>Latency under 2 seconds is required.</li>
+            <li>You&rsquo;re running at high volume and cost is the binding constraint.</li>
+            <li>The answer is &ldquo;in&rdquo; the input rather than computed from it.</li>
+            <li>You need predictable, calibrated confidence (reasoning models are over-confident).</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>The 80/20 heuristic.</strong> Most production AI workloads in 2026 are extraction, classification, summarization, and casual conversation &mdash; tasks that <em>do not benefit</em> from reasoning and often regress with it. Default to a base model. Switch to reasoning only when you can name a specific reason why deliberation will help on this specific task.
+      </div>
+
+      <h3>Hybrid pipelines</h3>
+
+      <p>The best products in 2026 don&rsquo;t commit to either side. They route. A common pattern:</p>
+
+      <div class="workflow-steps">
+        <span class="step">User query</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Cheap classifier</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Base or reasoning?</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Route to right model</span>
+        <span class="step-arrow">&rarr;</span>
+        <span class="step">Answer</span>
+      </div>
+
+      <p>The classifier is itself often a small base model. The savings from <em>not</em> routing every query to o3 are gigantic, and the quality drop is small if the classifier is decent.</p>
+    </section>
+
+    <section>
+      <h2>The thinking-budget knob in production</h2>
+
+      <p>Different vendors expose the budget differently. Here&rsquo;s how to think about it:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Vendor</th>
+            <th>Knob</th>
+            <th>Range</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Anthropic (Claude 3.7+, Opus 4.7)</td>
+            <td>Explicit <code>thinking_budget</code></td>
+            <td>100ms &ndash; 5s+</td>
+            <td>Configurable per request; thinking tokens billed as output</td>
+          </tr>
+          <tr>
+            <td>OpenAI (o-series, GPT-5.4 Thinking)</td>
+            <td><code>reasoning_effort</code></td>
+            <td><code>low</code> / <code>medium</code> / <code>high</code> / <code>xhigh</code> (Pro)</td>
+            <td>Reasoning tokens billed as separate line item</td>
+          </tr>
+          <tr>
+            <td>Google (Gemini 3.1 Pro Deep Think)</td>
+            <td><code>deep_think</code> mode flag</td>
+            <td>On / off</td>
+            <td>Less granular control; on or off</td>
+          </tr>
+          <tr>
+            <td>DeepSeek (R1)</td>
+            <td>None exposed</td>
+            <td>n/a</td>
+            <td>Reasoning happens automatically; control via system prompt</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Two practical tips:</p>
+
+      <ul>
+        <li><strong>Start with the lowest budget that solves your task.</strong> Quality usually plateaus before the maximum. Paying for the maximum is paying for nothing.</li>
+        <li><strong>Cache the reasoning when possible.</strong> If your application replays similar queries (e.g., re-running a coding task with small variations), reuse the prior reasoning chain as part of the new prompt. This can cut effective cost by half.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>What to watch for next</h2>
+
+      <div class="forecast-box">
+        <p>By the end of 2026, expect three things on the reasoning frontier. <strong>First:</strong> reasoning + retrieval as default. Today most reasoning models reason on what they remember; soon they&rsquo;ll routinely reason on what they retrieve, dramatically cutting hallucination on grounded tasks. <strong>Second:</strong> reasoning + tools as default. The model decides when to think, when to call a Python interpreter, when to query a database, mid-chain. OpenAI&rsquo;s o3 and Claude Opus 4.7 already preview this; by Q4 it&rsquo;s table stakes. <strong>Third:</strong> reasoning models that <em>know when to stop</em>. The current crop overthinks; the next crop will burn 200 tokens on &ldquo;capital of France&rdquo; and 30,000 on &ldquo;prove this theorem.&rdquo; Adaptive budgeting from the model itself, not the API caller. Whoever ships that first will own a real cost-quality advantage.</p>
+      </div>
+
+      <p>The version numbers will rot. <code>GPT-5.4 Thinking</code>, <code>Opus 4.7</code>, and <code>Gemini 3.1 Pro Deep Think</code> will be replaced by 5.5, 4.8, and 3.2 within months. The benchmark scores will rot &mdash; AIME at 99% means we need a new math benchmark before December.</p>
+
+      <p>What won&rsquo;t rot:</p>
+
+      <ul>
+        <li>The base/reasoning split as a product trade-off.</li>
+        <li>Test-time compute as a real, separate scaling axis.</li>
+        <li>The thinking-budget knob as a permanent API surface.</li>
+        <li>The hallucination paradox &mdash; reasoning will keep adding surface area for chain-of-thought drift on grounded tasks until someone solves it architecturally.</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>What rots fastest in this chapter:</strong> the specific model versions (<code>GPT-5.4</code>, <code>Opus 4.7</code>, <code>GLM-5.1</code>), the specific benchmark scores (<code>99%</code> AIME, <code>94.2%</code> GPQA, <code>14.3%</code> R1 hallucination rate), and the specific token-count caps. <strong>What probably won&rsquo;t rot:</strong> the trade-off shape (slow + accurate vs fast + grounded), the hallucination paradox on summarization, and the existence of a thinking-budget API knob.
+      </div>
+    </section>
+
+    <section>
+      <h2>The five-second summary</h2>
+
+      <div class="highlight-box">
+        <h3>Reasoning, in one breath</h3>
+        <p>A reasoning model is a model that talks to itself before answering. It wins on math, code, and logic by spending 10&ndash;100&times; more tokens of internal monologue. It loses on summarization, extraction, and anything latency- or cost-sensitive. And on grounded tasks, the very thing that makes it smarter (more deliberation) makes it more likely to hallucinate. Match the model to the task. Don&rsquo;t reflexively reach for the slow one.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What&rsquo;s next</h2>
+
+      <p>So far we&rsquo;ve covered <em>what</em> the frontier looks like (Chapter 1) and <em>how</em> the new reasoning paradigm works (this chapter). Both chapters used examples from American, European, and Chinese labs without making a fuss about the geography.</p>
+
+      <p>Chapter 3 is the chapter where geography stops being a footnote. The open-weights frontier &mdash; DeepSeek, Qwen, Kimi, GLM &mdash; is now genuinely competitive with the closed labs on most benchmarks. We&rsquo;ll look at <em>where the gap collapsed, where it didn&rsquo;t, and what &ldquo;open&rdquo; actually means in 2026</em> (spoiler: not what most people think).</p>
+
+      <p>Bring your skepticism. The leaderboards have a story. The production data has a different one.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="01-frontier-snapshot.html" class="prev">
+      <span class="nav-direction">Previous</span>
+      <span class="nav-chapter">The Frontier, Right Now</span>
+    </a>
+    <a href="index.html" style="text-align: center; color: var(--color-text-muted); text-decoration: none; align-self: center;">Back to Contents</a>
+    <a href="03-open-vs-closed.html" class="next">
+      <span class="nav-direction">Next</span>
+      <span class="nav-chapter">Open vs Closed: The Race Tightens</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

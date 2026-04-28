@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Evaluating Your RAG System | RAG &amp; Knowledge Systems For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">RAG &amp; Knowledge Systems</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-advanced-patterns.html">&larr; Prev</a>
+      <a href="11-production-deployment.html">Next &rarr;</a>
+      <a href="maps/10-evaluation-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 10</span>
+    <h1>Evaluating Your RAG System</h1>
+    <p class="subtitle">Because "it seems to work" is not a metric &mdash; how to measure retrieval quality, answer accuracy, and know when your RAG is good enough</p>
+  </header>
+
+  <main>
+
+    <div class="highlight-box">
+      <p><strong>The big idea:</strong> You can't improve what you can't measure. RAG evaluation breaks down into three layers &mdash; did you retrieve the right chunks, did the LLM generate a faithful answer, and did the user get what they needed? Each layer has its own metrics, and you need all three to build a system you can trust.</p>
+    </div>
+
+    <p>In the last chapter, you learned nine advanced RAG patterns &mdash; query rewriting, HyDE, parent-child retrieval, CRAG, and more. Each one promises better answers. But here's the uncomfortable question: <strong>how do you know if they actually help?</strong></p>
+
+    <p>"The answers feel better" is not engineering. "Users seem happier" is not a metric. If you can't put a number on it, you can't improve it &mdash; and you definitely can't tell your manager why the new chunking strategy was worth two weeks of work.</p>
+
+    <p>Think of it this way: you wouldn't ship a web app without checking if the pages load, the forms submit, and the database queries return correct results. RAG systems need the same discipline. The difference is that RAG has <em>three</em> things that can go wrong instead of one &mdash; and each needs its own test.</p>
+
+    <p>Let's build a measurement system that turns "it seems to work" into real numbers.</p>
+
+    <!-- ============================================ -->
+    <h2>The Three Layers of RAG Evaluation</h2>
+
+    <div class="pipeline-box">
+      <p><strong>Where evaluation fits in the pipeline:</strong> Evaluation is not a step you add at the end &mdash; it's a feedback loop that wraps around your entire pipeline. You evaluate retrieval quality (did you find the right chunks?), generation quality (is the answer correct and grounded?), and end-to-end quality (did the user get what they needed?). Each layer tells you something different about where your system is failing.</p>
+    </div>
+
+    <p>Imagine you ask your RAG system "What is our refund policy?" and it answers "Our refund policy allows returns within 60 days." There are three distinct ways this could go wrong:</p>
+
+    <ol>
+      <li><strong>Retrieval failure:</strong> The system retrieved chunks about shipping policy instead of refund policy. The LLM answered based on the wrong context. Fix: better chunking, better embeddings, or hybrid search.</li>
+      <li><strong>Generation failure:</strong> The system retrieved the <em>right</em> chunks (which say "30 days"), but the LLM hallucinated "60 days." Fix: better prompts, stronger models, or contextual compression.</li>
+      <li><strong>End-to-end failure:</strong> The retrieval was correct, the generation was faithful, but the answer didn't address what the user actually wanted (they wanted to know <em>how</em> to get a refund, not the time limit). Fix: query rewriting, better understanding of user intent.</li>
+    </ol>
+
+    <p>You need different metrics for each layer. Let's start with retrieval.</p>
+
+    <!-- ============================================ -->
+    <h2>Retrieval Metrics: Did You Find the Right Chunks?</h2>
+
+    <div class="retrieval-box">
+      <p><strong>Retrieval evaluation</strong> measures whether your search step returns the documents that actually contain the answer. This is the foundation &mdash; if retrieval fails, nothing downstream can save you. The key metrics are precision (how much of what you retrieved is relevant?) and recall (how much of what's relevant did you retrieve?).</p>
+    </div>
+
+    <p>To evaluate retrieval, you need a <strong>ground truth</strong> &mdash; a set of questions where you already know which chunks contain the correct answer. Then you compare what your system retrieves against what it <em>should</em> retrieve.</p>
+
+    <h3>Precision@k: Are the Retrieved Chunks Relevant?</h3>
+
+    <p>Precision@k answers: "Of the k chunks I retrieved, how many were actually relevant?"</p>
+
+    <pre><code>def precision_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float:
+    """What fraction of retrieved chunks are relevant?"""
+    top_k = retrieved_ids[:k]
+    relevant_in_top_k = sum(1 for doc_id in top_k if doc_id in relevant_ids)
+    return relevant_in_top_k / k
+
+# Example: retrieved 5 chunks, 3 are relevant
+retrieved = ["doc_1", "doc_7", "doc_3", "doc_12", "doc_5"]
+relevant = {"doc_1", "doc_3", "doc_5", "doc_9"}
+
+print(precision_at_k(retrieved, relevant, k=5))  # 3/5 = 0.6</code></pre>
+
+    <p>A precision@5 of 0.6 means 60% of what you retrieved was useful. The other 40% was noise &mdash; wasting context window tokens and potentially confusing the LLM.</p>
+
+    <h3>Recall@k: Did You Find Everything Relevant?</h3>
+
+    <p>Recall@k answers: "Of all the relevant chunks that exist, how many did I retrieve?"</p>
+
+    <pre><code>def recall_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float:
+    """What fraction of relevant chunks did we retrieve?"""
+    top_k = retrieved_ids[:k]
+    relevant_in_top_k = sum(1 for doc_id in top_k if doc_id in relevant_ids)
+    return relevant_in_top_k / len(relevant_ids) if relevant_ids else 0.0
+
+print(recall_at_k(retrieved, relevant, k=5))  # 3/4 = 0.75</code></pre>
+
+    <p>A recall@5 of 0.75 means you found 3 out of 4 relevant chunks. The missing one might contain the key detail the LLM needs to give a complete answer.</p>
+
+    <div class="tip-box">
+      <p><strong>Precision vs recall tradeoff:</strong> Retrieving more chunks (higher k) usually improves recall but hurts precision. Retrieving fewer chunks improves precision but risks missing relevant content. In RAG, you typically care more about recall &mdash; it's better to include some noise than to miss the chunk that contains the answer. A common sweet spot: retrieve 5-10 chunks, then use re-ranking to push the best ones to the top.</p>
+    </div>
+
+    <h3>MRR and nDCG: Ranking Quality Matters</h3>
+
+    <p><strong>MRR (Mean Reciprocal Rank)</strong> answers: "How far down do I look to find the first relevant chunk?" An MRR of 0.8 means the first relevant chunk is usually in the top 1-2 positions. For RAG, this matters a lot &mdash; if the best chunk is buried at position 8, the LLM gets the wrong context first.</p>
+
+    <p><strong>nDCG (Normalized Discounted Cumulative Gain)</strong> is the gold standard. Unlike precision/recall (binary: relevant or not), nDCG handles <em>graded</em> relevance &mdash; "highly relevant" scores higher than "somewhat relevant," and results near the top count more than those at the bottom.</p>
+
+    <div class="tip-box">
+      <p><strong>Which retrieval metric should you use?</strong> Start with <strong>precision@5</strong> and <strong>recall@5</strong> &mdash; they're easy to understand and compute. Add <strong>MRR</strong> when you care about ranking quality. Graduate to <strong>nDCG</strong> when you need graded relevance. For most teams, precision + recall at k=5 tells you 80% of what you need to know.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Generation Metrics: Is the Answer Any Good?</h2>
+
+    <p>Even with perfect retrieval, the LLM can still produce bad answers. Generation evaluation checks three qualities:</p>
+
+    <h3>Faithfulness: Does the Answer Stick to the Evidence?</h3>
+
+    <p>Faithfulness (also called "groundedness") measures whether every claim in the answer is supported by the retrieved context. This is the <strong>single most important generation metric</strong> &mdash; an unfaithful answer is a hallucination, and hallucinations are the whole reason you're building RAG in the first place.</p>
+
+    <pre><code>def evaluate_faithfulness(answer: str, context: str, client) -> dict:
+    """Use an LLM to check if the answer is faithful to the context."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=500,
+        messages=[{
+            "role": "user",
+            "content": f"""Evaluate the faithfulness of this answer.
+
+CONTEXT (retrieved documents):
+{context}
+
+ANSWER:
+{answer}
+
+For each claim in the answer:
+1. List the claim
+2. Is it supported by the context? (YES / NO / PARTIAL)
+3. If NO, what did the answer say vs what the context says?
+
+Then give an overall faithfulness score from 0.0 to 1.0."""
+        }]
+    )
+    return response.content[0].text</code></pre>
+
+    <p>Analogy: faithfulness is like checking a student's essay against their source material. Did they cite their sources correctly, or did they make things up?</p>
+
+    <h3>Answer Relevance and Completeness</h3>
+
+    <p><strong>Relevance</strong>: A faithful answer can still be useless. If you ask "How do I get a refund?" and the system responds with a faithful summary of refund <em>statistics</em> for Q3, it's grounded but doesn't answer the question. Relevance measures whether the answer actually addresses what was asked.</p>
+
+    <p><strong>Completeness</strong>: "What are the requirements and deadlines for the internship program?" needs both requirements <em>and</em> deadlines. An answer covering only requirements scores high on faithfulness and relevance, but low on completeness.</p>
+
+    <!-- ============================================ -->
+    <h2>LLM-as-Judge: Your Automated Evaluator</h2>
+
+    <p>You might have noticed: most generation metrics require an LLM to evaluate another LLM. This is the <strong>LLM-as-judge</strong> pattern, and it's the backbone of modern RAG evaluation.</p>
+
+    <p>The idea sounds circular &mdash; "using AI to grade AI" &mdash; but it works surprisingly well. Research shows that strong LLMs (Claude, GPT-4) achieve roughly <strong>80% agreement with human evaluators</strong>, which matches the consistency between two different human evaluators. In other words, an LLM judge is about as reliable as a second human opinion.</p>
+
+    <div class="embedding-box">
+      <p><strong>Why LLM-as-judge works:</strong> Evaluating an answer is an easier task than generating one. It's like how a film critic doesn't need to be able to direct a movie to judge one. The LLM judges whether claims are supported by evidence, whether the answer addresses the question, and whether key points are missing &mdash; all structured evaluation tasks where LLMs excel.</p>
+    </div>
+
+    <p>Here's a practical LLM-as-judge implementation that scores a RAG response on all three dimensions:</p>
+
+    <pre><code>from anthropic import Anthropic
+
+client = Anthropic()
+
+def judge_rag_response(question: str, answer: str, context: str,
+                       reference_answer: str = None) -> dict:
+    """Score a RAG response on faithfulness, relevance, and completeness."""
+    ref_section = ""
+    if reference_answer:
+        ref_section = f"\nREFERENCE ANSWER (ground truth):\n{reference_answer}\n"
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6-20250514",
+        max_tokens=400,
+        messages=[{
+            "role": "user",
+            "content": f"""You are evaluating a RAG system's response. Score each
+dimension from 0.0 to 1.0. Reply in this exact format:
+faithfulness: [score]
+relevance: [score]
+completeness: [score]
+explanation: [one sentence summary]
+
+QUESTION: {question}
+
+RETRIEVED CONTEXT:
+{context}
+
+GENERATED ANSWER:
+{answer}
+{ref_section}
+Score each dimension:
+- faithfulness: Is every claim in the answer supported by the context?
+- relevance: Does the answer address what was asked?
+- completeness: Does it cover all aspects of the question?"""
+        }]
+    )
+
+    # Parse scores from response
+    text = response.content[0].text
+    scores = {}
+    for line in text.strip().split("\n"):
+        if ":" in line:
+            key, value = line.split(":", 1)
+            key = key.strip().lower()
+            try:
+                scores[key] = float(value.strip())
+            except ValueError:
+                scores[key] = value.strip()
+    return scores</code></pre>
+
+    <div class="gotcha-box">
+      <p><strong>LLM judges have biases.</strong> They tend to prefer longer answers (even when shorter ones are better), they're biased toward their own generation style, and they can be overly generous on faithfulness. Mitigate this by: (1) being very explicit in your evaluation prompt about what counts as faithful, (2) asking the judge to list each claim and check it individually (chain-of-thought), and (3) using a different model as judge than the one that generated the answer. If Claude generated the answer, use GPT-4 to judge it, or vice versa.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Building an Evaluation Dataset</h2>
+
+    <p>Metrics are useless without data to measure. You need an <strong>evaluation dataset</strong> &mdash; a set of question-answer-context triples that represent real queries your system should handle.</p>
+
+    <p>Think of it like building a test suite for your API. Each "test case" has:</p>
+
+    <ul>
+      <li><strong>Question:</strong> What the user asks</li>
+      <li><strong>Expected context:</strong> Which chunks should be retrieved (for retrieval metrics)</li>
+      <li><strong>Reference answer:</strong> The correct answer (for generation metrics)</li>
+    </ul>
+
+    <pre><code># evaluation_dataset.json
+[
+    {
+        "question": "What is our refund policy for online orders?",
+        "expected_chunk_ids": ["refund-policy-001", "refund-policy-002"],
+        "reference_answer": "Online orders can be refunded within 30 days of purchase. Items must be unused and in original packaging. Refunds are processed to the original payment method within 5-7 business days."
+    },
+    {
+        "question": "How do I set up SSO with Okta?",
+        "expected_chunk_ids": ["sso-setup-001", "okta-config-001", "sso-setup-003"],
+        "reference_answer": "To set up SSO with Okta: 1) Navigate to Admin > Identity Providers, 2) Click 'Add Provider' and select Okta, 3) Enter your Okta domain and client ID, 4) Configure the callback URL in your Okta dashboard."
+    }
+]</code></pre>
+
+    <h3>How Many Questions Do You Need?</h3>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">&lt;20</div>
+        <div class="stat-label">Scores swing wildly between runs &mdash; too few</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">50+</div>
+        <div class="stat-label">Stable metrics to track changes over time</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">200-500</div>
+        <div class="stat-label">Comprehensive coverage with synthetic generation</div>
+      </div>
+    </div>
+
+    <p><strong>Start with 50 hand-crafted questions</strong> that represent real user queries. Prioritize diversity: include simple factual questions, multi-hop questions, questions with ambiguous wording, and questions that should return "I don't know." Quality matters more than quantity &mdash; 50 well-crafted questions beat 500 sloppy ones.</p>
+
+    <h3>Generating Synthetic Test Data</h3>
+
+    <p>Once you have 50 golden questions, expand your dataset with an LLM: feed each chunk to the model and ask it to generate 3 questions that the chunk should answer, along with expected answers. RAGAS also has a built-in synthetic test generator that creates questions with different difficulty levels (simple, multi-hop, reasoning).</p>
+
+    <div class="warning-box">
+      <p><strong>Synthetic questions have a blind spot:</strong> they're generated from your documents, so they use the same vocabulary and framing. Real users don't talk like your documentation. Always keep a core set of <em>real</em> user questions in your eval dataset &mdash; harvest them from support tickets, chat logs, or user interviews. Synthetic data expands your coverage; real data keeps you honest.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>RAGAS: The RAG Evaluation Toolkit</h2>
+
+    <p>RAGAS (Retrieval Augmented Generation Assessment) is the most popular open-source framework for evaluating RAG systems. Instead of building everything from scratch, RAGAS gives you pre-built metrics and a clean API.</p>
+
+    <pre><code># pip install ragas
+
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,
+    answer_relevancy,
+    context_precision,
+    context_recall,
+)
+from datasets import Dataset
+
+# Prepare your evaluation data
+eval_data = {
+    "question": [
+        "What is our refund policy?",
+        "How do I set up SSO?",
+    ],
+    "answer": [
+        "Refunds are available within 30 days of purchase.",
+        "Go to Admin > Identity Providers and add your SSO config.",
+    ],
+    "contexts": [
+        ["Our refund policy allows returns within 30 days..."],
+        ["To configure SSO, navigate to Admin > Identity Providers..."],
+    ],
+    "ground_truth": [
+        "Online orders can be refunded within 30 days.",
+        "Navigate to Admin > Identity Providers, click Add Provider.",
+    ],
+}
+
+dataset = Dataset.from_dict(eval_data)
+
+# Run evaluation
+results = evaluate(
+    dataset,
+    metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+)
+
+print(results)
+# {'faithfulness': 0.92, 'answer_relevancy': 0.88,
+#  'context_precision': 0.85, 'context_recall': 0.90}</code></pre>
+
+    <h3>What RAGAS Measures</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>What It Checks</th>
+          <th>Needs Ground Truth?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Faithfulness</strong></td>
+          <td>Are claims in the answer supported by retrieved context?</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td><strong>Answer Relevancy</strong></td>
+          <td>Does the answer address the question?</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td><strong>Context Precision</strong></td>
+          <td>Are the retrieved chunks relevant to the question?</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><strong>Context Recall</strong></td>
+          <td>Were all needed chunks retrieved?</td>
+          <td>Yes</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The first two metrics (faithfulness and answer relevancy) are <strong>reference-free</strong> &mdash; they don't need ground truth answers, which makes them perfect for quick evaluation. Context precision and recall need ground truth (expected chunk IDs), so they require a curated eval dataset.</p>
+
+    <div class="gotcha-box">
+      <p><strong>RAGAS gotcha: NaN scores.</strong> RAGAS uses an LLM internally to compute metrics. If the LLM returns invalid JSON or an unexpected format, RAGAS silently returns NaN instead of a score. Always check your results for NaN values before averaging. A common fix: use a more capable model (Claude Sonnet or GPT-4) as the RAGAS evaluator, and increase the retry count in the RAGAS config.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>DeepEval: Test-Driven RAG Evaluation</h2>
+
+    <p>If RAGAS is like running a Jupyter notebook, <strong>DeepEval</strong> is like writing unit tests. It integrates with pytest so you can run RAG evaluations as part of your CI/CD pipeline.</p>
+
+    <pre><code># pip install deepeval
+
+from deepeval import assert_test
+from deepeval.test_case import LLMTestCase
+from deepeval.metrics import (
+    FaithfulnessMetric,
+    AnswerRelevancyMetric,
+    ContextualRelevancyMetric,
+)
+
+def test_refund_policy_question():
+    test_case = LLMTestCase(
+        input="What is our refund policy?",
+        actual_output="Refunds are available within 30 days of purchase.",
+        retrieval_context=[
+            "Our refund policy allows returns within 30 days of purchase. "
+            "Items must be in original packaging."
+        ],
+    )
+
+    faithfulness = FaithfulnessMetric(threshold=0.8)
+    relevancy = AnswerRelevancyMetric(threshold=0.7)
+
+    assert_test(test_case, [faithfulness, relevancy])</code></pre>
+
+    <p>Run it with <code>pytest test_rag.py</code> and you get pass/fail results just like any other test. This is powerful for regression testing &mdash; if a code change breaks your RAG quality, your CI pipeline catches it before it ships.</p>
+
+    <div class="tip-box">
+      <p><strong>When to use which:</strong> Use <strong>RAGAS</strong> for exploratory evaluation &mdash; "how good is my system right now?" Use <strong>DeepEval</strong> for automated testing &mdash; "did this change make things worse?" Use both in a mature RAG project: RAGAS for experimentation, DeepEval for CI/CD quality gates.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Debugging Retrieval Failures</h2>
+
+    <p>Your evaluation scores show low context precision or recall. Now what? Here's a systematic debugging approach:</p>
+
+    <p>Start by inspecting what was actually retrieved vs what should have been. Print each retrieved chunk with its score, mark whether it was expected, and list any missed chunks. This immediately shows whether the problem is wrong results or missing results.</p>
+
+    <h3>Common Retrieval Failure Patterns</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Symptom</th>
+          <th>Likely Cause</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Right topic, wrong details</td>
+          <td>Chunks too large &mdash; the answer is diluted</td>
+          <td>Smaller chunks or parent-child retrieval</td>
+        </tr>
+        <tr>
+          <td>Completely irrelevant results</td>
+          <td>Vocabulary mismatch between query and docs</td>
+          <td>Hybrid search (add BM25) or query rewriting</td>
+        </tr>
+        <tr>
+          <td>Right chunk at position 8-10</td>
+          <td>Ranking issue &mdash; relevant chunk scored low</td>
+          <td>Add a re-ranker (cross-encoder)</td>
+        </tr>
+        <tr>
+          <td>Relevant chunk not in index at all</td>
+          <td>Ingestion bug &mdash; document wasn't indexed</td>
+          <td>Check your ingestion pipeline for errors</td>
+        </tr>
+        <tr>
+          <td>Good for simple queries, bad for complex ones</td>
+          <td>Multi-hop questions need decomposition</td>
+          <td>Multi-query retrieval or step-back prompting</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============================================ -->
+    <h2>Debugging Generation Failures</h2>
+
+    <p>The right chunks were retrieved, but the answer is still wrong. Here's how to diagnose:</p>
+
+    <h3>The Context Was Retrieved but Ignored</h3>
+
+    <p>The LLM generated an answer from its own knowledge instead of the provided context. This usually means your system prompt isn't strong enough.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Weak system prompt</div>
+        <div class="prompt-text">Answer the user's question using the following context.
+
+Context: {chunks}</div>
+        <div class="prompt-explanation">The LLM may use its own knowledge when the context doesn't seem sufficient.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Strong system prompt</div>
+        <div class="prompt-text">Answer the user's question based ONLY on the provided context. If the context does not contain enough information to answer, say "I don't have enough information to answer this." Do NOT use any outside knowledge.
+
+Context: {chunks}</div>
+        <div class="prompt-explanation">Explicit constraints force the LLM to stay grounded in the retrieved context.</div>
+      </div>
+    </div>
+
+    <h3>The Context Was Contradictory</h3>
+
+    <p>Different chunks say different things (outdated docs, conflicting sources). The LLM picks one, and it might pick wrong. Fix: add metadata filtering to prefer recent documents, or use contextual compression to extract only the most authoritative source.</p>
+
+    <h3>The Answer Confabulates Details</h3>
+
+    <p>The context says "within 30 days" and the LLM says "within 30 business days." Subtle but wrong. This is the hardest failure to catch manually &mdash; it's why automated faithfulness scoring is so important.</p>
+
+    <!-- ============================================ -->
+    <h2>A/B Testing RAG Configurations</h2>
+
+    <p>Now you have metrics and an eval dataset. The real power is using them to <strong>compare configurations</strong>. Changed your chunk size from 500 to 300 tokens? Run both through the eval and compare.</p>
+
+    <pre><code>def ab_test_rag(eval_dataset: list[dict], pipeline_a, pipeline_b,
+                judge_client) -> dict:
+    """Compare two RAG pipeline configurations."""
+    scores_a = {"faithfulness": [], "relevance": [], "retrieval_precision": []}
+    scores_b = {"faithfulness": [], "relevance": [], "retrieval_precision": []}
+
+    for item in eval_dataset:
+        question = item["question"]
+        expected_chunks = set(item.get("expected_chunk_ids", []))
+
+        # Run both pipelines
+        result_a = pipeline_a.query(question)
+        result_b = pipeline_b.query(question)
+
+        # Score retrieval
+        if expected_chunks:
+            prec_a = precision_at_k(result_a.chunk_ids, expected_chunks, k=5)
+            prec_b = precision_at_k(result_b.chunk_ids, expected_chunks, k=5)
+            scores_a["retrieval_precision"].append(prec_a)
+            scores_b["retrieval_precision"].append(prec_b)
+
+        # Score generation (LLM-as-judge)
+        judge_a = judge_rag_response(question, result_a.answer, result_a.context)
+        judge_b = judge_rag_response(question, result_b.answer, result_b.context)
+
+        scores_a["faithfulness"].append(judge_a.get("faithfulness", 0))
+        scores_b["faithfulness"].append(judge_b.get("faithfulness", 0))
+
+    # Compare averages
+    report = {}
+    for metric in scores_a:
+        avg_a = sum(scores_a[metric]) / len(scores_a[metric]) if scores_a[metric] else 0
+        avg_b = sum(scores_b[metric]) / len(scores_b[metric]) if scores_b[metric] else 0
+        report[metric] = {"pipeline_a": avg_a, "pipeline_b": avg_b,
+                          "delta": avg_b - avg_a}
+    return report</code></pre>
+
+    <div class="pipeline-box">
+      <p><strong>The evaluation loop in practice:</strong> Change one variable (chunk size, embedding model, retrieval strategy) &rarr; run the eval dataset through both configurations &rarr; compare scores &rarr; keep the winner &rarr; repeat. This is how you systematically improve a RAG system instead of guessing. Every improvement is backed by numbers, and you can explain exactly why one approach beats another.</p>
+    </div>
+
+    <h3>Quality Thresholds: When Is Good Enough?</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Use Case</th>
+          <th>Faithfulness</th>
+          <th>Relevance</th>
+          <th>Context Recall</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Internal knowledge base</td>
+          <td>&ge; 0.80</td>
+          <td>&ge; 0.75</td>
+          <td>&ge; 0.70</td>
+        </tr>
+        <tr>
+          <td>Customer-facing chatbot</td>
+          <td>&ge; 0.85</td>
+          <td>&ge; 0.80</td>
+          <td>&ge; 0.80</td>
+        </tr>
+        <tr>
+          <td>Legal / compliance</td>
+          <td>&ge; 0.95</td>
+          <td>&ge; 0.90</td>
+          <td>&ge; 0.90</td>
+        </tr>
+        <tr>
+          <td>Medical / safety-critical</td>
+          <td>&ge; 0.95</td>
+          <td>&ge; 0.90</td>
+          <td>&ge; 0.95</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="gotcha-box">
+      <p><strong>High retrieval precision doesn't guarantee good answers.</strong> You can retrieve 5 perfectly relevant chunks and still get a bad answer if: the LLM hallucinates details, the context is contradictory, or the question requires reasoning the LLM can't do. Always evaluate retrieval and generation <em>separately</em>. A drop in faithfulness with high retrieval scores means your problem is in the generation step, not retrieval. Treating them as one metric hides where things break.</p>
+    </div>
+
+    <!-- ============================================ -->
+
+    <div class="exercise-box">
+      <h3>Try It: Build a 20-Question Evaluation Suite</h3>
+      <ol>
+        <li><strong>Create your eval dataset:</strong> Write 20 questions that real users would ask of your document collection. For each, note which chunks should be retrieved and what the correct answer is.</li>
+        <li><strong>Mix question types:</strong> Include 5 simple factual questions, 5 that require combining information, 5 that use different wording than the docs, and 5 that should return "I don't know."</li>
+        <li><strong>Score with RAGAS:</strong> Run your eval dataset through RAGAS and get faithfulness, relevance, context precision, and context recall scores.</li>
+        <li><strong>Find your weakest metric:</strong> Which score is lowest? If it's context recall, focus on retrieval improvements. If it's faithfulness, focus on your prompt engineering.</li>
+        <li><strong>Run an A/B test:</strong> Pick one change (e.g., add query rewriting from Chapter 9) and compare scores before and after.</li>
+      </ol>
+      <p>Your goal: get all four RAGAS metrics above 0.80. If any metric is below 0.70, that's where your biggest improvement opportunity is.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+
+    <p>You now have the tools to measure your RAG system objectively. But measurement is just one part of running RAG in the real world. Your prototype handles 20 questions from 100 documents &mdash; what happens when 1,000 users hit it with 1,000,000 documents?</p>
+
+    <p>In the next chapter, we'll tackle the production gap: cost management (embedding and LLM costs add up fast), latency optimization (users won't wait 5 seconds for an answer), scaling vector databases, security and access control, and monitoring your system over time. Because a RAG system that works in a notebook is a demo &mdash; a RAG system that works at scale is a product.</p>
+
+  </main>
+
+  <nav class="chapter-nav">
+    <a href="09-advanced-patterns.html" class="prev">
+      <span class="nav-direction">&larr; Previous Chapter</span>
+      <span class="nav-chapter">Advanced RAG Patterns</span>
+    </a>
+    <a href="11-production-deployment.html" class="next">
+      <span class="nav-direction">Next Chapter &rarr;</span>
+      <span class="nav-chapter">RAG in Production</span>
+    </a>
+  </nav>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 10: Real-Time Multimodal Pipelines | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="09-video-understanding.html">&larr; Prev</a>
+      <a href="11-shipping-multimodal.html">Next &rarr;</a>
+      <a href="maps/10-realtime-pipelines-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 10</div>
+    <h1>Real-Time Multimodal Pipelines</h1>
+    <p class="subtitle">Streaming audio, video, and text to AI models &mdash; with virtually no delay</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>From Batch to Live</h2>
+
+      <p>Everything we've built so far in this course has been <em>batch processing</em>. You take a photo, send it to an API, wait a few seconds, get a response. You record audio, upload it to Whisper, get a transcript. You extract video frames, send them to Claude, get a summary.</p>
+
+      <p>That's incredibly useful &mdash; but it's not how humans communicate. We don't record a sentence, wait three seconds, then listen to a reply. We talk and listen <em>at the same time</em>. We see and hear <em>simultaneously</em>. We interrupt, point at things, react in real-time.</p>
+
+      <p><strong>Real-time multimodal AI</strong> is about making machines work the same way &mdash; processing audio, video, and text simultaneously, with latency so low it feels like a natural conversation.</p>
+
+      <div class="highlight-box">
+        <h3>The Simultaneous Interpreter</h3>
+        <p>Real-time multimodal AI is like a <strong>simultaneous interpreter at the UN</strong>. They listen to the speaker in one language, understand the meaning, translate in their head, and speak the translation &mdash; all at the same time, with virtually no delay. Now imagine that interpreter can also <em>see</em> what the speaker is pointing at, read the slides behind them, and adjust their translation based on the audience's facial expressions. That's what we're building toward.</p>
+      </div>
+
+      <p>If you've tried ChatGPT's Advanced Voice Mode or Gemini Live, you've already experienced this. You talk to the AI like you would talk to a person. You can interrupt it mid-sentence. It responds in a natural voice with emotion and pacing. It feels <em>alive</em> in a way that typing prompts and reading responses simply doesn't.</p>
+
+      <p>In this chapter, you'll learn how these systems work under the hood, what makes real-time processing so challenging, and how to build your own streaming pipelines.</p>
+    </section>
+
+    <!-- The Real-Time Challenge -->
+    <section>
+      <h2>Why Real-Time Is Hard</h2>
+
+      <p>Processing multimodal data in real-time is fundamentally different from batch processing. Here's why:</p>
+
+      <h3>The Latency Budget</h3>
+
+      <p>In a natural conversation, the gap between one person finishing a sentence and the other person starting to respond is about <strong>200-300 milliseconds</strong>. That's your target. If an AI takes longer than about 500ms to start responding, the conversation feels sluggish and unnatural. Over 1 second? It feels broken.</p>
+
+      <p>Now think about what needs to happen in those 200-300ms:</p>
+
+      <ol>
+        <li>Capture audio from the microphone</li>
+        <li>Send it to a server (network latency)</li>
+        <li>Convert speech to text (or process raw audio)</li>
+        <li>Run the language model to generate a response</li>
+        <li>Convert the response text to speech</li>
+        <li>Send the audio back to the client</li>
+        <li>Play it through the speaker</li>
+      </ol>
+
+      <p>That's seven steps, and each one takes time. If any single step is too slow, the whole experience falls apart.</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">200ms</span>
+          <span class="stat-label">Target end-to-end latency for natural conversation</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">500ms</span>
+          <span class="stat-label">Maximum latency before users notice delay</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">7+</span>
+          <span class="stat-label">Pipeline steps that must fit inside that budget</span>
+        </div>
+      </div>
+
+      <h3>The Three Enemies of Real-Time</h3>
+
+      <p><strong>1. Network latency.</strong> Every round trip to a cloud server adds 20-100ms. If your pipeline requires multiple sequential API calls (STT &rarr; LLM &rarr; TTS), those round trips stack up. A user in Sydney hitting a server in Virginia might add 200ms just from the speed of light.</p>
+
+      <p><strong>2. Processing time.</strong> LLMs take time to generate tokens. Whisper takes time to transcribe. TTS takes time to synthesize. Even fast models need <em>some</em> time to think.</p>
+
+      <p><strong>3. Buffering.</strong> Audio and video data comes in chunks. You need enough data to make sense of it (you can't transcribe half a syllable), but waiting for bigger chunks means more delay. Finding the right chunk size is a constant balancing act.</p>
+
+      <div class="modality-box">
+        <h3>Audio: The Most Latency-Sensitive Modality</h3>
+        <p>Humans are far more sensitive to audio latency than visual latency. A 100ms delay in a video stream is barely noticeable &mdash; we're used to video buffering. But a 100ms echo or delay in audio during a conversation is immediately jarring. This is why voice AI systems prioritize audio latency above everything else.</p>
+        <p>Think about it: you can have a perfectly natural phone call at 360p video quality, but add 300ms of audio delay and the conversation becomes painful. <strong>Audio latency is the bottleneck that defines real-time multimodal quality.</strong></p>
+      </div>
+    </section>
+
+    <!-- The Traditional Pipeline -->
+    <section>
+      <h2>The Traditional Pipeline: STT &rarr; LLM &rarr; TTS</h2>
+
+      <p>Before native multimodal real-time APIs existed, the standard approach was to chain three separate models together. This is still a valid architecture, and understanding it helps you appreciate why the newer approaches are such a big deal.</p>
+
+      <div class="pipeline-box">
+        <h3>The Classic Voice Assistant Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Microphone</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">STT (Whisper)</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">LLM (Claude/GPT)</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">TTS (ElevenLabs)</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Speaker</span>
+        </div>
+        <p style="margin-top: 1rem;"><strong>Step 1:</strong> Capture audio from the user's microphone. <strong>Step 2:</strong> Send audio chunks to a speech-to-text model (Whisper, Deepgram, AssemblyAI). <strong>Step 3:</strong> Send the transcribed text to an LLM for a response. <strong>Step 4:</strong> Stream the LLM's text output to a TTS engine to generate speech. <strong>Step 5:</strong> Play the audio back to the user.</p>
+      </div>
+
+      <p>Here's what a minimal implementation looks like:</p>
+
+<pre><code>import pyaudio, io, anthropic
+from openai import OpenAI
+from elevenlabs import stream as el_stream
+
+oai = OpenAI()
+claude = anthropic.Anthropic()
+
+# 1. Record audio until silence detected
+audio_data = record_until_silence()
+
+# 2. Transcribe with Whisper
+transcript = oai.audio.transcriptions.create(
+    model="whisper-1",
+    file=io.BytesIO(audio_data)
+)
+
+# 3. Get LLM response (streaming)
+response = claude.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=300,
+    messages=[{"role": "user",
+               "content": transcript.text}],
+    stream=True
+)
+
+# 4. Stream text to TTS and play audio
+el_stream(text_stream=response)
+</code></pre>
+
+      <div class="tip-box">
+        The key optimization in this pipeline is <strong>streaming at every step</strong>. Don't wait for the full LLM response before starting TTS. Instead, stream the LLM's tokens directly to the TTS engine, which starts synthesizing speech as soon as it receives the first sentence. This technique is called <strong>pipeline parallelism</strong>, and it can cut perceived latency in half.
+      </div>
+
+      <h3>Where the Latency Lives</h3>
+
+      <p>Let's break down the timing for a typical request:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>Typical Latency</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Audio capture + silence detection</strong></td>
+            <td>300-800ms</td>
+            <td>Waiting for the user to stop speaking</td>
+          </tr>
+          <tr>
+            <td><strong>Network: audio upload</strong></td>
+            <td>50-150ms</td>
+            <td>Depends on audio length and connection</td>
+          </tr>
+          <tr>
+            <td><strong>STT processing</strong></td>
+            <td>200-500ms</td>
+            <td>Whisper API; faster with Deepgram (~100ms)</td>
+          </tr>
+          <tr>
+            <td><strong>LLM time-to-first-token</strong></td>
+            <td>200-600ms</td>
+            <td>Varies by model and prompt length</td>
+          </tr>
+          <tr>
+            <td><strong>TTS first-chunk generation</strong></td>
+            <td>100-300ms</td>
+            <td>Time until first audio chunk is ready</td>
+          </tr>
+          <tr>
+            <td><strong>Network: audio playback start</strong></td>
+            <td>50-100ms</td>
+            <td>Streaming the first audio chunk back</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Total: 900ms - 2.5 seconds.</strong> That's noticeably slow for a conversation. Usable, but not natural. You can optimize individual steps (use Deepgram instead of Whisper for faster STT, use a smaller LLM for faster responses), but the fundamental problem is <strong>sequential processing</strong>: each step waits for the previous one to finish.</p>
+
+      <div class="warning-box">
+        <strong>Silence detection is the hidden latency killer.</strong> How does your system know the user has finished speaking? Most systems wait for a gap in the audio (typically 500-800ms of silence). That means even before any AI processing starts, you've already burned half a second just waiting to be sure the user is done talking. Advanced systems use Voice Activity Detection (VAD) models to detect end-of-speech more quickly and accurately.
+      </div>
+    </section>
+
+    <!-- Native Real-Time APIs -->
+    <section>
+      <h2>The Breakthrough: Native Real-Time APIs</h2>
+
+      <p>The chained pipeline works, but it has an inherent limitation: the LLM only sees <em>text</em>. All the richness of the human voice &mdash; tone, emotion, emphasis, hesitation &mdash; gets flattened into a plain text transcript before the model ever sees it. And the model's response is also flat text that the TTS engine must bring to life.</p>
+
+      <p>Native real-time APIs change the game by processing audio (and sometimes video) <strong>directly</strong>, without the text intermediary.</p>
+
+      <div class="model-card">
+        <div class="model-icon">O</div>
+        <div class="model-info">
+          <div class="model-name">OpenAI Realtime API (GPT-4o)</div>
+          <div class="model-desc">Audio in, audio out &mdash; no separate STT or TTS step. The model hears your voice directly and generates speech directly. It understands tone, emotion, and emphasis in your voice. It can be interrupted mid-sentence. Supports function calling during voice conversations. Uses WebSocket connections for low-latency streaming. This is what powers ChatGPT's Advanced Voice Mode.</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-icon">G</div>
+        <div class="model-info">
+          <div class="model-name">Google Gemini Live API</div>
+          <div class="model-desc">Native multimodal streaming with audio and video input. You can have a voice conversation while sharing your camera feed &mdash; the model sees what you see and hears what you say, simultaneously. Supports real-time screen sharing, camera input, and voice interaction. The closest thing to "talking to an AI that's sitting next to you looking at your screen."</div>
+        </div>
+      </div>
+
+      <h3>How Native Real-Time Works</h3>
+
+      <p>Instead of the chained STT &rarr; LLM &rarr; TTS pipeline, native real-time models work like this:</p>
+
+      <div class="pipeline-box">
+        <h3>Native Real-Time Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Microphone</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Audio Chunks (WebSocket)</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Multimodal Model</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Audio Chunks (WebSocket)</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Speaker</span>
+        </div>
+        <p style="margin-top: 1rem;">The model receives raw audio (and optionally video frames) via a persistent WebSocket connection. It processes the audio directly &mdash; no transcription step. It generates audio output directly &mdash; no TTS step. The result is dramatically lower latency because you've eliminated two entire pipeline stages.</p>
+      </div>
+
+      <p>The difference in latency is significant:</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <p class="prompt-label">Native Real-Time</p>
+          <div class="prompt-text">Time to first audio response:
+~300-500ms
+
+Pipeline steps: 3
+(capture → model → playback)
+
+Voice quality: Natural, emotional,
+preserves speaker's tone context
+
+Interruption: Built-in support</div>
+          <p class="prompt-explanation">Fewer steps, lower latency, richer understanding of voice characteristics.</p>
+        </div>
+        <div class="prompt-example bad">
+          <p class="prompt-label">Chained STT → LLM → TTS</p>
+          <div class="prompt-text">Time to first audio response:
+~1000-2500ms
+
+Pipeline steps: 7
+(capture → upload → STT → LLM →
+ TTS → download → playback)
+
+Voice quality: TTS voice only,
+loses speaker's emotional context
+
+Interruption: Custom implementation</div>
+          <p class="prompt-explanation">More steps, higher latency, voice information lost in transcription.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- WebRTC and WebSockets -->
+    <section>
+      <h2>The Transport Layer: WebSockets and WebRTC</h2>
+
+      <p>Real-time streaming needs a fast, persistent connection between the client and server. Two technologies dominate this space:</p>
+
+      <h3>WebSockets</h3>
+
+      <p>WebSockets provide a persistent, bidirectional connection between client and server. Unlike HTTP (which is request-response), a WebSocket stays open, letting both sides send data at any time. This is what most real-time AI APIs use.</p>
+
+      <p>Think of HTTP as sending letters &mdash; you write a letter, mail it, wait for a reply. WebSockets are like a phone call &mdash; the line stays open and either side can talk at any time.</p>
+
+<pre><code>import asyncio, websockets, json, base64
+
+async def realtime_session():
+    url = "wss://api.openai.com/v1/realtime"
+    headers = {
+        "Authorization": "Bearer YOUR_KEY",
+        "OpenAI-Beta": "realtime=v1"
+    }
+    async with websockets.connect(
+        url, extra_headers=headers
+    ) as ws:
+        # Send audio chunks as they're captured
+        async for chunk in mic_stream():
+            await ws.send(json.dumps({
+                "type": "input_audio_buffer.append",
+                "audio": base64.b64encode(
+                    chunk).decode()
+            }))
+        # Receive and play response audio
+        async for msg in ws:
+            data = json.loads(msg)
+            if data["type"] == "response.audio.delta":
+                play_audio(data["delta"])
+</code></pre>
+
+      <h3>WebRTC</h3>
+
+      <p>WebRTC (Web Real-Time Communication) is the technology behind video calls in your browser. It's designed for ultra-low-latency audio and video streaming, with built-in support for echo cancellation, noise suppression, and adaptive bitrate.</p>
+
+      <p>While WebSockets send data through a server, WebRTC can establish <strong>peer-to-peer connections</strong>, reducing latency even further. OpenAI's Realtime API also supports WebRTC connections, which is the recommended approach for browser-based applications.</p>
+
+      <div class="tip-box">
+        <strong>When to use which?</strong> Use <strong>WebSockets</strong> for server-side applications (Python scripts, backend services, mobile apps). Use <strong>WebRTC</strong> for browser-based applications where you need the lowest possible audio/video latency and built-in media handling. WebRTC handles echo cancellation, noise reduction, and codec negotiation automatically &mdash; things you'd have to build yourself with WebSockets.
+      </div>
+    </section>
+
+    <!-- Interruption Handling -->
+    <section>
+      <h2>Interruption Handling: The Conversation Killer</h2>
+
+      <p>Here's a scenario that seems simple but is surprisingly hard to get right: the user starts talking while the AI is still speaking. In a human conversation, we handle interruptions naturally &mdash; we stop talking when someone else starts. But for an AI system, this requires careful engineering.</p>
+
+      <h3>Why Interruptions Are Tricky</h3>
+
+      <p>When the AI is generating a response, multiple things are happening simultaneously:</p>
+
+      <ul>
+        <li>The LLM is still generating tokens</li>
+        <li>The TTS engine is still converting text to audio</li>
+        <li>Audio chunks are being sent to the client</li>
+        <li>The speaker is playing those chunks</li>
+      </ul>
+
+      <p>When the user interrupts, you need to:</p>
+
+      <ol>
+        <li><strong>Detect</strong> that the user is speaking (not just coughing or a background noise)</li>
+        <li><strong>Stop</strong> the current audio playback immediately</li>
+        <li><strong>Cancel</strong> the in-progress LLM generation (why keep generating a response nobody will hear?)</li>
+        <li><strong>Capture</strong> the user's new input</li>
+        <li><strong>Process</strong> the new input with context of what was already said</li>
+      </ol>
+
+      <p>Native real-time APIs like OpenAI's handle this automatically &mdash; they detect when the user starts speaking and stop their own output. But if you're building a custom pipeline, you need to implement this yourself.</p>
+
+      <div class="warning-box">
+        <strong>The echo problem.</strong> If the AI's audio output is picked up by the user's microphone, the system thinks the user is speaking and interrupts itself. This creates an infinite loop of self-interruption. The solution is <strong>echo cancellation</strong> &mdash; filtering out audio that matches what the system is currently playing. WebRTC handles this automatically; custom WebSocket implementations need explicit echo cancellation logic.
+      </div>
+    </section>
+
+    <!-- Function Calling in Real-Time -->
+    <section>
+      <h2>Function Calling in Voice Conversations</h2>
+
+      <p>One of the most powerful features of real-time APIs is <strong>function calling during voice conversations</strong>. The model can decide, mid-conversation, that it needs to call an external function &mdash; check the weather, look up a database, control a smart home device &mdash; and seamlessly integrate the result into its spoken response.</p>
+
+      <p>Imagine saying: "Hey, what's the weather like in Berlin tomorrow?" The model:</p>
+
+      <ol>
+        <li>Hears your question</li>
+        <li>Decides it needs to call a <code>get_weather</code> function</li>
+        <li>Sends the function call to your server</li>
+        <li>Receives the weather data</li>
+        <li>Speaks: "Tomorrow in Berlin it'll be 18 degrees and partly cloudy &mdash; nice day for a walk!"</li>
+      </ol>
+
+      <p>All of this happens in about a second, during a natural voice conversation. No typing, no waiting for a text response.</p>
+
+<pre><code># Define tools for the real-time session
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get current weather",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"}
+        },
+        "required": ["location"]
+    }
+}]
+
+# When the model calls a function:
+if event["type"] == "response.function_call":
+    result = get_weather(event["arguments"])
+    # Send the result back to continue
+    await ws.send(json.dumps({
+        "type": "conversation.item.create",
+        "item": {"type": "function_call_output",
+                 "output": json.dumps(result)}
+    }))
+</code></pre>
+
+      <div class="try-it-box">
+        <h3>Try It: Voice Conversation with ChatGPT</h3>
+        <p>Open ChatGPT on your phone and start a voice conversation (tap the headphone icon). Try these things and pay attention to the experience:</p>
+        <ol>
+          <li><strong>Interrupt it</strong> mid-sentence. Does it stop naturally?</li>
+          <li><strong>Ask a follow-up</strong> that requires context from its previous answer. Does it remember?</li>
+          <li><strong>Speak quickly</strong> and then slowly. Does it adapt its response pacing?</li>
+          <li><strong>Express emotion</strong> &mdash; sound excited, confused, or bored. Does it respond differently?</li>
+          <li><strong>Ask it to do something</strong> that requires a tool (search the web, do a calculation). Notice the slight pause while the function executes.</li>
+        </ol>
+        <p>This is GPT-4o's Realtime API in action. Think about the latency, the naturalness, and where you still notice "AI-ness."</p>
+      </div>
+    </section>
+
+    <!-- Live Camera + AI -->
+    <section>
+      <h2>Live Camera + AI: Seeing in Real-Time</h2>
+
+      <p>Voice conversations are impressive, but the next frontier is adding <strong>vision</strong> to the real-time loop. Imagine an AI that can see what your phone's camera sees, hear what you're saying, and respond in real-time. That's already possible.</p>
+
+      <h3>How Live Vision Works</h3>
+
+      <p>The approach is conceptually simple: capture video frames from the camera, send them alongside audio to the model, and get a response that accounts for both what it sees and what it hears.</p>
+
+      <p>In practice, you can't send every frame &mdash; that would overwhelm both the network and the model. Instead, you sample frames at a reasonable rate (typically 1-5 frames per second) and send them as part of the streaming session.</p>
+
+      <div class="pipeline-box">
+        <h3>Live Multimodal Pipeline</h3>
+        <div class="workflow-steps">
+          <span class="step">Camera + Mic</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Audio Stream + Frame Samples</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Multimodal Model</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Audio + Text Response</span>
+          <span class="step-arrow">&rarr;</span>
+          <span class="step">Speaker + Screen</span>
+        </div>
+        <p style="margin-top: 1rem;">The camera feed is sampled at 1-5 FPS (much lower than the full video rate). These frames are sent to the model alongside the continuous audio stream. The model processes both inputs and generates a response that references what it sees and hears. Gemini Live does this natively; for other models, you'd combine a frame-capture loop with the audio streaming pipeline.</p>
+      </div>
+
+      <h3>Use Cases for Live Vision + Voice</h3>
+
+      <ul>
+        <li><strong>Visual assistance for the blind:</strong> "What's in front of me? Is the traffic light green?" &mdash; an AI with your phone's camera feed providing real-time narration of the world</li>
+        <li><strong>Live tech support:</strong> "My printer is showing an error" &mdash; point your camera at the printer and the AI reads the error code, looks it up, and talks you through the fix</li>
+        <li><strong>Cooking assistance:</strong> Point your camera at your cutting board &mdash; "Am I dicing these onions finely enough?" The AI sees your technique and gives live feedback</li>
+        <li><strong>Learning and training:</strong> "Show me how to tie this knot" &mdash; the AI watches your hands and corrects your technique in real-time</li>
+        <li><strong>Real-time translation:</strong> Point your camera at a sign in a foreign language while the AI reads it aloud in your language</li>
+      </ul>
+
+      <div class="modality-box">
+        <h3>Screen Sharing: The Developer's Use Case</h3>
+        <p>For developers, the most immediately useful live vision feature is <strong>screen sharing with an AI</strong>. Share your screen (or IDE), talk to the AI about your code, and it can see exactly what you see. "Why is this test failing?" becomes a much richer question when the AI can read the error message, see the code, and look at the terminal output &mdash; all while you explain the context verbally.</p>
+        <p>Gemini Live already supports this. You share your screen, talk to Gemini, and it responds based on what it sees and hears. This is essentially <strong>pair programming with an AI that can see your screen</strong>.</p>
+      </div>
+    </section>
+
+    <!-- Building Your Own Pipeline -->
+    <section>
+      <h2>Building a Simple Real-Time Assistant</h2>
+
+      <p>Let's build a basic real-time voice assistant using the chained approach. While not as smooth as native real-time APIs, this gives you full control over each step and works with any combination of models.</p>
+
+<pre><code>import pyaudio, wave, io, anthropic
+from openai import OpenAI
+
+oai = OpenAI()
+claude = anthropic.Anthropic()
+history = []
+
+def listen(seconds=5):
+    """Record audio from microphone."""
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16,
+        channels=1, rate=16000, input=True,
+        frames_per_buffer=1024)
+    frames = [stream.read(1024)
+              for _ in range(int(16000/1024*seconds))]
+    stream.stop_stream(); stream.close()
+    buf = io.BytesIO()
+    wf = wave.open(buf, 'wb')
+    wf.setnchannels(1); wf.setsampwidth(2)
+    wf.setframerate(16000); wf.writeframes(
+        b''.join(frames)); wf.close()
+    buf.seek(0)
+    return buf
+</code></pre>
+
+<pre><code>def assistant_loop():
+    """Main conversation loop."""
+    while True:
+        print("Listening...")
+        audio = listen(seconds=5)
+        # STT
+        text = oai.audio.transcriptions.create(
+            model="whisper-1", file=audio).text
+        print(f"You: {text}")
+        # LLM
+        history.append({"role": "user",
+                        "content": text})
+        resp = claude.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=200, messages=history)
+        reply = resp.content[0].text
+        history.append({"role": "assistant",
+                        "content": reply})
+        print(f"AI: {reply}")
+        # TTS
+        speech = oai.audio.speech.create(
+            model="tts-1", voice="nova",
+            input=reply)
+        play_audio(speech.content)
+
+assistant_loop()
+</code></pre>
+
+      <div class="tip-box">
+        This is a <strong>simplified example</strong>. A production-quality version would add: Voice Activity Detection (VAD) to know when the user has stopped speaking, streaming at each step (not waiting for full responses), interruption handling, error recovery, and a proper audio playback queue. Libraries like <strong>LiveKit</strong>, <strong>Pipecat</strong>, and <strong>Vocode</strong> handle all of this for you.
+      </div>
+    </section>
+
+    <!-- Edge vs Cloud -->
+    <section>
+      <h2>Edge vs Cloud: Where to Process</h2>
+
+      <p>One of the biggest architecture decisions for real-time multimodal is: where does the processing happen?</p>
+
+      <div class="comparison">
+        <div class="prompt-example good">
+          <p class="prompt-label">Cloud Processing</p>
+          <div class="prompt-text">Pros:
++ Most capable models (GPT-4o, Gemini)
++ No device constraints
++ Easy to update and improve
+
+Cons:
+- Network latency (20-200ms per hop)
+- Requires internet connection
+- Privacy: audio/video sent to servers
+- Cost per API call</div>
+        </div>
+        <div class="prompt-example good">
+          <p class="prompt-label">Edge/On-Device Processing</p>
+          <div class="prompt-text">Pros:
++ Near-zero network latency
++ Works offline
++ Privacy: data stays on device
++ No per-call API costs
+
+Cons:
+- Limited model capability
+- Constrained by device hardware
+- Harder to update
+- Battery/thermal concerns on mobile</div>
+        </div>
+      </div>
+
+      <p>The practical answer is usually <strong>both</strong>. Use on-device models for latency-critical, privacy-sensitive tasks (wake word detection, basic voice commands, echo cancellation) and cloud models for the heavy thinking (complex reasoning, long conversations, multimodal understanding).</p>
+
+      <p>This is exactly how Siri and Google Assistant work: a small on-device model detects "Hey Siri" with near-zero latency, then the cloud handles the actual request. Apple's on-device models handle simple tasks locally, and only escalate to the cloud for complex queries.</p>
+
+      <div class="tip-box">
+        <strong>The hybrid approach is winning.</strong> Whisper Tiny runs on-device for fast, rough transcription to provide immediate feedback ("I heard you say..."), while the full request is processed in the cloud for an accurate response. The user sees instant acknowledgment (low perceived latency) while the real processing happens in the background.
+      </div>
+    </section>
+
+    <!-- The Future -->
+    <section>
+      <h2>Where This Is Heading</h2>
+
+      <p>Real-time multimodal AI is evolving incredibly fast. Here's what's coming:</p>
+
+      <h3>Always-On Multimodal AI</h3>
+
+      <p>Smart glasses (Meta Ray-Ban, etc.) with cameras and microphones that feed an always-on AI. You look at a restaurant menu in Japanese, and the AI whispers the English translation in your ear. You're in a meeting and forget someone's name &mdash; the AI recognizes their face and quietly reminds you. This is the "AI companion" vision, and the hardware is nearly there.</p>
+
+      <h3>Real-Time Video Generation</h3>
+
+      <p>Today, models understand video in real-time. Soon, they'll <em>generate</em> video in real-time. Imagine a video call where the AI renders itself as a realistic avatar, complete with facial expressions and gestures that match its speech. Or real-time game environments generated entirely by AI based on your actions.</p>
+
+      <h3>Multimodal Agents</h3>
+
+      <p>AI agents that can see your screen, hear your voice, control your computer, and carry out complex tasks autonomously. "Book me a flight to Berlin next Thursday, the cheapest option" &mdash; and the agent navigates the browser, fills in forms, and asks you verbally for confirmation before booking. This combines real-time multimodal understanding with the ability to <em>act</em>.</p>
+
+      <div class="highlight-box">
+        <h3>The "AI as a Colleague" Milestone</h3>
+        <p>We're moving from AI as a <strong>tool</strong> (type a prompt, get a response) to AI as a <strong>colleague</strong> (talks to you, sees what you see, works alongside you in real-time). The technical pieces &mdash; real-time voice, live vision, function calling, low latency &mdash; are all landing now. The next 2-3 years will be about combining them into experiences that feel genuinely collaborative, not just responsive.</p>
+      </div>
+    </section>
+
+    <!-- Frameworks and Tools -->
+    <section>
+      <h2>Your Real-Time Toolkit</h2>
+
+      <p>Building real-time multimodal systems from scratch is hard. These frameworks handle the plumbing so you can focus on the experience:</p>
+
+      <div class="tool-card">
+        <div class="tool-icon">LK</div>
+        <div class="tool-info">
+          <div class="tool-name">LiveKit</div>
+          <div class="tool-desc">Open-source platform for real-time audio and video. Handles WebRTC, room management, and media routing. Has an "Agents" framework specifically for building AI voice/video assistants. Integrates with OpenAI Realtime API, Deepgram, ElevenLabs, and more. Probably the most mature option for production real-time AI.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">PC</div>
+        <div class="tool-info">
+          <div class="tool-name">Pipecat</div>
+          <div class="tool-desc">Open-source framework by Daily for building voice and multimodal AI agents. Provides a pipeline abstraction where you plug in STT, LLM, and TTS components. Handles audio transport, interruption, VAD, and turn-taking out of the box. Great for prototyping real-time voice assistants quickly.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">DG</div>
+        <div class="tool-info">
+          <div class="tool-name">Deepgram</div>
+          <div class="tool-desc">Ultra-fast speech-to-text API (~100ms latency for streaming transcription). If you're building a chained pipeline and Whisper is too slow, Deepgram's streaming STT can dramatically reduce your STT latency. Also offers TTS. Purpose-built for real-time use cases.</div>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-icon">RT</div>
+        <div class="tool-info">
+          <div class="tool-name">OpenAI Realtime API</div>
+          <div class="tool-desc">Native audio-to-audio model API. WebSocket and WebRTC support. Built-in VAD, interruption handling, and function calling. The simplest path to a high-quality real-time voice assistant if you're in the OpenAI ecosystem. Currently supports GPT-4o and GPT-4o-mini.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tips and Pitfalls -->
+    <section>
+      <h2>Tips and Common Pitfalls</h2>
+
+      <div class="tip-box">
+        <strong>Start with a managed API.</strong> Don't build a real-time pipeline from scratch unless you have a specific reason. Use OpenAI's Realtime API or Gemini Live for prototyping. You can always swap in custom components later once you understand the latency and quality requirements.
+      </div>
+
+      <div class="tip-box">
+        <strong>Measure latency at every step.</strong> Add timestamps at each pipeline stage. If your total latency is 1.5 seconds, you need to know exactly where that time is going. Is it silence detection? STT? LLM? TTS? You can only optimize what you measure.
+      </div>
+
+      <div class="warning-box">
+        <strong>Real-time is expensive.</strong> A voice conversation uses continuous API calls for the duration of the conversation. A 10-minute voice chat can cost significantly more than a text conversation of the same length. Monitor costs carefully and set session duration limits. OpenAI charges per-minute for Realtime API sessions.
+      </div>
+
+      <div class="warning-box">
+        <strong>Don't forget the non-AI parts.</strong> The best AI model in the world doesn't matter if your audio capture has glitches, your WebSocket drops, or your playback buffer underruns. Reliable audio I/O, stable network connections, and proper error handling are just as important as the AI model itself. Real-time systems have no room to retry &mdash; when something fails, the user hears silence.
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Experience and Compare Real-Time AI</h3>
+        <p>This exercise is about building intuition for real-time multimodal systems by experiencing them firsthand.</p>
+        <ol>
+          <li><strong>Try ChatGPT Advanced Voice Mode:</strong> Open the ChatGPT mobile app and start a voice conversation. Have a 2-minute chat about any topic. Pay attention to: How long does it take to start responding? Can you interrupt it? Does it understand your tone and emotion?</li>
+          <li><strong>Try Gemini Live with screen sharing:</strong> If you have access, start a Gemini Live session and share your screen. Open your code editor and ask Gemini to explain what's on screen. How well does it combine what it sees with what you're saying?</li>
+          <li><strong>Estimate the pipeline:</strong> Based on what you experienced, estimate the latency of each step. Where does the system feel fastest? Where does it feel slowest?</li>
+          <li><strong>Design a use case:</strong> Think of one feature in your app or workflow where real-time multimodal AI would be genuinely useful. Sketch the pipeline: what inputs (audio? camera? screen?), what processing, what outputs? What's the acceptable latency?</li>
+          <li><strong>Bonus:</strong> If you're feeling ambitious, try the OpenAI Realtime API directly. Their documentation has a console demo you can try in the browser without writing any code.</li>
+        </ol>
+        <p><strong>Reflection:</strong> How different is the experience of talking to an AI versus typing to one? What tasks feel natural with voice, and which ones still feel better as text?</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>Real-time multimodal AI is exhilarating, but it's also where things get expensive, complex, and fragile. In the last few chapters, we've built up an impressive toolkit: vision, audio, video, and real-time processing. But how do you actually <em>ship</em> a multimodal feature to real users?</p>
+
+      <p>In Chapter 11, we tackle <strong>Building Multimodal Features That Ship</strong>. You'll learn the production engineering side: architecture patterns, cost management (multimodal inputs are expensive), latency optimization, fallback strategies, and the UX patterns that make multimodal features feel polished instead of fragile. We're going from "cool demo" to "feature that works for 10,000 users at 3 AM on a Sunday."</p>
+
+      <p>The demo is the easy part. Let's talk about shipping.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="09-video-understanding.html" class="prev">
+      <span class="nav-direction">&larr; Previous</span>
+      <span class="nav-chapter">Video Understanding &amp; Analysis</span>
+    </a>
+    <a href="11-shipping-multimodal.html" class="next">
+      <span class="nav-direction">Next &rarr;</span>
+      <span class="nav-chapter">Building Multimodal Features That Ship</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 2: Reading AI-Generated Code | Reviewing AI Code For Dummies</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Reviewing AI Code For Dummies</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="01-review-mindset.html">&larr; Prev</a>
+      <a href="03-review-checklist.html">Next &rarr;</a>
+      <a href="maps/02-reading-ai-code-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 2</span>
+    <h1>Reading AI-Generated Code</h1>
+    <p class="subtitle">How to spot the &ldquo;tells,&rdquo; triage a 500-line diff, and know when the AI actually nailed it</p>
+  </header>
+
+  <main>
+
+    <!-- ============================================ -->
+    <h2>Training Your Eye</h2>
+    <!-- ============================================ -->
+
+    <p>In Chapter 1, you learned <em>why</em> reviewing AI code demands a different mindset. Now we need to train your eye to actually <em>see</em> the problems.</p>
+
+    <p>AI-generated code has fingerprints. Not obvious ones &mdash; it won&rsquo;t say <code>// written by Claude</code> at the top. But there are patterns, tics, and habits that AI consistently produces. Once you learn to recognize them, you&rsquo;ll scan a diff and instinctively know which parts need close attention and which parts are solid.</p>
+
+    <p>Think of it like a <strong>food inspector at a restaurant</strong>. A novice inspector checks every dish the same way. An experienced one walks in, sees three things out of place, and knows exactly where to focus. That&rsquo;s what this chapter gives you &mdash; the trained instinct to know where the problems hide in AI output.</p>
+
+    <!-- ============================================ -->
+    <h2>The Seven AI Code &ldquo;Tells&rdquo;</h2>
+    <!-- ============================================ -->
+
+    <p>These are the patterns that consistently appear in AI-generated code across tools &mdash; Claude Code, Copilot, Cursor, Windsurf. Once you know them, you can&rsquo;t unsee them.</p>
+
+    <h3>Tell #1: Over-Abstraction</h3>
+
+    <p>AI loves abstraction. Give it a simple task, and it&rsquo;ll build a factory for a builder for a strategy. Three files where one function would do.</p>
+
+<pre><code>// AI wrote this for a simple config lookup
+class ConfigurationProvider {
+  constructor(private readonly loader: ConfigLoader) {}
+  async getConfig&lt;T&gt;(key: string): Promise&lt;T&gt; {
+    const raw = await this.loader.load(key);
+    return this.deserialize&lt;T&gt;(raw);
+  }
+  private deserialize&lt;T&gt;(raw: string): T {
+    return JSON.parse(raw) as T;
+  }
+}
+
+// What you actually needed
+const config = JSON.parse(fs.readFileSync('config.json', 'utf8'));</code></pre>
+
+    <p>The AI version isn&rsquo;t <em>wrong</em> &mdash; it&rsquo;s just solving a problem you don&rsquo;t have yet. If you have one config file, you don&rsquo;t need a generic deserialization provider with dependency injection. That complexity will confuse the next developer who touches this code.</p>
+
+    <h3>Tell #2: Hallucinated APIs</h3>
+
+    <p>This is one of the most dangerous patterns. AI invents methods that look real but don&rsquo;t exist, or uses patterns from an older version of a framework. Lasso Security&rsquo;s package-hallucination research (Bar Lanyado, 2024), corroborated by a USENIX 2024 study covering 576,000 code samples across 16 LLMs, found that roughly <strong>1 in 5 AI code samples</strong> includes hallucinated references to non-existent libraries or APIs &mdash; with rates climbing to 35% for Python.</p>
+
+<pre><code>// AI generated this for a Next.js app
+import { useServerAction } from 'next/server';  // This doesn't exist
+
+export default function Dashboard() {
+  const data = useServerAction(fetchDashboard);  // Hallucinated API
+  return &lt;div&gt;{data.summary}&lt;/div&gt;;
+}</code></pre>
+
+    <p>The code <em>reads</em> perfectly. The import looks plausible. The function name follows Next.js naming conventions. But <code>useServerAction</code> doesn&rsquo;t exist in any version of Next.js. The AI blended patterns from React Server Components, Server Actions, and client hooks into something that looks right but won&rsquo;t compile. Models are trained with a data cutoff, and if a library released breaking changes after that cutoff, the model generates code for the old API &mdash; or worse, an API that never existed at all.</p>
+
+    <div class="tip-box">
+      <h4>Quick Hallucination Check</h4>
+      <p>When reviewing AI code that uses a library API you don&rsquo;t recognize, spend 30 seconds checking the docs. Run <code>grep -r "useServerAction" node_modules/next/</code> or check the official docs. This single habit catches the most dangerous class of AI bugs.</p>
+    </div>
+
+    <h3>Tell #3: The &ldquo;Kitchen Sink&rdquo; Import</h3>
+
+    <p>AI imports more than it needs. It pulls in entire modules when it uses one function. It imports types it never references. Look at the top of any AI-generated file and count the unused imports.</p>
+
+<pre><code>import {
+  useState, useEffect, useCallback, useMemo,
+  useRef, useContext, useReducer, useLayoutEffect  // Only useState and useEffect are used
+} from 'react';
+import axios from 'axios';       // fetch() is used instead, 30 lines down
+import _ from 'lodash';          // Only _.debounce is used — import { debounce } instead</code></pre>
+
+    <p>Unused imports aren&rsquo;t just messy &mdash; they increase bundle size, add unnecessary dependencies, and signal that the AI didn&rsquo;t actually think about what it needed.</p>
+
+    <h3>Tell #4: Overly Defensive Error Handling</h3>
+
+    <p>AI wraps everything in try-catch blocks, checks for impossible nulls, and adds fallbacks that mask real errors instead of surfacing them.</p>
+
+<pre><code>async function getUser(id: string) {
+  try {
+    const user = await db.users.findById(id);
+    if (user === null || user === undefined) {  // findById already returns null
+      return null;
+    }
+    if (typeof user.name !== 'string') {  // Schema guarantees this is a string
+      user.name = String(user.name ?? '');
+    }
+    return user;
+  } catch (error) {
+    console.log('Error fetching user:', error);  // Swallowing the error
+    return null;                                  // Caller has no idea what went wrong
+  }
+}</code></pre>
+
+    <p>Every check here is technically &ldquo;safe.&rdquo; But the redundant null check, the type coercion on a typed field, and the error-swallowing catch block all add noise without adding safety. Worse, that <code>return null</code> in the catch block means upstream code will get <code>null</code> on a database connection failure and silently misbehave instead of failing loudly.</p>
+
+    <h3>Tell #5: Copy-Paste Duplication</h3>
+
+    <p>AI repeats similar code blocks instead of extracting shared utilities. You&rsquo;ll see three functions that differ by one parameter, or two API routes with identical validation logic inlined in both.</p>
+
+<pre><code>// AI generated separate handlers with near-identical logic
+app.post('/api/users', async (req, res) =&gt; {
+  if (!req.body.name || req.body.name.length &lt; 2) return res.status(400).json({ error: 'Invalid name' });
+  if (!req.body.email || !req.body.email.includes('@')) return res.status(400).json({ error: 'Invalid email' });
+  // ... create user
+});
+
+app.put('/api/users/:id', async (req, res) =&gt; {
+  if (!req.body.name || req.body.name.length &lt; 2) return res.status(400).json({ error: 'Invalid name' });
+  if (!req.body.email || !req.body.email.includes('@')) return res.status(400).json({ error: 'Invalid email' });
+  // ... update user (same validation, copy-pasted)
+});</code></pre>
+
+    <p>Each AI prompt is a fresh conversation. The AI doesn&rsquo;t think &ldquo;I already wrote this validation &mdash; let me extract it.&rdquo; It solves each task independently, producing duplication that a human developer would naturally refactor.</p>
+
+    <h3>Tell #6: Dead Code and Unreachable Branches</h3>
+
+    <p>AI generates functions that are never called, enum values that are never used, and conditional branches that can never execute. It&rsquo;s hedging &mdash; covering scenarios that might exist in some codebase, but don&rsquo;t exist in yours.</p>
+
+<pre><code>// AI generated a utility file with 12 functions
+// Only 3 are imported anywhere in the codebase
+export function formatDate(date: Date): string { ... }     // Used
+export function formatTime(date: Date): string { ... }     // Used
+export function formatDateTime(date: Date): string { ... } // Used
+export function formatRelative(date: Date): string { ... } // Never imported
+export function formatDuration(ms: number): string { ... } // Never imported
+export function parseDate(str: string): Date { ... }       // Never imported
+// ... 6 more unused functions</code></pre>
+
+    <p>This is the AI being &ldquo;helpful&rdquo; &mdash; you asked for date formatting, so it gave you the whole toolkit. But dead code is maintenance weight. It gets imported accidentally, confuses new team members, and shows up in search results when someone is looking for the function they actually need. Remove it.</p>
+
+    <h3>Tell #7: The Over-Commenting Pattern</h3>
+
+    <p>We covered this in Chapter 1 as an AI tell, but it&rsquo;s worth repeating as a reading skill: when every line has a comment that restates the code, you&rsquo;re looking at AI output. Human developers comment the <em>why</em>, not the <em>what</em>.</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">AI-Style Comments</div>
+        <div class="prompt-text"><code>// Check if the user is an admin<br>if (user.role === 'admin')</code></div>
+        <div class="prompt-explanation">Restates what the code does. Adds zero information. Classic AI tell.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Human-Style Comments</div>
+        <div class="prompt-text"><code>// Admin bypass: skip rate limiting per SEC-2847<br>if (user.role === 'admin')</code></div>
+        <div class="prompt-explanation">Explains <em>why</em> this check exists and links to the decision. This is what useful comments look like.</div>
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="ai-tell-box">
+      <h4>The Phantom Edge Case Handler</h4>
+      <p>One of the most distinctive AI tells: a function that handles 5 edge cases when only 2 are possible in your system.</p>
+<pre><code>function calculateDiscount(order) {
+  if (!order) return 0;                           // Can't happen: caller validates
+  if (order.items.length === 0) return 0;         // Can't happen: empty carts are blocked
+  if (order.total &lt; 0) return 0;                  // Can't happen: totals are unsigned
+  if (order.currency !== 'USD') {                 // Can't happen: single-currency system
+    return convertAndDiscount(order);
+  }
+  // The actual discount logic finally starts here
+  return order.total &gt; 100 ? order.total * 0.1 : 0;
+}</code></pre>
+      <p>The AI doesn&rsquo;t know your system. It imagines all the ways things <em>could</em> go wrong in <em>any</em> system and defends against all of them. The result: code that&rsquo;s harder to read, tests that are harder to write, and a false sense of robustness. When you spot this, ask: &ldquo;Which of these checks actually protect against real scenarios in our system?&rdquo;</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>How AI Hallucinates: The &ldquo;Looks Smart but Is Fragile&rdquo; Pattern</h2>
+    <!-- ============================================ -->
+
+    <p>Beyond individual tells, there&rsquo;s a broader pattern to understand: AI writes code that handles the <strong>happy path beautifully</strong> but crumbles on edge cases.</p>
+
+    <p>This happens because LLMs predict the most likely next token. The happy path is the most common pattern in training data. Edge cases, by definition, are rare &mdash; so the model either ignores them or invents plausible-sounding handling that doesn&rsquo;t actually work.</p>
+
+    <div class="warning-box">
+      <h4>The Happy Path Trap</h4>
+      <p>When reviewing AI code, your instinct will be to trace the happy path. Resist it. The happy path is almost always fine. Instead, immediately ask: what happens when the input is empty? What happens when the network times out? What happens when two requests arrive at the same time? That&rsquo;s where AI code breaks.</p>
+    </div>
+
+    <p>Addy Osmani recommends treating large AI-generated outputs as <strong>drafts, not production code</strong>. Run it to verify the approach works, then reimplement in smaller, comprehensible pieces. The second draft is always cleaner, and &mdash; critically &mdash; you actually understand it.</p>
+
+    <!-- ============================================ -->
+    <h2>Speed-Reading Large AI Diffs</h2>
+    <!-- ============================================ -->
+
+    <p>AI-generated PRs are 154% larger than human PRs on average. You&rsquo;re going to see 500-line diffs regularly. You cannot read every line with the same attention. You need a triage strategy.</p>
+
+    <p>The classic SmartBear/Cisco peer-review study &mdash; still the largest of its kind, with 2,500 reviews of 3.2M lines &mdash; established that reviewer effectiveness collapses past <strong>200&ndash;400 lines or 60&ndash;90 minutes per session</strong>. GitClear&rsquo;s 2024 analysis of 12,638 PRs found the median developer has only 2&ndash;5 hours per week to spend on review across all incoming PRs. That&rsquo;s not enough attention for AI-generated diffs that routinely blow past 500 lines. Here&rsquo;s a triage approach that fits the time you actually have:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>1. Stat View</strong><br>
+        <code>git diff --stat</code><br>
+        Which files changed?
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>2. Shape</strong><br>
+        Skim structure:<br>
+        new files, renames, deletes
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>3. Hot Spots</strong><br>
+        Focus on: auth,<br>
+        data, config, tests
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>4. Deep Read</strong><br>
+        Line-by-line only<br>
+        on hot spot files
+      </div>
+    </div>
+
+    <p><strong>Step 1: Start with <code>git diff --stat</code>.</strong> This shows you which files changed and how many lines were added or removed. A 500-line diff that touches 20 files is very different from one that touches 2 files.</p>
+
+    <p><strong>Step 2: Read for shape, not detail.</strong> Scroll through the entire diff quickly. Don&rsquo;t read the code &mdash; notice the <em>structure</em>. Are there new files? Renamed files? Deleted files? Large blocks of generated boilerplate vs. small targeted changes?</p>
+
+    <p><strong>Step 3: Identify hot spots.</strong> These are the files that matter most: anything touching authentication, database queries, payment logic, configuration, or public API surfaces. Also look for test files &mdash; do they exist? Do they test the right things?</p>
+
+    <p><strong>Step 4: Deep-read only the hot spots.</strong> Now go line-by-line, but only on the files that matter. For every function in those files, mentally trace through three scenarios: the happy path, the empty/null input, and the boundary case.</p>
+
+    <p>Here&rsquo;s what this looks like in practice:</p>
+
+<pre><code>$ git diff --stat HEAD~1
+ src/api/auth.ts          | 45 +++++++++++++++
+ src/api/users.ts         | 12 ++++
+ src/utils/validation.ts  | 89 +++++++++++++++++++++++++++++++
+ src/types/index.ts       |  8 +++
+ tests/auth.test.ts       | 67 +++++++++++++++++++++++
+ package.json             |  2 +-
+ 6 files changed, 223 insertions(+), 1 deletion(-)</code></pre>
+
+    <p>From this stat view alone, you already know: <code>auth.ts</code> is a hot spot (auth = high risk), <code>validation.ts</code> is the biggest change (89 lines &mdash; but validation code is often boilerplate), and <code>package.json</code> changed (check what dependency was added). Start your deep read with <code>auth.ts</code>, then check <code>package.json</code> for supply chain risk, then skim the rest.</p>
+
+    <div class="tip-box">
+      <h4>The &ldquo;Does This Code Teach Me Anything?&rdquo; Test</h4>
+      <p>As you scan AI-generated code, ask yourself: &ldquo;Is there anything here I didn&rsquo;t already know?&rdquo; If the code uses a pattern or technique that&rsquo;s new to you, slow down. That&rsquo;s either something worth learning &mdash; or something the AI invented that doesn&rsquo;t actually work. Either way, it deserves your full attention.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>When AI Code Is Actually Good</h2>
+    <!-- ============================================ -->
+
+    <p>Not all AI code is suspicious. Part of being a good reviewer is knowing when to <em>not</em> waste time. Here are signs that the AI nailed it:</p>
+
+    <ul>
+      <li><strong>It follows existing patterns.</strong> The code matches the conventions already in your codebase &mdash; same naming, same structure, same error handling approach.</li>
+      <li><strong>It&rsquo;s boring.</strong> Standard CRUD, straightforward data transformations, simple utility functions. The kind of code that&rsquo;s tedious to write but hard to get wrong.</li>
+      <li><strong>The tests are behavior-focused.</strong> Instead of testing implementation details, the tests verify <em>what</em> the code does, not <em>how</em> it does it.</li>
+      <li><strong>It&rsquo;s appropriately sized.</strong> Small, focused functions. No unnecessary abstraction layers. No dead code.</li>
+      <li><strong>The imports are clean.</strong> Only what&rsquo;s needed, no kitchen-sink imports, no deprecated packages.</li>
+    </ul>
+
+    <p>When you see these signals, give a quick sanity check and move on. Save your deep-review energy for the code that triggers your tells.</p>
+
+    <div class="highlight-box">
+      <h3>The 80/20 Rule of AI Code Review</h3>
+      <p>Roughly 80% of AI-generated code is boring, correct, and not worth agonizing over. The other 20% contains the bugs, security holes, and architectural mismatches that cause real problems. Your job as a reviewer is to <strong>spend 80% of your time on the dangerous 20%</strong> &mdash; and the tells are how you find it fast.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="red-flag-box">
+      <h4>Code You Can&rsquo;t Trace Back to a Requirement</h4>
+      <p>The biggest red flag when reading AI-generated code: changes that don&rsquo;t map to any requirement, ticket, or conversation.</p>
+      <p>AI agents frequently exhibit <strong>scope creep</strong>. You asked for a new API endpoint, and the PR also includes a refactored database layer, two new utility files, and a modified config. None of that was requested. None of it was reviewed as part of the original design.</p>
+      <p>When you see changes that don&rsquo;t trace back to the task at hand, flag them immediately. Either they should be in a separate PR, or they shouldn&rsquo;t exist at all. Untracked changes are how bugs, security holes, and technical debt sneak into production.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Reading AI Code Efficiently</h2>
+    <!-- ============================================ -->
+
+    <p>Here&rsquo;s your checklist for reading AI-generated code. Use it as a quick pre-flight before every review.</p>
+
+    <div class="review-checklist">
+      <h4>Reading AI Code: The Quick Scan</h4>
+      <ul class="checklist">
+        <li class="checked">Run <code>git diff --stat</code> first &mdash; understand the shape before the detail</li>
+        <li class="checked">Check imports &mdash; are they all used? Any deprecated packages?</li>
+        <li class="checked">Scan for hallucinated APIs &mdash; do all method calls actually exist?</li>
+        <li class="checked">Look for copy-paste duplication &mdash; are there similar blocks that should be extracted?</li>
+        <li class="checked">Check error handling &mdash; is it masking errors or surfacing them?</li>
+        <li class="checked">Count the edge-case guards &mdash; are they protecting against real scenarios?</li>
+        <li class="checked">Read the comments &mdash; do they explain <em>why</em> or just restate the code?</li>
+        <li class="checked">Trace the happy path, then trace the failure path</li>
+        <li class="checked">Verify scope &mdash; does every change map to the original requirement?</li>
+        <li class="checked">Check for dead code &mdash; unused functions, unreachable branches, commented-out blocks</li>
+      </ul>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="practice-drill">
+      <h4>Spot the Tells</h4>
+      <p>This exercise builds your pattern recognition. Do it now &mdash; it takes ten minutes.</p>
+      <ol>
+        <li>Open your recent git history: <code>git log --oneline -20</code></li>
+        <li>Find a commit or PR where AI generated most of the code</li>
+        <li>Run <code>git show &lt;commit-hash&gt;</code> to see the full diff</li>
+        <li>Read through the diff and write down every &ldquo;tell&rdquo; you spot:
+          <ul>
+            <li>Over-abstraction?</li>
+            <li>Hallucinated API?</li>
+            <li>Kitchen-sink imports?</li>
+            <li>Overly defensive error handling?</li>
+            <li>Copy-paste duplication?</li>
+            <li>Dead code?</li>
+            <li>Over-commenting?</li>
+            <li>Phantom edge cases?</li>
+          </ul>
+        </li>
+        <li>Count your tells. If you found 3 or more, your pattern recognition is already developing.</li>
+      </ol>
+    </div>
+
+    <!-- ============================================ -->
+    <div class="exercise-box">
+      <h4>The AI Tell Catalogue</h4>
+      <p>Build a personal catalogue of AI tells you encounter in your codebase. This becomes a reference you can use (and share with your team) during reviews.</p>
+      <ol>
+        <li>Create a file called <code>ai-tells.md</code> in your notes</li>
+        <li>For each tell you find in your next 5 code reviews, record:
+          <ul>
+            <li><strong>Pattern:</strong> what did the AI do? (e.g., &ldquo;imported lodash for a single debounce&rdquo;)</li>
+            <li><strong>File:</strong> where did you find it?</li>
+            <li><strong>Risk:</strong> low / medium / high</li>
+            <li><strong>Fix:</strong> what should it have been instead?</li>
+          </ul>
+        </li>
+        <li>After 5 reviews, look for patterns. Which tells appear most often in your codebase?</li>
+        <li>Share the catalogue with your team &mdash; it becomes a shared vocabulary for review discussions</li>
+      </ol>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================ -->
+
+    <p>Now you can spot the tells and read AI diffs efficiently. But knowing <em>what to look for</em> is only half the battle. You need a systematic process &mdash; a checklist you apply every time, so nothing slips through the cracks.</p>
+
+    <p>In <a href="03-review-checklist.html">Chapter 3: The Structured Review Checklist</a>, we&rsquo;ll build a concrete, 10-point checklist for reviewing any AI-generated change. You&rsquo;ll learn the PR Contract Framework, the &ldquo;explain it back&rdquo; test, and how to break AI output into reviewable pieces. It&rsquo;s the system that ties all your new pattern-recognition skills together.</p>
+
+    <p>From instinct to system &mdash; let&rsquo;s build it.</p>
+
+    <!-- ============================================ -->
+
+    <!-- ============================================ -->
+
+    <nav class="chapter-nav">
+      <a href="01-review-mindset.html" class="prev">
+        <span class="nav-direction">&larr; Previous Chapter</span>
+        <span class="nav-chapter">The Review Mindset Shift</span>
+      </a>
+      <a href="03-review-checklist.html" class="next">
+        <span class="nav-direction">Next Chapter &rarr;</span>
+        <span class="nav-chapter">The Structured Review Checklist</span>
+      </a>
+    </nav>
+
+  </main>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

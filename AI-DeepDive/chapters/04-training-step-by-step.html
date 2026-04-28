@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Training Step by Step | How AI Really Works: The Deep Dive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI Deep Dive</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-layers-and-signals.html">&larr; Prev</a>
+      <a href="05-tokenization-deep-dive.html">Next &rarr;</a>
+      <a href="maps/04-training-step-by-step-map.html">&#129504; Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">&#127769;</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Training Step by Step &mdash; Forward, Loss, Backward</h1>
+    <p class="chapter-subtitle">One complete training iteration with real numbers &mdash; from wrong prediction to weight update</p>
+  </header>
+
+  <main>
+
+    <div class="tip-box">
+      <strong>Companion:</strong> This expands on <a href="../../AI-Intro/chapters/03-how-ai-learns.html">AI-Intro Ch 3: How AI Learns</a>. There you saw the high-level loop. Now we&rsquo;ll trace every number.
+    </div>
+
+    <p>In <a href="03-layers-and-signals.html">Chapter 3</a>, you traced a forward pass through a network and got a prediction. But we <em>gave</em> you the weights. In reality, a network starts with <strong>random weights</strong> &mdash; it knows absolutely nothing. Training is how it goes from random guessing to useful predictions.</p>
+
+    <p>In this chapter, we&rsquo;ll walk through one complete training step: make a prediction, measure how wrong it is, figure out which weights to blame, and nudge them in the right direction. All with real numbers.</p>
+
+    <!-- ============================================== -->
+    <h2>The Training Loop: Four Steps</h2>
+    <!-- ============================================== -->
+
+    <div class="workflow-steps">
+      <div class="step">
+        <h4>1. Forward</h4>
+        <p>Feed input, get prediction</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>2. Loss</h4>
+        <p>Measure the error</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>3. Backward</h4>
+        <p>Find who&rsquo;s to blame</p>
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <h4>4. Update</h4>
+        <p>Adjust the weights</p>
+      </div>
+    </div>
+
+    <p>Repeat these four steps thousands (or millions) of times, and the network gradually gets better. Let&rsquo;s trace one iteration.</p>
+
+    <!-- ============================================== -->
+    <h2>Step 1: The Forward Pass (Getting It Wrong)</h2>
+    <!-- ============================================== -->
+
+    <p>We&rsquo;ll use a tiny network with just <strong>2 inputs, 1 hidden neuron, and 1 output</strong> &mdash; the simplest possible multi-layer network. This keeps the numbers manageable while showing the full training process.</p>
+
+    <p><strong>Network:</strong></p>
+    <ul>
+      <li>Input: <code>x = [1.0, 0.5]</code></li>
+      <li>Hidden weights: <code>w<sub>1</sub> = 0.3</code>, <code>w<sub>2</sub> = -0.2</code>, bias <code>b<sub>h</sub> = 0.1</code></li>
+      <li>Activation: ReLU</li>
+      <li>Output weight: <code>w<sub>3</sub> = 0.6</code>, bias <code>b<sub>o</sub> = 0.0</code></li>
+      <li>Output activation: sigmoid</li>
+    </ul>
+
+    <p><strong>Target:</strong> The correct answer is <code>1.0</code> (the input belongs to the positive class).</p>
+
+    <div class="math-walkthrough">
+      <h4>Forward Pass</h4>
+
+      <p><strong>Hidden neuron:</strong></p>
+      <p><code>z<sub>h</sub> = (1.0 &times; 0.3) + (0.5 &times; -0.2) + 0.1 = 0.3 - 0.1 + 0.1 = 0.3</code></p>
+      <p><code>h = ReLU(0.3) = 0.3</code></p>
+
+      <p><strong>Output neuron:</strong></p>
+      <p><code>z<sub>o</sub> = (0.3 &times; 0.6) + 0.0 = 0.18</code></p>
+      <p><code>y&#770; = sigmoid(0.18) = 1/(1 + e<sup>-0.18</sup>) &asymp; 0.545</code></p>
+
+      <p><strong>Prediction:</strong> <code>0.545</code>. Target: <code>1.0</code>. The network is wrong &mdash; it&rsquo;s barely above 50/50.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Step 2: Measuring the Error (Loss)</h2>
+    <!-- ============================================== -->
+
+    <p>We need a single number that says &ldquo;how wrong is this prediction?&rdquo; That number is the <strong>loss</strong>.</p>
+
+    <div class="operation-box">
+      <h4>Mean Squared Error (MSE)</h4>
+      <p>The simplest loss function: take the difference between prediction and target, square it.</p>
+      <p style="text-align: center;"><code>Loss = (predicted - actual)&sup2;</code></p>
+      <p>Squaring does two things: it makes the loss always positive (no negative errors), and it punishes big errors much more than small ones.</p>
+    </div>
+
+    <div class="math-walkthrough">
+      <h4>Computing MSE Loss</h4>
+      <table>
+        <thead>
+          <tr><th>Value</th><th>Number</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Predicted (y&#770;)</td><td><code>0.545</code></td></tr>
+          <tr><td>Actual (y)</td><td><code>1.0</code></td></tr>
+          <tr><td>Difference</td><td><code>0.545 - 1.0 = -0.455</code></td></tr>
+          <tr><td><strong>Loss</strong></td><td><code>(-0.455)&sup2; = 0.207</code></td></tr>
+        </tbody>
+      </table>
+      <p>The loss is <code>0.207</code>. Not great. A perfect prediction would give loss = <code>0</code>.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>Cross-Entropy Loss (The Other Option)</h4>
+      <p>For classification tasks, <strong>cross-entropy</strong> is usually preferred over MSE. It uses logarithms to punish confident-but-wrong predictions especially hard:</p>
+      <p style="text-align: center;"><code>Loss = -[y &times; log(y&#770;) + (1 - y) &times; log(1 - y&#770;)]</code></p>
+      <p>For our numbers: <code>-[1.0 &times; log(0.545)] = -(-0.607) = 0.607</code>. Cross-entropy gives a higher loss here because it&rsquo;s more sensitive to how far the probability is from the target. We&rsquo;ll stick with MSE for simplicity in this walkthrough.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Step 3: The Backward Pass (Who&rsquo;s to Blame?)</h2>
+    <!-- ============================================== -->
+
+    <p>We know the prediction is wrong. Now we need to figure out: <strong>which weights should we change, and in which direction?</strong></p>
+
+    <p>This is <strong>backpropagation</strong> &mdash; and despite its scary name, the idea is beautifully simple.</p>
+
+    <div class="operation-box">
+      <h4>Backpropagation: The Blame Game</h4>
+      <p>Start at the output (where the error is). Ask: &ldquo;Which weights in the last layer contributed to this error?&rdquo; Then move one layer back and ask the same question. Keep going until you reach the first layer.</p>
+      <p>For each weight, you compute a <strong>gradient</strong> &mdash; a number that tells you:</p>
+      <ul>
+        <li><strong>Direction:</strong> should this weight go up or down?</li>
+        <li><strong>Magnitude:</strong> how much does changing this weight affect the error?</li>
+      </ul>
+    </div>
+
+    <div class="highlight-box">
+      <p><strong>The chain rule in plain English:</strong> The gradient of a weight tells you &ldquo;if I nudge this weight up by a tiny amount, how much does the loss change?&rdquo; If the loss goes up, the gradient is positive (weight should decrease). If the loss goes down, the gradient is negative (weight should increase).</p>
+    </div>
+
+    <p>Let&rsquo;s compute gradients for our 3 weights. We won&rsquo;t use calculus &mdash; we&rsquo;ll use the intuition of &ldquo;tracing the chain of influence.&rdquo;</p>
+
+    <h3>Gradient for w<sub>3</sub> (output weight)</h3>
+
+    <p>The output weight <code>w<sub>3</sub></code> directly affects the output. The chain of influence is:</p>
+    <p style="text-align: center;">w<sub>3</sub> &rarr; z<sub>o</sub> &rarr; y&#770; &rarr; Loss</p>
+
+    <div class="math-walkthrough">
+      <h4>Gradient of w<sub>3</sub> Step by Step</h4>
+
+      <p>We need three pieces, multiplied together:</p>
+
+      <p><strong>1. How does Loss change with y&#770;?</strong></p>
+      <p><code>dLoss/dy&#770; = 2 &times; (y&#770; - y) = 2 &times; (0.545 - 1.0) = -0.91</code></p>
+
+      <p><strong>2. How does y&#770; change with z<sub>o</sub>?</strong> (sigmoid derivative)</p>
+      <p><code>dy&#770;/dz<sub>o</sub> = y&#770; &times; (1 - y&#770;) = 0.545 &times; 0.455 = 0.248</code></p>
+
+      <p><strong>3. How does z<sub>o</sub> change with w<sub>3</sub>?</strong></p>
+      <p><code>dz<sub>o</sub>/dw<sub>3</sub> = h = 0.3</code> (the input to this weight)</p>
+
+      <p><strong>Chain them together:</strong></p>
+      <p><code>gradient<sub>w3</sub> = -0.91 &times; 0.248 &times; 0.3 = -0.068</code></p>
+    </div>
+
+    <div class="intuition-box">
+      <h4>What Does -0.068 Mean?</h4>
+      <p>The gradient is <strong>negative</strong>, which means: increasing w<sub>3</sub> would <em>decrease</em> the loss. That&rsquo;s what we want! The weight should go <strong>up</strong>. It makes sense &mdash; the network predicted too low (0.545 vs. 1.0), so strengthening the connection from the hidden neuron to the output should push the prediction higher.</p>
+    </div>
+
+    <h3>Gradients for w<sub>1</sub> and w<sub>2</sub> (hidden weights)</h3>
+
+    <p>For hidden weights, the chain is longer &mdash; the error has to travel through more steps:</p>
+    <p style="text-align: center;">w<sub>1</sub> &rarr; z<sub>h</sub> &rarr; h &rarr; z<sub>o</sub> &rarr; y&#770; &rarr; Loss</p>
+
+    <div class="math-walkthrough">
+      <h4>Gradients of Hidden Weights</h4>
+
+      <p>We already computed the &ldquo;output error signal&rdquo;:</p>
+      <p><code>dLoss/dz<sub>o</sub> = -0.91 &times; 0.248 = -0.226</code></p>
+
+      <p>This signal flows backward through <code>w<sub>3</sub></code>:</p>
+      <p><code>dLoss/dh = -0.226 &times; w<sub>3</sub> = -0.226 &times; 0.6 = -0.135</code></p>
+
+      <p>Through ReLU (since h was positive, the derivative is 1):</p>
+      <p><code>dLoss/dz<sub>h</sub> = -0.135 &times; 1 = -0.135</code></p>
+
+      <p>Now for each hidden weight:</p>
+      <table>
+        <thead>
+          <tr><th>Weight</th><th>Input</th><th>Gradient</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>w<sub>1</sub></td>
+            <td><code>x<sub>1</sub> = 1.0</code></td>
+            <td><code>-0.135 &times; 1.0 = -0.135</code></td>
+          </tr>
+          <tr>
+            <td>w<sub>2</sub></td>
+            <td><code>x<sub>2</sub> = 0.5</code></td>
+            <td><code>-0.135 &times; 0.5 = -0.068</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>All gradients:</strong></p>
+      <table>
+        <thead>
+          <tr><th>Weight</th><th>Current Value</th><th>Gradient</th><th>Direction</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>w<sub>1</sub></td><td><code>0.3</code></td><td><code>-0.135</code></td><td>Increase &uarr;</td></tr>
+          <tr><td>w<sub>2</sub></td><td><code>-0.2</code></td><td><code>-0.068</code></td><td>Increase &uarr;</td></tr>
+          <tr><td>w<sub>3</sub></td><td><code>0.6</code></td><td><code>-0.068</code></td><td>Increase &uarr;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="intuition-box">
+      <h4>The Blame Report</h4>
+      <p>All three gradients are negative, meaning all three weights should increase. This makes sense: the network predicted too low (0.545 instead of 1.0), so every weight in the chain needs to push harder. Weight w<sub>1</sub> gets the biggest adjustment (-0.135) because it has the most direct influence &mdash; its input was <code>1.0</code>, the largest signal in the network.</p>
+    </div>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>If the hidden neuron&rsquo;s output <code>h</code> had been zero (killed by ReLU), what would happen to the gradients of w<sub>1</sub> and w<sub>2</sub>?</p>
+      <p><em>Answer: They would be zero. ReLU&rsquo;s derivative is 0 for negative inputs, so no error signal flows through a dead neuron. The hidden weights get no update &mdash; this is the &ldquo;dead neuron&rdquo; problem mentioned in Chapter 2.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Step 4: Updating the Weights</h2>
+    <!-- ============================================== -->
+
+    <p>Now we have gradients. The update rule is beautifully simple:</p>
+
+    <div class="highlight-box">
+      <p style="text-align: center; font-size: 1.15em;">
+        <strong>new_weight = old_weight - learning_rate &times; gradient</strong>
+      </p>
+    </div>
+
+    <p>The <strong>learning rate</strong> (usually written as &eta; or <code>lr</code>) controls how big each step is. Let&rsquo;s use <code>lr = 0.1</code>.</p>
+
+    <div class="math-walkthrough">
+      <h4>Weight Update with lr = 0.1</h4>
+
+      <table>
+        <thead>
+          <tr><th>Weight</th><th>Old</th><th>Gradient</th><th>lr &times; gradient</th><th>New</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>w<sub>1</sub></td>
+            <td><code>0.300</code></td>
+            <td><code>-0.135</code></td>
+            <td><code>-0.014</code></td>
+            <td><code>0.314</code></td>
+          </tr>
+          <tr>
+            <td>w<sub>2</sub></td>
+            <td><code>-0.200</code></td>
+            <td><code>-0.068</code></td>
+            <td><code>-0.007</code></td>
+            <td><code>-0.193</code></td>
+          </tr>
+          <tr>
+            <td>w<sub>3</sub></td>
+            <td><code>0.600</code></td>
+            <td><code>-0.068</code></td>
+            <td><code>-0.007</code></td>
+            <td><code>0.607</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Every weight moved slightly in the direction that reduces the loss. The changes are small &mdash; that&rsquo;s intentional. Training is a slow, careful process of many tiny adjustments.</p>
+    </div>
+
+    <p>If we ran the forward pass again with the updated weights, the prediction would be slightly closer to <code>1.0</code>. After hundreds or thousands of iterations with many training examples, the network converges to weights that make accurate predictions.</p>
+
+    <!-- ============================================== -->
+    <h2>The Learning Rate: Too Big vs. Too Small</h2>
+    <!-- ============================================== -->
+
+    <p>The learning rate is one of the most important choices in training. Let&rsquo;s see why with the same gradient for w<sub>1</sub>:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Learning Rate</th>
+          <th>Update Amount</th>
+          <th>New w<sub>1</sub></th>
+          <th>Problem?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>0.0001</code> (too small)</td>
+          <td><code>0.000014</code></td>
+          <td><code>0.300014</code></td>
+          <td>Barely moved. Training will take forever.</td>
+        </tr>
+        <tr>
+          <td><code>0.1</code> (good)</td>
+          <td><code>0.014</code></td>
+          <td><code>0.314</code></td>
+          <td>Nice, steady progress.</td>
+        </tr>
+        <tr>
+          <td><code>0.5</code> (too big)</td>
+          <td><code>0.068</code></td>
+          <td><code>0.368</code></td>
+          <td>Big jump. Might overshoot the sweet spot.</td>
+        </tr>
+        <tr>
+          <td><code>5.0</code> (way too big)</td>
+          <td><code>0.675</code></td>
+          <td><code>0.975</code></td>
+          <td>Wild swing. Loss could <em>increase</em>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <h4>The Goldilocks Problem</h4>
+      <p>Too small: training is painfully slow and may get stuck. Too big: training becomes unstable &mdash; the loss bounces around or even explodes. Typical starting learning rates: <code>0.001</code> to <code>0.01</code> for most networks. Modern optimizers like Adam adjust the rate automatically during training.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>The Mixing Board Analogy</h2>
+    <!-- ============================================== -->
+
+    <div class="highlight-box">
+      <p>Training is like adjusting the dials on a <strong>mixing board</strong> while listening to music:</p>
+      <ul>
+        <li>Each <strong>dial</strong> (weight) changes the sound a little</li>
+        <li>You listen to the <strong>output</strong> (prediction) and compare it to the <strong>target</strong> (the song you want)</li>
+        <li>The <strong>loss</strong> is how far off it sounds</li>
+        <li>You figure out which dials are <strong>most wrong</strong> (gradients)</li>
+        <li>You <strong>nudge each dial</strong> slightly (weight update)</li>
+        <li>Repeat. Hundreds of thousands of times.</li>
+      </ul>
+      <p>With 175 billion dials (GPT-3), you need a computer. But the process is the same.</p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Epochs and Batches</h2>
+    <!-- ============================================== -->
+
+    <p>One training step uses one example. But real datasets have millions of examples. Two important terms:</p>
+
+    <div class="operation-box">
+      <h4>Epoch</h4>
+      <p>One <strong>epoch</strong> = one pass through the <em>entire</em> training dataset. If you have 10,000 examples and train for 100 epochs, the model sees each example 100 times.</p>
+    </div>
+
+    <h3>Batch Size: Finding the Middle Ground</h3>
+
+    <p>You could update weights after every single example, but that&rsquo;s noisy &mdash; one weird example might push weights in the wrong direction. You could also wait until you&rsquo;ve seen the entire dataset, but that&rsquo;s slow. The compromise: <strong>mini-batches</strong>.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Batch Size</th>
+          <th>Pros</th>
+          <th>Cons</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Stochastic</strong></td>
+          <td><code>1</code></td>
+          <td>Fast updates, can escape local minima</td>
+          <td>Noisy, unstable gradients</td>
+        </tr>
+        <tr>
+          <td><strong>Mini-batch</strong></td>
+          <td><code>32-512</code></td>
+          <td>Good balance, efficient on GPUs</td>
+          <td>Needs tuning</td>
+        </tr>
+        <tr>
+          <td><strong>Full batch</strong></td>
+          <td>Entire dataset</td>
+          <td>Stable, accurate gradients</td>
+          <td>Slow, memory-heavy, can get stuck</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>In practice, batch sizes of <code>32</code> to <code>256</code> are most common. GPUs process batches in parallel, so a batch of 64 takes barely longer than a batch of 1. Free parallelism.</p>
+
+    <!-- ============================================== -->
+    <h2>The Loss Curve: A Training Story</h2>
+    <!-- ============================================== -->
+
+    <p>During training, you track the loss at each step. A healthy training run looks like this:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Epoch</th>
+          <th>Training Loss</th>
+          <th>Validation Loss</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>1</code></td><td><code>2.50</code></td><td><code>2.45</code></td><td>Both high &mdash; just starting</td></tr>
+        <tr><td><code>10</code></td><td><code>0.80</code></td><td><code>0.85</code></td><td>Both dropping &mdash; learning!</td></tr>
+        <tr><td><code>50</code></td><td><code>0.15</code></td><td><code>0.20</code></td><td>Good convergence</td></tr>
+        <tr><td><code>100</code></td><td><code>0.05</code></td><td><code>0.18</code></td><td>Gap growing &mdash; watch out</td></tr>
+        <tr><td><code>200</code></td><td><code>0.01</code></td><td><code>0.50</code></td><td>Overfitting!</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warning-box">
+      <h4>Overfitting: When the Model Memorizes</h4>
+      <p>At epoch 200, training loss is almost zero (the model gets training examples nearly perfect), but validation loss has <em>increased</em>. The model memorized the training data instead of learning general patterns. It&rsquo;s like a student who memorizes the textbook word for word but fails on new questions.</p>
+    </div>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <h4>Healthy Training</h4>
+        <ul>
+          <li>Training loss: <code>0.15</code></li>
+          <li>Validation loss: <code>0.20</code></li>
+          <li>Small gap &mdash; model generalizes well</li>
+        </ul>
+      </div>
+      <div class="prompt-example bad">
+        <h4>Overfitting</h4>
+        <ul>
+          <li>Training loss: <code>0.01</code></li>
+          <li>Validation loss: <code>0.50</code></li>
+          <li>Huge gap &mdash; model memorized, doesn&rsquo;t generalize</li>
+        </ul>
+      </div>
+    </div>
+
+    <p>Common fixes for overfitting: more training data, dropout (randomly zeroing neurons during training), early stopping (stop training when validation loss starts rising), and regularization (penalizing large weights).</p>
+
+    <!-- ============================================== -->
+    <h2>The Complete Training Iteration: Summary</h2>
+    <!-- ============================================== -->
+
+    <table>
+      <thead>
+        <tr><th>Step</th><th>What Happens</th><th>Our Numbers</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>1. Forward</strong></td>
+          <td>Compute prediction</td>
+          <td>y&#770; = <code>0.545</code></td>
+        </tr>
+        <tr>
+          <td><strong>2. Loss</strong></td>
+          <td>Measure error</td>
+          <td>MSE = <code>0.207</code></td>
+        </tr>
+        <tr>
+          <td><strong>3. Backward</strong></td>
+          <td>Compute gradients</td>
+          <td>w<sub>1</sub>: <code>-0.135</code>, w<sub>2</sub>: <code>-0.068</code>, w<sub>3</sub>: <code>-0.068</code></td>
+        </tr>
+        <tr>
+          <td><strong>4. Update</strong></td>
+          <td>Adjust weights (lr=0.1)</td>
+          <td>w<sub>1</sub>: <code>0.314</code>, w<sub>2</sub>: <code>-0.193</code>, w<sub>3</sub>: <code>0.607</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>One step done. Now repeat with the next training example, and the next, and the next &mdash; thousands of times per epoch, for dozens or hundreds of epochs.</p>
+
+    <div class="checkpoint-box">
+      <h4>Quick Check</h4>
+      <p>After the weight update, would the prediction be closer to <code>1.0</code> or further from it?</p>
+      <p><em>Answer: Closer. Every weight moved in the direction that reduces the loss, so the next forward pass will produce a prediction slightly higher than <code>0.545</code>, nudging toward the target of <code>1.0</code>.</em></p>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>Exercise: One Training Step</h2>
+    <!-- ============================================== -->
+
+    <div class="exercise-box">
+      <h4>Exercise: Compute a Weight Update</h4>
+
+      <p>A single neuron (no hidden layer) has:</p>
+      <ul>
+        <li>Input: <code>x = 2.0</code></li>
+        <li>Weight: <code>w = 0.5</code></li>
+        <li>Bias: <code>b = 0.0</code></li>
+        <li>No activation function (linear output)</li>
+        <li>Target: <code>y = 3.0</code></li>
+        <li>Loss: MSE = <code>(predicted - actual)&sup2;</code></li>
+        <li>Learning rate: <code>lr = 0.05</code></li>
+      </ul>
+
+      <p><strong>Tasks:</strong></p>
+      <ol>
+        <li>Compute the prediction: <code>y&#770; = w &times; x + b</code></li>
+        <li>Compute the MSE loss</li>
+        <li>Compute the gradient: <code>dLoss/dw = 2 &times; (y&#770; - y) &times; x</code></li>
+        <li>Update the weight: <code>w_new = w - lr &times; gradient</code></li>
+        <li>What would the prediction be with the updated weight?</li>
+      </ol>
+
+      <p><em>Solution:</em></p>
+      <ol>
+        <li><code>y&#770; = 0.5 &times; 2.0 + 0.0 = 1.0</code></li>
+        <li><code>Loss = (1.0 - 3.0)&sup2; = 4.0</code></li>
+        <li><code>gradient = 2 &times; (1.0 - 3.0) &times; 2.0 = 2 &times; (-2.0) &times; 2.0 = -8.0</code></li>
+        <li><code>w_new = 0.5 - 0.05 &times; (-8.0) = 0.5 + 0.4 = 0.9</code></li>
+        <li><code>y&#770;_new = 0.9 &times; 2.0 = 1.8</code> &mdash; moved from 1.0 toward 3.0. Progress!</li>
+      </ol>
+    </div>
+
+    <!-- ============================================== -->
+    <h2>What&rsquo;s Next</h2>
+    <!-- ============================================== -->
+
+    <p>We&rsquo;ve now covered the complete machinery of neural networks: what neurons compute (Chapter 2), how layers work together (Chapter 3), and how weights are learned through training (this chapter). With these foundations in place, we&rsquo;re ready to tackle the first piece of the language model puzzle.</p>
+
+    <p>In <a href="05-tokenization-deep-dive.html">Chapter 5: Tokenization Deep Dive</a>, we&rsquo;ll answer a crucial question: how does text become numbers? You&rsquo;ll trace the BPE algorithm step by step, building a vocabulary from scratch, and finally understand why &ldquo;strawberry&rdquo; gives language models trouble.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="03-layers-and-signals.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">Layers, Weights &amp; Signals</span>
+    </a>
+    <a href="05-tokenization-deep-dive.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">Tokenization Deep Dive</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

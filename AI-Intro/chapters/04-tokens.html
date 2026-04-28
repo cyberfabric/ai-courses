@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Tokens — The Language AI Speaks | How AI Actually Works</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">How AI Actually Works</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-how-ai-learns.html">&larr; Prev</a>
+      <a href="05-transformer.html">Next &rarr;</a>
+      <a href="maps/04-tokens-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 4</span>
+    <h1>Tokens: The Language AI Speaks</h1>
+    <p class="chapter-subtitle">Tokenization, BPE, why &ldquo;strawberry&rdquo; is tricky, and what token limits really mean</p>
+  </header>
+
+  <main>
+
+    <p>We've been saying "the model predicts the next token" since Chapter 1. But what <em>is</em> a token, exactly? It's not a word. It's not a character. It's something in between &mdash; and understanding tokens is one of the most practically useful things in this entire book.</p>
+
+    <p>After this chapter, you'll understand why your prompts cost what they cost, why AI sometimes struggles with simple letter-counting, and why a 128K "context window" doesn't mean 128,000 words.</p>
+
+    <!-- ============================================ -->
+    <h2>AI Doesn't Read Words</h2>
+    <!-- ============================================ -->
+
+    <p>You and I read text as words. We see "understanding" and process it as one unit. AI doesn't work that way.</p>
+
+    <p>Neural networks need numbers, not letters. So before any text reaches the model, it has to be converted into numbers. The process of breaking text into pieces that can be converted to numbers is called <strong>tokenization</strong>.</p>
+
+    <p>A token is a chunk of text that the model treats as a single unit. Sometimes a token is a whole word. Sometimes it's part of a word. Sometimes it's a single character. Sometimes it's a space or punctuation mark.</p>
+
+    <p>Here's what tokenization actually looks like:</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Example: How "Hello, how are you today?" gets tokenized</p>
+      <div class="prompt-text">"Hello"  ","  " how"  " are"  " you"  " today"  "?"
+
+That's 7 tokens for 5 words.</div>
+      <p class="prompt-explanation">Notice: the comma is its own token, spaces are attached to the next word, and common words like "how" and "are" are single tokens.</p>
+    </div>
+
+    <p>Seems straightforward? Let's look at a harder example:</p>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Example: How "unconditionally" gets tokenized</p>
+      <div class="prompt-text">"un"  "condition"  "ally"
+
+That's 3 tokens for 1 word.</div>
+      <p class="prompt-explanation">Less common words get split into smaller pieces. The model doesn't know "unconditionally" as a single unit — it sees three sub-word chunks.</p>
+    </div>
+
+    <p>This splitting might seem weird, but it's the key to how AI handles language efficiently. Let's understand why.</p>
+
+    <!-- ============================================ -->
+    <h2>BPE: How Tokenizers Are Built</h2>
+    <!-- ============================================ -->
+
+    <p>The most common tokenization method is called <strong>Byte Pair Encoding (BPE)</strong>. The name sounds complex, but the idea is simple:</p>
+
+    <ol>
+      <li><strong>Start with individual characters.</strong> Every letter, digit, and symbol is its own token. "cat" would be three tokens: "c", "a", "t".</li>
+      <li><strong>Find the most common pair.</strong> Look through the entire training data and find which two adjacent tokens appear together most frequently. Maybe "t" and "h" appear together millions of times.</li>
+      <li><strong>Merge that pair into a new token.</strong> Now "th" is a single token instead of two.</li>
+      <li><strong>Repeat.</strong> Find the next most common pair, merge it. Keep going until you reach a desired vocabulary size (typically around 100,000 tokens).</li>
+    </ol>
+
+    <p>The result is a vocabulary where:</p>
+    <ul>
+      <li>Very common words like "the", "is", "and" are single tokens</li>
+      <li>Common word parts like "ing", "tion", "pre" are single tokens</li>
+      <li>Less common words get split into multiple tokens</li>
+      <li>Rare words or invented words get broken all the way down to characters</li>
+    </ul>
+
+    <div class="analogy-box">
+      <h4>Analogy: The Compression Dictionary</h4>
+      <p>Think of tokenization like text compression. When you zip a file, the algorithm finds repeated patterns and replaces them with short codes. "The" appears thousands of times? Give it a single short code. "Antidisestablishmentarianism" appears once? It has to be spelled out.</p>
+      <p>BPE does the same thing for language. Common patterns get a single token (efficient, cheap). Rare patterns need multiple tokens (less efficient, more expensive). The tokenizer is basically a compression dictionary optimized for the most common text patterns.</p>
+    </div>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>This is why different models tokenize text differently. Each model (GPT-4, Claude, Llama) has its own tokenizer trained on its own data. The same sentence might be 15 tokens in one model and 18 in another. There's no universal standard.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Why "Strawberry" Breaks AI</h2>
+    <!-- ============================================ -->
+
+    <p>You've probably seen the viral example: ask ChatGPT "How many R's are in strawberry?" and it often gets it wrong, saying 2 instead of 3.</p>
+
+    <p>Now you can understand why. The model doesn't see the letters in "strawberry" &mdash; it sees tokens. And "strawberry" is typically tokenized as something like:</p>
+
+    <div class="prompt-example bad">
+      <p class="prompt-label">What the model "sees"</p>
+      <div class="prompt-text">"str"  "aw"  "berry"
+
+The model sees 3 chunks, not 10 individual letters.
+It has no direct access to the letter-by-letter
+spelling within each token.</div>
+    </div>
+
+    <p>The model has to <em>reason</em> about what letters exist inside those tokens, and it's working from pattern memory, not from actually inspecting the characters. It's like asking someone to count a specific ingredient in a dish they can only see, not taste &mdash; they're guessing based on experience, not direct observation.</p>
+
+    <div class="aha-box">
+      <h4>Aha Moment</h4>
+      <p>This is one of the most important insights about tokenization: <strong>the model doesn't see individual characters.</strong> It sees tokens, which are chunks. Any task that requires character-level analysis &mdash; counting letters, reversing words, checking spelling &mdash; is fundamentally harder for the model because it's working at the wrong level of granularity.</p>
+      <p>It's like being asked "how many bricks are in this wall?" when you can only see the wall from across the street. You can estimate, but you can't count precisely.</p>
+    </div>
+
+    <p>This isn't a "bug" that will be fixed. It's an inherent consequence of tokenization. Models are getting better at these tasks through training, but they're fighting against their own architecture.</p>
+
+    <!-- ============================================ -->
+    <h2>Token Vocabularies: Every Token Is a Number</h2>
+    <!-- ============================================ -->
+
+    <p>Every tokenizer has a fixed vocabulary &mdash; a complete list of all tokens it knows. Each token gets a unique ID number. Typical vocabulary sizes:</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">~100K</div>
+        <div class="stat-label">GPT-4 vocabulary size</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">~100K</div>
+        <div class="stat-label">Claude vocabulary size</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">~32K</div>
+        <div class="stat-label">Llama 2 vocabulary size</div>
+      </div>
+    </div>
+
+    <p>So when you type "Hello, world!", the tokenizer converts it into something like: <code>[9906, 11, 1917, 0]</code>. Those numbers are what actually flow into the neural network. The model works entirely in numbers &mdash; it never "sees" text at all.</p>
+
+    <p>When the model produces output, it generates number IDs, which the tokenizer then converts back into text for you. The whole process is:</p>
+
+    <div class="workflow-steps">
+      <div class="step">
+        <strong>Your text</strong><br>
+        "Hello, world!"
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Tokenize</strong><br>
+        [9906, 11, 1917, 0]
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Model processes</strong><br>
+        numbers in, numbers out
+      </div>
+      <div class="step-arrow">&rarr;</div>
+      <div class="step">
+        <strong>Detokenize</strong><br>
+        back to text
+      </div>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Why Tokens Matter for Cost</h2>
+    <!-- ============================================ -->
+
+    <p>If you've ever used the OpenAI or Anthropic API, you know that pricing is per token, not per word. Now you know exactly what that means.</p>
+
+    <p>Here's the typical pricing structure:</p>
+
+    <ul>
+      <li><strong>Input tokens</strong> (your prompt) &mdash; cheaper, because the model just reads them</li>
+      <li><strong>Output tokens</strong> (the model's response) &mdash; more expensive, because generating each one requires a full forward pass through the network</li>
+    </ul>
+
+    <p>A rough rule of thumb: <strong>1 token &asymp; 0.75 words in English</strong>. Or flipped: <strong>100 words &asymp; 130-140 tokens.</strong></p>
+
+    <p>This means:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Content</th>
+          <th>Approximate Tokens</th>
+          <th>Rough Word Equivalent</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A short prompt</td>
+          <td>~50 tokens</td>
+          <td>~35 words</td>
+        </tr>
+        <tr>
+          <td>A typical email</td>
+          <td>~200 tokens</td>
+          <td>~150 words</td>
+        </tr>
+        <tr>
+          <td>A page of text</td>
+          <td>~400 tokens</td>
+          <td>~300 words</td>
+        </tr>
+        <tr>
+          <td>A full source file</td>
+          <td>~1,000&ndash;3,000 tokens</td>
+          <td>varies wildly</td>
+        </tr>
+        <tr>
+          <td>A novel (80K words)</td>
+          <td>~100K tokens</td>
+          <td>~80,000 words</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip-box">
+      <h4>Tip</h4>
+      <p>Longer prompts cost more <em>and</em> take longer to process. Every input token has to flow through the entire neural network. When you paste a 5,000-line file into your prompt "just in case," you're paying for every token whether the model needs it or not. Be specific about what context the model actually needs.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Context Window = Max Tokens</h2>
+    <!-- ============================================ -->
+
+    <p>You've probably seen context window sizes advertised: 128K, 200K, 1M tokens. This is the maximum number of tokens the model can handle in a single request &mdash; <strong>input and output combined</strong>.</p>
+
+    <p>This is critical: the context window is shared. If your prompt uses 100K tokens, and the context window is 128K, the model can only generate up to 28K tokens of output.</p>
+
+    <div class="warning-box">
+      <h4>Common Misconception</h4>
+      <p>A "128K context window" does NOT mean 128,000 words. Since 1 token &asymp; 0.75 words, 128K tokens is roughly 96,000 words. And that's the <em>total</em> budget for both your prompt and the response. If you use half for your prompt, only half remains for the answer.</p>
+    </div>
+
+    <p>We'll dive much deeper into context windows in Chapter 8, including how conversations work, what happens when you hit the limit, and why longer isn't always better. For now, just remember: context window is measured in tokens, and it's a shared budget.</p>
+
+    <!-- ============================================ -->
+    <h2>Tokens in Different Languages</h2>
+    <!-- ============================================ -->
+
+    <p>Here's something that catches many developers off guard: <strong>tokenization is not equal across languages</strong>.</p>
+
+    <p>Since most LLM tokenizers are trained primarily on English text, English gets the most efficient tokenization. Common English words are single tokens. But in other languages, the same meaning might require 2-3x more tokens.</p>
+
+    <div class="comparison">
+      <div class="prompt-example good">
+        <p class="prompt-label">English (efficient)</p>
+        <div class="prompt-text">"Hello, how are you?"
+→ ~6 tokens
+
+Common English words are single
+tokens. Very efficient.</div>
+      </div>
+      <div class="prompt-example bad">
+        <p class="prompt-label">Japanese (less efficient)</p>
+        <div class="prompt-text">"こんにちは、お元気ですか？"
+→ ~15+ tokens
+
+Each character may need its own
+token. Same meaning, 2-3x the cost.</div>
+      </div>
+    </div>
+
+    <p>This has real consequences:</p>
+    <ul>
+      <li>Non-English prompts cost more (more tokens for the same content)</li>
+      <li>Non-English text fills up the context window faster</li>
+      <li>Non-English responses take longer to generate (more tokens to produce)</li>
+    </ul>
+
+    <p>This is improving as models train on more multilingual data, but the gap still exists. If you're working in a non-English language, token counts may surprise you.</p>
+
+    <!-- ============================================ -->
+    <h2>Code Tokenization: More Tokens Than You'd Expect</h2>
+    <!-- ============================================ -->
+
+    <p>Code is another area where tokenization produces surprises. You might think a short function is "not much text," but code tends to use more tokens than natural language.</p>
+
+    <p>Why? Several reasons:</p>
+
+    <ul>
+      <li><strong>Variable names</strong> get split into multiple tokens. <code>getUserByEmail</code> might become <code>["get", "User", "By", "Email"]</code> &mdash; 4 tokens for one identifier.</li>
+      <li><strong>Indentation</strong> uses tokens. Every space or tab counts. Deeply nested code burns through tokens fast.</li>
+      <li><strong>Symbols</strong> like <code>{</code>, <code>}</code>, <code>=></code>, <code>===</code> are each their own token (or sometimes multiple tokens).</li>
+      <li><strong>Uncommon identifiers</strong> from your specific codebase are likely not in the vocabulary, so they get split aggressively.</li>
+    </ul>
+
+    <div class="prompt-example good">
+      <p class="prompt-label">Example: A short function in tokens</p>
+      <div class="prompt-text">function getUserByEmail(email) {
+  return db.users.find(u => u.email === email);
+}
+
+This ~60-character function is roughly 25-30 tokens.
+Seems like a lot for 3 lines of code, right?</div>
+    </div>
+
+    <div class="aha-box">
+      <h4>Aha Moment</h4>
+      <p>This is why tools like Claude Code and Cursor are smart about what context they include. When you have a project with 500 files, they don't send all 500 files to the model &mdash; that would blow through the context window (and your budget) instantly. Instead, they selectively include relevant files, function signatures, and snippets.</p>
+      <p>Now you understand <em>why</em> they do this: every line of code costs tokens, and tokens are the model's most limited resource. The tools that are best at selecting the right context are the ones that produce the best results.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Seeing Tokens: Tools You Can Use</h2>
+    <!-- ============================================ -->
+
+    <p>You don't have to guess how text gets tokenized. There are free tools that show you exactly how any text breaks into tokens:</p>
+
+    <div class="tool-card">
+      <div class="tool-icon">TK</div>
+      <div class="tool-info">
+        <div class="tool-name">OpenAI Tokenizer (platform.openai.com/tokenizer)</div>
+        <div class="tool-desc">Paste any text and see exactly how GPT models tokenize it. Color-coded visualization shows each token. Great for understanding why your prompt costs what it does.</div>
+      </div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-icon">TT</div>
+      <div class="tool-info">
+        <div class="tool-name">tiktokenizer.vercel.app</div>
+        <div class="tool-desc">Community-built tool for counting tokens across different models. Useful for comparing how different tokenizers handle the same text.</div>
+      </div>
+    </div>
+
+    <p>Try pasting a piece of your own code into one of these tools. You'll likely be surprised at how many tokens it takes.</p>
+
+    <!-- ============================================ -->
+    <h2>The Bigger Picture: Why Tokens Are Everywhere</h2>
+    <!-- ============================================ -->
+
+    <p>Once you understand tokens, you start seeing them everywhere in AI:</p>
+
+    <ul>
+      <li><strong>Pricing</strong> &mdash; API costs are per token (input and output separately)</li>
+      <li><strong>Speed</strong> &mdash; generation speed is measured in tokens per second</li>
+      <li><strong>Context limits</strong> &mdash; how much the model can "see" at once, measured in tokens</li>
+      <li><strong>Model comparisons</strong> &mdash; "this model supports 1M tokens" is about context window</li>
+      <li><strong>Rate limits</strong> &mdash; API rate limits are often in tokens per minute</li>
+    </ul>
+
+    <div class="highlight-box">
+      <p>Tokens are the fundamental currency of AI. Everything is measured in tokens, priced in tokens, and limited by tokens. The better you understand them, the more efficiently you can use AI tools &mdash; and the better you'll understand their limitations.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>Putting It All Together</h2>
+    <!-- ============================================ -->
+
+    <ul class="checklist">
+      <li class="checked">AI reads tokens, not words. Tokens are chunks that may be words, parts of words, or single characters.</li>
+      <li class="checked">BPE builds a vocabulary by merging the most common patterns. Common text gets efficient tokens; rare text gets split into many tokens.</li>
+      <li class="checked">Character-level tasks (counting letters, reversing words) are hard because the model sees tokens, not individual characters.</li>
+      <li class="checked">Each token has a unique numeric ID. The model works entirely in numbers.</li>
+      <li class="checked">You pay per token: input tokens are cheaper, output tokens are more expensive.</li>
+      <li class="checked">Context window is measured in tokens, shared between input and output. 128K tokens &ne; 128K words.</li>
+      <li class="checked">English is more token-efficient than other languages. Code uses more tokens than you'd expect.</li>
+    </ul>
+
+    <div class="exercise-box">
+      <h4>Exercise: Count Your Tokens</h4>
+      <p>Go to a tokenizer tool (like OpenAI's tokenizer) and try the following:</p>
+      <ol>
+        <li>Paste a paragraph of English text. Count the tokens. Is it roughly 1.3x the word count?</li>
+        <li>Paste the same content translated to another language. How many more tokens does it need?</li>
+        <li>Paste a function from your codebase. How many tokens does it use? Try a deeply nested function vs. a simple one.</li>
+        <li>Type "strawberry" and see how it gets tokenized. Now you know why letter-counting is hard.</li>
+        <li>Type an unusual variable name from your project. How many tokens does it split into?</li>
+      </ol>
+      <p><strong>Bonus:</strong> Estimate how many tokens your largest source file would use. Then compare: could it even fit in a 128K context window alongside a conversation?</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>What's Next</h2>
+    <!-- ============================================ -->
+
+    <p>You now understand the "language" AI speaks &mdash; tokens. You know how text gets broken up, converted to numbers, and fed into the network.</p>
+
+    <p>But there's a crucial question: once those tokens are inside the network, <em>how does the model understand context?</em> How does it know that "bank" means something different in "river bank" vs. "bank account"?</p>
+
+    <p>The answer is the <strong>transformer</strong> &mdash; the architecture that made all of this possible. In <a href="05-transformer.html">Chapter 5: The Transformer</a>, you'll learn about the "attention" mechanism that lets the model consider every token in relation to every other token. It's the single most important innovation in modern AI, and it's more intuitive than you'd expect.</p>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="03-how-ai-learns.html" class="prev-chapter">
+      <span class="nav-direction">Previous Chapter</span>
+      <span class="nav-chapter">How AI Learns</span>
+    </a>
+    <a href="05-transformer.html" class="next-chapter">
+      <span class="nav-direction">Next Chapter</span>
+      <span class="nav-chapter">The Transformer</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

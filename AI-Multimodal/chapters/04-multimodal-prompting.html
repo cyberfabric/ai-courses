@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 4: Multimodal Prompting: Sending Images to LLMs | Multimodal AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">Multimodal AI: Beyond Text</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="03-fusion.html">← Prev</a>
+      <a href="05-document-understanding.html">Next →</a>
+      <a href="maps/04-multimodal-prompting-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <div class="chapter-number">CHAPTER 4</div>
+    <h1>Multimodal Prompting: Sending Images to LLMs</h1>
+    <p class="subtitle">The practical chapter &mdash; API calls, prompt patterns, and the things that trip everyone up</p>
+  </header>
+
+  <main>
+
+    <!-- Opening -->
+    <section>
+      <h2>Theory's Over. Let's Build.</h2>
+
+      <p>For three chapters, we've been building foundations — what multimodal means, how encoders work, how fusion combines modalities. Now it's time to get your hands dirty.</p>
+
+      <p>This chapter is about the thing you'll do most often with multimodal AI: <strong>sending images to an LLM and getting useful answers back</strong>. Whether you're building an image analysis feature, a visual code reviewer, or a screenshot-to-bug-report tool, it all starts here.</p>
+
+      <div class="highlight-box">
+        <strong>The well-read friend analogy:</strong> Sending an image to an LLM is like showing a photo to a friend who has read every book, article, and manual ever written — but has never actually been outside. They can identify and describe almost everything, draw on vast knowledge to interpret what they see, and make impressive inferences. But sometimes they "fill in" details that aren't actually there, because their understanding comes from reading <em>about</em> the world, not from experiencing it firsthand.
+      </div>
+
+      <p>Keep this analogy in mind. It'll help you understand both the impressive capabilities and the frustrating limitations.</p>
+    </section>
+
+    <!-- The Basics -->
+    <section>
+      <h2>How Images Get to the Model</h2>
+
+      <p>Before we talk about prompting strategy, let's cover the plumbing. There are two ways to send an image to an LLM via API:</p>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h4>Base64 Encoding</h4>
+          <p>Convert the image file into a text string (base64) and include it directly in the API request. The image travels inside the JSON payload.</p>
+          <p><strong>Pros:</strong> Works everywhere, no hosting needed, the image is self-contained</p>
+          <p><strong>Cons:</strong> Makes API requests larger (~33% bigger than the file), slower to transmit</p>
+        </div>
+        <div class="comparison-col">
+          <h4>URL Reference</h4>
+          <p>Pass a URL pointing to the image. The model's server fetches the image itself.</p>
+          <p><strong>Pros:</strong> Smaller API requests, faster for large images</p>
+          <p><strong>Cons:</strong> Image must be publicly accessible (or the API must support signed URLs)</p>
+        </div>
+      </div>
+
+      <p>In practice, base64 is the most common approach — it works reliably and doesn't require hosting images anywhere. Let's see how it works across the three major APIs.</p>
+    </section>
+
+    <!-- API Comparison -->
+    <section>
+      <h2>Sending Images: Claude vs GPT-4 vs Gemini</h2>
+
+      <p>All three major multimodal APIs follow the same basic pattern: send a message that contains both text and image content. The syntax differs, but the concept is identical.</p>
+
+      <div class="model-card">
+        <h3>Claude (Anthropic)</h3>
+<pre><code>import anthropic, base64
+
+client = anthropic.Anthropic()
+
+with open("screenshot.png", "rb") as f:
+    image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": image_data}},
+            {"type": "text", "text": "What's in this image?"}
+        ]
+    }]
+)
+</code></pre>
+      </div>
+
+      <div class="model-card">
+        <h3>GPT-4 (OpenAI)</h3>
+<pre><code>from openai import OpenAI
+import base64
+
+client = OpenAI()
+
+with open("screenshot.png", "rb") as f:
+    image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {
+                "url": f"data:image/png;base64,{image_data}"}},
+            {"type": "text", "text": "What's in this image?"}
+        ]
+    }]
+)
+</code></pre>
+      </div>
+
+      <div class="model-card">
+        <h3>Gemini (Google)</h3>
+<pre><code>import google.generativeai as genai
+from PIL import Image
+
+genai.configure(api_key="YOUR_KEY")
+model = genai.GenerativeModel("gemini-2.0-flash")
+
+image = Image.open("screenshot.png")
+response = model.generate_content([
+    "What's in this image?",
+    image
+])
+</code></pre>
+      </div>
+
+      <div class="tip-box">
+        <strong>Notice the pattern:</strong> Every API uses the same concept — a message with mixed content types (text + image). The image is always alongside the text prompt, never separate. This is because the model uses cross-attention (Chapter 3) to relate your question to the image content.
+      </div>
+    </section>
+
+    <!-- What Vision Models Can Do -->
+    <section>
+      <h2>What Vision Models Can Actually Do</h2>
+
+      <p>You might be surprised by the range. Modern vision models don't just "describe pictures." They can:</p>
+
+      <div class="modality-box">
+        <h3>Vision Model Capabilities</h3>
+        <ul>
+          <li><strong>Describe</strong> — "What's in this image?" — detailed scene description</li>
+          <li><strong>Analyze</strong> — "Is this UI accessible?" — quality and compliance assessment</li>
+          <li><strong>Extract</strong> — "What does the receipt total say?" — read and extract text/data</li>
+          <li><strong>Compare</strong> — "What changed between these two screenshots?" — diff analysis</li>
+          <li><strong>Reason</strong> — "Why might this code crash based on the error dialog?" — inference and logic</li>
+          <li><strong>Count</strong> — "How many people are in this photo?" — enumeration (with caveats)</li>
+          <li><strong>Locate</strong> — "Where is the submit button?" — spatial reasoning (with caveats)</li>
+          <li><strong>Generate code</strong> — "Write HTML/CSS that recreates this design" — from mockup to code</li>
+        </ul>
+      </div>
+
+      <p>That's a lot of capabilities from a single API call. But capabilities alone don't guarantee good results — the prompt makes a huge difference.</p>
+    </section>
+
+    <!-- Prompt Engineering for Images -->
+    <section>
+      <h2>Prompt Engineering for Images</h2>
+
+      <p>The way you phrase your question dramatically affects the quality of vision responses. Here are the patterns that work:</p>
+
+      <h3>Be Specific About What You Want</h3>
+
+      <div class="prompt-example bad">
+        <h4>Vague prompt</h4>
+        <p><strong>Prompt:</strong> "Look at this image."</p>
+        <p><strong>Result:</strong> A generic description. The model doesn't know what you need, so it describes everything at surface level.</p>
+      </div>
+
+      <div class="prompt-example good">
+        <h4>Specific prompt</h4>
+        <p><strong>Prompt:</strong> "This is a screenshot of our app's checkout page. List every form field you can see, its current value (if any), and whether it appears to have a validation error."</p>
+        <p><strong>Result:</strong> A focused, structured analysis of exactly what you need.</p>
+      </div>
+
+      <h3>Give Context About What the Image Is</h3>
+
+      <p>The model doesn't know if your image is a mockup, a production screenshot, a medical scan, or a cat photo. Tell it.</p>
+
+      <div class="prompt-example good">
+        <h4>Context-rich prompt</h4>
+        <p><strong>Prompt:</strong> "This is an architecture diagram for our microservices system. Identify all services shown, their connections, and any potential single points of failure."</p>
+        <p>By saying "architecture diagram" and "microservices," you've activated the model's knowledge of software architecture, making the response far more relevant than a generic "I see boxes connected by arrows."</p>
+      </div>
+
+      <h3>Request Structured Output</h3>
+
+      <div class="prompt-example good">
+        <h4>Structured output prompt</h4>
+        <p><strong>Prompt:</strong> "Extract the data from this chart and return it as a JSON object with keys: title, x_axis_label, y_axis_label, and data_points (array of {x, y} objects)."</p>
+        <p>When you specify the exact output format, the model is remarkably good at following it — even extracting numerical values from bar charts and line graphs.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>The golden rule of multimodal prompting:</strong> Tell the model (1) what the image is, (2) what you want to know about it, and (3) what format you want the answer in. The more specific you are on all three, the better the result.
+      </div>
+    </section>
+
+    <!-- Multi-Image Prompting -->
+    <section>
+      <h2>Multi-Image Prompting</h2>
+
+      <p>You can send multiple images in a single request. This unlocks powerful comparison and sequence analysis patterns:</p>
+
+      <div class="pipeline-box">
+        <h3>Multi-Image Use Cases</h3>
+        <div class="workflow-steps">
+          <div class="step">
+            <strong>Before / After</strong>
+            <p>"Here's the UI before and after the redesign. What changed?"</p>
+          </div>
+          <div class="step-arrow">|</div>
+          <div class="step">
+            <strong>Sequence Analysis</strong>
+            <p>"These are 5 frames from a screen recording. What's the user doing?"</p>
+          </div>
+          <div class="step-arrow">|</div>
+          <div class="step">
+            <strong>Consistency Check</strong>
+            <p>"Here are screenshots of 4 app screens. Is the design language consistent?"</p>
+          </div>
+          <div class="step-arrow">|</div>
+          <div class="step">
+            <strong>Multi-Page Document</strong>
+            <p>"These are pages 1-3 of an invoice. Extract all line items and the total."</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="prompt-example good">
+        <h4>Multi-image comparison example</h4>
+<pre><code># Send two images for comparison (Claude API)
+messages=[{
+    "role": "user",
+    "content": [
+        {"type": "image", "source": {"type": "base64",
+            "media_type": "image/png", "data": before_img}},
+        {"type": "image", "source": {"type": "base64",
+            "media_type": "image/png", "data": after_img}},
+        {"type": "text", "text":
+            "Image 1 is before the fix, Image 2 is after. "
+            "What visual differences do you see?"}
+    ]
+}]
+</code></pre>
+      </div>
+
+      <div class="warning-box">
+        <strong>Watch the token cost.</strong> Each image uses tokens. Two high-resolution images can easily cost 2,000-3,000 tokens of input. For Claude, a 1080p image costs roughly 1,600 tokens. For GPT-4o, image cost depends on the detail level you choose (low/high). Always check your provider's pricing — multi-image requests can get expensive fast.
+      </div>
+    </section>
+
+    <!-- Resolution and Tokens -->
+    <section>
+      <h2>Image Resolution and Token Cost</h2>
+
+      <p>Bigger images cost more tokens, take longer to process, and don't always improve results. Here's what you need to know:</p>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">~1,600</div>
+          <div class="stat-label">tokens for a 1080p image in Claude</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">85 / 1,105</div>
+          <div class="stat-label">tokens for GPT-4o low / high detail mode</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">258</div>
+          <div class="stat-label">tokens per image in Gemini Flash</div>
+        </div>
+      </div>
+
+      <div class="checklist">
+        <ul>
+          <li><strong>Resize before sending</strong> — a 4K screenshot adds cost but rarely adds understanding. Resize to 1080p or even 720p for most tasks.</li>
+          <li><strong>Crop to the relevant area</strong> — if you only care about a button in the corner, crop the image to just that region. Fewer tokens, better focus.</li>
+          <li><strong>Use low-detail mode when it's enough</strong> — GPT-4o's "low" detail mode uses only 85 tokens per image. Perfect for "what kind of image is this?" but not for reading small text.</li>
+          <li><strong>JPEG vs PNG</strong> — the file format doesn't matter for token count (it's based on pixel dimensions), but JPEG is smaller for upload, saving bandwidth.</li>
+        </ul>
+      </div>
+
+      <div class="tip-box">
+        <strong>Cost optimization trick:</strong> For batch processing (analyzing 100 screenshots), first send each image at low resolution with a simple question ("Does this screenshot contain an error dialog?"). Only send the ones that match to high-resolution analysis. This can cut your costs by 80%+.
+      </div>
+    </section>
+
+    <!-- What Models Get Wrong -->
+    <section>
+      <h2>The Hallucination Problem: What Models Get Wrong</h2>
+
+      <p>Here's where the "well-read friend who's never been outside" analogy really clicks. Vision models have specific, predictable failure modes:</p>
+
+      <div class="comparison">
+        <div class="comparison-col">
+          <h4>Surprisingly Good At</h4>
+          <ul>
+            <li>Describing scenes and objects</li>
+            <li>Reading printed text (even at angles)</li>
+            <li>Understanding charts and graphs</li>
+            <li>Analyzing UI layouts</li>
+            <li>Recognizing well-known logos and brands</li>
+            <li>Interpreting diagrams and flowcharts</li>
+          </ul>
+        </div>
+        <div class="comparison-col">
+          <h4>Frustratingly Bad At</h4>
+          <ul>
+            <li>Counting objects precisely (especially > 10)</li>
+            <li>Reading very small or blurry text</li>
+            <li>Exact spatial reasoning ("is A left of B?")</li>
+            <li>Distinguishing very similar images</li>
+            <li>OCR on handwritten text (inconsistent)</li>
+            <li>Understanding perspective and 3D layout</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>The Biggest Danger: Confident Hallucinations</h3>
+
+      <p>Vision models don't say "I'm not sure." They will confidently report text that doesn't exist in the image, count 7 objects when there are 5, or describe colors incorrectly. This isn't uncertainty — it's hallucination, and it looks exactly like a correct answer.</p>
+
+      <div class="prompt-example bad">
+        <h4>Hallucination trap</h4>
+        <p><strong>Prompt:</strong> "Read the serial number printed on this device."</p>
+        <p><strong>What happens:</strong> If the serial number is too small or blurry to read, the model may <em>invent</em> a plausible-looking serial number instead of saying "I can't read it." It'll look completely real.</p>
+      </div>
+
+      <div class="prompt-example good">
+        <h4>Hallucination-resistant prompt</h4>
+        <p><strong>Prompt:</strong> "Read the serial number on this device. If you cannot read it clearly, say 'UNREADABLE' instead of guessing. Accuracy is critical — do not infer or approximate."</p>
+        <p><strong>Why this works:</strong> You've explicitly given the model permission to say "I don't know" and told it that guessing is worse than admitting uncertainty.</p>
+      </div>
+
+      <div class="warning-box">
+        <strong>Never trust vision model output for safety-critical data without verification.</strong> Serial numbers, medical readings, financial figures, legal text — always validate extracted data against the source. Treat vision model output like OCR output: useful first pass, not ground truth.
+      </div>
+    </section>
+
+    <!-- Practical Patterns -->
+    <section>
+      <h2>Practical Patterns You'll Use All the Time</h2>
+
+      <h3>Pattern 1: Screenshot Analysis</h3>
+
+      <div class="prompt-example good">
+        <h4>The dev's best friend</h4>
+        <p><strong>Prompt:</strong> "This is a screenshot of our Android app. Identify: (1) any UI elements that look misaligned or overlapping, (2) any text that appears truncated, (3) whether the spacing and padding look consistent. Format as a numbered list."</p>
+        <p>Use this for QA, design reviews, and catching visual regressions. Faster than manually checking every screen.</p>
+      </div>
+
+      <h3>Pattern 2: Chart Interpretation</h3>
+
+      <div class="prompt-example good">
+        <h4>Data extraction from visuals</h4>
+        <p><strong>Prompt:</strong> "This is a line chart from our analytics dashboard. Extract the approximate values for each data point and identify the overall trend. Return as JSON with 'data_points' and 'trend_summary' keys."</p>
+        <p>Surprisingly accurate for bar charts and line graphs. Less reliable for complex scatter plots or overlapping data series.</p>
+      </div>
+
+      <h3>Pattern 3: Code from Screenshots</h3>
+
+      <div class="prompt-example good">
+        <h4>When someone sends you a screenshot of code instead of the actual code</h4>
+        <p><strong>Prompt:</strong> "Transcribe the code visible in this screenshot exactly as written, preserving indentation. Then explain what it does and identify any bugs."</p>
+        <p>Every developer's been there: someone pastes a screenshot of an error in Slack. Now you can paste it straight into Claude.</p>
+      </div>
+    </section>
+
+    <!-- Building a Simple Tool -->
+    <section>
+      <h2>Building a Simple Image Analysis Tool</h2>
+
+      <p>Let's put it all together. Here's a complete, runnable Python script that takes an image and answers questions about it:</p>
+
+      <div class="pipeline-box">
+        <h3>Image Q&amp;A Tool Pipeline</h3>
+        <div class="workflow-steps">
+          <div class="step">
+            <strong>Load Image</strong>
+            <p>Read file, encode as base64</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Build Prompt</strong>
+            <p>Combine image + question in API format</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Call API</strong>
+            <p>Send to Claude/GPT-4</p>
+          </div>
+          <div class="step-arrow">→</div>
+          <div class="step">
+            <strong>Parse Response</strong>
+            <p>Extract and display the answer</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="prompt-example good">
+        <h4>image_qa.py — a reusable image analysis function</h4>
+<pre><code>import anthropic, base64, sys
+
+def ask_about_image(image_path, question):
+    client = anthropic.Anthropic()
+    with open(image_path, "rb") as f:
+        img = base64.standard_b64encode(f.read()).decode("utf-8")
+    ext = image_path.split(".")[-1].replace("jpg", "jpeg")
+    resp = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64",
+                "media_type": f"image/{ext}", "data": img}},
+            {"type": "text", "text": question}
+        ]}])
+    return resp.content[0].text
+
+if __name__ == "__main__":
+    print(ask_about_image(sys.argv[1], sys.argv[2]))
+</code></pre>
+      </div>
+
+      <p>Usage: <code>python image_qa.py screenshot.png "What errors do you see?"</code></p>
+
+      <p>That's a multimodal AI tool in 15 lines. You can wrap this in a web API, plug it into a Slack bot, or use it in a CI pipeline to analyze screenshots from automated tests.</p>
+    </section>
+
+    <!-- Try It Box -->
+    <section>
+      <h2>Get Your Hands Dirty</h2>
+
+      <div class="try-it-box">
+        <h3>Try It Now: The IDE Screenshot Challenge</h3>
+        <p>Take a screenshot of your IDE right now — with some code visible. Upload it to Claude or ChatGPT and try these prompts in order:</p>
+        <ol>
+          <li><strong>General:</strong> "What programming language is this? What does this code do?"</li>
+          <li><strong>Specific:</strong> "Are there any potential bugs or issues in this code?"</li>
+          <li><strong>Extraction:</strong> "Transcribe this code as text, preserving formatting."</li>
+          <li><strong>Structured:</strong> "List all function/method names visible in this screenshot as a JSON array."</li>
+        </ol>
+        <p>Notice how the model handles each task differently. The general description is usually good. Bug detection is hit-or-miss (it may flag style issues but miss logic bugs). Transcription is surprisingly accurate for readable code. Structured extraction works well with clear output format instructions.</p>
+        <p><strong>Bonus experiment:</strong> Try the same screenshot at different resolutions (resize to 50%, 25%). At what point does the model start struggling to read the code?</p>
+      </div>
+    </section>
+
+    <!-- Structured Output from Images -->
+    <section>
+      <h2>Structured Output from Images</h2>
+
+      <p>One of the most powerful patterns is extracting structured data (JSON, tables, lists) from images. This is the bridge between "the AI can see the image" and "my code can use the data."</p>
+
+      <div class="prompt-example good">
+        <h4>Extracting structured data from a UI screenshot</h4>
+        <p><strong>Prompt:</strong></p>
+<pre><code>Analyze this mobile app screenshot and return JSON:
+{
+  "screen_name": "...",
+  "navigation_elements": ["..."],
+  "interactive_elements": [
+    {"type": "button|input|toggle", "label": "...", "state": "..."}
+  ],
+  "visible_text": ["..."],
+  "potential_issues": ["..."]
+}
+</code></pre>
+        <p>The model will fill in the JSON structure based on what it sees. You can then parse this in your code and use it programmatically — automated UI auditing, test generation, accessibility checks.</p>
+      </div>
+
+      <div class="tip-box">
+        <strong>Pro tip:</strong> When extracting structured data, include an example of the expected output in your prompt. This "few-shot" approach dramatically improves consistency, especially for complex schemas. The model follows the pattern of your example.
+      </div>
+    </section>
+
+    <!-- Exercise -->
+    <section>
+      <h2>Hands-On Exercise</h2>
+
+      <div class="exercise-box">
+        <h3>Exercise: Build a Visual Bug Reporter</h3>
+        <p>Using the <code>ask_about_image</code> function from earlier (or the Claude/ChatGPT web interface), build a workflow for visual bug reporting:</p>
+        <ol>
+          <li><strong>Screenshot capture:</strong> Take a screenshot of any app with a visible issue (real or imagined)</li>
+          <li><strong>Analysis prompt:</strong> Write a prompt that asks the model to:
+            <ul>
+              <li>Describe what app/screen is shown</li>
+              <li>Identify any visual issues (misalignment, truncation, color contrast problems)</li>
+              <li>Suggest a severity level (critical / major / minor / cosmetic)</li>
+              <li>Write a bug report title and description</li>
+            </ul>
+          </li>
+          <li><strong>Format:</strong> Request the output as Markdown suitable for a Jira/Linear ticket</li>
+        </ol>
+        <p><strong>Challenge:</strong> Try the same screenshot with three different prompts — one vague, one moderately specific, and one highly detailed. Compare the quality of bug reports generated. Which prompt produces the most actionable result?</p>
+        <p><strong>Stretch goal:</strong> Wrap it in a Python script that takes a screenshot path and outputs a formatted bug report to a file.</p>
+      </div>
+    </section>
+
+    <!-- What's Next -->
+    <section>
+      <h2>What's Next</h2>
+
+      <p>You now know how to send images to LLMs, write effective multimodal prompts, handle multiple images, manage costs, and avoid the hallucination traps. That's the general skill.</p>
+
+      <p>In Chapter 5, we'll apply this skill to one of the most immediately practical use cases: <strong>document understanding</strong>. Receipts, invoices, charts, handwritten notes, PDFs — traditional OCR could read the characters, but multimodal AI <em>understands the meaning</em>. It's OCR 2.0, and it's already replacing entire document processing pipelines in production.</p>
+    </section>
+
+  </main>
+
+  <footer class="chapter-nav">
+    <a href="03-fusion.html" class="prev">
+      <span class="nav-direction">← Previous</span>
+      <span class="nav-chapter">The Fusion Problem</span>
+    </a>
+    <a href="05-document-understanding.html" class="next">
+      <span class="nav-direction">Next →</span>
+      <span class="nav-chapter">Document Understanding &amp; OCR 2.0</span>
+    </a>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>

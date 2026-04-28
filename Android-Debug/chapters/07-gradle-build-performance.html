@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter 7: Gradle Build Performance | AI-Driven Debugging &amp; Performance for Android</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐛</text></svg>">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav class="top-nav">
+    <span class="nav-title">AI-Driven Debugging &amp; Performance</span>
+    <div class="nav-links">
+      <a href="index.html">Contents</a>
+      <a href="06-network-debugging.html">&larr; Prev</a>
+      <a href="08-battery-power.html">Next &rarr;</a>
+      <a href="maps/07-gradle-build-performance-map.html">🧠 Map</a>
+      <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+    </div>
+  </nav>
+
+  <header class="chapter-header">
+    <span class="chapter-number">Chapter 7</span>
+    <h1>Gradle Build Performance</h1>
+    <p class="subtitle">Stop waiting for builds &mdash; let AI find the bottlenecks hiding in your Gradle configuration</p>
+  </header>
+
+  <main>
+
+    <h2>The Build Time Tax</h2>
+
+    <p>Chapters 1&ndash;6 optimized how your app runs. This chapter optimizes how your app <em>builds</em>. Because the fastest code in the world doesn&rsquo;t help if you spend 4 minutes waiting for Gradle every time you change a line.</p>
+
+    <p>Build times are a developer productivity multiplier &mdash; or destroyer. A 30-second incremental build keeps you in flow. A 4-minute build sends you to check Slack, lose context, and take 10 minutes to get back on track.</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">35&ndash;50</span>
+        <span class="stat-label">builds per day for an active Android developer</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">2+ hrs</span>
+        <span class="stat-label">daily wait time if each build takes 4 minutes</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">$50K+</span>
+        <span class="stat-label">annual cost per developer of slow builds (salary + CI)</span>
+      </div>
+    </div>
+
+    <h2>Capturing Build Data</h2>
+
+    <p>Before you optimize, you need to know what&rsquo;s slow. Gradle offers three ways to capture build performance data:</p>
+
+    <h3>Method 1: <code>--profile</code> (Quick Local Report)</h3>
+
+    <pre><code># Generates an HTML report in build/reports/profile/
+./gradlew assembleDebug --profile
+
+# The report shows:
+# - Configuration phase time
+# - Task execution times (sorted by duration)
+# - Dependency resolution time</code></pre>
+
+    <h3>Method 2: <code>--scan</code> (Detailed Cloud Report)</h3>
+
+    <pre><code># Uploads a detailed build scan to scans.gradle.com
+./gradlew assembleDebug --scan
+
+# Provides:
+# - Timeline visualization of all tasks
+# - Build cache hit/miss details
+# - Dependency download times
+# - Configuration phase breakdown
+# - Comparison between builds</code></pre>
+
+    <h3>Method 3: Build Analyzer (Android Studio)</h3>
+
+    <p>After any build, click <strong>Build &rarr; Build Analyzer</strong> in Android Studio. It shows task impact, warnings about annotation processors, and configuration bottlenecks.</p>
+
+    <div class="tip-box">
+      For AI analysis, <code>--profile</code> is the most practical &mdash; it generates a local HTML report you can summarize and paste into Claude Code. Build scans are better for team sharing and historical comparison.
+    </div>
+
+    <h2>Feeding Build Data to Claude Code</h2>
+
+    <p>You can&rsquo;t paste an entire HTML profile report into Claude Code. Instead, extract the key metrics:</p>
+
+    <div class="debug-trace">
+      <h4>Gradle Build Profile Summary</h4>
+<pre><code>Build: assembleDebug
+Total build time: 3m 47s
+Configuration phase: 18.2s (32 projects configured)
+
+Top 10 tasks by execution time:
+1. :app:kaptDebugKotlin                    — 62.3s
+2. :app:compileDebugKotlin                 — 38.1s
+3. :app:mergeDebugResources                — 14.7s
+4. :app:packageDebug                       — 12.2s
+5. :data:kaptDebugKotlin                   — 11.8s
+6. :app:transformDebugClassesWithAsm       — 9.4s
+7. :domain:compileDebugKotlin              — 8.2s
+8. :app:mergeDebugNativeLibs               — 6.1s
+9. :feature-auth:kaptDebugKotlin           — 5.9s
+10. :feature-checkout:kaptDebugKotlin      — 5.3s
+
+Build cache: 47 tasks cached, 18 tasks executed (72% hit rate)
+Configuration cache: DISABLED
+Parallel execution: ENABLED (4 workers)</code></pre>
+      <h4>What Claude Code Finds</h4>
+      <p><strong>(1) kapt is the dominant bottleneck</strong> &mdash; three kapt tasks total 80s (35% of build time). These are annotation processor runs, likely Hilt/Dagger, Room, and possibly Moshi/Gson. <strong>(2) Configuration phase is slow</strong> at 18.2s for 32 projects &mdash; configuration cache would nearly eliminate this. <strong>(3) Build cache hit rate of 72% is decent</strong> but the 18 executed tasks suggest some tasks aren&rsquo;t cacheable or their inputs keep changing. <strong>(4) The single biggest win would be migrating from kapt to KSP</strong>, which processes annotations incrementally instead of from scratch.</p>
+    </div>
+
+    <div class="root-cause">
+      <h4>Root Cause: kapt Runs From Scratch on Every Build</h4>
+      <p><code>kapt</code> (Kotlin Annotation Processing Tool) delegates to Java&rsquo;s annotation processing API, which requires a full reprocessing pass on every build. Even changing one file triggers a complete kapt run. For Hilt/Dagger projects, this means regenerating the entire dependency graph every time.</p>
+      <p>KSP (Kotlin Symbol Processing) is a Kotlin-native replacement that supports incremental processing. It only reprocesses files that actually changed.</p>
+    </div>
+
+    <div class="fix-pattern">
+      <h4>Fix: Migrate from kapt to KSP</h4>
+<pre><code>// build.gradle.kts — BEFORE (kapt):
+plugins {
+    id("com.google.devtools.ksp") version "2.1.0-1.0.29"  // Add KSP
+    // Keep kapt temporarily for libraries that don't support KSP yet
+    kotlin("kapt")
+}
+
+dependencies {
+    // Hilt: kapt → ksp
+    // kapt("com.google.dagger:hilt-compiler:2.53")      // Remove
+    ksp("com.google.dagger:hilt-compiler:2.53")           // Add
+
+    // Room: kapt → ksp
+    // kapt("androidx.room:room-compiler:2.7.0")          // Remove
+    ksp("androidx.room:room-compiler:2.7.0")              // Add
+
+    // Moshi: kapt → ksp
+    // kapt("com.squareup.moshi:moshi-kotlin-codegen:1.15.1")  // Remove
+    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.1")      // Add
+}
+
+// Once all processors are migrated, remove kapt entirely:
+// plugins { kotlin("kapt") }  ← Delete this line</code></pre>
+      <p><strong>Expected improvement:</strong> 40&ndash;60% reduction in annotation processing time. kapt runs of 62s typically drop to 15&ndash;25s with KSP, and incremental builds are dramatically faster.</p>
+    </div>
+
+    <h2>Building an <code>/analyze-build</code> Skill</h2>
+
+    <p>Create <code>.claude/commands/analyze-build.md</code>:</p>
+
+    <pre><code># /analyze-build — Gradle Build Performance Analysis
+
+Analyze Gradle build profile data and suggest optimizations.
+
+## Input
+The user will provide one or more of:
+- Gradle --profile report summary (task times, cache stats)
+- Build scan URL or summary
+- build.gradle.kts configuration files
+- Gradle properties
+
+## Analysis Steps
+
+1. **Identify the top time consumers** — which tasks take the most
+   wall-clock time? Focus on the top 5.
+
+2. **Check annotation processing:**
+   - Is kapt still in use? → Recommend KSP migration
+   - Which processors are active? (Hilt, Room, Moshi, Glide)
+   - Are any processors not KSP-compatible?
+
+3. **Evaluate build cache:**
+   - Cache hit rate (target: >85%)
+   - Tasks that should be cached but aren't
+   - Configuration cache status
+
+4. **Review configuration phase:**
+   - Time spent (target: <5s)
+   - Number of projects configured
+   - Configuration cache opportunity
+
+5. **Check Gradle settings:**
+   - Parallel execution enabled?
+   - org.gradle.workers.max set appropriately?
+   - org.gradle.jvmargs memory allocation
+   - Gradle daemon keep-alive
+
+6. **Dependency analysis:**
+   - api vs implementation usage (api leaks cause cascade rebuilds)
+   - Unused dependencies adding compilation time
+   - Version conflicts requiring resolution
+
+## Output Format
+
+### Build Summary
+[Total time, configuration, execution, cache rate]
+
+### Top Bottlenecks
+[Ranked list with time and percentage of total build]
+
+### Recommended Optimizations
+[Ranked by expected impact: High/Medium/Low]
+
+### Gradle Properties Suggestions
+```properties
+[Recommended gradle.properties changes]
+```
+
+### Migration Steps
+[If kapt→KSP or other migrations are recommended]</code></pre>
+
+    <h2>Common Build Killers</h2>
+
+    <h3>Killer #1: <code>api</code> vs <code>implementation</code></h3>
+
+    <p>Using <code>api</code> instead of <code>implementation</code> for dependencies exposes them to all dependent modules. When that dependency changes, <em>everything</em> recompiles.</p>
+
+    <pre><code>// BAD: Exposes Retrofit to all modules that depend on :data
+// If Retrofit updates, every module recompiles
+dependencies {
+    api("com.squareup.retrofit2:retrofit:2.11.0")
+}
+
+// GOOD: Only :data module sees Retrofit internally
+// Changes to Retrofit only recompile :data
+dependencies {
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+}</code></pre>
+
+    <div class="tip-box">
+      Ask Claude Code to scan your Gradle files: &ldquo;Review my dependency declarations and identify any <code>api</code> dependencies that should be <code>implementation</code>.&rdquo; AI can trace which types are actually exposed in your module&rsquo;s public API.
+    </div>
+
+    <h3>Killer #2: Disabled Build Cache</h3>
+
+    <pre><code># gradle.properties — make sure these are set:
+org.gradle.caching=true
+org.gradle.configuration-cache=true
+org.gradle.parallel=true</code></pre>
+
+    <p>The build cache stores task outputs and reuses them when inputs haven&rsquo;t changed. Configuration cache stores the result of the configuration phase. Together, they can cut incremental build times by 50&ndash;80%.</p>
+
+    <div class="warning-box">
+      Configuration cache can break plugins that aren&rsquo;t compatible. Enable it and run a build &mdash; Gradle will tell you which plugins need updating. In 2026 it&rsquo;s Gradle&rsquo;s <em>preferred</em> execution mode (since Gradle 9.0) &mdash; AGP 9.x, KGP, and most mainstream plugins ship with support, and Gradle plans to make it the only supported mode in a future major release.
+    </div>
+
+    <h3>Killer #3: Wrong JVM Arguments</h3>
+
+    <pre><code># gradle.properties — default is often too low for Android builds:
+
+# BAD: Default or too-small heap
+org.gradle.jvmargs=-Xmx512m
+
+# GOOD: Sized for a typical Android project
+org.gradle.jvmargs=-Xmx4g -XX:+UseParallelGC -XX:MaxMetaspaceSize=512m
+
+# For larger multi-module projects:
+org.gradle.jvmargs=-Xmx6g -XX:+UseParallelGC -XX:MaxMetaspaceSize=1g</code></pre>
+
+    <p>If the Gradle daemon runs out of heap, it triggers GC pauses that stall the build. Too much heap wastes memory. Feed your <code>gradle.properties</code> to Claude Code along with your project size (number of modules, total Kotlin files) for a tailored recommendation.</p>
+
+    <h2>Dependency Analysis with AI</h2>
+
+    <p>Unused dependencies add compilation time and bloat your APK. Claude Code can audit your dependency tree:</p>
+
+    <div class="prompt-example good">
+      <div class="prompt-label">Prompt</div>
+      <div class="prompt-text">Here's the dependency block from my app module's build.gradle.kts. I suspect some of these aren't used. Can you identify likely unused dependencies based on common usage patterns?
+
+[paste dependencies block]
+
+My app uses: Compose UI, Hilt, Room, Retrofit, Coil for images. We removed the XML layout system 6 months ago.</div>
+      <div class="prompt-explanation">The mention of removing XML layouts tells AI to flag any remaining View-system dependencies (AppCompat widgets, RecyclerView, ConstraintLayout) as likely unused.</div>
+    </div>
+
+    <h2>Modularization for Build Speed</h2>
+
+    <p>A single-module app recompiles everything on every change. A well-modularized app only recompiles the module you changed and anything that depends on it.</p>
+
+    <div class="workflow-steps">
+      <span class="step">Change in :feature-cart</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Recompile :feature-cart</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Relink :app</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Done</span>
+    </div>
+
+    <p>vs. a monolith:</p>
+
+    <div class="workflow-steps">
+      <span class="step">Change anywhere</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Recompile everything</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Relink everything</span>
+      <span class="step-arrow">&rarr;</span>
+      <span class="step">Done (slowly)</span>
+    </div>
+
+    <p>Claude Code can suggest module boundaries. Paste your project&rsquo;s package structure and ask: &ldquo;Based on this package layout, what module boundaries would give me the best build speed improvement?&rdquo;</p>
+
+    <div class="comparison">
+      <div class="prompt-example bad">
+        <div class="prompt-label">Module Structure</div>
+        <div class="prompt-text">app/
+  ├── data/
+  ├── domain/
+  ├── ui/
+  │   ├── home/
+  │   ├── cart/
+  │   ├── profile/
+  │   └── checkout/
+  └── di/
+
+One module. 847 Kotlin files.</div>
+        <div class="prompt-explanation">Every change recompiles all 847 files. Incremental compilation helps, but kapt/KSP still processes everything.</div>
+      </div>
+      <div class="prompt-example good">
+        <div class="prompt-label">Module Structure</div>
+        <div class="prompt-text">:app (shell, navigation)
+:core:data (repositories, DB)
+:core:domain (use cases, models)
+:core:network (Retrofit, API)
+:core:ui (shared composables)
+:feature:home
+:feature:cart
+:feature:profile
+:feature:checkout
+
+9 modules. Longest recompile: ~180 files.</div>
+        <div class="prompt-explanation">Changes in :feature:cart only recompile that module. Core modules change rarely, so their cache stays warm.</div>
+      </div>
+    </div>
+
+    <h2>CI-Specific Optimizations</h2>
+
+    <p>Local builds and CI builds have different bottlenecks. CI often starts with a cold cache and no Gradle daemon.</p>
+
+    <pre><code># CI-specific gradle.properties:
+org.gradle.caching=true
+org.gradle.parallel=true
+org.gradle.daemon=false  # CI: no daemon (fresh JVM each time)
+org.gradle.jvmargs=-Xmx6g -XX:+UseParallelGC
+
+# Remote build cache (share cache across CI runs and developers):
+# settings.gradle.kts:
+buildCache {
+    remote&lt;HttpBuildCache&gt; {
+        url = uri("https://your-cache-server.com/cache/")
+        isPush = System.getenv("CI") != null  // Only CI pushes to cache
+        credentials {
+            username = System.getenv("CACHE_USER") ?: ""
+            password = System.getenv("CACHE_PASS") ?: ""
+        }
+    }
+}</code></pre>
+
+    <div class="tip-box">
+      A remote build cache is the single biggest CI optimization. When one CI run builds a task, the output is cached remotely. The next CI run (and local developers) can download the cached output instead of rebuilding. This can cut CI times by 40&ndash;70%.
+    </div>
+
+    <h2>Measuring the Impact</h2>
+
+    <p>Here&rsquo;s a real before/after from applying the optimizations in this chapter to a 28-module Android project:</p>
+
+    <div class="performance-metric">
+      <div class="metric-before">
+        <h4>Before: kapt, No Config Cache</h4>
+        <p><strong>Clean build:</strong> 4m 12s</p>
+        <p><strong>Incremental build (1 file):</strong> 1m 48s</p>
+        <p><strong>CI build:</strong> 6m 34s</p>
+        <p><strong>Configuration phase:</strong> 18s</p>
+        <p><strong>Build cache hit rate:</strong> 62%</p>
+      </div>
+      <div class="metric-after">
+        <h4>After: KSP, Config Cache, Remote Cache</h4>
+        <p><strong>Clean build:</strong> 2m 31s</p>
+        <p><strong>Incremental build (1 file):</strong> 22s</p>
+        <p><strong>CI build:</strong> 2m 08s</p>
+        <p><strong>Configuration phase:</strong> 0.4s (cached)</p>
+        <p><strong>Build cache hit rate:</strong> 91%</p>
+      </div>
+    </div>
+
+    <h2>Your Build Performance Checklist</h2>
+
+    <ul class="checklist">
+      <li class="checked">Run <code>./gradlew assembleDebug --profile</code> and identify top 5 slowest tasks</li>
+      <li class="checked">Migrate from kapt to KSP for all compatible annotation processors</li>
+      <li class="checked">Enable configuration cache (<code>org.gradle.configuration-cache=true</code>)</li>
+      <li class="checked">Enable build cache (<code>org.gradle.caching=true</code>)</li>
+      <li class="checked">Set JVM args appropriately (<code>-Xmx4g</code> minimum for Android projects)</li>
+      <li class="checked">Audit <code>api</code> vs <code>implementation</code> &mdash; minimize <code>api</code> usage</li>
+      <li class="checked">Remove unused dependencies</li>
+      <li class="checked">Consider modularization if your app has 300+ Kotlin files in one module</li>
+      <li class="checked">Set up a remote build cache for CI</li>
+    </ul>
+
+    <div class="highlight-box">
+      <h3>The Build Speed Mindset</h3>
+      <p>Every minute of build time is a minute of broken flow state. A 22-second incremental build lets you stay in the zone. A 2-minute build sends you to a browser tab. The optimizations in this chapter are a one-time investment that pays back every single day, for every developer on your team. Run the profile, feed it to Claude Code, and fix the top 3 bottlenecks. You&rsquo;ll never look back.</p>
+    </div>
+
+    <div class="exercise-box">
+      <h4>Hands-On: Profile and Optimize Your Build</h4>
+      <ol>
+        <li><strong>Capture a baseline:</strong> Run <code>./gradlew clean assembleDebug --profile</code>. Open the report in <code>build/reports/profile/</code>.</li>
+        <li><strong>Extract the summary:</strong> Copy the top 10 tasks by execution time, the configuration phase time, and the build cache hit rate.</li>
+        <li><strong>Run <code>/analyze-build</code>:</strong> Paste the summary into Claude Code. Also paste your <code>gradle.properties</code> and the <code>plugins</code> + <code>dependencies</code> blocks from your app&rsquo;s <code>build.gradle.kts</code>.</li>
+        <li><strong>Apply the top recommendation:</strong> If AI says &ldquo;migrate kapt to KSP&rdquo;, do the Hilt and Room migrations first (they&rsquo;re the biggest wins).</li>
+        <li><strong>Measure again:</strong> Run <code>./gradlew assembleDebug --profile</code> (without <code>clean</code>) to measure incremental build time. Compare to your baseline.</li>
+        <li><strong>Bonus:</strong> Enable configuration cache, rebuild, and check if the configuration phase drops to under 1 second.</li>
+      </ol>
+    </div>
+
+    <h2>What&rsquo;s Next</h2>
+
+    <p>We&rsquo;ve optimized what the developer sees &mdash; build times, runtime crashes, UI performance, network efficiency. But what about what the <em>user&rsquo;s battery</em> sees? A beautifully smooth, fast-building app that drains the battery in 3 hours is still going to get uninstalled.</p>
+
+    <p>In <strong>Chapter 8: Battery and Power Optimization</strong>, we&rsquo;ll use Battery Historian data and Claude Code to identify wake locks, inefficient scheduling, and background behaviors that drain power &mdash; plus build a <code>/analyze-battery</code> skill to audit your app&rsquo;s power usage.</p>
+
+  </main>
+
+  <footer>
+    <nav class="chapter-nav">
+      <a href="06-network-debugging.html">
+        <span class="nav-direction">Previous Chapter</span>
+        <span class="nav-chapter">Network Debugging with AI</span>
+      </a>
+      <a href="08-battery-power.html" class="next">
+        <span class="nav-direction">Next Chapter</span>
+        <span class="nav-chapter">Battery and Power Optimization</span>
+      </a>
+    </nav>
+  </footer>
+
+  <script>
+    const toggle = document.querySelector('.theme-toggle');
+    const saved = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+    toggle.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  </script>
+
+</body>
+</html>
