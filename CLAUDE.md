@@ -21,8 +21,6 @@ A collection of HTML-based courses in "For Dummies" style, each targeting a spec
 | `iOS-OnDevice/` | On-Device AI for iOS | iOS developers shipping AI features on-device | 12 |
 | `iOS-AIFeatures/` | Building AI-Powered Features for iOS | iOS developers shipping user-facing AI features | 12 |
 | `AI-Multimodal/` | Multimodal AI: Beyond Text | Developers exploring vision, audio, and video AI | 12 |
-| `Security/` | App Security For Dummies | Android devs learning mobile security concepts | 12 |
-| `Security-iOS/` | iOS Security For QA Engineers | QA engineers testing iOS security products (True Protect) | 12 |
 | `Claude-Architect/` | Claude Certified Architect: Foundations | Developers preparing for CCA-F certification | 14 |
 | `Claude-Power/` | Claude Power User For Dummies | Developers mastering the full Claude ecosystem | 15 |
 | `AI-Agents/` | Building AI Agents For Dummies | Developers building autonomous agent systems | 13 |
@@ -35,7 +33,6 @@ A collection of HTML-based courses in "For Dummies" style, each targeting a spec
 | `AI-Rewrite/` | Rewriting Apps With AI For Dummies | Experienced devs transforming existing codebases with AI | 12 |
 | `AI-Factory/` | From Zero to App With AI For Dummies | Experienced devs building apps from scratch with AI roles | 13 |
 | `AI-TechLeads/` | AI for Tech Leads For Dummies | Tech leads & engineering managers adopting AI on their teams | 12 |
-| `AI-VibeCheck/` | Vibe Context Management For Dummies | Developers who use AI coding tools daily | 13 |
 | `AI-PromptEng/` | Prompt Engineering For Dummies | Developers, QAs, managers — everyone on the team | 12 |
 | `Android-Quality/` | The Android Quality Stack For Dummies | Experienced Android devs bolting detekt/lint/StrictMode/etc. onto existing projects | 12 |
 | `Android-DDD/` | Domain-Driven Design For Android Engineers | Senior Android developers learning DDD and applying it with AI | 12 |

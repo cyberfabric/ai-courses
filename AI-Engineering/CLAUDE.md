@@ -222,7 +222,7 @@ When the user invokes `/generate-next-chapter`:
 - Condensing to `.ctx` files: the 25-line constraint, one-line summaries, rule IDs
 - Loading rules into CLAUDE.md: when to reference vs when to inline
 - Measuring rule compliance: how to check if AI follows your rules
-- The actual recipes app rules as templates: walkthrough of `presentation-layer-ai-review-checklist.md` and `presentation-layer-ctx.md`
+- The actual recipes app rules as templates: walkthrough of `presentation-layer-ai-review-checklist.md` and `.claude/rules/presentation-layer.md`
 - Evolving rules as architecture changes: the rule maintenance lifecycle
 - Cross-reference: "AI-CodeReview Chapter 3 covers review checklists conceptually. This chapter shows how to encode them as AI configuration."
 
