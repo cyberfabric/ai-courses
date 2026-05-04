@@ -30,7 +30,7 @@
 
     <p>Everything you've built so far — CLAUDE.md, skills, hooks, architecture rules, thinking guidelines — has a price tag measured in tokens. At the individual level, it's barely noticeable. At team scale, with 10 developers running 50+ AI interactions per day, costs compound fast.</p>
 
-    <p>The good news: the same configuration that makes AI produce better code also makes it cheaper. A well-structured CLAUDE.md gets cached. Precise .ctx files reduce context bloat. Skills that skip extended thinking on simple tasks save tokens. Cost engineering isn't a separate concern — it's a natural outcome of good configuration.</p>
+    <p>The good news: the same configuration that makes AI produce better code also makes it cheaper. A well-structured CLAUDE.md gets cached. Precise rule files in <code>.claude/rules/</code> reduce context bloat. Skills that skip extended thinking on simple tasks save tokens. Cost engineering isn't a separate concern — it's a natural outcome of good configuration.</p>
 
     <p>This chapter teaches you how the cost mechanics work and how to optimize your project configuration for maximum value per token.</p>
 
@@ -39,7 +39,7 @@
     <p>Prompt caching is the single most important cost mechanism to understand. When you send a request to Claude, the system checks whether the beginning of your prompt matches a recently cached prompt. If it does, those cached tokens are charged at a fraction of the normal price.</p>
 
     <div class="highlight-box">
-      <strong>The key insight:</strong> Your CLAUDE.md, .ctx files, and skill definitions are sent at the <em>beginning</em> of every interaction. If they're stable (not changing between requests), they get cached and become nearly free after the first request. This means rich project configuration costs almost nothing in practice.
+      <strong>The key insight:</strong> Your CLAUDE.md, <code>.claude/rules/</code> files, and skill definitions are sent at the <em>beginning</em> of every interaction. If they're stable (not changing between requests), they get cached and become nearly free after the first request. This means rich project configuration costs almost nothing in practice.
     </div>
 
     <h3>The 5-Minute TTL</h3>
@@ -62,6 +62,10 @@
       <strong>Practical tip:</strong> If you're about to step away for more than 5 minutes during a complex task, consider finishing the current step first. The next interaction will re-cache your context, but you'll pay full price for that one request.
     </div>
 
+    <div class="tip-box">
+      <strong>The 1-hour TTL is a paid lever:</strong> The 5-minute window is the default and refreshes for free, but Anthropic also offers a 1-hour cache TTL for sporadic workflows. The trade-off is at write time: 1-hour writes cost <strong>2&times;</strong> base input vs <strong>1.25&times;</strong> for the 5-min default. Cache reads are 0.1&times; either way. Reach for the 1-hour TTL only when you can prove the longer window pays for itself — for most teams, 5-min is correct.
+    </div>
+
     <h3>What Gets Cached</h3>
 
     <p>The cache works on a prefix basis — it matches from the beginning of the prompt forward. This means the order of your context matters:</p>
@@ -79,7 +83,7 @@
         <div class="step-number">2</div>
         <div class="step-content">
           <h4>Referenced Files</h4>
-          <p>.ctx files, skill definitions. Cacheable when stable.</p>
+          <p>Rule files in <code>.claude/rules/</code>, skill definitions. Cacheable when stable.</p>
         </div>
       </div>
       <div class="step-arrow">&rarr;</div>
@@ -108,7 +112,7 @@
 
     <div class="stats-grid">
       <div class="stat-card">
-        <div class="stat-number">~3x</div>
+        <div class="stat-number">~5x</div>
         <div class="stat-label">Output tokens cost more than input tokens</div>
       </div>
       <div class="stat-card">
@@ -117,7 +121,7 @@
       </div>
       <div class="stat-card">
         <div class="stat-number">~2K</div>
-        <div class="stat-label">Tokens for full architecture rules (10 .ctx files)</div>
+        <div class="stat-label">Tokens for full architecture rules (10 <code>.claude/rules/*.md</code> files)</div>
       </div>
     </div>
 
@@ -127,7 +131,7 @@
       <div class="before-config">
         <h4>Poor Context Strategy</h4>
         <p>Minimal CLAUDE.md (200 tokens)</p>
-        <p>No .ctx files loaded</p>
+        <p>No <code>.claude/rules/</code> files loaded</p>
         <p>AI guesses at patterns</p>
         <p>3 regeneration cycles to get it right</p>
         <p><strong>Total: ~15K output tokens</strong></p>
@@ -135,7 +139,7 @@
       <div class="after-config">
         <h4>Good Context Strategy</h4>
         <p>Rich CLAUDE.md (1,500 tokens, cached)</p>
-        <p>2 .ctx files loaded (400 tokens, cached)</p>
+        <p>2 rule files loaded (400 tokens, cached)</p>
         <p>AI follows patterns correctly first try</p>
         <p>1 generation cycle</p>
         <p><strong>Total: ~5K output tokens</strong></p>
@@ -163,43 +167,67 @@
       <strong>Don't over-optimize:</strong> Using Haiku for architecture decisions saves money but produces lower quality. The rework cost of fixing a bad architectural plan far exceeds the savings from using a cheaper model. Match the model to the task complexity, not just the price.
     </div>
 
-    <h2>Encoding Model Selection in CLAUDE.md</h2>
+    <h2>Where Model Selection Actually Lives</h2>
 
-    <p>You can guide your team's model choices by documenting recommendations directly in your project configuration:</p>
+    <p>It's tempting to write a "Model Selection Guidelines" section into CLAUDE.md and call it done. Don't. The main agent in a Claude Code session runs on one model and can't reroute itself mid-turn — when you start a session on Sonnet, every reasoning step in that session is Sonnet. CLAUDE.md is read by the AI on every turn, so prose like "use Opus for architecture, Haiku for formatting" is a directive the AI can't act on. It's wasted tokens that look like instructions.</p>
+
+    <p>Real model dispatch in 2026 lives in four places — and only two of them are AI-actionable:</p>
+
+    <table>
+      <thead>
+        <tr><th>Where</th><th>Who decides</th><th>When the model changes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>/model</code> command</td><td>Human, between turns</td><td>Switches the main session; warns it invalidates cache</td></tr>
+        <tr><td><code>opusplan</code> alias</td><td>Harness</td><td>Opus during plan mode, auto-switches to Sonnet on execute</td></tr>
+        <tr><td>Skill frontmatter <code>model:</code></td><td>Skill author (read by AI)</td><td>When the AI invokes that skill</td></tr>
+        <tr><td>Subagent frontmatter <code>model:</code></td><td>Subagent author (read by AI)</td><td>When the main agent dispatches that subagent</td></tr>
+      </tbody>
+    </table>
+
+    <p>So the right home for "use Opus for X, Haiku for Y" is twofold: the <em>frontmatter</em> of the skills and subagents that should run on those models, and a brief team-facing note (in the README, not CLAUDE.md) for which model humans should pick at session start.</p>
+
+    <h3>Model picks by task type</h3>
+
+    <p>Use this list when you're choosing a session model as a human, or deciding which <code>model:</code> to declare on a skill or subagent:</p>
+
+    <ul>
+      <li><strong>Opus 4.7</strong> — architecture decisions, migration planning, complex debugging (race conditions, state corruption), ADRs, review of critical components.</li>
+      <li><strong>Sonnet 4.6</strong> — feature implementation following established patterns, test generation, standard PR review, refactoring within a single module, technical documentation.</li>
+      <li><strong>Haiku 4.5</strong> — formatting and lint fixes, simple string/config edits, commit messages, strictly-templated boilerplate, quick lookups.</li>
+    </ul>
+
+    <h3>The 2026 pattern: encode the model in the skill</h3>
+
+    <p>The AI-actionable way to bind a task to a model is the skill's frontmatter. The main agent reads the frontmatter and dispatches the skill on the declared model — no human reminder needed:</p>
 
     <div class="config-block">
-      <div class="config-header">CLAUDE.md</div>
-<pre><code>## Model Selection Guidelines
+      <div class="config-header">.claude/skills/extract-module/SKILL.md</div>
+<pre><code>---
+name: extract-module
+description: Extract a feature into its own module using plan-execute-validate.
+model: claude-opus-4-7
+---
 
-### Use Opus (highest capability) for:
-- Architecture decisions and module design
-- Migration planning and dependency analysis
-- Complex debugging (race conditions, state corruption)
-- ADR generation and trade-off analysis
-- Code review of critical system components
+# Extract Module
 
-### Use Sonnet (balanced) for:
-- Feature implementation following established patterns
-- Test generation and test refactoring
-- Code review of standard feature PRs
-- Refactoring within a single module
-- Documentation with technical depth
+Use this skill when extracting a feature into its own Gradle module.
+...</code></pre>
+    </div>
 
-### Use Haiku (fastest, cheapest) for:
-- Formatting and linting fixes
-- Simple string/config changes
-- Commit message generation
-- Boilerplate that follows strict templates
-- Quick lookups and explanations</code></pre>
+    <p>The same idea drives subagents. When the main agent spawns a Task subagent, the subagent's <code>model:</code> field decides what runs there — which is how a Sonnet main session offloads a cheap codebase search to a Haiku subagent without paying Sonnet rates for the grep work. That's the real cost lever: not "tell the AI to use Haiku in CLAUDE.md," but "make the search subagent <em>be</em> Haiku."</p>
+
+    <div class="warning-box">
+      <strong>Anti-pattern: model rules in CLAUDE.md.</strong> If you write "Use Opus for architecture, Haiku for formatting" inside CLAUDE.md, the AI loads that text on every single turn (cached, but still riding along) and can't act on it — it has no mechanism to swap its own model. Worse, it dilutes the rules the AI <em>can</em> act on. Keep CLAUDE.md for instructions the AI can execute (architecture rules, naming, forbidden patterns); push model-routing intent into skill/subagent frontmatter where it actually does something.
     </div>
 
     <div class="team-tip">
-      <strong>For Team Leads:</strong> Model selection isn't about restricting developers — it's about setting defaults. A developer who's debugging a subtle race condition should reach for Opus without feeling guilty about cost. A developer fixing a typo shouldn't need to think about it — Haiku is the natural choice. Document the defaults so the decision is automatic.
+      <strong>For Team Leads:</strong> Model selection isn't about restricting developers — it's about setting defaults that don't require thought. Encode them in skill and subagent frontmatter so the right model runs automatically. The team README is the right place for a human cheat-sheet ("reach for <code>opusplan</code> on architecture work; default Sonnet otherwise"); CLAUDE.md is for rules the AI can follow.
     </div>
 
     <h2>Cost Optimization Patterns for CLAUDE.md</h2>
 
-    <p>The structure of your CLAUDE.md affects how well it caches. Here are patterns that maximize cache efficiency:</p>
+    <p>CLAUDE.md is loaded into every turn — even at the 0.1&times; cache-read rate, every token still rides along on every request. Reserve it for instructions the AI can act on; push human-only team norms into the team README. With that frame in mind, here are patterns that maximize cache efficiency:</p>
 
     <h3>Pattern 1: Stable Content First</h3>
 
@@ -267,7 +295,7 @@ Avoid touching :feature-search — active refactor by another dev.
 
     <h3>Pattern 3: Reference Instead of Inline</h3>
 
-    <p>For detailed rules that only apply to specific tasks, reference .ctx files instead of inlining everything in CLAUDE.md:</p>
+    <p>For detailed rules that only apply to specific tasks, reference rule files in <code>.claude/rules/</code> instead of inlining everything in CLAUDE.md:</p>
 
     <div class="config-block">
       <div class="config-header">CLAUDE.md — Reference Pattern</div>
@@ -279,13 +307,13 @@ Avoid touching :feature-search — active refactor by another dev.
 - VMs expose StateFlow&lt;UiState&gt;, not mutableStateOf
 
 ### Load on demand (referenced):
-- Before editing UI: read docs/rules/presentation-layer-ctx.md
-- Before editing data layer: read docs/rules/data-layer-ctx.md
-- Before writing tests: read docs/rules/testing-ctx.md
-- Before modifying Gradle: read docs/rules/gradle-ctx.md</code></pre>
+- Before editing UI: read .claude/rules/presentation-layer.md
+- Before editing data layer: read .claude/rules/data-layer.md
+- Before writing tests: read .claude/rules/testing.md
+- Before modifying Gradle: read .claude/rules/gradle.md</code></pre>
     </div>
 
-    <p>The inlined NEVER rules (50 tokens) are always in context. The .ctx files (200 tokens each) are loaded only when relevant. This saves 600+ tokens on every interaction that doesn't touch those specific layers.</p>
+    <p>The inlined NEVER rules (50 tokens) are always in context. The path-scoped rule files (200 tokens each) are loaded only when relevant. This saves 600+ tokens on every interaction that doesn't touch those specific layers.</p>
 
     <h2>Tracking Costs at Team Scale</h2>
 
@@ -317,7 +345,7 @@ Avoid touching :feature-search — active refactor by another dev.
       <tbody>
         <tr><td>One developer 5x higher than team average</td><td>Possible inefficient workflow or extended thinking overuse</td><td>Pair session to review their interaction patterns</td></tr>
         <tr><td>One skill 10x more expensive than others</td><td>Skill may be loading too much context or using thinking unnecessarily</td><td>Audit and optimize the skill's context and instructions</td></tr>
-        <tr><td>High regeneration rate (multiple attempts for same task)</td><td>Context is insufficient — AI is guessing</td><td>Add missing rules to CLAUDE.md or .ctx files</td></tr>
+        <tr><td>High regeneration rate (multiple attempts for same task)</td><td>Context is insufficient — AI is guessing</td><td>Add missing rules to CLAUDE.md or <code>.claude/rules/</code></td></tr>
         <tr><td>Cache hit rate below 60%</td><td>CLAUDE.md changes too often or conversations are too short</td><td>Stabilize top-of-file content, batch small tasks</td></tr>
       </tbody>
     </table>
@@ -373,7 +401,7 @@ Avoid touching :feature-search — active refactor by another dev.
       <div class="after-config">
         <h4>Well-Configured Project</h4>
         <p>Rich CLAUDE.md &rarr; cached after first request</p>
-        <p>.ctx rules &rarr; correct patterns first try</p>
+        <p>Path-scoped rule files &rarr; correct patterns first try</p>
         <p>1 generation cycle for most tasks</p>
         <p>Thinking only where it adds value</p>
         <p><strong>~$0.03-0.08 per interaction</strong></p>
@@ -398,7 +426,7 @@ Avoid touching :feature-search — active refactor by another dev.
     </div>
 
     <div class="team-tip">
-      <strong>For Team Leads:</strong> Never restrict AI usage as a cost measure — it sends the message that the tool isn't worth using. Instead, invest in better configuration. A $200 investment in CLAUDE.md and .ctx rules saves $1,000+/month in wasted tokens. Fix the root cause (bad context), not the symptom (high cost).
+      <strong>For Team Leads:</strong> Never restrict AI usage as a cost measure — it sends the message that the tool isn't worth using. Instead, invest in better configuration. A $200 investment in CLAUDE.md and <code>.claude/rules/</code> saves $1,000+/month in wasted tokens. Fix the root cause (bad context), not the symptom (high cost).
     </div>
 
     <h2>Quick Wins for Cost Reduction</h2>
@@ -410,7 +438,7 @@ Avoid touching :feature-search — active refactor by another dev.
       </div>
       <div class="stat-card">
         <div class="stat-number">2</div>
-        <div class="stat-label">Add .ctx files for your top 3 architecture layers</div>
+        <div class="stat-label">Add <code>.claude/rules/</code> files for your top 3 architecture layers</div>
       </div>
       <div class="stat-card">
         <div class="stat-number">3</div>
@@ -436,7 +464,7 @@ Avoid touching :feature-search — active refactor by another dev.
       </div>
       <div class="audit-item">
         <span class="audit-score">2</span>
-        <span class="audit-label">Rich CLAUDE.md with stable ordering. .ctx files for main layers. Thinking guidelines reduce unnecessary reasoning. Team is aware of model selection.</span>
+        <span class="audit-label">Rich CLAUDE.md with stable ordering. <code>.claude/rules/</code> files for main layers. Thinking guidelines reduce unnecessary reasoning. Team is aware of model selection.</span>
       </div>
       <div class="audit-item">
         <span class="audit-score">3</span>
@@ -459,7 +487,7 @@ Avoid touching :feature-search — active refactor by another dev.
             <li><strong>Bottom:</strong> Sprint context, known issues, temporary workarounds (change weekly)</li>
           </ul>
         </li>
-        <li>Move detailed rules from inline to referenced .ctx files (keep only NEVER rules inline)</li>
+        <li>Move detailed rules from inline to referenced <code>.claude/rules/</code> files (keep only NEVER rules inline)</li>
         <li>Add a "## Model Selection Guidelines" section with per-task-type recommendations</li>
         <li>Commit the reorganized CLAUDE.md</li>
       </ol>

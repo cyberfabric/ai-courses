@@ -34,7 +34,9 @@
 
       <p>In Chapters <a href="02-claude-md-mastery.html">2</a> and <a href="03-context-engineering.html">3</a>, you built the brain (CLAUDE.md) and the memory (context layer). Now it's time to build the muscle &mdash; <strong>skills</strong>.</p>
 
-      <p>A skill is a reusable prompt stored as a Markdown file in your project's <code>.claude/commands/</code> directory. When you type <code>/skill-name</code> in Claude Code, it loads that file as a prompt and executes it. Think of skills as functions for AI &mdash; named, parameterized, documented, and version-controlled.</p>
+      <p>A skill is a reusable prompt packaged as a directory at <code>.claude/skills/&lt;skill-name&gt;/</code> containing a <code>SKILL.md</code> file (plus optional supporting files like scripts, examples, or reference docs). When you type <code>/skill-name</code> in Claude Code, it loads <code>SKILL.md</code> and executes it. With the right frontmatter, Claude can also load the skill <em>automatically</em> when your conversation matches the skill's description. Think of skills as functions for AI &mdash; named, parameterized, documented, and version-controlled.</p>
+
+      <p>Skills and slash commands were merged in 2026: the older <code>.claude/commands/&lt;name&gt;.md</code> path still works (and supports the same frontmatter), but <code>.claude/skills/&lt;name&gt;/SKILL.md</code> is the recommended shape going forward because a directory lets the skill bring its own scripts, templates, and reference files. Both paths produce the same <code>/name</code> command.</p>
 
       <p>Without skills, your team re-invents the same complex prompts over and over. "How do I scaffold a new feature again?" "What was the review prompt we used last time?" Skills turn tribal knowledge into shared infrastructure.</p>
 
@@ -49,35 +51,36 @@
       <p>A professional skill library has structure. Here's the directory layout that scales from 5 skills to 50:</p>
 
       <div class="config-block">
-        <div class="config-path">.claude/commands/ — skill library structure</div>
+        <div class="config-path">.claude/skills/ — skill library structure</div>
 <pre><code>.claude/
-  commands/
-    # Scaffolding skills — create new code structures
-    scaffold-feature.md
-    scaffold-test-suite.md
-    scaffold-module.md
+  skills/
+    # Scaffolding — create new code structures
+    scaffold-feature/
+      SKILL.md                  # main instructions + frontmatter
+      templates/                # optional: file templates the skill copies
+        ViewModel.kt.tmpl
+    scaffold-module/SKILL.md
 
-    # Review skills — analyze existing code
-    run-review.md
-    review-pr.md
-    check-architecture.md
+    # Review — analyze existing code
+    run-review/SKILL.md
+    check-architecture/
+      SKILL.md
+      scripts/scan-dependencies.sh    # helper script the skill can run
 
-    # Testing skills — generate and run tests
-    generate-tests.md
-    generate-integration-test.md
+    # Testing — generate and run tests
+    generate-tests/SKILL.md
 
-    # Documentation skills — generate docs
-    document-module.md
-    generate-api-docs.md
+    # Migration — transform code patterns
+    migrate-to-compose/
+      SKILL.md
+      references/compose-cheatsheet.md  # loaded on demand
 
-    # Migration skills — transform code patterns
-    migrate-to-compose.md
-    migrate-to-stateflow.md
-
-    # Workflow skills — multi-step processes
-    prepare-release.md
-    generate-next-chapter.md</code></pre>
+    # Workflow — multi-step processes
+    prepare-release/SKILL.md
+    generate-next-chapter/SKILL.md</code></pre>
       </div>
+
+      <p>Each skill is its own directory. <code>SKILL.md</code> is the entrypoint — it always exists. The peer folders (<code>templates/</code>, <code>scripts/</code>, <code>references/</code>) are optional and only loaded when <code>SKILL.md</code> tells Claude to open them. That keeps the listing-overhead tiny no matter how many skills you have, while letting individual skills bring real assets along.</p>
 
       <h3>Naming Conventions</h3>
 
@@ -126,7 +129,88 @@
       </table>
 
       <div class="tip-box">
-        <strong>Tip:</strong> Use <code>kebab-case</code> for skill file names. The filename becomes the command: <code>scaffold-feature.md</code> is invoked as <code>/scaffold-feature</code>. Keep names short but descriptive &mdash; you'll type them often.
+        <strong>Tip:</strong> Use <code>kebab-case</code> for skill directory names. The directory name becomes the command: <code>scaffold-feature/</code> is invoked as <code>/scaffold-feature</code>. Keep names short but descriptive &mdash; you'll type them often.
+      </div>
+    </section>
+
+    <section>
+      <h2>Frontmatter: Telling Claude When to Use a Skill</h2>
+
+      <p>Every <code>SKILL.md</code> starts with a YAML frontmatter block between <code>---</code> markers. The frontmatter is what turns a static prompt file into a smart skill: it tells Claude what the skill does, when to load it automatically, and which tools it's allowed to use without asking permission.</p>
+
+      <p>The minimum useful frontmatter is just a <code>description</code>:</p>
+
+      <div class="config-block">
+        <div class="config-path">.claude/skills/explain-module/SKILL.md</div>
+<pre><code>---
+description: Explains a Kotlin module with a diagram, public API, and gotchas. Use when the reader asks "how does this module work?" or wants a tour of unfamiliar code.
+---
+
+When asked to explain a module:
+1. Read the module's `build.gradle.kts` to understand dependencies
+2. List public classes and their responsibilities
+3. Draw an ASCII diagram of layer relationships
+4. Highlight one common mistake or non-obvious behavior</code></pre>
+      </div>
+
+      <p>That single <code>description</code> field is doing real work. Claude reads it at session start and decides on every turn whether your request matches. If it does, Claude loads the rest of <code>SKILL.md</code> and follows the instructions &mdash; without you ever typing the slash command. The reader gets the right behavior even when they don't know a skill exists.</p>
+
+      <h3>Controlling Who Invokes the Skill</h3>
+
+      <p>Sometimes you don't <em>want</em> Claude to auto-invoke a skill. A deploy skill, a "send Slack message" skill, anything with side effects &mdash; you want a human in the loop. Two frontmatter switches give you that control:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Frontmatter</th>
+            <th>You can invoke</th>
+            <th>Claude can invoke</th>
+            <th>Use for</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><em>(default)</em></td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Most skills &mdash; conventions, scaffolding, helpers</td>
+          </tr>
+          <tr>
+            <td><code>disable-model-invocation: true</code></td>
+            <td>Yes</td>
+            <td>No</td>
+            <td>Side-effect actions: deploys, commits, releases, sends</td>
+          </tr>
+          <tr>
+            <td><code>user-invocable: false</code></td>
+            <td>No</td>
+            <td>Yes</td>
+            <td>Background knowledge skills that aren't a meaningful command</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Here's a deploy skill that locks itself to manual invocation and pre-approves the git/build commands it needs, so you don't get nagged for permission each step:</p>
+
+      <div class="config-block">
+        <div class="config-path">.claude/skills/deploy-staging/SKILL.md</div>
+<pre><code>---
+description: Build the app and push to the staging environment.
+disable-model-invocation: true
+allowed-tools: Bash(./gradlew *) Bash(git tag *) Bash(git push *)
+---
+
+Deploy to staging:
+1. Run `./gradlew :app:assembleStagingRelease`
+2. Tag the build: `git tag staging-$(date +%Y%m%d-%H%M)`
+3. Push the tag: `git push origin --tags`
+4. Verify the staging build appears in the dashboard</code></pre>
+      </div>
+
+      <p>Other fields worth knowing: <code>paths</code> (auto-loads only when files match a glob), <code>model</code> (forces Opus for an architecture-review skill, say), and <code>argument-hint</code> (autocomplete hint for arguments).</p>
+
+      <div class="tip-box">
+        <strong>Tip:</strong> Keep <code>SKILL.md</code> under 500 lines (Anthropic's official guidance). For more detail, add peer files like <code>reference.md</code> or <code>examples.md</code> and reference them from <code>SKILL.md</code> &mdash; Claude only reads peers when told to.
       </div>
     </section>
 
@@ -136,8 +220,13 @@
       <p>Let's build a real skill step by step. A scaffold skill for new features is the most common starting point:</p>
 
       <div class="config-block">
-        <div class="config-path">.claude/commands/scaffold-feature.md</div>
-<pre><code>Scaffold a new feature module for the recipes app.
+        <div class="config-path">.claude/skills/scaffold-feature/SKILL.md</div>
+<pre><code>---
+description: Scaffold a new feature module with presentation (Compose + MVI), domain (UseCase + Repository), data, and tests. Use when adding a new feature to the recipes app.
+argument-hint: &lt;feature-name&gt;
+---
+
+Scaffold a new feature module for the recipes app.
 
 ## Arguments
 Feature name: $ARGUMENTS (e.g., "nutrition", "shopping-list")
@@ -145,8 +234,8 @@ Feature name: $ARGUMENTS (e.g., "nutrition", "shopping-list")
 ## Steps
 
 1. Read CLAUDE.md for architecture rules and module structure
-2. Read docs/architecture/presentation-layer-ctx.md for UI conventions
-3. Read docs/architecture/package-structure-ctx.md for package layout
+2. Read .claude/rules/presentation-layer.md for UI conventions
+3. Read .claude/rules/package-structure.md for package layout
 
 4. Create the feature module directory:
    - feature/$ARGUMENTS/src/main/kotlin/com/recipes/feature/$ARGUMENTS/
@@ -199,8 +288,13 @@ Feature name: $ARGUMENTS (e.g., "nutrition", "shopping-list")
       <p>Parameters can be more complex than a single word. Design your skills to parse structured arguments when needed:</p>
 
       <div class="config-block">
-        <div class="config-path">.claude/commands/generate-tests.md</div>
-<pre><code>Generate comprehensive tests for the specified file.
+        <div class="config-path">.claude/skills/generate-tests/SKILL.md</div>
+<pre><code>---
+description: Generate a test file for a target Kotlin source file, matching the layer's testing conventions and using fakes from :core:testing.
+argument-hint: &lt;file-path&gt;
+---
+
+Generate comprehensive tests for the specified file.
 
 ## Arguments
 $ARGUMENTS — the file path to generate tests for (e.g., "feature/recipes/presentation/RecipesViewModel.kt")
@@ -208,7 +302,7 @@ $ARGUMENTS — the file path to generate tests for (e.g., "feature/recipes/prese
 ## Steps
 1. Read the target file: $ARGUMENTS
 2. Read CLAUDE.md for testing standards
-3. Read docs/architecture/testing-ctx.md for test conventions
+3. Read .claude/rules/testing.md for test conventions
 4. Identify the layer (presentation/domain/data) from the file path
 5. Generate test file in the corresponding test directory:
    - Match the package structure
@@ -232,8 +326,13 @@ $ARGUMENTS — the file path to generate tests for (e.g., "feature/recipes/prese
       <p>Advanced skills can reference other skills, creating multi-step workflows. This is the "macro skill" pattern &mdash; one skill orchestrates several others:</p>
 
       <div class="config-block">
-        <div class="config-path">.claude/commands/prepare-release.md</div>
-<pre><code>Prepare the project for a release build.
+        <div class="config-path">.claude/skills/prepare-release/SKILL.md</div>
+<pre><code>---
+description: Run the full release readiness check — architecture review, code review, tests, version bump, and release notes generation.
+disable-model-invocation: true
+---
+
+Prepare the project for a release build.
 
 ## Steps
 1. Run the equivalent of /check-architecture to verify no rule violations
@@ -297,7 +396,7 @@ $ARGUMENTS — the file path to generate tests for (e.g., "feature/recipes/prese
       <p>When skills are shared across a team, they need quality standards. A bad skill wastes everyone's time. Here's the checklist for skill review:</p>
 
       <div class="checklist">
-        <div class="checked"><strong>Context Loading:</strong> Skill reads CLAUDE.md and relevant .ctx files before acting</div>
+        <div class="checked"><strong>Context Loading:</strong> Skill reads CLAUDE.md and relevant rule files in <code>.claude/rules/</code> before acting</div>
         <div class="checked"><strong>Clear Steps:</strong> Numbered, sequential, unambiguous instructions</div>
         <div class="checked"><strong>Verification:</strong> Skill includes a validation step (tests, lint, compile check)</div>
         <div class="checked"><strong>Documentation:</strong> Top-level description explains what the skill does</div>
@@ -351,7 +450,7 @@ $ARGUMENTS — the file path to generate tests for (e.g., "feature/recipes/prese
       <p>When a skill needs a major overhaul, create the new version alongside the old one. Add a deprecation note to the old skill:</p>
 
       <div class="config-block">
-        <div class="config-path">.claude/commands/scaffold-feature.md (deprecated header)</div>
+        <div class="config-path">.claude/skills/scaffold-feature/SKILL.md (deprecated header)</div>
 <pre><code>⚠️ DEPRECATED: Use /scaffold-feature-v2 instead. This skill will be removed next sprint.
 
 Scaffold a new feature module...
@@ -432,7 +531,7 @@ Scaffold a new feature module...
             </tr>
             <tr>
               <td><strong>2 — Basic</strong></td>
-              <td>3-5 skills in .claude/commands/, shared in repo. No consistent naming or documentation.</td>
+              <td>3-5 skills in <code>.claude/skills/</code>, shared in repo (or legacy <code>.claude/commands/</code>). No consistent naming or documentation.</td>
             </tr>
             <tr>
               <td><strong>3 — Solid</strong></td>
@@ -455,10 +554,10 @@ Scaffold a new feature module...
         <strong>Exercise: Build Your Starter Skill Library</strong>
         <p>Create the first three skills for your project. Start with the highest-impact ones from the starter library.</p>
         <ol>
-          <li><strong>Create the directory:</strong> <code>mkdir -p .claude/commands</code></li>
-          <li><strong>Build /scaffold-feature</strong> &mdash; adapt the template from this chapter to your project's architecture. Replace recipes-specific patterns with your own module structure, naming conventions, and test standards.</li>
+          <li><strong>Create the directory:</strong> <code>mkdir -p .claude/skills</code></li>
+          <li><strong>Build /scaffold-feature</strong> &mdash; adapt the template from this chapter to your project's architecture. Create <code>.claude/skills/scaffold-feature/SKILL.md</code> with frontmatter (<code>description</code> at minimum) and replace recipes-specific patterns with your own module structure, naming conventions, and test standards.</li>
           <li><strong>Build /generate-tests</strong> &mdash; create a skill that takes a file path and generates a test file following your testing conventions.</li>
-          <li><strong>Build /run-review</strong> &mdash; create a skill that loads your .ctx files (from Chapter 3) and runs an architecture review.</li>
+          <li><strong>Build /run-review</strong> &mdash; create a skill that loads your rule files from <code>.claude/rules/</code> (from Chapter 3) and runs an architecture review.</li>
           <li><strong>Test each skill</strong> &mdash; run it at least once and verify the output.</li>
           <li><strong>Update CLAUDE.md</strong> &mdash; add a Workflow section that references your new skills:</li>
         </ol>
@@ -466,7 +565,7 @@ Scaffold a new feature module...
 - Use /scaffold-feature for new features
 - Use /generate-tests to create test coverage
 - Use /run-review before submitting PRs</code></pre>
-        <p><strong>Acceptance criteria:</strong> 3 skill files in .claude/commands/, each following the read-create-verify pattern, with documentation and parameter descriptions. CLAUDE.md updated with skill references.</p>
+        <p><strong>Acceptance criteria:</strong> 3 skill directories in <code>.claude/skills/</code>, each containing a <code>SKILL.md</code> with YAML frontmatter (at minimum a <code>description</code>) and following the read-create-verify pattern. CLAUDE.md updated with skill references.</p>
         <p>Commit everything and update your <code>AI_READINESS_BASELINE.md</code> with your new Pillar 3 score.</p>
       </div>
     </section>
